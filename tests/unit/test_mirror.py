@@ -82,3 +82,44 @@ def test_mirror_lock_prevents_concurrent_runs(tmp_home: Path, tmp_vault: Path):
         lock.rmdir()
     # Second mirror noop'd, so target memory dir should not exist.
     assert not (tmp_vault / "bots" / "myrepo" / "memory" / "a.md").exists()
+
+
+def test_decode_resolves_to_real_git_root(tmp_path: Path):
+    """When the encoded path corresponds to a real filesystem path with .git, use git-root basename.
+
+    Regression: previously, the encoded path was parsed via a brittle 'skip first 3 components'
+    heuristic that produced 'refactor-sg-imports' for /home/xyrlan/github/refactor/sg-imports
+    when the real git-root basename is 'sg-imports'.
+    """
+    repo = tmp_path / "github" / "refactor" / "sg-imports"
+    (repo / ".git").mkdir(parents=True)
+    encoded = "-" + str(repo).lstrip("/").replace("/", "-")
+    assert mirror._agent_from_project_dir(encoded) == "sg-imports"
+
+
+def test_decode_handles_repo_with_internal_dashes(tmp_path: Path):
+    """Repo names containing dashes should be recovered intact via filesystem decoding."""
+    repo = tmp_path / "code" / "my-cool-project"
+    (repo / ".git").mkdir(parents=True)
+    encoded = "-" + str(repo).lstrip("/").replace("/", "-")
+    assert mirror._agent_from_project_dir(encoded) == "my-cool-project"
+
+
+def test_decode_falls_back_to_heuristic_when_path_missing():
+    """When the encoded path no longer exists on disk, fall back to the existing heuristic."""
+    # /no/such/path/here-bogus does not exist on this machine
+    encoded = "-no-such-path-here-bogus"
+    result = mirror._agent_from_project_dir(encoded)
+    # Either the heuristic produces "here-bogus" (skip 3 → ['here','bogus']) or "bogus" (last segment).
+    # Both are acceptable as long as it does not raise.
+    assert result and isinstance(result, str)
+
+
+def test_decode_walks_up_to_git_root_when_subdir_passed(tmp_path: Path):
+    """If the encoded path points inside a subdir of a git repo, walk up to the git root."""
+    repo = tmp_path / "work" / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "src" / "deep" / "module"
+    sub.mkdir(parents=True)
+    encoded = "-" + str(sub).lstrip("/").replace("/", "-")
+    assert mirror._agent_from_project_dir(encoded) == "myrepo"
