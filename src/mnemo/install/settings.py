@@ -10,7 +10,14 @@ from typing import Any
 
 from mnemo.core import locks
 
-MNEMO_TAG = "mnemo:"  # marker substring in command field
+# Marker substring used to identify mnemo entries in settings.json. The tag
+# must be a literal substring of every valid hook command we generate so that
+# uninject_hooks can find them — but it must NOT prepend or otherwise corrupt
+# the command, or Claude Code will fail to dispatch the hook. The python -m
+# target naturally contains "mnemo.hooks." in every command we emit, which
+# makes it the perfect marker: zero collision risk and zero impact on
+# executability.
+MNEMO_TAG = "mnemo.hooks."
 
 
 class SettingsError(Exception):
@@ -19,7 +26,7 @@ class SettingsError(Exception):
 
 def _hook_command(module: str) -> str:
     """Return the command line that invokes a mnemo hook."""
-    return f"{MNEMO_TAG} {sys.executable or 'python3'} -m mnemo.hooks.{module}"
+    return f"{sys.executable or 'python3'} -m mnemo.hooks.{module}"
 
 
 HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
