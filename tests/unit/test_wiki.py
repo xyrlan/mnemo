@@ -44,3 +44,33 @@ def test_promote_idempotent_overwrite(tmp_vault: Path):
     src.write_text("v2")
     out = wiki.promote_note(src, cfg)
     assert "v2" in out.read_text()
+
+
+def test_compile_wiki_copies_sources_to_compiled(tmp_vault: Path):
+    cfg = {"vaultRoot": str(tmp_vault)}
+    src = tmp_vault / "wiki" / "sources" / "alpha.md"
+    src.write_text("# Alpha")
+    (tmp_vault / "wiki" / "sources" / "beta.md").write_text("# Beta")
+    wiki.compile_wiki(cfg)
+    compiled = tmp_vault / "wiki" / "compiled"
+    assert (compiled / "alpha.md").read_text() == "# Alpha"
+    assert (compiled / "beta.md").read_text() == "# Beta"
+
+
+def test_compile_wiki_writes_index(tmp_vault: Path):
+    cfg = {"vaultRoot": str(tmp_vault)}
+    (tmp_vault / "wiki" / "sources" / "alpha.md").write_text("# Alpha")
+    (tmp_vault / "wiki" / "sources" / "beta.md").write_text("# Beta")
+    wiki.compile_wiki(cfg)
+    index = (tmp_vault / "wiki" / "compiled" / "index.md").read_text()
+    assert "alpha" in index
+    assert "beta" in index
+    assert "[[alpha]]" in index or "alpha.md" in index
+
+
+def test_compile_wiki_idempotent(tmp_vault: Path):
+    cfg = {"vaultRoot": str(tmp_vault)}
+    (tmp_vault / "wiki" / "sources" / "a.md").write_text("v1")
+    wiki.compile_wiki(cfg)
+    wiki.compile_wiki(cfg)
+    assert (tmp_vault / "wiki" / "compiled" / "a.md").read_text() == "v1"

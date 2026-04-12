@@ -43,3 +43,19 @@ def promote_note(source: Path, cfg: dict[str, Any]) -> Path:
     out_path = out_dir / source.name
     out_path.write_text(new_text)
     return out_path
+
+
+def compile_wiki(cfg: dict[str, Any]) -> Path:
+    sources = paths.vault_root(cfg) / "wiki" / "sources"
+    compiled = paths.vault_root(cfg) / "wiki" / "compiled"
+    compiled.mkdir(parents=True, exist_ok=True)
+    sources.mkdir(parents=True, exist_ok=True)
+    index_lines = ["---", "tags: [wiki, index]", "---", "# Wiki", ""]
+    entries = sorted(p for p in sources.iterdir() if p.is_file() and p.suffix == ".md")
+    for src in entries:
+        target = compiled / src.name
+        target.write_text(src.read_text())
+        stem = src.stem
+        index_lines.append(f"- [[{stem}]]")
+    (compiled / "index.md").write_text("\n".join(index_lines) + "\n")
+    return compiled / "index.md"
