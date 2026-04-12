@@ -2,6 +2,7 @@
 """Atomic single-syscall append to daily log."""
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import IO, Any
@@ -9,6 +10,11 @@ from typing import IO, Any
 from mnemo.core import paths
 
 MAX_LINE_BYTES = 3800  # Linux PIPE_BUF=4096 safety margin
+
+# Process-wide lock to serialize append_line calls within one Python process.
+# fcntl.flock (in _flock_ex) handles cross-process serialization on POSIX,
+# but it's a no-op for threads sharing one process — hence this Lock.
+_PROCESS_LOCK = threading.Lock()
 
 
 def _flock_ex(fh: IO[bytes]) -> None:
@@ -52,12 +58,13 @@ def append_line(agent: str, content: str, cfg: dict[str, Any]) -> None:
     log_path = paths.today_log(cfg, agent)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _format_line(content)
-    try:
-        with open(log_path, "xb", buffering=0) as fh:
+    with _PROCESS_LOCK:
+        try:
+            with open(log_path, "xb", buffering=0) as fh:
+                _flock_ex(fh)
+                fh.write(_header(agent))
+        except FileExistsError:
+            pass
+        with open(log_path, "ab", buffering=0) as fh:
             _flock_ex(fh)
-            fh.write(_header(agent))
-    except FileExistsError:
-        pass
-    with open(log_path, "ab", buffering=0) as fh:
-        _flock_ex(fh)
-        fh.write(payload)
+            fh.write(payload)
