@@ -727,12 +727,14 @@ v0.1.0 CHECKLIST
 
 ### 12.1 — v0.2 — LLM extraction
 
-- Opt-in extraction of canonical pages from Tier 1 content using Claude API
-- User provides `ANTHROPIC_API_KEY`
+- Opt-in extraction of canonical pages from Tier 1 content into `shared/`
+- **Auth: hybrid, subscription-first.** Default execution path is a `claude --print` subprocess that reuses the user's existing Claude Code authentication (Pro/Max subscription OR API key, whichever is configured). No new credentials required for the common case. Power users can opt into the direct Anthropic API path by setting `ANTHROPIC_API_KEY` and an explicit `extraction.preferAPI: true` config flag — useful for batch processing, faster turnaround, and explicit cost control.
+- **Why subscription-first:** the original spec assumed `ANTHROPIC_API_KEY` only, which would have excluded every Pro/Max user from v0.2 — likely the majority of vibe coders. The subprocess approach eliminates that adoption barrier entirely. Validated technically on 2026-04-12: `claude --print --no-session-persistence --output-format json --model haiku --tools "" --system-prompt ... <prompt>` succeeds with `apiKeySource:"none"` (subscription auth), runs in ~6s, costs ~$0.005 per typical extraction, and produces parseable JSON output (the result text may need a markdown-fence strip in the parser, since `--json-schema` does not force structured output).
 - Extracted pages go to `_inbox/` with `#needs-review` tag
 - User manually promotes to `shared/` after review
 - Batch-based, runs on `SessionEnd` or manual `/mnemo extract`
-- Cost transparency: dry-run mode estimates tokens before spending
+- Cost transparency: dry-run mode estimates tokens before spending; subprocess path also surfaces the live `total_cost_usd` returned by Claude Code in its result message (zero on subscription, real dollars on API)
+- **Avoids `--bare`:** the subprocess does NOT use `claude --bare` because that flag is explicitly incompatible with subscription auth (it strips OAuth/keychain reads and only honors `ANTHROPIC_API_KEY`). The cost of skipping `--bare` is some startup overhead (LSP, plugin sync, CLAUDE.md auto-discovery) which adds ~3s per call — acceptable for background extraction.
 
 ### 12.2 — v0.3 — Enriched capture
 
@@ -760,12 +762,13 @@ v0.1.0 CHECKLIST
 
 These are questions that do NOT block v0.1 but should be answered before v0.2:
 
-1. **LLM extraction prompt design** — what exactly does the prompt look like? Few-shot examples? Structured output schema?
-2. **Token budgeting for extraction** — default batch size, rate limits, cost warnings
+1. **LLM extraction prompt design** — what exactly does the prompt look like? Few-shot examples? Structured output schema? (Validation note: `--json-schema` flag exists in Claude Code but does not force the response shape; parser must strip markdown fences.)
+2. **Token budgeting for extraction** — default batch size, rate limits, cost warnings (subprocess path returns `total_cost_usd` per call; aggregate it for the cost-transparency dashboard)
 3. **Conflict resolution in Tier 2** — if extraction suggests updating an existing canonical page, how is merge handled?
 4. **Multi-machine sync** — do we document user-driven git sync, or build it in?
 5. **Backup strategy** — should the plugin do automatic snapshots of the vault, or leave it to the user?
 6. **Plugin auto-update** — does mnemo update itself, or wait for the user?
+7. **Subprocess vs SDK for v0.2 execution** — `claude --print` subprocess is validated and works, but the Claude Agent SDK (Python) might give better integration: streaming, structured tool dispatch, no JSON parsing overhead. Decide before writing the v0.2 code whether to subprocess-shell-out (zero new dependencies) or pip-install the SDK (cleaner but adds a runtime dep — breaks the v0.1 stdlib-only invariant).
 
 ---
 
@@ -790,6 +793,7 @@ Decisions made during brainstorming, preserved here for future maintainers:
 | 13 | Circuit breaker at 10 errors/hour | Protects against runaway failure loops without being too aggressive |
 | 14 | Backup settings.json on every modification | User trust — reversibility is table stakes |
 | 15 | Uninstall never deletes vault data | User data is sacred |
+| 16 | v0.2 LLM extraction defaults to `claude --print` subprocess, not direct API | Reuses the user's existing Claude Code authentication (Pro/Max subscription OR API key). Eliminates "ANTHROPIC_API_KEY required" as a v0.2 adoption barrier. The original spec assumed direct API and would have excluded subscription users — likely the majority. Validated 2026-04-12: works with `apiKeySource:"none"`, ~6s/call, ~$0.005/extraction with haiku. Power users can opt into the direct API path via config flag for batch processing. |
 
 ---
 
