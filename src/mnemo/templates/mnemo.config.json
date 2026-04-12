@@ -1,0 +1,8 @@
+{
+  "vaultRoot": "~/mnemo",
+  "capture": {
+    "sessionStartEnd": true,
+    "userPrompt": true,
+    "fileEdits": true
+  }
+}
