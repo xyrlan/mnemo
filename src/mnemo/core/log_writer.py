@@ -36,10 +36,11 @@ def _format_line(content: str) -> bytes:
 def append_line(agent: str, content: str, cfg: dict[str, Any]) -> None:
     log_path = paths.today_log(cfg, agent)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    fresh = not log_path.exists()
     payload = _format_line(content)
-    if fresh:
-        with open(log_path, "ab", buffering=0) as fh:
+    try:
+        with open(log_path, "xb", buffering=0) as fh:
             fh.write(_header(agent))
+    except FileExistsError:
+        pass
     with open(log_path, "ab", buffering=0) as fh:
         fh.write(payload)
