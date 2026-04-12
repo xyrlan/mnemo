@@ -53,3 +53,32 @@ def test_mirror_skips_when_no_claude_projects(tmp_home: Path, tmp_vault: Path):
     cfg = {"vaultRoot": str(tmp_vault)}
     mirror.mirror_all(cfg)  # must not raise
     assert (tmp_vault / "bots").exists()
+
+
+def test_python_fallback_when_rsync_missing(tmp_home: Path, tmp_vault: Path, monkeypatch: pytest.MonkeyPatch):
+    """Critical test from spec § 10.3: test_missing_rsync_fallback."""
+    _make_claude_project(tmp_home, "-home-x-myrepo", {
+        "deep/nested/file.md": "deep content",
+        "top.md": "top content",
+    })
+    monkeypatch.setattr(mirror, "_has_rsync", lambda: False)
+    cfg = {"vaultRoot": str(tmp_vault)}
+    mirror.mirror_all(cfg)
+    target = tmp_vault / "bots" / "myrepo" / "memory"
+    assert (target / "top.md").read_text() == "top content"
+    assert (target / "deep" / "nested" / "file.md").read_text() == "deep content"
+
+
+def test_mirror_lock_prevents_concurrent_runs(tmp_home: Path, tmp_vault: Path):
+    _make_claude_project(tmp_home, "-home-x-myrepo", {"a.md": "x"})
+    cfg = {"vaultRoot": str(tmp_vault)}
+    # Hold the lock manually
+    lock = tmp_vault / ".mirror.lock"
+    lock.mkdir()
+    os.utime(lock, None)  # fresh
+    try:
+        mirror.mirror_all(cfg)
+    finally:
+        lock.rmdir()
+    # Second mirror noop'd, so target memory dir should not exist.
+    assert not (tmp_vault / "bots" / "myrepo" / "memory" / "a.md").exists()
