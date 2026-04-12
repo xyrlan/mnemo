@@ -26,22 +26,32 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
     """Regression: the hook command must NOT be prefixed with a marker token
     that breaks shell dispatch. Claude Code runs `command` literally; an entry
     like 'mnemo: /path/to/python -m ...' would fail with command-not-found."""
+    import os
+    import re
+
     settings_path = tmp_home / ".claude" / "settings.json"
     settings.inject_hooks(settings_path)
     data = json.loads(settings_path.read_text())
+    # An "executable token" must be either:
+    #  - an absolute POSIX path: /usr/bin/python3
+    #  - an absolute Windows path: C:\Python311\python.exe (or with forward slashes)
+    #  - a bare command name resolvable on PATH: python3, python
+    abs_posix = re.compile(r"^/")
+    abs_windows = re.compile(r"^[A-Za-z]:[\\/]")
+    bare_name = re.compile(r"^python3?(\.exe)?$")
     for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse"):
         for entry in data["hooks"][event]:
             for h in entry.get("hooks", []):
                 cmd = h.get("command", "")
-                # Must start with an absolute path or 'python3', never with a tag word + colon.
                 first_token = cmd.split()[0] if cmd else ""
-                assert first_token.startswith("/") or first_token == "python3", (
-                    f"{event} command starts with non-executable token: {first_token!r} "
-                    f"(full command: {cmd!r})"
+                executable = (
+                    abs_posix.match(first_token)
+                    or abs_windows.match(first_token)
+                    or bare_name.match(os.path.basename(first_token))
                 )
-                assert ":" not in first_token, (
-                    f"{event} command first token contains ':' which breaks shell dispatch: "
-                    f"{first_token!r}"
+                assert executable, (
+                    f"{event} command first token is not directly executable: "
+                    f"{first_token!r} (full command: {cmd!r})"
                 )
 
 
