@@ -174,6 +174,16 @@ Result: **cross-platform compatibility comes for free**. The same Python code ru
 
 **Rule of trust:** content in higher tiers has been reviewed and is more trustworthy. Plugin never auto-promotes across tier boundaries in v0.1.
 
+**Subdirectory ownership within `bots/<agent>/`:**
+
+| Subdir | Owner | Plugin touches it? | Purpose |
+|--------|-------|-------------------|---------|
+| `logs/` | Plugin (append-only) | Yes — daily log append via hooks | Atomic line-by-line capture of session activity |
+| `memory/` | Plugin (sync) | Yes — mirrored from `~/.claude/projects/*/memory/` on SessionStart/End | Reflection of Claude Code's own memory, never `--delete`d |
+| `working/` | **User only** | **No — never touched by any hook or command** | User scratch space for drafts, WIP notes, brain-dumps before promoting to `shared/` or `wiki/sources/`. The plugin creates the empty directory on scaffold but never writes, reads, or touches it afterward. |
+
+The scaffold step (`install/scaffold.py`) creates `working/` as an empty directory so the user discovers it, but no code path in the plugin ever interacts with its contents. This is an intentional "safe zone" — the user can edit freely without worrying about plugin interference. Analogous to `docs/drafts/` in a typical repo.
+
 ---
 
 ## 5. Components
@@ -549,17 +559,40 @@ Both paths converge on the same `python -m mnemo init` entry point.
 
 **Total time:** 3–5 seconds end-to-end.
 
+**Interactive and non-interactive modes:**
+
+`/mnemo init` has two modes — one for humans running it in Claude Code, one for automation (dotfiles, CI, scripted setups):
+
+| Mode | Invocation | Behavior |
+|------|-----------|----------|
+| Interactive (default) | `/mnemo init` | Prompts for vault path override, asks to confirm before modifying `settings.json` |
+| Non-interactive | `/mnemo init --yes` (or `-y`) | Skips all prompts, uses defaults or values from flags, suitable for dotfiles and scripted installs |
+
+Non-interactive supports additional flags:
+- `--vault-root <path>` — override vault location without being prompted
+- `--no-mirror` — skip initial Claude Code memory mirror (useful in CI tests)
+- `--quiet` — suppress informational output, only errors and exit code
+
+Example dotfile install line:
+```bash
+python -m mnemo init --yes --vault-root ~/Documents/brain
+```
+
+**Idempotency guarantee:** both modes are fully idempotent. Running `init` twice on the same machine never corrupts existing state; it skips already-scaffolded files and re-validates hook injection.
+
 ### 9.4 — Post-install commands
 
 ```
-/mnemo init        — first-run setup (idempotent)
+/mnemo init [--yes] [--vault-root PATH] [--no-mirror] [--quiet]
+                   — first-run setup (idempotent); --yes for dotfiles/automation
 /mnemo status      — vault state + hook health + recent activity
 /mnemo doctor      — full diagnostic with actionable fixes
 /mnemo open        — open vault in Obsidian or file manager
 /mnemo promote     — promote a note to wiki/sources/
 /mnemo compile     — regenerate wiki/compiled/ from sources
 /mnemo fix         — reset circuit breaker
-/mnemo uninstall   — remove hooks (keeps vault)
+/mnemo uninstall [--yes]
+                   — remove hooks (keeps vault); --yes skips confirmation
 /mnemo help        — list commands
 ```
 
