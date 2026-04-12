@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,10 +32,16 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def tmp_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect tempfile.gettempdir() to an isolated dir."""
+    """Redirect tempfile.gettempdir() to an isolated dir.
+
+    Sets env vars AND patches tempfile.tempdir directly — CPython caches
+    gettempdir() on first call, so the env vars alone would not affect an
+    already-running session.
+    """
     td = tmp_path / "tmp"
     td.mkdir()
     monkeypatch.setenv("TMPDIR", str(td))
     monkeypatch.setenv("TEMP", str(td))
     monkeypatch.setenv("TMP", str(td))
+    monkeypatch.setattr(tempfile, "tempdir", str(td))
     return td
