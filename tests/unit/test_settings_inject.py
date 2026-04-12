@@ -22,6 +22,29 @@ def test_inject_into_empty_settings(tmp_home: Path):
     assert pt["matcher"] == "Write|Edit"
 
 
+def test_hook_command_is_directly_executable(tmp_home: Path):
+    """Regression: the hook command must NOT be prefixed with a marker token
+    that breaks shell dispatch. Claude Code runs `command` literally; an entry
+    like 'mnemo: /path/to/python -m ...' would fail with command-not-found."""
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings.inject_hooks(settings_path)
+    data = json.loads(settings_path.read_text())
+    for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse"):
+        for entry in data["hooks"][event]:
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                # Must start with an absolute path or 'python3', never with a tag word + colon.
+                first_token = cmd.split()[0] if cmd else ""
+                assert first_token.startswith("/") or first_token == "python3", (
+                    f"{event} command starts with non-executable token: {first_token!r} "
+                    f"(full command: {cmd!r})"
+                )
+                assert ":" not in first_token, (
+                    f"{event} command first token contains ':' which breaks shell dispatch: "
+                    f"{first_token!r}"
+                )
+
+
 def test_inject_creates_backup(tmp_home: Path):
     settings_path = tmp_home / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
