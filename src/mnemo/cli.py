@@ -93,6 +93,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     say(f"Scaffolding vault at {vault_root}…")
     scaffold.scaffold_vault(vault_root)
 
+    # 4b. Persist vault root to default config path so _resolve_vault() finds it
+    cfg_mod.save_config({"vaultRoot": str(vault_root)})
+
     # 5. Inject hooks
     settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
     say(f"Injecting hooks into {settings_path}…")
@@ -130,6 +133,84 @@ def main(argv: list[str] | None = None) -> int:
         return fn(args)
     except KeyboardInterrupt:
         return 130
+
+
+def _resolve_vault() -> Path:
+    from mnemo.core import config as cfg_mod, paths as paths_mod
+    cfg = cfg_mod.load_config()
+    return paths_mod.vault_root(cfg)
+
+
+def _run_open(path: Path) -> None:
+    import subprocess
+    import os
+    if sys.platform.startswith("darwin"):
+        subprocess.run(["open", str(path)], check=False)
+    elif sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
+
+
+@command("status")
+def cmd_status(_args: argparse.Namespace) -> int:
+    import os, json
+    from mnemo.core import errors as err_mod
+
+    vault = _resolve_vault()
+    print(f"Vault: {vault}  ({'exists' if vault.exists() else 'MISSING'})")
+    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+            installed = sum(
+                1
+                for ev in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse")
+                for entry in data.get("hooks", {}).get(ev, [])
+                for h in entry.get("hooks", [])
+                if "mnemo" in h.get("command", "")
+            )
+            print(f"Hooks installed: {installed}/4")
+        except json.JSONDecodeError:
+            print("Hooks: settings.json malformed (see mnemo doctor)")
+    else:
+        print("Hooks: settings.json missing")
+    breaker = "closed (ok)" if err_mod.should_run(vault) else "OPEN — recent errors detected"
+    print(f"Circuit breaker: {breaker}")
+    log = vault / ".errors.log"
+    if log.exists():
+        print(f"Error log: {log} ({log.stat().st_size} bytes)")
+    return 0
+
+
+@command("doctor")
+def cmd_doctor(_args: argparse.Namespace) -> int:
+    from mnemo.install import preflight
+    vault = _resolve_vault()
+    print("Running diagnostic / preflight checks…")
+    result = preflight.run_preflight(vault_root=vault)
+    for issue in result.issues:
+        print(f"  [{issue.severity}] {issue.kind}: {issue.message}")
+        print(f"       → {issue.remediation}")
+    print("OK" if result.ok else "Issues found above.")
+    return 0 if result.ok else 1
+
+
+@command("fix")
+def cmd_fix(_args: argparse.Namespace) -> int:
+    from mnemo.core import errors as err_mod
+    vault = _resolve_vault()
+    err_mod.reset(vault)
+    print("Circuit breaker reset.")
+    return 0
+
+
+@command("open")
+def cmd_open(_args: argparse.Namespace) -> int:
+    vault = _resolve_vault()
+    _run_open(vault)
+    print(f"Opened {vault}")
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
