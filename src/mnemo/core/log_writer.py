@@ -1,0 +1,45 @@
+# src/mnemo/core/log_writer.py
+"""Atomic single-syscall append to daily log."""
+from __future__ import annotations
+
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+from mnemo.core import paths
+
+MAX_LINE_BYTES = 3800  # safety margin under Linux PIPE_BUF=4096
+
+
+def _header(agent: str) -> bytes:
+    today = date.today().isoformat()
+    text = (
+        "---\n"
+        f"tags: [log, {agent}]\n"
+        f"date: {today}\n"
+        "---\n"
+        f"# {today} — {agent}\n"
+        "\n"
+    )
+    return text.encode("utf-8")
+
+
+def _format_line(content: str) -> bytes:
+    now = datetime.now().strftime("%H:%M")
+    line = f"- **{now}** — {content}\n"
+    encoded = line.encode("utf-8")
+    if len(encoded) > MAX_LINE_BYTES:
+        encoded = encoded[: MAX_LINE_BYTES - 5] + b"...\n"
+    return encoded
+
+
+def append_line(agent: str, content: str, cfg: dict[str, Any]) -> None:
+    log_path = paths.today_log(cfg, agent)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not log_path.exists()
+    payload = _format_line(content)
+    if fresh:
+        with open(log_path, "ab", buffering=0) as fh:
+            fh.write(_header(agent))
+    with open(log_path, "ab", buffering=0) as fh:
+        fh.write(payload)
