@@ -10,6 +10,7 @@ from mnemo.core import paths
 
 def test_vault_root_expands_tilde(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows compatibility
     cfg = {"vaultRoot": "~/mnemo"}
     assert paths.vault_root(cfg) == tmp_path / "mnemo"
 

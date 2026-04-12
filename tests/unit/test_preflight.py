@@ -23,6 +23,7 @@ def test_python_version_check(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
     assert any(i.kind == "python_version" for i in result.issues)
 
 
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX chmod semantics not honored on Windows")
 def test_unwritable_vault_parent(tmp_path: Path):
     parent = tmp_path / "ro"
     parent.mkdir()

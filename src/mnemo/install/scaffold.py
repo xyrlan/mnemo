@@ -24,7 +24,11 @@ TEMPLATE_FILES = {
 
 
 def _read_template(name: str) -> str:
-    return resources.files("mnemo.templates").joinpath(name).read_text(encoding="utf-8")
+    try:
+        return (resources.files("mnemo.templates") / name).read_text(encoding="utf-8")
+    except AttributeError:
+        # Python 3.8 fallback — resources.files() added in 3.9
+        return resources.read_text("mnemo.templates", name, encoding="utf-8")
 
 
 def scaffold_vault(vault_root: Path) -> None:
