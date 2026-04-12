@@ -213,5 +213,49 @@ def cmd_open(_args: argparse.Namespace) -> int:
     return 0
 
 
+@command("promote")
+def cmd_promote(args: argparse.Namespace) -> int:
+    from mnemo.core import config as cfg_mod, wiki
+    cfg = cfg_mod.load_config()
+    src = Path(args.source)
+    if not src.exists():
+        print(f"Source not found: {src}", file=sys.stderr)
+        return 1
+    out = wiki.promote_note(src, cfg)
+    print(f"Promoted to {out}")
+    return 0
+
+
+@command("compile")
+def cmd_compile(_args: argparse.Namespace) -> int:
+    from mnemo.core import config as cfg_mod, wiki
+    cfg = cfg_mod.load_config()
+    out = wiki.compile_wiki(cfg)
+    print(f"Compiled wiki index: {out}")
+    return 0
+
+
+@command("uninstall")
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    import os
+    from mnemo.install import settings as inj
+    if not args.yes:
+        try:
+            answer = input("Remove mnemo hooks from settings.json? Vault data is preserved. [y/N]: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Aborted.", file=sys.stderr)
+            return 2
+    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    try:
+        inj.uninject_hooks(settings_path)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print("Hooks removed. Vault preserved.")
+    return 0
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
