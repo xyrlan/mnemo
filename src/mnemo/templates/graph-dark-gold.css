@@ -1,0 +1,16 @@
+/* mnemo — dark gold graph theme. Drop into Obsidian → Settings → CSS snippets. */
+.theme-dark .graph-view.color-fill {
+  color: #c9a227;
+}
+.theme-dark .graph-view.color-line {
+  color: #5a4a1a;
+}
+.theme-dark .graph-view.color-text {
+  color: #e6d28b;
+}
+.theme-dark .graph-view.color-circle {
+  color: #c9a227;
+}
+.theme-dark .graph-view.color-fill-tag {
+  color: #f0c14b;
+}

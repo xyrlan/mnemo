@@ -1,0 +1,16 @@
+{
+  "vaultRoot": "~/mnemo",
+  "capture": {
+    "sessionStartEnd": true,
+    "userPrompt": true,
+    "fileEdits": true
+  },
+  "agent": {
+    "strategy": "git-root",
+    "overrides": {}
+  },
+  "async": {
+    "userPrompt": true,
+    "postToolUse": true
+  }
+}
