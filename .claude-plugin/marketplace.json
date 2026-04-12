@@ -1,0 +1,11 @@
+{
+  "name": "mnemo-marketplace",
+  "description": "mnemo plugin marketplace listing",
+  "plugins": [
+    {
+      "name": "mnemo",
+      "source": "github:xyrlan/mnemo",
+      "version": "0.1.0"
+    }
+  ]
+}
