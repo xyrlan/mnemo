@@ -257,7 +257,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     # Summary
     total_tokens = summary.total_input_tokens + summary.total_output_tokens
-    if summary.all_calls_subscription and summary.total_cost_usd == 0.0:
+    if summary.all_calls_subscription:
+        # Subscription users: the CLI still reports a hypothetical API cost,
+        # but the user isn't actually charged. Show tokens only.
         cost_line = f"{total_tokens} tokens processed (subscription — no charge)"
     else:
         cost_line = f"${summary.total_cost_usd:.4f} ({total_tokens} tokens)"

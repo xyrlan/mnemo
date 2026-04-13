@@ -114,19 +114,47 @@ def call(
         break
 
     try:
-        envelope: Any = json.loads(result.stdout)
+        parsed: Any = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise LLMParseError(f"envelope JSON invalid: {exc.msg}") from exc
-    if not isinstance(envelope, dict):
-        raise LLMParseError("envelope is not a JSON object")
 
-    text = envelope.get("result", "")
-    usage = envelope.get("usage") or {}
+    # Claude Code CLI ≥2.x returns `--output-format json` as an array of events.
+    # Older format (single dict envelope) is also supported for test fixtures
+    # and backwards compatibility.
+    if isinstance(parsed, list):
+        events = parsed
+    elif isinstance(parsed, dict):
+        events = [parsed]
+    else:
+        raise LLMParseError("envelope is neither a JSON object nor a JSON array")
+
+    result_event: dict | None = None
+    init_event: dict | None = None
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        etype = ev.get("type")
+        if etype == "result" and result_event is None:
+            result_event = ev
+        elif etype == "system" and ev.get("subtype") == "init":
+            init_event = ev
+
+    if result_event is None:
+        raise LLMParseError("no result event in response")
+
+    text = result_event.get("result", "")
+    usage = result_event.get("usage") or {}
+    api_key_source = None
+    if init_event is not None:
+        api_key_source = init_event.get("apiKeySource")
+    if api_key_source is None:
+        api_key_source = result_event.get("apiKeySource")
+
     return LLMResponse(
         text=text,
-        total_cost_usd=envelope.get("total_cost_usd"),
+        total_cost_usd=result_event.get("total_cost_usd"),
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
-        api_key_source=envelope.get("apiKeySource"),
-        raw=envelope,
+        api_key_source=api_key_source,
+        raw={"events": events, "result": result_event, "init": init_event},
     )

@@ -156,3 +156,43 @@ def test_call_omits_system_prompt_when_none(mock_subprocess_run):
     llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
     argv = mock_subprocess_run.calls[0]["argv"]
     assert "--system-prompt" not in argv
+
+
+def test_call_parses_array_envelope_from_claude_code_2x(mock_subprocess_run):
+    """Claude Code CLI >=2.x returns --output-format json as an array of events."""
+    array_envelope = json.dumps([
+        {
+            "type": "system",
+            "subtype": "init",
+            "apiKeySource": "none",
+            "model": "claude-haiku-4-5",
+        },
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Hi"}]},
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "result": '{"pages": [{"slug": "x"}]}',
+            "total_cost_usd": 0.0055,
+            "usage": {"input_tokens": 2775, "output_tokens": 542},
+        },
+    ])
+    mock_subprocess_run([MockCompletedProcess(stdout=array_envelope)])
+    resp = llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    assert resp.text == '{"pages": [{"slug": "x"}]}'
+    assert resp.total_cost_usd == 0.0055
+    assert resp.input_tokens == 2775
+    assert resp.output_tokens == 542
+    assert resp.api_key_source == "none"
+
+
+def test_call_array_envelope_missing_result_raises(mock_subprocess_run):
+    array_envelope = json.dumps([
+        {"type": "system", "subtype": "init", "apiKeySource": "none"},
+        {"type": "assistant", "message": {}},
+    ])
+    mock_subprocess_run([MockCompletedProcess(stdout=array_envelope)])
+    with pytest.raises(llm.LLMParseError, match="no result event"):
+        llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
