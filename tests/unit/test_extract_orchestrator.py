@@ -92,8 +92,11 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
     assert summary.all_calls_subscription is True
     # project file exists
     assert (populated_vault / "shared" / "project" / "agent-b__china-portal.md").exists()
-    # inbox files exist
-    assert (populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").exists()
+    # single-source yarn page auto-promoted to sacred dir
+    assert (populated_vault / "shared" / "feedback" / "use-yarn.md").exists()
+    # multi-source no-commits page staged in _inbox/
+    assert (populated_vault / "shared" / "_inbox" / "feedback" / "no-commits-without-permission.md").exists()
+    assert summary.auto_promoted == 1
 
 
 def test_orchestrator_second_run_skips_unchanged(populated_vault: Path, stub_llm):
@@ -148,10 +151,16 @@ def test_orchestrator_aborts_when_lock_held(populated_vault: Path, stub_llm):
 
 
 def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_llm):
-    # First run writes an inbox file, then we delete it, then force-run.
+    # First run writes a page, then we delete it, then force-run.
+    # Use 2 sources to route through the _inbox/ branch (the original v0.2
+    # test intent is about dismissed/force behavior of the inbox branch).
     response = _fake_llm_response([
         {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
-         "body": "b", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
+         "body": "b",
+         "source_files": [
+             "bots/agent-a/memory/feedback_use_yarn.md",
+             "bots/agent-a/memory/feedback_yarn_only.md",
+         ]},
     ])
     stub_llm([response, response])
     cfg = _make_cfg(populated_vault)
@@ -161,3 +170,32 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
 
     run_extraction(cfg, force=True)
     assert target.exists()
+
+
+def test_summary_has_v0_3_fields():
+    from mnemo.core.extract import ExtractionSummary
+
+    summary = ExtractionSummary()
+    assert summary.auto_promoted == 0
+    assert summary.sibling_bounced == 0
+    assert summary.upgrade_proposed == 0
+    assert summary.mode == "manual"
+
+
+def test_merge_apply_folds_new_fields():
+    from mnemo.core.extract import _merge_apply, ExtractionSummary
+    from mnemo.core.extract.inbox import ApplyResult
+
+    apply_result = ApplyResult()
+    apply_result.auto_promoted = ["feedback/use-yarn", "feedback/no-bun"]
+    apply_result.sibling_bounced = [("feedback/use-yarn", "path/to/proposed.md")]
+    apply_result.upgrade_proposed = [("feedback/no-commits", "path/to/upgrade.md")]
+
+    summary = ExtractionSummary()
+    _merge_apply(apply_result, summary)
+
+    assert summary.auto_promoted == 2
+    assert summary.sibling_bounced == 1
+    assert summary.upgrade_proposed == 1
+    # Existing v0.2 semantics: auto-promoted pages also count toward pages_written
+    assert summary.pages_written == 2

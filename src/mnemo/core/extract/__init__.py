@@ -29,15 +29,28 @@ class ExtractionSummary:
     total_output_tokens: int = 0
     all_calls_subscription: bool = True
     conflicts: list[tuple[str, str]] = field(default_factory=list)
+    auto_promoted: int = 0
+    sibling_bounced: int = 0
+    upgrade_proposed: int = 0
+    mode: str = "manual"
 
 
 def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
-    summary.pages_written += len(result.written_fresh) + len(result.overwrite_safe)
+    summary.pages_written += (
+        len(result.written_fresh)
+        + len(result.overwrite_safe)
+        + len(result.auto_promoted)
+    )
     summary.sibling_proposed += len(result.sibling_proposed)
     summary.update_proposed += len(result.update_proposed)
     summary.unchanged_skipped += len(result.unchanged_skipped)
     summary.dismissed_skipped += len(result.dismissed_skipped)
+    summary.auto_promoted += len(result.auto_promoted)
+    summary.sibling_bounced += len(result.sibling_bounced)
+    summary.upgrade_proposed += len(result.upgrade_proposed)
     summary.conflicts.extend(result.sibling_proposed)
+    summary.conflicts.extend(result.sibling_bounced)
+    summary.conflicts.extend(result.upgrade_proposed)
 
 
 def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.ExtractedPage]:
