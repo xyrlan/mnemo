@@ -75,16 +75,17 @@ def test_full_first_run_produces_expected_layout(populated_vault, stub_llm_integ
     assert summary.llm_calls == 1
     assert summary.failed_chunks == 0
 
-    # Verify disk layout
+    # Verify disk layout — v0.3 split: single-source auto-promoted, multi-source staged
     assert (populated_vault / "shared" / "project" / "agent-b__china-portal.md").exists()
-    assert (populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").exists()
-    assert (populated_vault / "shared" / "_inbox" / "feedback" / "no-commits-without-permission.md").exists()
+    assert (populated_vault / "shared" / "feedback" / "use-yarn.md").exists()  # single-source → sacred
+    assert (populated_vault / "shared" / "_inbox" / "feedback" / "no-commits-without-permission.md").exists()  # multi → inbox
+    assert summary.auto_promoted == 1
 
     # Verify state
     state_file = populated_vault / ".mnemo" / "extraction-state.json"
     assert state_file.exists()
     state = json.loads(state_file.read_text())
-    assert state["schema_version"] == 1
+    assert state["schema_version"] == 2
     assert any(k.startswith("project/") for k in state["entries"])
     assert any(k.startswith("feedback/") for k in state["entries"])
 
@@ -129,7 +130,10 @@ def test_dry_run_zero_writes(populated_vault, stub_llm_integration):
     assert not (populated_vault / ".mnemo" / "extraction-state.json").exists()
 
 
-def test_conflict_flow_sibling_proposed(populated_vault, stub_llm_integration):
+def test_conflict_flow_sibling_bounced(populated_vault, stub_llm_integration):
+    # Single-source page is auto-promoted to shared/feedback/; when user edits
+    # the sacred file and source changes, v0.3 writes a .proposed.md sibling
+    # INTO _inbox/ rather than next to the sacred file.
     r1 = _resp([
         {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
          "body": "v1", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
@@ -143,16 +147,18 @@ def test_conflict_flow_sibling_proposed(populated_vault, stub_llm_integration):
     cfg = _cfg(populated_vault)
     run_extraction(cfg)
 
-    # User hand-edits the inbox file
-    inbox_file = populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
-    inbox_file.write_text(inbox_file.read_text() + "\n\n(user note)\n")
+    # Sacred file exists — user hand-edits it
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists()
+    sacred.write_text(sacred.read_text() + "\n\n(user note)\n")
 
     # Source changes — mutate the memory file
     yarn_mem = populated_vault / "bots" / "agent-a" / "memory" / "feedback_use_yarn.md"
     yarn_mem.write_text(yarn_mem.read_text() + "\n\nextra content\n")
 
-    run_extraction(cfg)
+    summary = run_extraction(cfg)
 
     sibling = populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists()
-    assert "(user note)" in inbox_file.read_text()
+    assert "(user note)" in sacred.read_text(), "sacred file must be untouched"
+    assert summary.sibling_bounced == 1

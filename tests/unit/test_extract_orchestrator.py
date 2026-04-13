@@ -199,3 +199,55 @@ def test_merge_apply_folds_new_fields():
     assert summary.upgrade_proposed == 1
     # Existing v0.2 semantics: auto-promoted pages also count toward pages_written
     assert summary.pages_written == 2
+
+
+def test_run_extraction_background_writes_last_auto_run_json_on_success(tmp_path):
+    from mnemo.core.extract import run_extraction
+
+    vault = tmp_path / "vault"
+    (vault / "bots").mkdir(parents=True)
+    (vault / ".mnemo").mkdir()
+
+    cfg = {
+        "vaultRoot": str(vault),
+        "extraction": {
+            "model": "claude-haiku-4-5",
+            "chunkSize": 10,
+            "subprocessTimeout": 60,
+        },
+    }
+
+    # Empty scan → no LLM calls
+    summary = run_extraction(cfg, dry_run=False, force=False, background=True)
+
+    last_run_path = vault / ".mnemo" / "last-auto-run.json"
+    assert last_run_path.exists(), "last-auto-run.json must be written in background mode"
+
+    payload = json.loads(last_run_path.read_text())
+    assert payload["mode"] == "background"
+    assert payload["exit_code"] == 0
+    assert payload["error"] is None
+    assert "summary" in payload
+    assert summary.mode == "background"
+
+
+def test_run_extraction_manual_does_not_write_last_auto_run_json(tmp_path):
+    from mnemo.core.extract import run_extraction
+
+    vault = tmp_path / "vault"
+    (vault / "bots").mkdir(parents=True)
+    (vault / ".mnemo").mkdir()
+
+    cfg = {
+        "vaultRoot": str(vault),
+        "extraction": {
+            "model": "claude-haiku-4-5",
+            "chunkSize": 10,
+            "subprocessTimeout": 60,
+        },
+    }
+
+    run_extraction(cfg, dry_run=False, force=False, background=False)
+
+    last_run_path = vault / ".mnemo" / "last-auto-run.json"
+    assert not last_run_path.exists(), "manual runs must not write last-auto-run.json"
