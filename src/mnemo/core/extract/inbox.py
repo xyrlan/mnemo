@@ -15,7 +15,7 @@ from pathlib import Path
 
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ExtractionIOError(OSError):
@@ -245,6 +245,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
                 "source_hash": v.source_hash,
                 "written_hash": v.written_hash,
                 "written_at": v.written_at,
+                "last_sync": v.last_sync,
                 "status": v.status,
             }
             for k, v in state.entries.items()
@@ -265,7 +266,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
 
 def load_state(path: Path) -> ExtractionState:
     if not path.exists():
-        return ExtractionState(last_run=None, entries={})
+        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -275,21 +276,32 @@ def load_state(path: Path) -> ExtractionState:
             path.rename(path.with_name(f"{path.name}.bak.{stamp}"))
         except OSError:
             pass
-        return ExtractionState(last_run=None, entries={})
+        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
 
-    version = payload.get("schema_version", 0)
-    if version != SCHEMA_VERSION:
+    version = int(payload.get("schema_version", 0) or 0)
+    if version > SCHEMA_VERSION:
+        raise StateSchemaError(
+            f"state file schema_version={version} was written by a newer mnemo version"
+        )
+    if version < 1:
         raise StateSchemaError(
             f"state file schema_version={version}, this mnemo supports {SCHEMA_VERSION}"
         )
 
-    entries = {}
+    entries: dict[str, StateEntry] = {}
     for k, v in payload.get("entries", {}).items():
+        written_at = str(v.get("written_at") or "")
+        last_sync = str(v.get("last_sync") or written_at)
         entries[k] = StateEntry(
             source_files=list(v.get("source_files") or []),
             source_hash=str(v.get("source_hash") or ""),
             written_hash=str(v.get("written_hash") or ""),
-            written_at=str(v.get("written_at") or ""),
+            written_at=written_at,
             status=str(v.get("status") or "inbox"),
+            last_sync=last_sync,
         )
-    return ExtractionState(last_run=payload.get("last_run"), entries=entries)
+    return ExtractionState(
+        last_run=payload.get("last_run"),
+        entries=entries,
+        schema_version=SCHEMA_VERSION,
+    )
