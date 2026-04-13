@@ -151,6 +151,63 @@ def test_call_builds_expected_argv(mock_subprocess_run):
     assert mock_subprocess_run.calls[0]["input"] == "prompt text"
 
 
+def test_call_argv_uses_strict_mcp_config_to_strip_plugin_tools(mock_subprocess_run):
+    """Issue #6: --tools "" alone does not strip MCP plugin tools loaded from
+    the user's Claude Code config. --strict-mcp-config (without any paired
+    --mcp-config) tells the CLI to ignore every MCP configuration source,
+    producing an empty mcp_servers list and, combined with --tools "",
+    an empty init.tools list. Unlike --bare, it preserves OAuth/keychain
+    auth so subscription users are not broken.
+    """
+    mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
+    llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    argv = mock_subprocess_run.calls[0]["argv"]
+    assert "--strict-mcp-config" in argv, (
+        "--strict-mcp-config must be in argv to suppress MCP plugin tools "
+        "while preserving subscription auth"
+    )
+    # Must NOT use --bare: it breaks OAuth/keychain auth for subscription users
+    assert "--bare" not in argv, (
+        "--bare breaks OAuth/keychain auth; use --strict-mcp-config instead"
+    )
+
+
+def test_call_subprocess_env_disables_extended_thinking(mock_subprocess_run):
+    """Issue #7: Haiku 4.5 does extended thinking by default in `claude --print`,
+    costing ~200-400 output tokens and several seconds of wall-time on trivial
+    prompts. The `CLAUDE_CODE_DISABLE_THINKING=1` environment variable is the
+    canonical switch to strip the thinking block entirely.
+    """
+    mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
+    llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    kwargs = mock_subprocess_run.calls[0]["kwargs"]
+    env = kwargs.get("env")
+    assert env is not None, (
+        "llm.call must pass an explicit env= to subprocess.run so we can "
+        "inject CLAUDE_CODE_DISABLE_THINKING=1"
+    )
+    assert env.get("CLAUDE_CODE_DISABLE_THINKING") == "1", (
+        "CLAUDE_CODE_DISABLE_THINKING=1 must be set in the subprocess env "
+        "to suppress the thinking block on Haiku 4.5"
+    )
+
+
+def test_call_subprocess_env_preserves_parent_environment(mock_subprocess_run):
+    """When injecting CLAUDE_CODE_DISABLE_THINKING, we must inherit the parent
+    environment (PATH, HOME, auth-related vars, etc.) — otherwise the CLI
+    cannot locate claude binaries or find the user's auth.
+    """
+    import os
+    mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
+    llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    env = mock_subprocess_run.calls[0]["kwargs"].get("env") or {}
+    assert "PATH" in env, "subprocess env must inherit PATH from parent"
+    # A specific parent var used as a canary — $HOME is reliably present
+    assert env.get("HOME") == os.environ.get("HOME"), (
+        "subprocess env must inherit parent HOME"
+    )
+
+
 def test_call_omits_system_prompt_when_none(mock_subprocess_run):
     mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
     llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)

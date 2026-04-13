@@ -61,3 +61,57 @@ def test_real_llm_extraction_roundtrip(tmp_vault, tmp_home, memory_fixture):
     # Subscription contract (if user is on subscription)
     total_tokens = summary.total_input_tokens + summary.total_output_tokens
     assert summary.all_calls_subscription or total_tokens > 0
+
+
+def test_real_llm_strips_plugin_tools_and_thinking():
+    """Issues #6 + #7 acceptance on a real subprocess call.
+
+    #6: `--strict-mcp-config` + `--tools ""` must strip both built-in and
+        MCP plugin tools from the init event, regardless of what the user
+        has configured in their Claude Code settings.
+    #7: `CLAUDE_CODE_DISABLE_THINKING=1` must suppress the extended-thinking
+        block on Haiku 4.5, keeping wall-time and output-tokens low on
+        trivial prompts.
+    """
+    from mnemo.core import llm
+
+    resp = llm.call(
+        "Reply with the exact JSON: {}",
+        system="You are a JSON-only tool. Respond with `{}` and nothing else.",
+        model="claude-haiku-4-5",
+        timeout=60,
+    )
+
+    # --- Issue #6 acceptance ------------------------------------------------
+    init = resp.raw.get("init") or {}
+    assert init.get("tools") == [], (
+        f"init.tools must be empty, got {init.get('tools')!r}"
+    )
+    assert init.get("mcp_servers") == [], (
+        f"init.mcp_servers must be empty, got {init.get('mcp_servers')!r}"
+    )
+
+    # --- Issue #7 acceptance ------------------------------------------------
+    events = resp.raw.get("events") or []
+    thinking_blocks = [
+        c
+        for ev in events
+        if isinstance(ev, dict) and ev.get("type") == "assistant"
+        for c in (ev.get("message") or {}).get("content", [])
+        if isinstance(c, dict) and c.get("type") == "thinking"
+    ]
+    assert not thinking_blocks, (
+        f"CLAUDE_CODE_DISABLE_THINKING=1 should suppress thinking blocks, "
+        f"but found {len(thinking_blocks)} on this response"
+    )
+
+    result_event = resp.raw.get("result") or {}
+    duration_ms = result_event.get("duration_ms")
+    assert duration_ms is not None and duration_ms < 15_000, (
+        f"trivial prompt should finish in <15s wall-time, got {duration_ms}ms"
+    )
+    # Output tokens should be tiny for a trivial JSON reply (was ~300-500
+    # with thinking enabled, should be <50 without)
+    assert resp.output_tokens is not None and resp.output_tokens < 50, (
+        f"trivial prompt output should be <50 tokens, got {resp.output_tokens}"
+    )

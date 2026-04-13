@@ -91,3 +91,49 @@ def test_system_prompts_are_non_empty_constants():
     assert len(prompts.FEEDBACK_SYSTEM_PROMPT) > 50
     assert isinstance(prompts.USER_SYSTEM_PROMPT, str)
     assert isinstance(prompts.REFERENCE_SYSTEM_PROMPT, str)
+
+
+# --- Issue #5: cross-agent merge strengthening --------------------------------
+
+
+def test_feedback_system_prompt_instructs_merge_on_different_wording():
+    """Two files expressing the same rule with different wording MUST merge."""
+    sysp = prompts.FEEDBACK_SYSTEM_PROMPT.lower()
+    assert "different" in sysp and "wording" in sysp, (
+        "system prompt must explicitly tell the model to merge across different wording"
+    )
+    assert "when in doubt, merge" in sysp, (
+        "system prompt must bias the model toward merging on ambiguity"
+    )
+
+
+def test_feedback_few_shot_includes_no_commits_cross_agent_merge():
+    """Few-shot must demonstrate the real no-commits vs no-commit-without-permission merge."""
+    files = [_mk_file("x", "feedback", "example")]
+    prompt = prompts.build_feedback_prompt(files)
+    assert "no_commits" in prompt or "no-commits" in prompt
+    assert "no_commit_without_permission" in prompt or "no-commit-without-permission" in prompt
+    # Both sources must appear in the merged output's source_files list
+    assert "feedback_no_commits.md" in prompt
+    assert "feedback_no_commit_without_permission.md" in prompt
+
+
+def test_feedback_few_shot_includes_negative_do_not_merge_example():
+    """Few-shot must include a negative example: two distinct rules that stay split."""
+    files = [_mk_file("x", "feedback", "example")]
+    prompt = prompts.build_feedback_prompt(files)
+    lowered = prompt.lower()
+    # Must signal "do NOT merge" or an equivalent anti-merge marker
+    assert "do not merge" in lowered or "must not merge" in lowered or "stay separate" in lowered, (
+        "few-shot must include explicit negative example flagging files that should NOT merge"
+    )
+    # The negative pair is use-yarn vs no-commits (distinct domains)
+    assert "yarn" in lowered
+    # And the negative output must emit TWO separate pages (distinct slugs)
+    # sharing a single pages array — a clear demonstration of non-merge.
+    assert '"slug":"use-yarn"' in prompt
+    # A second distinct slug in the same few-shot confirms two pages
+    assert prompt.count('"slug":"') >= 3, (
+        "few-shot should show at least 3 slugs across examples "
+        "(positive merge + negative 2-page + passthrough)"
+    )

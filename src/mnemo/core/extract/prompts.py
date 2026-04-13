@@ -12,8 +12,17 @@ FEEDBACK_SYSTEM_PROMPT = (
     "multiple Claude Code agents into canonical Tier 2 pages. Group files that "
     "express the SAME rule or preference across different agents. Produce one "
     "canonical page per conceptual cluster. Preserve the 'Why' and 'How to apply' "
-    "structure. Output MUST be valid JSON matching the requested schema. Do not "
-    "add prose before or after the JSON."
+    "structure.\n\n"
+    "CRITICAL merge rule: two files from different agents that describe the "
+    "same underlying rule or preference MUST be merged into a single page, "
+    "even when the wording, filename, or frontmatter name differs. Focus on "
+    "the conceptual intent, not surface phrasing. When in doubt, merge — "
+    "over-merging conceptually-related rules is preferable to leaving "
+    "duplicates in the sacred directory. Only keep files separate when they "
+    "address genuinely distinct rules (different domains, different tools, "
+    "unrelated behaviors).\n\n"
+    "Output MUST be valid JSON matching the requested schema. Do not add "
+    "prose before or after the JSON."
 )
 
 USER_SYSTEM_PROMPT = (
@@ -49,32 +58,64 @@ Required JSON output schema:
 """
 
 _FEW_SHOT_FEEDBACK = """\
-Example — TWO input files merging into ONE page:
+Example 1 — POSITIVE: two files with different wording, same rule → MERGE into one page.
+(This is the canonical case you must get right. Different agents, different
+filenames, different `name:` frontmatter, different phrasing — but the
+underlying rule is identical: never create git commits without explicit
+user permission.)
 
 Input:
-[FILE: bots/agent-x/memory/feedback_use_yarn.md]
+[FILE: bots/central-inteligencia-frontend/memory/feedback_no_commits.md]
+---
+name: No commits
+type: feedback
+---
+Never run `git commit` on my behalf. Only edit files.
+**Why:** I review and stage commits myself.
+**How to apply:** edit files but stop before committing.
+[END]
+[FILE: bots/clubinho/memory/feedback_no_commit_without_permission.md]
+---
+name: Ask before committing
+type: feedback
+---
+Do not create git commits unless I explicitly ask.
+**Why:** commit history is my responsibility.
+**How to apply:** wait for the user to say "commit this" before running git commit.
+[END]
+
+Output (ONE merged page, both files listed in source_files):
+{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"]}]}
+
+Example 2 — NEGATIVE: two files about genuinely different rules → DO NOT MERGE.
+(Use yarn and no-commits-without-permission are unrelated rules — different
+domain, different tool, different behavior. They must stay separate even
+though they are both "feedback" type.)
+
+Input:
+[FILE: bots/agent-a/memory/feedback_use_yarn.md]
 ---
 name: Use yarn
 type: feedback
 ---
-Always use yarn.
-**Why:** yarn.lock is canonical.
-**How to apply:** Use `yarn add`.
+Always use yarn for JS/TS package management.
+**Why:** yarn.lock is canonical in this repo.
+**How to apply:** `yarn add <pkg>`, never `npm install`.
 [END]
-[FILE: bots/agent-y/memory/feedback_yarn_only.md]
+[FILE: bots/agent-b/memory/feedback_no_commits.md]
 ---
-name: Yarn only
+name: No autonomous commits
 type: feedback
 ---
-Never npm.
-**Why:** mixing causes lockfile drift.
-**How to apply:** use yarn.
+Do not run `git commit` without permission.
+**Why:** I own commit history.
+**How to apply:** stop before committing.
 [END]
 
-Output:
-{"pages":[{"slug":"use-yarn","name":"Use yarn, never npm","description":"JS/TS projects use yarn exclusively","type":"feedback","body":"Use yarn for all JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile; mixing npm and yarn causes drift.\\n\\n**How to apply:** Use `yarn add <pkg>` or `yarn add -D <pkg>`. Never run npm commands.","source_files":["bots/agent-x/memory/feedback_use_yarn.md","bots/agent-y/memory/feedback_yarn_only.md"]}]}
+Output (TWO separate pages — these rules DO NOT merge):
+{"pages":[{"slug":"use-yarn","name":"Use yarn for JS/TS","description":"Always use yarn, never npm","type":"feedback","body":"Always use yarn for JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile in this repo.\\n\\n**How to apply:** `yarn add <pkg>` for runtime deps, `yarn add -D <pkg>` for dev deps. Never run `npm install`.","source_files":["bots/agent-a/memory/feedback_use_yarn.md"]},{"slug":"no-autonomous-commits","name":"No autonomous commits","description":"Do not run git commit without explicit permission","type":"feedback","body":"Do not run `git commit` without explicit user permission.\\n\\n**Why:** the user owns their commit history.\\n\\n**How to apply:** edit and stage freely, but stop before committing.","source_files":["bots/agent-b/memory/feedback_no_commits.md"]}]}
 
-Example — ONE input file passing through unchanged:
+Example 3 — ONE input file passing through unchanged:
 
 Input:
 [FILE: bots/agent-z/memory/feedback_solo.md]
