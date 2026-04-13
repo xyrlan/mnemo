@@ -1,0 +1,296 @@
+"""State machine + atomic writes for v0.2 extraction inbox.
+
+Implements the decision table from spec §5.4 (cluster types) using typed
+exceptions only. KeyboardInterrupt must propagate — never use
+`except Exception` in this file.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from mnemo.core.extract.scanner import ExtractionState, StateEntry
+
+SCHEMA_VERSION = 1
+
+
+class ExtractionIOError(OSError):
+    """Filesystem failure during extraction write."""
+
+
+class StateSchemaError(Exception):
+    """Unknown or incompatible state file schema version."""
+
+
+@dataclass
+class ExtractedPage:
+    slug: str
+    type: str
+    name: str
+    description: str
+    body: str
+    source_files: list[str]
+    source_hash: str
+
+
+@dataclass
+class ApplyResult:
+    written_fresh: list[str] = field(default_factory=list)
+    overwrite_safe: list[str] = field(default_factory=list)
+    sibling_proposed: list[tuple[str, str]] = field(default_factory=list)
+    update_proposed: list[str] = field(default_factory=list)
+    dismissed_skipped: list[str] = field(default_factory=list)
+    unchanged_skipped: list[str] = field(default_factory=list)
+
+
+def _file_hash(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise ExtractionIOError(f"failed to write {path}: {exc}") from exc
+
+
+def _render_page(page: ExtractedPage, *, run_id: str) -> str:
+    now = datetime.now().isoformat(timespec="seconds")
+    sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
+    return (
+        "---\n"
+        f"name: {page.name}\n"
+        f"description: {page.description}\n"
+        f"type: {page.type}\n"
+        f"extracted_at: {now}\n"
+        f"extraction_run: {run_id}\n"
+        "sources:\n"
+        f"{sources_yaml}\n"
+        "tags:\n"
+        "  - needs-review\n"
+        "---\n\n"
+        f"{page.body}\n"
+    )
+
+
+def _inbox_path(vault_root: Path, page: ExtractedPage) -> Path:
+    return vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+
+
+def _promoted_path(vault_root: Path, page: ExtractedPage) -> Path:
+    return vault_root / "shared" / page.type / f"{page.slug}.md"
+
+
+def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
+    """Merge pages that share a slug (cross-chunk cluster collision)."""
+    groups: dict[str, list[ExtractedPage]] = {}
+    for p in pages:
+        key = f"{p.type}/{p.slug}"
+        groups.setdefault(key, []).append(p)
+
+    merged: list[ExtractedPage] = []
+    for key, items in groups.items():
+        if len(items) == 1:
+            merged.append(items[0])
+            continue
+        # Union source files; body from the page with most sources
+        chosen = max(items, key=lambda p: len(p.source_files))
+        all_sources: list[str] = []
+        for p in items:
+            for sf in p.source_files:
+                if sf not in all_sources:
+                    all_sources.append(sf)
+        merged.append(ExtractedPage(
+            slug=chosen.slug,
+            type=chosen.type,
+            name=chosen.name,
+            description=chosen.description,
+            body=chosen.body,
+            source_files=all_sources,
+            source_hash=chosen.source_hash,
+        ))
+    return merged
+
+
+def apply_pages(
+    pages: list[ExtractedPage],
+    state: ExtractionState,
+    vault_root: Path,
+    *,
+    run_id: str | None = None,
+    force: bool = False,
+) -> ApplyResult:
+    run_id = run_id or datetime.now().isoformat(timespec="seconds")
+    result = ApplyResult()
+
+    for page in pages:
+        key = f"{page.type}/{page.slug}"
+        entry = state.entries.get(key)
+        inbox_file = _inbox_path(vault_root, page)
+        promoted_file = _promoted_path(vault_root, page)
+
+        # Row 1: source_hash unchanged
+        if entry is not None and entry.source_hash == page.source_hash and not force:
+            result.unchanged_skipped.append(key)
+            continue
+
+        content = _render_page(page, run_id=run_id)
+        new_written_hash = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        # Row 2: fresh (no entry)
+        if entry is None:
+            _atomic_write(inbox_file, content)
+            state.entries[key] = StateEntry(
+                source_files=list(page.source_files),
+                source_hash=page.source_hash,
+                written_hash=new_written_hash,
+                written_at=run_id,
+                status="inbox",
+            )
+            result.written_fresh.append(key)
+            continue
+
+        # Entry exists, source changed (or force)
+        status = entry.status
+
+        if status == "dismissed":
+            if force:
+                _atomic_write(inbox_file, content)
+                state.entries[key] = StateEntry(
+                    source_files=list(page.source_files),
+                    source_hash=page.source_hash,
+                    written_hash=new_written_hash,
+                    written_at=run_id,
+                    status="inbox",
+                )
+                result.written_fresh.append(key)
+            else:
+                result.dismissed_skipped.append(key)
+            continue
+
+        if status == "promoted":
+            if promoted_file.exists():
+                update_file = inbox_file.with_name(f"{page.slug}.update-proposed.md")
+                _atomic_write(update_file, content)
+                # Entry stays promoted; record source_hash so next run doesn't re-fire
+                entry.source_hash = page.source_hash
+                entry.source_files = list(page.source_files)
+                result.update_proposed.append(key)
+            else:
+                # Promoted file was deleted by user — treat as dismissed
+                entry.status = "dismissed"
+                result.dismissed_skipped.append(key)
+            continue
+
+        # status == "inbox" (the main case)
+        if inbox_file.exists():
+            disk_hash = _file_hash(inbox_file)
+            if disk_hash == entry.written_hash:
+                # overwrite_safe
+                _atomic_write(inbox_file, content)
+                entry.source_files = list(page.source_files)
+                entry.source_hash = page.source_hash
+                entry.written_hash = new_written_hash
+                entry.written_at = run_id
+                result.overwrite_safe.append(key)
+            else:
+                # user edited — write sibling
+                sibling = inbox_file.with_name(f"{page.slug}.proposed.md")
+                _atomic_write(sibling, content)
+                result.sibling_proposed.append((key, str(sibling)))
+        else:
+            # inbox file disappeared; check shared/
+            if promoted_file.exists():
+                entry.status = "promoted"
+                update_file = inbox_file.with_name(f"{page.slug}.update-proposed.md")
+                _atomic_write(update_file, content)
+                entry.source_hash = page.source_hash
+                entry.source_files = list(page.source_files)
+                result.update_proposed.append(key)
+            elif force:
+                # Force resurrects: same-run detection of deletion + force means write fresh.
+                _atomic_write(inbox_file, content)
+                entry.source_files = list(page.source_files)
+                entry.source_hash = page.source_hash
+                entry.written_hash = new_written_hash
+                entry.written_at = run_id
+                entry.status = "inbox"
+                result.written_fresh.append(key)
+            else:
+                entry.status = "dismissed"
+                result.dismissed_skipped.append(key)
+
+    return result
+
+
+def atomic_write_state(state: ExtractionState, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "last_run": state.last_run,
+        "entries": {
+            k: {
+                "source_files": v.source_files,
+                "source_hash": v.source_hash,
+                "written_hash": v.written_hash,
+                "written_at": v.written_at,
+                "status": v.status,
+            }
+            for k, v in state.entries.items()
+        },
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise ExtractionIOError(f"failed to write state file: {exc}") from exc
+
+
+def load_state(path: Path) -> ExtractionState:
+    if not path.exists():
+        return ExtractionState(last_run=None, entries={})
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # Back up and return empty
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        try:
+            path.rename(path.with_name(f"{path.name}.bak.{stamp}"))
+        except OSError:
+            pass
+        return ExtractionState(last_run=None, entries={})
+
+    version = payload.get("schema_version", 0)
+    if version != SCHEMA_VERSION:
+        raise StateSchemaError(
+            f"state file schema_version={version}, this mnemo supports {SCHEMA_VERSION}"
+        )
+
+    entries = {}
+    for k, v in payload.get("entries", {}).items():
+        entries[k] = StateEntry(
+            source_files=list(v.get("source_files") or []),
+            source_hash=str(v.get("source_hash") or ""),
+            written_hash=str(v.get("written_hash") or ""),
+            written_at=str(v.get("written_at") or ""),
+            status=str(v.get("status") or "inbox"),
+        )
+    return ExtractionState(last_run=payload.get("last_run"), entries=entries)
