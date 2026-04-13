@@ -152,3 +152,83 @@ def test_apply_single_source_dismissed_when_user_deleted_sacred_file(tmp_path):
     entry = state.entries["feedback/use-yarn"]
     assert entry.status == "dismissed"
     assert result.dismissed_skipped == ["feedback/use-yarn"]
+
+
+def test_apply_sibling_bounced_when_user_edited_sacred_file(tmp_path):
+    page_v1 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    state = _mkstate()
+    inbox.apply_pages([page_v1], state, tmp_path, run_id="2026-04-13T12:00:00-run1")
+
+    # User edits the sacred file
+    target = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    target.write_text(target.read_text() + "\n\nUser's own paragraph.\n")
+
+    page_v2 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    page_v2.source_hash = "sha256:newhash"
+    page_v2.body = "Updated body from LLM.\n"
+
+    result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T13:00:00-run2")
+
+    sibling = tmp_path / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
+    assert sibling.exists(), "sibling should be bounced into _inbox/"
+    assert "Updated body from LLM" in sibling.read_text()
+    assert "User's own paragraph" in target.read_text(), "sacred file must be untouched"
+    assert result.sibling_bounced and result.sibling_bounced[0][0] == "feedback/use-yarn"
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "auto_promoted", "status must not regress"
+    assert entry.last_sync == "2026-04-13T12:00:00-run1", "last_sync must not advance on bounce"
+
+
+def test_apply_upgrade_proposed_when_single_becomes_multi(tmp_path):
+    # Run 1: single-source, auto-promoted
+    page_v1 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    state = _mkstate()
+    inbox.apply_pages([page_v1], state, tmp_path, run_id="2026-04-13T12:00:00-run1")
+
+    target = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    assert target.exists()
+    sacred_snapshot = target.read_text()
+
+    # Run 2: the same slug now has 2 sources (a new agent memorized a yarn rule)
+    page_v2 = _page("use-yarn", sources=[
+        "bots/a/memory/feedback_use_yarn.md",
+        "bots/b/memory/feedback_yarn_rule.md",
+    ])
+    page_v2.source_hash = "sha256:clusterhash"
+
+    result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T13:00:00-run2")
+
+    sibling = tmp_path / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
+    assert sibling.exists()
+    assert "bots/b/memory/feedback_yarn_rule.md" in sibling.read_text()
+    assert target.read_text() == sacred_snapshot, "sacred file untouched"
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "auto_promoted", "no regression to inbox status"
+    assert len(entry.source_files) == 1, "existing entry preserved"
+    assert result.upgrade_proposed and result.upgrade_proposed[0][0] == "feedback/use-yarn"
+
+
+def test_apply_v0_2_to_v0_3_migration_legacy_inbox_becomes_auto_promoted(tmp_path):
+    # Simulate v0.2 state: single-source page with status=inbox + file in _inbox/
+    state = _mkstate(**{
+        "feedback/use-yarn": StateEntry(
+            source_files=["bots/a/memory/feedback_use_yarn.md"],
+            source_hash="sha256:oldhash",
+            written_hash="sha256:wr1",
+            written_at="2026-04-10T12:00:00",
+            status="inbox",
+            last_sync="2026-04-10T12:00:00",
+        )
+    })
+
+    page_v2 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    page_v2.source_hash = "sha256:newhash"
+
+    result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T12:00:00-run2")
+
+    sacred = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists(), "v0.2→v0.3 migration should write to sacred dir"
+    assert "auto-promoted" in sacred.read_text()
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "auto_promoted"
+    assert result.auto_promoted == ["feedback/use-yarn"]
