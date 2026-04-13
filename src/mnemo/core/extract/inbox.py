@@ -45,6 +45,9 @@ class ApplyResult:
     update_proposed: list[str] = field(default_factory=list)
     dismissed_skipped: list[str] = field(default_factory=list)
     unchanged_skipped: list[str] = field(default_factory=list)
+    auto_promoted: list[str] = field(default_factory=list)
+    sibling_bounced: list[tuple[str, str]] = field(default_factory=list)
+    upgrade_proposed: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _file_hash(path: Path) -> str:
@@ -66,8 +69,14 @@ def _atomic_write(path: Path, content: str) -> None:
         raise ExtractionIOError(f"failed to write {path}: {exc}") from exc
 
 
-def _render_page(page: ExtractedPage, *, run_id: str) -> str:
+def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
+    if auto_promoted:
+        extras = f"last_sync: {run_id}\n"
+        tag = "auto-promoted"
+    else:
+        extras = ""
+        tag = "needs-review"
     return (
         "---\n"
         f"name: {page.name}\n"
@@ -75,10 +84,11 @@ def _render_page(page: ExtractedPage, *, run_id: str) -> str:
         f"type: {page.type}\n"
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
+        f"{extras}"
         "sources:\n"
         f"{sources_yaml}\n"
         "tags:\n"
-        "  - needs-review\n"
+        f"  - {tag}\n"
         "---\n\n"
         f"{page.body}\n"
     )

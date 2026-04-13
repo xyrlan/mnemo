@@ -60,3 +60,27 @@ def test_sibling_path_stays_adjacent_for_inbox_target(tmp_path):
     target = tmp_path / "shared" / "_inbox" / "feedback" / "no-commits.md"
     sibling = inbox._sibling_path(target, tmp_path)
     assert sibling == tmp_path / "shared" / "_inbox" / "feedback" / "no-commits.proposed.md"
+
+
+def test_render_page_inbox_has_needs_review_tag():
+    page = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    content = inbox._render_page(page, run_id="2026-04-13T12:00:00-abc123", auto_promoted=False)
+    assert "needs-review" in content
+    assert "auto-promoted" not in content
+    assert "last_sync:" not in content
+
+
+def test_render_page_auto_promoted_has_auto_tag_and_last_sync():
+    page = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    content = inbox._render_page(page, run_id="2026-04-13T12:00:00-abc123", auto_promoted=True)
+    assert "auto-promoted" in content
+    assert "needs-review" not in content
+    assert "last_sync: 2026-04-13T12:00:00-abc123" in content
+    assert "extracted_at: 2026-04-13T12:00:00-abc123" in content
+
+
+def test_apply_result_has_v0_3_fields():
+    result = inbox.ApplyResult()
+    assert result.auto_promoted == []
+    assert result.sibling_bounced == []
+    assert result.upgrade_proposed == []
