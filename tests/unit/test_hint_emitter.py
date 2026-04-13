@@ -47,7 +47,7 @@ def test_hint_not_emitted_below_threshold(tmp_vault: Path):
         vault_root=tmp_vault,
         agent_name="a",
     )
-    assert "🟡" not in log_path.read_text()
+    assert "🟡" not in log_path.read_text(encoding="utf-8")
 
 
 def test_hint_emitted_at_threshold(tmp_vault: Path):
@@ -65,7 +65,7 @@ def test_hint_emitted_at_threshold(tmp_vault: Path):
         vault_root=tmp_vault,
         agent_name="a",
     )
-    text = log_path.read_text()
+    text = log_path.read_text(encoding="utf-8")
     assert "🟡" in text
     assert "5 new memories" in text
     assert "/mnemo extract" in text
@@ -85,7 +85,7 @@ def test_hint_emphatic_variant_at_triple_threshold(tmp_vault: Path):
         vault_root=tmp_vault,
         agent_name="a",
     )
-    assert "a lot!" in log_path.read_text()
+    assert "a lot!" in log_path.read_text(encoding="utf-8")
 
 
 def test_hint_not_duplicated_same_day(tmp_vault: Path):
@@ -101,7 +101,7 @@ def test_hint_not_duplicated_same_day(tmp_vault: Path):
     session_end._maybe_emit_hint({"extraction": {"hintThreshold": 5}}, tmp_vault, "a")
     session_end._maybe_emit_hint({"extraction": {"hintThreshold": 5}}, tmp_vault, "a")
 
-    assert log_path.read_text().count("🟡") == 1
+    assert log_path.read_text(encoding="utf-8").count("🟡") == 1
 
 
 def test_hint_silent_when_state_missing(tmp_vault: Path):
@@ -114,7 +114,7 @@ def test_hint_silent_when_state_missing(tmp_vault: Path):
     log_path.write_text("# log\n")
 
     session_end._maybe_emit_hint({"extraction": {"hintThreshold": 5}}, tmp_vault, "a")
-    assert "🟡" not in log_path.read_text()
+    assert "🟡" not in log_path.read_text(encoding="utf-8")
 
 
 def test_hint_silent_when_state_corrupt(tmp_vault: Path):

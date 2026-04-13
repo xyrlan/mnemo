@@ -55,7 +55,7 @@ def _maybe_emit_hint(cfg: dict, vault_root, agent_name: str) -> None:
 
         today = datetime.now().strftime("%Y-%m-%d")
         log_path = vault_root / "bots" / agent_name / "logs" / f"{today}.md"
-        if log_path.exists() and "🟡" in log_path.read_text(errors="ignore"):
+        if log_path.exists() and "🟡" in log_path.read_text(encoding="utf-8", errors="ignore"):
             return  # already hinted today
 
         if count >= threshold * 3:

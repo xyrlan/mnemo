@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _VALID_TYPES = {"feedback", "user", "reference", "project"}
-_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
 _SLUG_CLEAN_RE = re.compile(r"[^a-z0-9]+")
 
 

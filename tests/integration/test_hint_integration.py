@@ -55,7 +55,7 @@ def test_session_end_hook_emits_hint_end_to_end(tmp_vault, tmp_home, monkeypatch
     # Find any log file that has the hint (agent-name resolution from cwd may pick
     # whichever name — the key assertion is that SOME log has the hint).
     log_files = list((tmp_vault / "bots").glob("*/logs/*.md"))
-    assert any("🟡" in f.read_text() for f in log_files), f"no hint found in {log_files}"
+    assert any("🟡" in f.read_text(encoding="utf-8", errors="ignore") for f in log_files), f"no hint found in {log_files}"
 
 
 def test_session_end_hook_silent_when_no_state(tmp_vault, tmp_home, monkeypatch):
@@ -71,4 +71,4 @@ def test_session_end_hook_silent_when_no_state(tmp_vault, tmp_home, monkeypatch)
     rc = session_end.main()
     assert rc == 0
     log_files = list((tmp_vault / "bots").glob("*/logs/*.md"))
-    assert not any("🟡" in f.read_text() for f in log_files if f.exists())
+    assert not any("🟡" in f.read_text(encoding="utf-8", errors="ignore") for f in log_files if f.exists())
