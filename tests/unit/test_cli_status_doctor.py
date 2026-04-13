@@ -124,3 +124,85 @@ def test_status_shows_running_now_when_lock_held(tmp_path, monkeypatch, capsys):
     cli.main(["status"])
     captured = capsys.readouterr()
     assert "running" in captured.out.lower()
+
+
+def test_doctor_warns_on_recent_background_failure(tmp_path, monkeypatch, capsys):
+    from datetime import datetime, timedelta
+
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+
+    last_run = {
+        "run_id": "2026-04-13T12:00:00-abc",
+        "started_at": "2026-04-13T12:00:00",
+        "finished_at": (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds"),
+        "mode": "background",
+        "exit_code": 1,
+        "summary": {"pages_written": 0, "failed_chunks": 1, "mode": "background"},
+        "error": {"type": "LLMSubprocessError", "message": "timeout"},
+    }
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": True, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+    monkeypatch.setattr("mnemo.install.preflight.run_preflight",
+                        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})())
+
+    cli.main(["doctor"])
+    captured = capsys.readouterr()
+    assert "Auto-brain" in captured.out or "auto-brain" in captured.out.lower()
+    assert "failed" in captured.out.lower() or "FAIL" in captured.out
+    assert "LLMSubprocessError" in captured.out
+
+
+def test_doctor_warns_on_stale_lock(tmp_path, monkeypatch, capsys):
+    import os
+    import time
+
+    vault = tmp_path / "vault"
+    lock = vault / ".mnemo" / "extract.lock"
+    lock.mkdir(parents=True)
+    old = time.time() - 900
+    os.utime(lock, (old, old))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": True, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+    monkeypatch.setattr("mnemo.install.preflight.run_preflight",
+                        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})())
+
+    cli.main(["doctor"])
+    captured = capsys.readouterr()
+    assert "stale" in captured.out.lower()
+    assert "extract.lock" in captured.out
+
+
+def test_doctor_warns_when_auto_enabled_but_no_recent_run(tmp_path, monkeypatch, capsys):
+    from datetime import datetime, timedelta
+
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    last_run = {
+        "run_id": "old",
+        "started_at": "2026-04-01T00:00:00",
+        "finished_at": (datetime.now() - timedelta(days=10)).isoformat(timespec="seconds"),
+        "mode": "background",
+        "exit_code": 0,
+        "summary": {"pages_written": 0, "mode": "background"},
+        "error": None,
+    }
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": True, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+    monkeypatch.setattr("mnemo.install.preflight.run_preflight",
+                        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})())
+
+    cli.main(["doctor"])
+    captured = capsys.readouterr()
+    assert "7" in captured.out or "days" in captured.out.lower()
