@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "result": "Sure! Here is the extraction you requested:\n\n```json\n{\n  \"pages\": [\n    {\n      \"slug\": \"use-yarn\",\n      \"name\": \"Use yarn\",\n      \"description\": \"Prefer yarn\",\n      \"type\": \"feedback\",\n      \"body\": \"body text\",\n      \"source_files\": [\"bots/x/memory/feedback_use_yarn.md\"]\n    }\n  ]\n}\n```\n\nLet me know if you need more.",
+  "total_cost_usd": 0.0021,
+  "usage": {"input_tokens": 800, "output_tokens": 200},
+  "apiKeySource": "none"
+}

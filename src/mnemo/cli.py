@@ -33,6 +33,9 @@ def _build_parser() -> argparse.ArgumentParser:
     promote.add_argument("source", type=str)
     sub.add_parser("compile", help="regenerate wiki/compiled/ from sources")
     sub.add_parser("fix", help="reset circuit breaker")
+    extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
+    extract.add_argument("--dry-run", action="store_true", help="show what would run without making LLM calls or writes")
+    extract.add_argument("--force", action="store_true", help="reprocess dismissed and promoted entries")
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     sub.add_parser("help", help="list commands")
@@ -232,6 +235,46 @@ def cmd_compile(_args: argparse.Namespace) -> int:
     cfg = cfg_mod.load_config()
     out = wiki.compile_wiki(cfg)
     print(f"Compiled wiki index: {out}")
+    return 0
+
+
+@command("extract")
+def cmd_extract(args: argparse.Namespace) -> int:
+    from mnemo.core import config as cfg_mod, extract as extract_mod
+
+    cfg = cfg_mod.load_config()
+    try:
+        summary = extract_mod.run_extraction(cfg, dry_run=bool(args.dry_run), force=bool(args.force))
+    except extract_mod.ExtractionIOError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("Interrupted. Partial state flushed; re-run to continue.", file=sys.stderr)
+        return 130
+
+    if args.dry_run:
+        return 0
+
+    # Summary
+    total_tokens = summary.total_input_tokens + summary.total_output_tokens
+    if summary.all_calls_subscription and summary.total_cost_usd == 0.0:
+        cost_line = f"{total_tokens} tokens processed (subscription — no charge)"
+    else:
+        cost_line = f"${summary.total_cost_usd:.4f} ({total_tokens} tokens)"
+
+    cluster_pages = summary.pages_written - summary.projects_promoted
+    print("✓ extraction complete")
+    print(f"  written:    {summary.pages_written} pages ({summary.projects_promoted} direct projects + {cluster_pages} cluster pages)")
+    print(f"  conflicts:  {summary.sibling_proposed}")
+    print(f"  updates:    {summary.update_proposed}")
+    print(f"  skipped:    {summary.unchanged_skipped} unchanged, {summary.dismissed_skipped} dismissed")
+    print(f"  calls:      {summary.llm_calls} LLM calls")
+    print(f"  wall-time:  {summary.wall_time_s:.1f}s")
+    print(f"  cost:       {cost_line}")
+
+    if summary.failed_chunks > 0:
+        print(f"  ⚠ failed_chunks: {summary.failed_chunks} (see ~/.errors.log; re-run to retry)", file=sys.stderr)
+        return 1
     return 0
 
 

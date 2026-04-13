@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "result": "```json\n{\n  \"pages\": [\n    {\n      \"slug\": \"use-yarn\",\n      \"name\": \"Use yarn as package manager\",\n      \"description\": \"Prefer yarn over npm for JS/TS projects\",\n      \"type\": \"feedback\",\n      \"body\": \"Always use yarn.\\n\\n**Why:** yarn.lock is the canonical lockfile.\\n\\n**How to apply:** Use yarn add.\",\n      \"source_files\": [\"bots/central-inteligencia-frontend/memory/feedback_use_yarn.md\"]\n    },\n    {\n      \"slug\": \"no-commits-without-permission\",\n      \"name\": \"No commits without permission\",\n      \"description\": \"Never commit without explicit approval\",\n      \"type\": \"feedback\",\n      \"body\": \"Do not create git commits unless the user explicitly asks.\\n\\n**Why:** Manual control over commit history.\\n\\n**How to apply:** Wait for explicit commit approval.\",\n      \"source_files\": [\"bots/central-inteligencia-frontend/memory/feedback_no_commits.md\", \"bots/clubinho/memory/feedback_no_commit_without_permission.md\"]\n    }\n  ]\n}\n```",
+  "total_cost_usd": 0.0048,
+  "usage": {"input_tokens": 5200, "output_tokens": 1100},
+  "apiKeySource": "none"
+}

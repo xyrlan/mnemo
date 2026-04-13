@@ -57,3 +57,26 @@ def test_corrupted_json_returns_defaults(tmp_path: Path):
     # Falls back silently to defaults; never raises
     assert cfg["vaultRoot"]
     assert cfg["capture"]["sessionStartEnd"] is True
+
+
+def test_extraction_defaults_populated(tmp_path):
+    from mnemo.core import config
+    cfg = config.load_config(tmp_path / "nope.json")
+    assert cfg["extraction"]["model"] == "claude-haiku-4-5"
+    assert cfg["extraction"]["chunkSize"] == 10
+    assert cfg["extraction"]["hintThreshold"] == 5
+    assert cfg["extraction"]["preferAPI"] is False
+    assert cfg["extraction"]["subprocessTimeout"] == 60
+    assert cfg["extraction"]["costSoftCap"] is None
+
+
+def test_extraction_user_override_preserved(tmp_path):
+    from mnemo.core import config
+    p = tmp_path / "cfg.json"
+    p.write_text('{"extraction": {"model": "claude-sonnet-4-6", "chunkSize": 5}}')
+    cfg = config.load_config(p)
+    assert cfg["extraction"]["model"] == "claude-sonnet-4-6"
+    assert cfg["extraction"]["chunkSize"] == 5
+    # Defaults still present for non-overridden keys
+    assert cfg["extraction"]["hintThreshold"] == 5
+    assert cfg["extraction"]["subprocessTimeout"] == 60

@@ -1,0 +1,2 @@
+tests/fixtures/memory_files/*.md text eol=lf
+tests/fixtures/llm_responses/*.json text eol=lf
