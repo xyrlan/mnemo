@@ -5,6 +5,7 @@ Reusable beyond v0.2 — kept outside core/extract/ on purpose.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -57,9 +58,19 @@ def _is_rate_limit(stderr: str) -> bool:
 
 
 def _build_argv(model: str, system: str | None) -> list[str]:
+    # --strict-mcp-config (with no paired --mcp-config) tells the CLI to
+    # ignore every MCP configuration source, producing an empty mcp_servers
+    # list. Combined with --tools "" (which zeroes the built-in set), the
+    # subprocess sees zero tools — no MCP plugin tools leaking in from the
+    # user's Claude Code config. See issue #6.
+    #
+    # NOTE: do NOT use --bare here; it also skips plugin sync but forces
+    # ANTHROPIC_API_KEY auth and refuses to read OAuth/keychain, which
+    # breaks subscription users.
     argv = [
         "claude",
         "--print",
+        "--strict-mcp-config",
         "--no-session-persistence",
         "--output-format", "json",
         "--model", model,
@@ -70,6 +81,18 @@ def _build_argv(model: str, system: str | None) -> list[str]:
     return argv
 
 
+def _build_env() -> dict[str, str]:
+    """Parent env + CLAUDE_CODE_DISABLE_THINKING=1 to suppress extended thinking.
+
+    Haiku 4.5 does extended thinking by default in `claude --print`, which
+    costs ~200-400 output tokens and several seconds of wall-time on trivial
+    prompts. This env var is the canonical switch. See issue #7.
+    """
+    env = os.environ.copy()
+    env["CLAUDE_CODE_DISABLE_THINKING"] = "1"
+    return env
+
+
 def _invoke_once(argv: list[str], prompt: str, timeout: int):
     return _subprocess_run(
         argv,
@@ -77,6 +100,7 @@ def _invoke_once(argv: list[str], prompt: str, timeout: int):
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=_build_env(),
     )
 
 
