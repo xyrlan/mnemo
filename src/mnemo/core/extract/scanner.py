@@ -28,14 +28,15 @@ class StateEntry:
     source_hash: str
     written_hash: str
     written_at: str
-    status: str  # "inbox" | "promoted" | "dismissed" | "direct"
+    status: str  # "inbox" | "promoted" | "dismissed" | "direct" | "auto_promoted"
+    last_sync: str = ""
 
 
 @dataclass
 class ExtractionState:
     last_run: str | None
     entries: dict[str, StateEntry] = field(default_factory=dict)
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
