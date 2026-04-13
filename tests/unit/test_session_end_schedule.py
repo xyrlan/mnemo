@@ -118,3 +118,150 @@ def test_lock_held_false_when_stale_dir(tmp_path):
     old = time.time() - 600
     os.utime(lock, (old, old))
     assert session_end._lock_held(lock) is False
+
+
+def test_spawn_detached_extraction_posix_uses_start_new_session(monkeypatch):
+    import subprocess
+    import sys
+    from mnemo.hooks import session_end
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    session_end._spawn_detached_extraction()
+
+    assert captured["argv"][1:] == ["-m", "mnemo", "extract", "--background"]
+    assert captured["kwargs"].get("start_new_session") is True
+    assert captured["kwargs"].get("close_fds") is True
+    assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
+    assert captured["kwargs"]["stdout"] == subprocess.DEVNULL
+    assert captured["kwargs"]["stderr"] == subprocess.DEVNULL
+
+
+def test_spawn_detached_extraction_windows_uses_creationflags(monkeypatch):
+    import sys
+    from mnemo.hooks import session_end
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    session_end._spawn_detached_extraction()
+
+    flags = captured["kwargs"].get("creationflags", 0)
+    # DETACHED_PROCESS = 0x00000008, CREATE_NEW_PROCESS_GROUP = 0x00000200
+    assert flags & 0x00000008
+    assert flags & 0x00000200
+    assert "start_new_session" not in captured["kwargs"]
+
+
+def test_schedule_extraction_no_op_when_auto_disabled(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    cfg = {"extraction": {"auto": {"enabled": False}, "hintThreshold": 5}}
+
+    spawn_called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_extraction",
+                        lambda: spawn_called.append(True))
+    hint_called = []
+    monkeypatch.setattr(session_end, "_maybe_emit_hint",
+                        lambda cfg, vault, agent: hint_called.append(True))
+
+    session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
+
+    assert spawn_called == []
+    assert hint_called == [True]
+
+
+def test_schedule_extraction_spawns_when_debounce_passes(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / ".mnemo").mkdir()
+
+    cfg = {"extraction": {"auto": {
+        "enabled": True,
+        "minNewMemories": 1,
+        "minIntervalMinutes": 0,
+    }}}
+
+    mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
+    mem.parent.mkdir(parents=True)
+    mem.write_text("---\ntype: feedback\n---\nbody\n")
+
+    spawn_called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_extraction",
+                        lambda: spawn_called.append(True))
+
+    session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
+
+    assert spawn_called == [True]
+
+
+def test_schedule_extraction_skips_when_lock_held(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / ".mnemo" / "extract.lock").mkdir(parents=True)
+
+    cfg = {"extraction": {"auto": {
+        "enabled": True,
+        "minNewMemories": 1,
+        "minIntervalMinutes": 0,
+    }}}
+
+    spawn_called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_extraction",
+                        lambda: spawn_called.append(True))
+
+    mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
+    mem.parent.mkdir(parents=True)
+    mem.write_text("---\ntype: feedback\n---\nbody\n")
+
+    session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
+
+    assert spawn_called == [], "should not spawn when lock is held"
+
+
+def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+
+    cfg = {"extraction": {"auto": {
+        "enabled": True,
+        "minNewMemories": 1,
+        "minIntervalMinutes": 0,
+    }}}
+
+    mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
+    mem.parent.mkdir(parents=True)
+    mem.write_text("---\ntype: feedback\n---\nbody\n")
+
+    def boom():
+        raise OSError("too many fds")
+    monkeypatch.setattr(session_end, "_spawn_detached_extraction", boom)
+
+    # Should not raise
+    session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
+
+    errors_log = vault / ".errors.log"
+    assert errors_log.exists()
+    assert "session_end.schedule" in errors_log.read_text()

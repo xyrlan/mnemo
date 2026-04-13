@@ -89,6 +89,69 @@ def _lock_held(lock_path) -> bool:
         return False
 
 
+def _spawn_detached_extraction() -> None:
+    """Fire-and-forget background extraction via subprocess.Popen.
+
+    Uses platform-specific detach flags so the child survives the hook's
+    exit. Stdio is redirected to DEVNULL because nothing reads a detached
+    subprocess's output.
+    """
+    import subprocess
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    argv = [sys.executable, "-m", "mnemo", "extract", "--background"]
+    subprocess.Popen(argv, **kwargs)
+
+
+def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
+    """Main entry point called from session_end.main().
+
+    When auto.enabled=True and debounce passes, spawn a detached background
+    extraction. Otherwise fall back to the v0.2 passive hint emitter. Any
+    exception is logged with where='session_end.schedule' and swallowed.
+    """
+    try:
+        from mnemo.core import errors as err_mod
+
+        auto_cfg = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
+        auto_enabled = bool(auto_cfg.get("enabled", False))
+
+        if not auto_enabled:
+            _maybe_emit_hint(cfg, vault_root, agent_name)
+            return
+
+        state_path = vault_root / ".mnemo" / "extraction-state.json"
+        if not _debounce_passes(state_path, vault_root, cfg):
+            return
+
+        lock_path = vault_root / ".mnemo" / "extract.lock"
+        if _lock_held(lock_path):
+            return
+
+        try:
+            _spawn_detached_extraction()
+        except OSError as exc:
+            err_mod.log_error(vault_root, "session_end.schedule.popen", exc)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_end.schedule", exc)
+        except Exception:
+            pass
+
+
 def _maybe_emit_hint(cfg: dict, vault_root, agent_name: str) -> None:
     """Append a hint line to today's log if enough new memories have accumulated.
 
@@ -192,9 +255,9 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_end.clear", e)
         try:
-            _maybe_emit_hint(cfg, vault, agent_name)
+            _maybe_schedule_extraction(cfg, vault, agent_name)
         except Exception as e:
-            errors.log_error(vault, "session_end.hint_wrap", e)
+            errors.log_error(vault, "session_end.schedule_wrap", e)
     except Exception as e:
         try:
             from mnemo.core import config as _c, errors as _e, paths as _p
