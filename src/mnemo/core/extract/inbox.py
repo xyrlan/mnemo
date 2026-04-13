@@ -92,6 +92,43 @@ def _promoted_path(vault_root: Path, page: ExtractedPage) -> Path:
     return vault_root / "shared" / page.type / f"{page.slug}.md"
 
 
+def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
+    """Return the filesystem target for a page based on its source count.
+
+    Single-source pages go directly to the sacred dir (auto-promote).
+    Multi-source pages stage in _inbox/ for review.
+    """
+    if len(page.source_files) == 1:
+        return vault_root / "shared" / page.type / f"{page.slug}.md"
+    return vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+
+
+def _is_auto_promoted_target(target: Path, vault_root: Path) -> bool:
+    """True if the target is inside shared/<type>/ (not shared/_inbox/)."""
+    try:
+        rel = target.relative_to(vault_root / "shared")
+    except ValueError:
+        return False
+    parts = rel.parts
+    if not parts:
+        return False
+    return parts[0] != "_inbox"
+
+
+def _sibling_path(target: Path, vault_root: Path) -> Path:
+    """Where does a .proposed.md sibling for this target live?
+
+    Auto-promoted targets (in shared/<type>/) bounce their siblings back into
+    shared/_inbox/<type>/ so the sacred dir stays free of plugin artifacts.
+    _inbox/ targets keep siblings adjacent (v0.2 behavior).
+    """
+    if _is_auto_promoted_target(target, vault_root):
+        page_type = target.parent.name
+        slug = target.stem
+        return vault_root / "shared" / "_inbox" / page_type / f"{slug}.proposed.md"
+    return target.parent / f"{target.stem}.proposed.md"
+
+
 def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
     """Merge pages that share a slug (cross-chunk cluster collision)."""
     groups: dict[str, list[ExtractedPage]] = {}
