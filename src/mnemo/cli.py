@@ -36,6 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
     extract.add_argument("--dry-run", action="store_true", help="show what would run without making LLM calls or writes")
     extract.add_argument("--force", action="store_true", help="reprocess dismissed and promoted entries")
+    extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     sub.add_parser("help", help="list commands")
@@ -183,7 +184,80 @@ def cmd_status(_args: argparse.Namespace) -> int:
     log = vault / ".errors.log"
     if log.exists():
         print(f"Error log: {log} ({log.stat().st_size} bytes)")
+    _print_auto_brain_status(vault)
     return 0
+
+
+def _print_auto_brain_status(vault: Path) -> None:
+    import json as _json
+    import time
+    from datetime import datetime
+    from mnemo.core import config as cfg_mod
+
+    cfg = cfg_mod.load_config()
+    auto = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
+    enabled = bool(auto.get("enabled", False))
+    min_new = int(auto.get("minNewMemories", 5) or 5)
+    min_interval = int(auto.get("minIntervalMinutes", 60) or 60)
+
+    print("Auto-brain:")
+
+    lock_path = vault / ".mnemo" / "extract.lock"
+    if lock_path.exists():
+        try:
+            age = int(time.time() - lock_path.stat().st_mtime)
+            print(f"  running now: extract.lock held, started {age}s ago")
+        except OSError:
+            print("  running now: extract.lock present")
+
+    if not enabled:
+        print("  enabled:     no (set extraction.auto.enabled=true to activate)")
+        return
+
+    print(f"  enabled:     yes (minNewMemories={min_new}, minIntervalMinutes={min_interval})")
+
+    last_run_path = vault / ".mnemo" / "last-auto-run.json"
+    if not last_run_path.exists():
+        print("  last run:    (none yet)")
+        return
+
+    try:
+        payload = _json.loads(last_run_path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        print("  last run:    (corrupt last-auto-run.json)")
+        return
+
+    exit_code = payload.get("exit_code", 0)
+    summary = payload.get("summary", {}) or {}
+    finished_at = payload.get("finished_at")
+    elapsed_str = "unknown"
+    if finished_at:
+        try:
+            finished_dt = datetime.fromisoformat(finished_at)
+            delta = datetime.now() - finished_dt
+            total_sec = int(delta.total_seconds())
+            if total_sec < 60:
+                elapsed_str = f"{total_sec}s ago"
+            elif total_sec < 3600:
+                elapsed_str = f"{total_sec // 60}m ago"
+            else:
+                elapsed_str = f"{total_sec // 3600}h ago"
+        except ValueError:
+            pass
+
+    pages = summary.get("pages_written", 0)
+    auto_n = summary.get("auto_promoted", 0)
+    siblings = summary.get("sibling_proposed", 0) + summary.get("sibling_bounced", 0)
+    upgrades = summary.get("upgrade_proposed", 0)
+
+    if exit_code == 0:
+        print(f"  last run:    {elapsed_str} — {pages} pages ({auto_n} auto-promoted), {siblings} conflicts")
+    else:
+        err = payload.get("error") or {}
+        err_type = err.get("type", "error")
+        print(f"  last run:    {elapsed_str} — FAILED ({err_type}); see ~/.errors.log")
+    if upgrades:
+        print(f"  upgrades:    {upgrades} proposed")
 
 
 @command("doctor")
@@ -195,8 +269,76 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     for issue in result.issues:
         print(f"  [{issue.severity}] {issue.kind}: {issue.message}")
         print(f"       → {issue.remediation}")
-    print("OK" if result.ok else "Issues found above.")
-    return 0 if result.ok else 1
+
+    auto_ok = _doctor_check_auto_brain(vault)
+
+    if not result.ok:
+        print("Issues found above.")
+        return 1
+    if not auto_ok:
+        print("Auto-brain warnings above.")
+    else:
+        print("OK")
+    return 0
+
+
+def _doctor_check_auto_brain(vault: Path) -> bool:
+    """Return True if no warnings were emitted."""
+    import json as _json
+    import time
+    from datetime import datetime, timedelta
+    from mnemo.core import config as cfg_mod
+
+    cfg = cfg_mod.load_config()
+    auto = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
+    enabled = bool(auto.get("enabled", False))
+    ok = True
+
+    lock_path = vault / ".mnemo" / "extract.lock"
+    if lock_path.exists():
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+            if age > 600:
+                print(f"  ⚠ Auto-brain: stale extract.lock at {lock_path} ({int(age)}s old); will auto-reclaim on next run")
+                ok = False
+        except OSError:
+            pass
+
+    last_run_path = vault / ".mnemo" / "last-auto-run.json"
+    if not enabled:
+        return ok
+
+    if not last_run_path.exists():
+        print("  ℹ Auto-brain: enabled but has never run. Hook scheduling may not be firing.")
+        return ok
+
+    try:
+        payload = _json.loads(last_run_path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        print("  ⚠ Auto-brain: last-auto-run.json is corrupt; delete to reset")
+        return False
+
+    exit_code = payload.get("exit_code", 0)
+    error = payload.get("error") or {}
+    finished_at = payload.get("finished_at")
+
+    if exit_code != 0 and error:
+        err_type = error.get("type", "error")
+        err_msg = error.get("message", "")
+        print(f"  ⚠ Auto-brain: FAILED on last run: {err_type}: {err_msg}")
+        print(f"       → check ~/mnemo/.errors.log for extract.bg.* entries")
+        ok = False
+
+    if finished_at:
+        try:
+            finished_dt = datetime.fromisoformat(finished_at)
+            if datetime.now() - finished_dt > timedelta(days=7):
+                print(f"  ℹ Auto-brain: has not run successfully in 7+ days (last: {finished_at})")
+                ok = False
+        except ValueError:
+            pass
+
+    return ok
 
 
 @command("fix")
@@ -243,6 +385,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
     from mnemo.core import config as cfg_mod, extract as extract_mod
 
     cfg = cfg_mod.load_config()
+    if bool(getattr(args, "background", False)):
+        return _run_extract_background(cfg, args)
+
     try:
         summary = extract_mod.run_extraction(cfg, dry_run=bool(args.dry_run), force=bool(args.force))
     except extract_mod.ExtractionIOError as exc:
@@ -258,8 +403,6 @@ def cmd_extract(args: argparse.Namespace) -> int:
     # Summary
     total_tokens = summary.total_input_tokens + summary.total_output_tokens
     if summary.all_calls_subscription:
-        # Subscription users: the CLI still reports a hypothetical API cost,
-        # but the user isn't actually charged. Show tokens only.
         cost_line = f"{total_tokens} tokens processed (subscription — no charge)"
     else:
         cost_line = f"${summary.total_cost_usd:.4f} ({total_tokens} tokens)"
@@ -267,7 +410,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
     cluster_pages = summary.pages_written - summary.projects_promoted
     print("✓ extraction complete")
     print(f"  written:    {summary.pages_written} pages ({summary.projects_promoted} direct projects + {cluster_pages} cluster pages)")
-    print(f"  conflicts:  {summary.sibling_proposed}")
+    print(f"  auto-promoted: {summary.auto_promoted}")
+    print(f"  conflicts:  {summary.sibling_proposed + summary.sibling_bounced}")
+    print(f"  upgrades:   {summary.upgrade_proposed}")
     print(f"  updates:    {summary.update_proposed}")
     print(f"  skipped:    {summary.unchanged_skipped} unchanged, {summary.dismissed_skipped} dismissed")
     print(f"  calls:      {summary.llm_calls} LLM calls")
@@ -277,6 +422,37 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if summary.failed_chunks > 0:
         print(f"  ⚠ failed_chunks: {summary.failed_chunks} (see ~/.errors.log; re-run to retry)", file=sys.stderr)
         return 1
+    return 0
+
+
+def _run_extract_background(cfg: dict, args: argparse.Namespace) -> int:
+    import contextlib
+    import os
+    from mnemo.core import errors as err_mod, extract as extract_mod, paths as paths_mod
+
+    vault_root = paths_mod.vault_root(cfg)
+    devnull = open(os.devnull, "w")
+    try:
+        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            try:
+                extract_mod.run_extraction(
+                    cfg,
+                    dry_run=bool(args.dry_run),
+                    force=bool(args.force),
+                    background=True,
+                )
+            except extract_mod.ExtractionIOError as exc:
+                # Lock contention: do NOT write last-auto-run.json; log only
+                err_mod.log_error(vault_root, "extract.bg.lock", exc)
+                return 2
+            except Exception as exc:
+                # run_extraction in background mode catches most errors and
+                # writes them into last-auto-run.json; this path is for
+                # exceptions that escape (e.g., config issues).
+                err_mod.log_error(vault_root, "extract.bg.outer", exc)
+                return 1
+    finally:
+        devnull.close()
     return 0
 
 

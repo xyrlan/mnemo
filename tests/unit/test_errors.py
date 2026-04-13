@@ -94,3 +94,29 @@ def test_should_run_ignores_extract_errors(tmp_vault: Path):
         except RuntimeError as e:
             errors.log_error(tmp_vault, "extract.chunk", e)
     assert errors.should_run(tmp_vault) is True
+
+
+def test_circuit_breaker_excludes_session_end_schedule(tmp_vault):
+    from mnemo.core import errors as err_mod
+
+    for _ in range(15):
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as e:
+            err_mod.log_error(tmp_vault, "session_end.schedule", e)
+
+    assert err_mod.should_run(tmp_vault) is True, \
+        "session_end.schedule errors must not trip the circuit breaker"
+
+
+def test_circuit_breaker_still_trips_on_hook_errors(tmp_vault):
+    from mnemo.core import errors as err_mod
+
+    for _ in range(15):
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as e:
+            err_mod.log_error(tmp_vault, "session_end.outer", e)
+
+    assert err_mod.should_run(tmp_vault) is False, \
+        "genuine hook errors should still trip the breaker"

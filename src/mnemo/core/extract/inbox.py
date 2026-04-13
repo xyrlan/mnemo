@@ -15,7 +15,7 @@ from pathlib import Path
 
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ExtractionIOError(OSError):
@@ -45,6 +45,9 @@ class ApplyResult:
     update_proposed: list[str] = field(default_factory=list)
     dismissed_skipped: list[str] = field(default_factory=list)
     unchanged_skipped: list[str] = field(default_factory=list)
+    auto_promoted: list[str] = field(default_factory=list)
+    sibling_bounced: list[tuple[str, str]] = field(default_factory=list)
+    upgrade_proposed: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _file_hash(path: Path) -> str:
@@ -66,8 +69,14 @@ def _atomic_write(path: Path, content: str) -> None:
         raise ExtractionIOError(f"failed to write {path}: {exc}") from exc
 
 
-def _render_page(page: ExtractedPage, *, run_id: str) -> str:
+def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
+    if auto_promoted:
+        extras = f"last_sync: {run_id}\n"
+        tag = "auto-promoted"
+    else:
+        extras = ""
+        tag = "needs-review"
     return (
         "---\n"
         f"name: {page.name}\n"
@@ -75,10 +84,11 @@ def _render_page(page: ExtractedPage, *, run_id: str) -> str:
         f"type: {page.type}\n"
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
+        f"{extras}"
         "sources:\n"
         f"{sources_yaml}\n"
         "tags:\n"
-        "  - needs-review\n"
+        f"  - {tag}\n"
         "---\n\n"
         f"{page.body}\n"
     )
@@ -90,6 +100,43 @@ def _inbox_path(vault_root: Path, page: ExtractedPage) -> Path:
 
 def _promoted_path(vault_root: Path, page: ExtractedPage) -> Path:
     return vault_root / "shared" / page.type / f"{page.slug}.md"
+
+
+def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
+    """Return the filesystem target for a page based on its source count.
+
+    Single-source pages go directly to the sacred dir (auto-promote).
+    Multi-source pages stage in _inbox/ for review.
+    """
+    if len(page.source_files) == 1:
+        return vault_root / "shared" / page.type / f"{page.slug}.md"
+    return vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+
+
+def _is_auto_promoted_target(target: Path, vault_root: Path) -> bool:
+    """True if the target is inside shared/<type>/ (not shared/_inbox/)."""
+    try:
+        rel = target.relative_to(vault_root / "shared")
+    except ValueError:
+        return False
+    parts = rel.parts
+    if not parts:
+        return False
+    return parts[0] != "_inbox"
+
+
+def _sibling_path(target: Path, vault_root: Path) -> Path:
+    """Where does a .proposed.md sibling for this target live?
+
+    Auto-promoted targets (in shared/<type>/) bounce their siblings back into
+    shared/_inbox/<type>/ so the sacred dir stays free of plugin artifacts.
+    _inbox/ targets keep siblings adjacent (v0.2 behavior).
+    """
+    if _is_auto_promoted_target(target, vault_root):
+        page_type = target.parent.name
+        slug = target.stem
+        return vault_root / "shared" / "_inbox" / page_type / f"{slug}.proposed.md"
+    return target.parent / f"{target.stem}.proposed.md"
 
 
 def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
@@ -137,101 +184,232 @@ def apply_pages(
     for page in pages:
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
-        inbox_file = _inbox_path(vault_root, page)
-        promoted_file = _promoted_path(vault_root, page)
+        target = _target_path_for_page(page, vault_root)
+        is_auto = _is_auto_promoted_target(target, vault_root)
 
-        # Row 1: source_hash unchanged
+        # Row 1: source_hash unchanged → skip
         if entry is not None and entry.source_hash == page.source_hash and not force:
             result.unchanged_skipped.append(key)
             continue
 
-        content = _render_page(page, run_id=run_id)
-        new_written_hash = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+        # v0.3 upgrade detection: existing auto_promoted entry + multi-source re-emission
+        if (
+            not is_auto
+            and entry is not None
+            and entry.status == "auto_promoted"
+        ):
+            _apply_upgrade_proposed(page, entry, vault_root, run_id, result)
+            continue
 
-        # Row 2: fresh (no entry)
-        if entry is None:
-            _atomic_write(inbox_file, content)
+        if is_auto:
+            _apply_auto_promoted(
+                page, entry, target, vault_root, state, run_id, force, result,
+            )
+        else:
+            _apply_inbox(
+                page, entry, target, vault_root, state, run_id, force, result,
+            )
+
+    return result
+
+
+def _apply_auto_promoted(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    target: Path,
+    vault_root: Path,
+    state: ExtractionState,
+    run_id: str,
+    force: bool,
+    result: ApplyResult,
+) -> None:
+    key = f"{page.type}/{page.slug}"
+    content = _render_page(page, run_id=run_id, auto_promoted=True)
+    new_written_hash = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    if entry is None:
+        _atomic_write(target, content)
+        state.entries[key] = StateEntry(
+            source_files=list(page.source_files),
+            source_hash=page.source_hash,
+            written_hash=new_written_hash,
+            written_at=run_id,
+            status="auto_promoted",
+            last_sync=run_id,
+        )
+        result.auto_promoted.append(key)
+        return
+
+    if entry.status == "dismissed" and not force:
+        result.dismissed_skipped.append(key)
+        return
+
+    # v0.2 → v0.3 migration: legacy status=inbox + target is now sacred
+    if entry.status == "inbox" and not target.exists():
+        _atomic_write(target, content)
+        entry.status = "auto_promoted"
+        entry.source_files = list(page.source_files)
+        entry.source_hash = page.source_hash
+        entry.written_hash = new_written_hash
+        entry.written_at = run_id
+        entry.last_sync = run_id
+        result.auto_promoted.append(key)
+        return
+
+    if not target.exists():
+        # status was auto_promoted but user deleted the sacred file → dismissed
+        if force:
+            _atomic_write(target, content)
+            entry.status = "auto_promoted"
+            entry.source_files = list(page.source_files)
+            entry.source_hash = page.source_hash
+            entry.written_hash = new_written_hash
+            entry.written_at = run_id
+            entry.last_sync = run_id
+            result.auto_promoted.append(key)
+        else:
+            entry.status = "dismissed"
+            result.dismissed_skipped.append(key)
+        return
+
+    # target exists — check if user edited it
+    disk_hash = _file_hash(target)
+    if disk_hash == entry.written_hash:
+        _atomic_write(target, content)
+        entry.source_files = list(page.source_files)
+        entry.source_hash = page.source_hash
+        entry.written_hash = new_written_hash
+        entry.written_at = run_id
+        entry.last_sync = run_id
+        entry.status = "auto_promoted"
+        result.overwrite_safe.append(key)
+    else:
+        # user edited the sacred file — bounce sibling back into _inbox/
+        sibling = _sibling_path(target, vault_root)
+        _atomic_write(sibling, content)
+        result.sibling_bounced.append((key, str(sibling)))
+
+
+def _apply_inbox(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    target: Path,
+    vault_root: Path,
+    state: ExtractionState,
+    run_id: str,
+    force: bool,
+    result: ApplyResult,
+) -> None:
+    """v0.2 _inbox/ branch, unchanged in behavior."""
+    key = f"{page.type}/{page.slug}"
+    content = _render_page(page, run_id=run_id, auto_promoted=False)
+    new_written_hash = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    promoted_file = _promoted_path(vault_root, page)
+
+    if entry is None:
+        _atomic_write(target, content)
+        state.entries[key] = StateEntry(
+            source_files=list(page.source_files),
+            source_hash=page.source_hash,
+            written_hash=new_written_hash,
+            written_at=run_id,
+            status="inbox",
+            last_sync=run_id,
+        )
+        result.written_fresh.append(key)
+        return
+
+    status = entry.status
+
+    if status == "dismissed":
+        if force:
+            _atomic_write(target, content)
             state.entries[key] = StateEntry(
                 source_files=list(page.source_files),
                 source_hash=page.source_hash,
                 written_hash=new_written_hash,
                 written_at=run_id,
                 status="inbox",
+                last_sync=run_id,
             )
             result.written_fresh.append(key)
-            continue
-
-        # Entry exists, source changed (or force)
-        status = entry.status
-
-        if status == "dismissed":
-            if force:
-                _atomic_write(inbox_file, content)
-                state.entries[key] = StateEntry(
-                    source_files=list(page.source_files),
-                    source_hash=page.source_hash,
-                    written_hash=new_written_hash,
-                    written_at=run_id,
-                    status="inbox",
-                )
-                result.written_fresh.append(key)
-            else:
-                result.dismissed_skipped.append(key)
-            continue
-
-        if status == "promoted":
-            if promoted_file.exists():
-                update_file = inbox_file.with_name(f"{page.slug}.update-proposed.md")
-                _atomic_write(update_file, content)
-                # Entry stays promoted; record source_hash so next run doesn't re-fire
-                entry.source_hash = page.source_hash
-                entry.source_files = list(page.source_files)
-                result.update_proposed.append(key)
-            else:
-                # Promoted file was deleted by user — treat as dismissed
-                entry.status = "dismissed"
-                result.dismissed_skipped.append(key)
-            continue
-
-        # status == "inbox" (the main case)
-        if inbox_file.exists():
-            disk_hash = _file_hash(inbox_file)
-            if disk_hash == entry.written_hash:
-                # overwrite_safe
-                _atomic_write(inbox_file, content)
-                entry.source_files = list(page.source_files)
-                entry.source_hash = page.source_hash
-                entry.written_hash = new_written_hash
-                entry.written_at = run_id
-                result.overwrite_safe.append(key)
-            else:
-                # user edited — write sibling
-                sibling = inbox_file.with_name(f"{page.slug}.proposed.md")
-                _atomic_write(sibling, content)
-                result.sibling_proposed.append((key, str(sibling)))
         else:
-            # inbox file disappeared; check shared/
-            if promoted_file.exists():
-                entry.status = "promoted"
-                update_file = inbox_file.with_name(f"{page.slug}.update-proposed.md")
-                _atomic_write(update_file, content)
-                entry.source_hash = page.source_hash
-                entry.source_files = list(page.source_files)
-                result.update_proposed.append(key)
-            elif force:
-                # Force resurrects: same-run detection of deletion + force means write fresh.
-                _atomic_write(inbox_file, content)
-                entry.source_files = list(page.source_files)
-                entry.source_hash = page.source_hash
-                entry.written_hash = new_written_hash
-                entry.written_at = run_id
-                entry.status = "inbox"
-                result.written_fresh.append(key)
-            else:
-                entry.status = "dismissed"
-                result.dismissed_skipped.append(key)
+            result.dismissed_skipped.append(key)
+        return
 
-    return result
+    if status == "promoted":
+        if promoted_file.exists():
+            update_file = target.with_name(f"{page.slug}.update-proposed.md")
+            _atomic_write(update_file, content)
+            entry.source_hash = page.source_hash
+            entry.source_files = list(page.source_files)
+            result.update_proposed.append(key)
+        else:
+            entry.status = "dismissed"
+            result.dismissed_skipped.append(key)
+        return
+
+    # status == "inbox" (the v0.2 main case)
+    if target.exists():
+        disk_hash = _file_hash(target)
+        if disk_hash == entry.written_hash:
+            _atomic_write(target, content)
+            entry.source_files = list(page.source_files)
+            entry.source_hash = page.source_hash
+            entry.written_hash = new_written_hash
+            entry.written_at = run_id
+            entry.last_sync = run_id
+            result.overwrite_safe.append(key)
+        else:
+            sibling = _sibling_path(target, vault_root)
+            _atomic_write(sibling, content)
+            result.sibling_proposed.append((key, str(sibling)))
+    else:
+        if promoted_file.exists():
+            entry.status = "promoted"
+            update_file = target.with_name(f"{page.slug}.update-proposed.md")
+            _atomic_write(update_file, content)
+            entry.source_hash = page.source_hash
+            entry.source_files = list(page.source_files)
+            result.update_proposed.append(key)
+        elif force:
+            _atomic_write(target, content)
+            entry.source_files = list(page.source_files)
+            entry.source_hash = page.source_hash
+            entry.written_hash = new_written_hash
+            entry.written_at = run_id
+            entry.last_sync = run_id
+            entry.status = "inbox"
+            result.written_fresh.append(key)
+        else:
+            entry.status = "dismissed"
+            result.dismissed_skipped.append(key)
+
+
+def _apply_upgrade_proposed(
+    page: ExtractedPage,
+    entry: StateEntry,
+    vault_root: Path,
+    run_id: str,
+    result: ApplyResult,
+) -> None:
+    """Multi-source re-emission of a slug that was already auto_promoted.
+
+    Writes a sibling proposal into _inbox/ WITHOUT touching the existing
+    auto_promoted state entry or the sacred file.  The user decides whether
+    to merge the upgrade by hand.
+    """
+    key = f"{page.type}/{page.slug}"
+    content = _render_page(page, run_id=run_id, auto_promoted=False)
+    sibling = (
+        vault_root
+        / "shared"
+        / "_inbox"
+        / page.type
+        / f"{page.slug}.proposed.md"
+    )
+    _atomic_write(sibling, content)
+    result.upgrade_proposed.append((key, str(sibling)))
 
 
 def atomic_write_state(state: ExtractionState, path: Path) -> None:
@@ -245,6 +423,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
                 "source_hash": v.source_hash,
                 "written_hash": v.written_hash,
                 "written_at": v.written_at,
+                "last_sync": v.last_sync,
                 "status": v.status,
             }
             for k, v in state.entries.items()
@@ -265,7 +444,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
 
 def load_state(path: Path) -> ExtractionState:
     if not path.exists():
-        return ExtractionState(last_run=None, entries={})
+        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -275,21 +454,32 @@ def load_state(path: Path) -> ExtractionState:
             path.rename(path.with_name(f"{path.name}.bak.{stamp}"))
         except OSError:
             pass
-        return ExtractionState(last_run=None, entries={})
+        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
 
-    version = payload.get("schema_version", 0)
-    if version != SCHEMA_VERSION:
+    version = int(payload.get("schema_version", 0) or 0)
+    if version > SCHEMA_VERSION:
+        raise StateSchemaError(
+            f"state file schema_version={version} was written by a newer mnemo version"
+        )
+    if version < 1:
         raise StateSchemaError(
             f"state file schema_version={version}, this mnemo supports {SCHEMA_VERSION}"
         )
 
-    entries = {}
+    entries: dict[str, StateEntry] = {}
     for k, v in payload.get("entries", {}).items():
+        written_at = str(v.get("written_at") or "")
+        last_sync = str(v.get("last_sync") or written_at)
         entries[k] = StateEntry(
             source_files=list(v.get("source_files") or []),
             source_hash=str(v.get("source_hash") or ""),
             written_hash=str(v.get("written_hash") or ""),
-            written_at=str(v.get("written_at") or ""),
+            written_at=written_at,
             status=str(v.get("status") or "inbox"),
+            last_sync=last_sync,
         )
-    return ExtractionState(last_run=payload.get("last_run"), entries=entries)
+    return ExtractionState(
+        last_run=payload.get("last_run"),
+        entries=entries,
+        schema_version=SCHEMA_VERSION,
+    )

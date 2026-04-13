@@ -98,3 +98,23 @@ def test_scan_detects_content_change(populated_vault: Path):
     # Different content => different hash
     old_hash = next(f.source_hash for f in first.by_type["feedback"] if "use_yarn" in f.path.name)
     assert yarn_file.source_hash != old_hash
+
+
+def test_state_entry_has_last_sync_field_defaulting_empty():
+    from mnemo.core.extract.scanner import StateEntry
+
+    entry = StateEntry(
+        source_files=["bots/a/memory/x.md"],
+        source_hash="sha256:abc",
+        written_hash="sha256:def",
+        written_at="2026-04-13T12:00:00",
+        status="inbox",
+    )
+    assert entry.last_sync == ""
+
+
+def test_extraction_state_default_schema_version_is_2():
+    from mnemo.core.extract.scanner import ExtractionState
+
+    state = ExtractionState(last_run=None)
+    assert state.schema_version == 2

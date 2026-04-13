@@ -29,6 +29,11 @@ DEFAULTS: dict[str, Any] = {
         "preferAPI": False,
         "subprocessTimeout": 60,
         "costSoftCap": None,
+        "auto": {
+            "enabled": False,
+            "minNewMemories": 5,
+            "minIntervalMinutes": 60,
+        },
     },
 }
 

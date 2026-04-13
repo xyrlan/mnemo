@@ -60,6 +60,8 @@ def should_run(vault_root: Path) -> bool:
                     where = entry.get("where", "")
                     if where.startswith("extract."):
                         continue
+                    if where.startswith("session_end.schedule"):
+                        continue
                     if ts >= cutoff:
                         recent += 1
                 except Exception:
