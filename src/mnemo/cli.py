@@ -184,7 +184,80 @@ def cmd_status(_args: argparse.Namespace) -> int:
     log = vault / ".errors.log"
     if log.exists():
         print(f"Error log: {log} ({log.stat().st_size} bytes)")
+    _print_auto_brain_status(vault)
     return 0
+
+
+def _print_auto_brain_status(vault: Path) -> None:
+    import json as _json
+    import time
+    from datetime import datetime
+    from mnemo.core import config as cfg_mod
+
+    cfg = cfg_mod.load_config()
+    auto = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
+    enabled = bool(auto.get("enabled", False))
+    min_new = int(auto.get("minNewMemories", 5) or 5)
+    min_interval = int(auto.get("minIntervalMinutes", 60) or 60)
+
+    print("Auto-brain:")
+
+    lock_path = vault / ".mnemo" / "extract.lock"
+    if lock_path.exists():
+        try:
+            age = int(time.time() - lock_path.stat().st_mtime)
+            print(f"  running now: extract.lock held, started {age}s ago")
+        except OSError:
+            print("  running now: extract.lock present")
+
+    if not enabled:
+        print("  enabled:     no (set extraction.auto.enabled=true to activate)")
+        return
+
+    print(f"  enabled:     yes (minNewMemories={min_new}, minIntervalMinutes={min_interval})")
+
+    last_run_path = vault / ".mnemo" / "last-auto-run.json"
+    if not last_run_path.exists():
+        print("  last run:    (none yet)")
+        return
+
+    try:
+        payload = _json.loads(last_run_path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        print("  last run:    (corrupt last-auto-run.json)")
+        return
+
+    exit_code = payload.get("exit_code", 0)
+    summary = payload.get("summary", {}) or {}
+    finished_at = payload.get("finished_at")
+    elapsed_str = "unknown"
+    if finished_at:
+        try:
+            finished_dt = datetime.fromisoformat(finished_at)
+            delta = datetime.now() - finished_dt
+            total_sec = int(delta.total_seconds())
+            if total_sec < 60:
+                elapsed_str = f"{total_sec}s ago"
+            elif total_sec < 3600:
+                elapsed_str = f"{total_sec // 60}m ago"
+            else:
+                elapsed_str = f"{total_sec // 3600}h ago"
+        except ValueError:
+            pass
+
+    pages = summary.get("pages_written", 0)
+    auto_n = summary.get("auto_promoted", 0)
+    siblings = summary.get("sibling_proposed", 0) + summary.get("sibling_bounced", 0)
+    upgrades = summary.get("upgrade_proposed", 0)
+
+    if exit_code == 0:
+        print(f"  last run:    {elapsed_str} — {pages} pages ({auto_n} auto-promoted), {siblings} conflicts")
+    else:
+        err = payload.get("error") or {}
+        err_type = err.get("type", "error")
+        print(f"  last run:    {elapsed_str} — FAILED ({err_type}); see ~/.errors.log")
+    if upgrades:
+        print(f"  upgrades:    {upgrades} proposed")
 
 
 @command("doctor")

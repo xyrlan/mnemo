@@ -59,3 +59,68 @@ def test_open_returns_zero_when_no_opener(tmp_home: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(cli, "_run_open", lambda path: None)
     rc = cli.main(["open"])
     assert rc == 0
+
+
+def test_status_shows_auto_brain_disabled(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": False, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+
+    cli.main(["status"])
+    captured = capsys.readouterr()
+    assert "Auto-brain:" in captured.out
+    assert "disabled" in captured.out.lower() or "no" in captured.out.lower()
+
+
+def test_status_shows_last_run_when_present(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+
+    last_run = {
+        "run_id": "2026-04-13T12:00:00-abc",
+        "started_at": "2026-04-13T12:00:00",
+        "finished_at": "2026-04-13T12:00:09",
+        "mode": "background",
+        "exit_code": 0,
+        "summary": {
+            "pages_written": 3,
+            "auto_promoted": 2,
+            "sibling_proposed": 0,
+            "sibling_bounced": 0,
+            "upgrade_proposed": 0,
+            "update_proposed": 0,
+            "failed_chunks": 0,
+            "mode": "background",
+        },
+        "error": None,
+    }
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": True, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+
+    cli.main(["status"])
+    captured = capsys.readouterr()
+    assert "Auto-brain:" in captured.out
+    assert "enabled" in captured.out.lower() or "yes" in captured.out.lower()
+    assert "3 pages" in captured.out
+    assert "2 auto-promoted" in captured.out
+
+
+def test_status_shows_running_now_when_lock_held(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo" / "extract.lock").mkdir(parents=True)
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": True, "minNewMemories": 5, "minIntervalMinutes": 60}},
+    })
+
+    cli.main(["status"])
+    captured = capsys.readouterr()
+    assert "running" in captured.out.lower()
