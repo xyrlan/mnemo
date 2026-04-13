@@ -5,6 +5,88 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+
+
+def _debounce_passes(
+    state_path,
+    vault_root,
+    cfg: dict,
+    *,
+    now=None,
+) -> bool:
+    """Pure function: check count+time debounce for background scheduling.
+
+    Returns True when both minNewMemories and minIntervalMinutes conditions
+    are satisfied.  Any exception results in False (fail-closed).
+    """
+    from datetime import datetime, timedelta
+    try:
+        auto_cfg = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
+        min_new = int(auto_cfg.get("minNewMemories", 5) or 5)
+        min_interval_min = int(auto_cfg.get("minIntervalMinutes", 60) or 60)
+
+        last_run = None
+        if state_path.exists():
+            try:
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+                last_run = payload.get("last_run")
+            except (OSError, json.JSONDecodeError):
+                last_run = None
+
+        now_dt = now or datetime.now()
+
+        # Time gate
+        if last_run:
+            try:
+                last_run_dt = datetime.fromisoformat(last_run)
+            except ValueError:
+                last_run_dt = None
+            if last_run_dt is not None:
+                if (now_dt - last_run_dt) < timedelta(minutes=min_interval_min):
+                    return False
+
+        # Count gate
+        last_run_ts = 0.0
+        if last_run:
+            try:
+                last_run_ts = datetime.fromisoformat(last_run).timestamp()
+            except ValueError:
+                last_run_ts = 0.0
+
+        count = 0
+        bots_root = vault_root / "bots"
+        if bots_root.is_dir():
+            for agent_dir in bots_root.iterdir():
+                memory_dir = agent_dir / "memory"
+                if not memory_dir.is_dir():
+                    continue
+                for p in memory_dir.glob("*.md"):
+                    if p.name == "MEMORY.md":
+                        continue
+                    try:
+                        if p.stat().st_mtime > last_run_ts:
+                            count += 1
+                    except OSError:
+                        continue
+
+        return count >= min_new
+    except Exception:
+        return False
+
+
+def _lock_held(lock_path) -> bool:
+    """True if the extract lock exists and is younger than the stale threshold.
+
+    Matches the 5-minute self-heal in locks.try_lock.
+    """
+    try:
+        if not lock_path.exists():
+            return False
+        age = time.time() - lock_path.stat().st_mtime
+        return age < 300  # 5 minutes
+    except OSError:
+        return False
 
 
 def _maybe_emit_hint(cfg: dict, vault_root, agent_name: str) -> None:
