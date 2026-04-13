@@ -7,9 +7,16 @@ from pathlib import Path
 
 DIRS = [
     "bots",
+    # Auto-populated Tier 2 — `mnemo extract` writes here. Type names match
+    # scanner._VALID_TYPES; `shared/project/` is singular to match promote.py.
+    "shared/feedback",
+    "shared/user",
+    "shared/reference",
+    "shared/project",
+    # User-maintained Tier 2 — extraction never touches these; the user
+    # curates them by hand.
     "shared/people",
     "shared/companies",
-    "shared/projects",
     "shared/decisions",
     "wiki/sources",
     "wiki/compiled",
