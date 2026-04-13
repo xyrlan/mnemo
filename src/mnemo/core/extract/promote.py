@@ -23,14 +23,13 @@ def _target_path(vault_root: Path, file: MemoryFile) -> Path:
 
 
 def _render_project_page(file: MemoryFile, *, run_id: str) -> str:
-    now = datetime.now().isoformat(timespec="seconds")
     return (
         "---\n"
         f"name: {file.frontmatter.get('name', file.slug)}\n"
         f"description: {file.frontmatter.get('description', '')}\n"
         "type: project\n"
         f"agent: {file.agent}\n"
-        f"promoted_at: {now}\n"
+        f"promoted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         "sources:\n"
         f"  - {file.path}\n"

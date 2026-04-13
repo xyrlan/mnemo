@@ -67,14 +67,13 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def _render_page(page: ExtractedPage, *, run_id: str) -> str:
-    now = datetime.now().isoformat(timespec="seconds")
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
     return (
         "---\n"
         f"name: {page.name}\n"
         f"description: {page.description}\n"
         f"type: {page.type}\n"
-        f"extracted_at: {now}\n"
+        f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         "sources:\n"
         f"{sources_yaml}\n"

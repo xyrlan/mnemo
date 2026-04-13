@@ -106,6 +106,8 @@ def test_sibling_proposed_when_user_edited_inbox(tmp_vault: Path):
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
     target.write_text(target.read_text() + "\n\n(user's handwritten note)\n")
 
+    v1_written_hash = state.entries["feedback/use-yarn"].written_hash
+
     # Source hash changes triggering reapply
     page_v2 = inbox.ExtractedPage(
         slug="use-yarn",
@@ -124,6 +126,10 @@ def test_sibling_proposed_when_user_edited_inbox(tmp_vault: Path):
     assert "(user's handwritten note)" in target.read_text()  # untouched
     assert len(result.sibling_proposed) == 1
     assert result.sibling_proposed[0][0] == "feedback/use-yarn"
+    assert state.entries["feedback/use-yarn"].written_hash == v1_written_hash, (
+        "written_hash must not be updated when a sibling is written — otherwise "
+        "next run would think the user hasn't edited and could overwrite their work"
+    )
 
 
 def test_promoted_slug_writes_update_proposed(tmp_vault: Path):
