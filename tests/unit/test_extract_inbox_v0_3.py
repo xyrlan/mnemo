@@ -84,3 +84,71 @@ def test_apply_result_has_v0_3_fields():
     assert result.auto_promoted == []
     assert result.sibling_bounced == []
     assert result.upgrade_proposed == []
+
+
+from mnemo.core.extract.scanner import ExtractionState, StateEntry
+
+
+def _mkstate(**entries):
+    state = ExtractionState(last_run=None)
+    for key, entry in entries.items():
+        state.entries[key] = entry
+    return state
+
+
+def test_apply_single_source_fresh_writes_sacred_with_auto_promoted_status(tmp_path):
+    page = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    state = _mkstate()
+
+    result = inbox.apply_pages([page], state, tmp_path, run_id="2026-04-13T12:00:00-run1")
+
+    target = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    assert target.exists(), "sacred file should be written"
+    content = target.read_text()
+    assert "auto-promoted" in content
+    assert "last_sync: 2026-04-13T12:00:00-run1" in content
+
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "auto_promoted"
+    assert entry.last_sync == "2026-04-13T12:00:00-run1"
+    assert result.auto_promoted == ["feedback/use-yarn"]
+    assert result.written_fresh == []
+
+
+def test_apply_single_source_overwrite_safe_updates_sacred(tmp_path):
+    page_v1 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+
+    state = _mkstate()
+    inbox.apply_pages([page_v1], state, tmp_path, run_id="2026-04-13T12:00:00-run1")
+
+    page_v2 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    page_v2.source_hash = "sha256:newhash"
+    page_v2.body = "Updated body for use-yarn.\n"
+
+    result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T13:00:00-run2")
+
+    target = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    assert "Updated body" in target.read_text()
+    assert result.overwrite_safe == ["feedback/use-yarn"]
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "auto_promoted"
+    assert entry.source_hash == "sha256:newhash"
+    assert entry.last_sync == "2026-04-13T13:00:00-run2"
+
+
+def test_apply_single_source_dismissed_when_user_deleted_sacred_file(tmp_path):
+    page_v1 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    state = _mkstate()
+    inbox.apply_pages([page_v1], state, tmp_path, run_id="2026-04-13T12:00:00-run1")
+
+    (tmp_path / "shared" / "feedback" / "use-yarn.md").unlink()
+
+    page_v2 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    page_v2.source_hash = "sha256:newhash"
+    result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T14:00:00-run3")
+
+    target = tmp_path / "shared" / "feedback" / "use-yarn.md"
+    assert not target.exists(), "dismissed files are not resurrected"
+    entry = state.entries["feedback/use-yarn"]
+    assert entry.status == "dismissed"
+    assert result.dismissed_skipped == ["feedback/use-yarn"]
