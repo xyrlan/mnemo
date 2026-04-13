@@ -57,6 +57,9 @@ def should_run(vault_root: Path) -> bool:
                 try:
                     entry = json.loads(raw.decode("utf-8"))
                     ts = datetime.fromisoformat(entry["timestamp"])
+                    where = entry.get("where", "")
+                    if where.startswith("extract."):
+                        continue
                     if ts >= cutoff:
                         recent += 1
                 except Exception:

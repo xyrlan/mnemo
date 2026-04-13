@@ -84,3 +84,13 @@ def test_log_rotation_at_5mb(tmp_vault: Path):
     # After rotation, .errors.log only contains the new entry (small)
     assert log_path.stat().st_size < 1024
     assert any(p.name.startswith(".errors.log.") for p in tmp_vault.iterdir())
+
+
+def test_should_run_ignores_extract_errors(tmp_vault: Path):
+    # 11 extract.* errors should NOT trip the hook breaker
+    for i in range(11):
+        try:
+            raise RuntimeError(f"extract err {i}")
+        except RuntimeError as e:
+            errors.log_error(tmp_vault, "extract.chunk", e)
+    assert errors.should_run(tmp_vault) is True
