@@ -13,13 +13,12 @@ def test_inject_into_empty_settings(tmp_home: Path):
     settings.inject_hooks(settings_path)
     data = json.loads(settings_path.read_text())
     hooks = data["hooks"]
+    # v0.3.1 removed UserPromptSubmit and PostToolUse — they were write-only
+    # log amplifiers feeding a consumer that no longer exists.
     assert "SessionStart" in hooks
     assert "SessionEnd" in hooks
-    assert "UserPromptSubmit" in hooks
-    assert "PostToolUse" in hooks
-    # PostToolUse must have matcher Write|Edit
-    pt = hooks["PostToolUse"][0]
-    assert pt["matcher"] == "Write|Edit"
+    assert "UserPromptSubmit" not in hooks
+    assert "PostToolUse" not in hooks
 
 
 def test_hook_command_is_directly_executable(tmp_home: Path):
@@ -39,7 +38,7 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
     abs_posix = re.compile(r"^/")
     abs_windows = re.compile(r"^[A-Za-z]:[\\/]")
     bare_name = re.compile(r"^python3?(\.exe)?$")
-    for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse"):
+    for event in ("SessionStart", "SessionEnd"):
         for entry in data["hooks"][event]:
             for h in entry.get("hooks", []):
                 cmd = h.get("command", "")
@@ -53,6 +52,27 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
                     f"{event} command first token is not directly executable: "
                     f"{first_token!r} (full command: {cmd!r})"
                 )
+
+
+def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
+    """v0.3.1 migration: an existing settings.json with legacy UserPromptSubmit
+    and PostToolUse entries (from v0.3.0) should have them pruned when the
+    user runs `mnemo init` again, because those hook modules no longer exist
+    and leaving the registration causes ImportError on every session start."""
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    legacy = {
+        "hooks": {
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/py -m mnemo.hooks.user_prompt"}]}],
+            "PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "/py -m mnemo.hooks.post_tool_use"}]}],
+        }
+    }
+    settings_path.write_text(json.dumps(legacy))
+    settings.inject_hooks(settings_path)
+    data = json.loads(settings_path.read_text())
+    hooks = data.get("hooks", {})
+    assert "UserPromptSubmit" not in hooks
+    assert "PostToolUse" not in hooks
 
 
 def test_inject_creates_backup(tmp_home: Path):

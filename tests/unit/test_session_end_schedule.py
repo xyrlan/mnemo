@@ -172,19 +172,18 @@ def test_schedule_extraction_no_op_when_auto_disabled(tmp_path, monkeypatch):
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    cfg = {"extraction": {"auto": {"enabled": False}, "hintThreshold": 5}}
+    cfg = {"extraction": {"auto": {"enabled": False}}}
 
     spawn_called = []
     monkeypatch.setattr(session_end, "_spawn_detached_extraction",
                         lambda: spawn_called.append(True))
-    hint_called = []
-    monkeypatch.setattr(session_end, "_maybe_emit_hint",
-                        lambda cfg, vault, agent: hint_called.append(True))
 
+    # v0.3.1: when auto is disabled the scheduler returns silently. The old
+    # hint fallback (_maybe_emit_hint) was removed along with the write-only
+    # hooks and the 🟡 daily-log notification path.
     session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
 
     assert spawn_called == []
-    assert hint_called == [True]
 
 
 def test_schedule_extraction_spawns_when_debounce_passes(tmp_path, monkeypatch):

@@ -11,21 +11,14 @@ DEFAULTS: dict[str, Any] = {
     "vaultRoot": "~/mnemo",
     "capture": {
         "sessionStartEnd": True,
-        "userPrompt": True,
-        "fileEdits": True,
     },
     "agent": {
         "strategy": "git-root",
         "overrides": {},
     },
-    "async": {
-        "userPrompt": True,
-        "postToolUse": True,
-    },
     "extraction": {
         "model": "claude-haiku-4-5",
         "chunkSize": 10,
-        "hintThreshold": 5,
         "preferAPI": False,
         "subprocessTimeout": 60,
         "costSoftCap": None,

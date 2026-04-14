@@ -40,16 +40,6 @@ HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
         "matcher": None,
         "async": False,
     },
-    "UserPromptSubmit": {
-        "module": "user_prompt",
-        "matcher": None,
-        "async": True,
-    },
-    "PostToolUse": {
-        "module": "post_tool_use",
-        "matcher": "Write|Edit",
-        "async": True,
-    },
 }
 
 
@@ -125,11 +115,22 @@ def _do_inject(settings_path: Path) -> None:
     data = _read_settings(settings_path)
     _backup(settings_path)
     hooks = data.setdefault("hooks", {})
+
+    # Legacy migration: strip mnemo entries from ALL hook events, not just
+    # those in HOOK_DEFINITIONS. Prunes previously-installed hooks that have
+    # since been removed (e.g. UserPromptSubmit, PostToolUse from v0.3.1).
+    # If an event ends up with no remaining hooks after stripping, drop it.
+    for event in list(hooks.keys()):
+        hooks[event] = _strip_mnemo_entries(hooks[event])
+        if not hooks[event]:
+            del hooks[event]
+
+    # Re-register current hooks
     for event, defn in HOOK_DEFINITIONS.items():
         existing = hooks.get(event, [])
-        existing = _strip_mnemo_entries(existing)
         existing.append(_build_entry(event, defn))
         hooks[event] = existing
+
     settings_path.write_text(json.dumps(data, indent=2))
 
 
