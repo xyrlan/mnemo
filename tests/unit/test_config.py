@@ -14,25 +14,23 @@ def test_defaults_when_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = config.load_config(missing_path=tmp_path / "nope.json")
     assert cfg["vaultRoot"]  # always set
     assert cfg["capture"]["sessionStartEnd"] is True
-    assert cfg["capture"]["userPrompt"] is True
-    assert cfg["capture"]["fileEdits"] is True
     assert cfg["agent"]["strategy"] == "git-root"
-    assert cfg["async"]["userPrompt"] is True
-    assert cfg["async"]["postToolUse"] is True
+    # v0.3.1 removed userPrompt, fileEdits, and the async block along with the
+    # write-only user_prompt and post_tool_use hooks.
+    assert "userPrompt" not in cfg["capture"]
+    assert "fileEdits" not in cfg["capture"]
+    assert "async" not in cfg
 
 
 def test_user_overrides_defaults(tmp_path: Path):
     p = tmp_path / "mnemo.config.json"
     p.write_text(json.dumps({
         "vaultRoot": "~/somewhere",
-        "capture": {"userPrompt": False},
+        "capture": {"sessionStartEnd": False},
     }))
     cfg = config.load_config(p)
     assert cfg["vaultRoot"] == "~/somewhere"
-    assert cfg["capture"]["userPrompt"] is False
-    # Other capture keys still get defaults
-    assert cfg["capture"]["sessionStartEnd"] is True
-    assert cfg["capture"]["fileEdits"] is True
+    assert cfg["capture"]["sessionStartEnd"] is False
 
 
 def test_unknown_keys_preserved(tmp_path: Path):
@@ -64,10 +62,11 @@ def test_extraction_defaults_populated(tmp_path):
     cfg = config.load_config(tmp_path / "nope.json")
     assert cfg["extraction"]["model"] == "claude-haiku-4-5"
     assert cfg["extraction"]["chunkSize"] == 10
-    assert cfg["extraction"]["hintThreshold"] == 5
     assert cfg["extraction"]["preferAPI"] is False
     assert cfg["extraction"]["subprocessTimeout"] == 60
     assert cfg["extraction"]["costSoftCap"] is None
+    # v0.3.1 removed hintThreshold along with the hint fallback path.
+    assert "hintThreshold" not in cfg["extraction"]
 
 
 def test_extraction_user_override_preserved(tmp_path):
@@ -78,7 +77,6 @@ def test_extraction_user_override_preserved(tmp_path):
     assert cfg["extraction"]["model"] == "claude-sonnet-4-6"
     assert cfg["extraction"]["chunkSize"] == 5
     # Defaults still present for non-overridden keys
-    assert cfg["extraction"]["hintThreshold"] == 5
     assert cfg["extraction"]["subprocessTimeout"] == 60
 
 

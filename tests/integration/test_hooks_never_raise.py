@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from mnemo.hooks import session_start, session_end, user_prompt, post_tool_use
+from mnemo.hooks import session_start, session_end
 
-ALL_HOOKS = [session_start, session_end, user_prompt, post_tool_use]
+ALL_HOOKS = [session_start, session_end]
 
 MALFORMED_PAYLOADS = [
     # 1-10: invalid JSON shapes

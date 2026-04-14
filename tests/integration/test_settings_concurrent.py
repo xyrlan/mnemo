@@ -29,7 +29,9 @@ def test_concurrent_inject_hooks(tmp_home: Path):
     assert not errors, f"unexpected errors: {errors}"
     data = json.loads(settings_path.read_text())
     hooks = data["hooks"]
-    for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse"):
+    # v0.3.1: only SessionStart and SessionEnd are registered; the write-only
+    # UserPromptSubmit and PostToolUse hooks were removed.
+    for event in ("SessionStart", "SessionEnd"):
         assert event in hooks
         mnemo_count = sum(
             1

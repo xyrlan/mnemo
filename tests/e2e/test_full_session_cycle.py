@@ -1,5 +1,12 @@
 # tests/e2e/test_full_session_cycle.py
-"""Critical test from spec § 10.3: full SessionStart → prompts → edits → SessionEnd."""
+"""Critical test from spec § 10.3: full SessionStart → SessionEnd lifecycle.
+
+v0.3.1 removed the user_prompt and post_tool_use hooks (they were write-only
+log amplifiers with no downstream consumers). The remaining lifecycle is
+SessionStart → SessionEnd; this test verifies the two-hook cycle still
+produces a usable daily log with green/red markers and clears the session
+IPC cache on exit.
+"""
 from __future__ import annotations
 
 import io
@@ -11,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from mnemo import cli
-from mnemo.hooks import session_start, session_end, user_prompt, post_tool_use
+from mnemo.hooks import session_start, session_end
 
 
 def _stdin(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
@@ -36,42 +43,15 @@ def test_full_session_cycle(tmp_home: Path, tmp_tempdir: Path, monkeypatch: pyte
     _stdin(monkeypatch, {"session_id": "S1", "cwd": str(repo), "source": "startup"})
     assert session_start.main() == 0
 
-    # 4. Three prompts
-    for prompt in ["add validation", "fix the bug", "write tests"]:
-        _stdin(monkeypatch, {"session_id": "S1", "prompt": prompt})
-        assert user_prompt.main() == 0
-
-    # 5. Two file edits
-    _stdin(monkeypatch, {
-        "session_id": "S1",
-        "tool_name": "Edit",
-        "tool_input": {"file_path": str(src)},
-        "tool_response": {"filePath": str(src)},
-    })
-    assert post_tool_use.main() == 0
-    new_file = repo / "src" / "validate.py"
-    _stdin(monkeypatch, {
-        "session_id": "S1",
-        "tool_name": "Write",
-        "tool_input": {"file_path": str(new_file)},
-        "tool_response": {"filePath": str(new_file)},
-    })
-    assert post_tool_use.main() == 0
-
-    # 6. SessionEnd
+    # 4. SessionEnd
     _stdin(monkeypatch, {"session_id": "S1", "reason": "exit"})
     assert session_end.main() == 0
 
-    # 7. Verify the daily log
+    # 5. Verify the daily log has green/red markers (the only log writes remaining)
     log = (tmp_home / "vault" / "bots" / "repo" / "logs" / f"{date.today().isoformat()}.md").read_text()
     assert "🟢 session started (startup)" in log
-    assert "💬 add validation" in log
-    assert "💬 fix the bug" in log
-    assert "💬 write tests" in log
-    assert "✏️ edited `src/main.py`" in log
-    assert "✏️ created `src/validate.py`" in log
     assert "🔴 session ended (exit)" in log
 
-    # 8. Cache is cleared
+    # 6. Session IPC cache is cleared on session end
     from mnemo.core import session as sess
     assert sess.load("S1") is None
