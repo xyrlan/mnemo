@@ -31,6 +31,9 @@ DEFAULTS: dict[str, Any] = {
     "briefings": {
         "enabled": False,
     },
+    "injection": {
+        "enabled": False,
+    },
 }
 
 

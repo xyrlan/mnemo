@@ -145,3 +145,31 @@ def test_user_override_of_briefings_enabled_preserved(tmp_path):
     cfg = load_config(cfg_path)
 
     assert cfg["briefings"]["enabled"] is True
+
+
+def test_injection_defaults_are_opt_in():
+    """v0.5: SessionStart MCP injection is opt-in, matching v0.3 conservative pattern."""
+    from mnemo.core.config import DEFAULTS
+
+    assert "injection" in DEFAULTS
+    assert DEFAULTS["injection"]["enabled"] is False
+
+
+def test_load_config_populates_injection_defaults(tmp_path):
+    from mnemo.core.config import load_config
+
+    cfg_path = tmp_path / "mnemo.config.json"
+    cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
+    cfg = load_config(cfg_path)
+
+    assert cfg["injection"]["enabled"] is False
+
+
+def test_user_override_of_injection_enabled_preserved(tmp_path):
+    from mnemo.core.config import load_config
+
+    cfg_path = tmp_path / "mnemo.config.json"
+    cfg_path.write_text('{"injection": {"enabled": true}}')
+    cfg = load_config(cfg_path)
+
+    assert cfg["injection"]["enabled"] is True
