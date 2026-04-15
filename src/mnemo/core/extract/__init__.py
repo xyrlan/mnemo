@@ -144,6 +144,30 @@ def _atomic_write_last_auto_run(
         raise ExtractionIOError(f"failed to write last-auto-run.json: {exc}") from exc
 
 
+_FORCE_WIPE_TYPES = ("feedback", "user", "reference")
+
+
+def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
+    """Delete every .md directly under shared/_inbox/<cluster_type>/.
+
+    Called only when --force is set, before any cluster extraction runs.
+    Wipes slug-drift duplicates from prior force runs (see v0.3.1 spec §3b).
+    Intentionally leaves non-cluster subdirs (e.g. _inbox/project/) alone.
+    """
+    inbox_root = vault_root / "shared" / "_inbox"
+    if not inbox_root.is_dir():
+        return
+    for type_name in _FORCE_WIPE_TYPES:
+        type_dir = inbox_root / type_name
+        if not type_dir.is_dir():
+            continue
+        for md in type_dir.glob("*.md"):
+            try:
+                md.unlink()
+            except OSError:
+                continue
+
+
 def _run_extraction_body(
     cfg: dict,
     vault_root: Path,
@@ -160,6 +184,9 @@ def _run_extraction_body(
     if dry_run:
         _print_estimate(scan_result, cfg)
         return
+
+    if force:
+        _force_clear_inbox_cluster_dirs(vault_root)
 
     # Phase 1: projects (zero LLM, fastest, cannot fail from network)
     project_files = scan_result.by_type.get("project", [])

@@ -86,7 +86,10 @@ def test_extraction_auto_defaults_are_opt_in():
     assert "auto" in DEFAULTS["extraction"]
     auto = DEFAULTS["extraction"]["auto"]
     assert auto["enabled"] is False
-    assert auto["minNewMemories"] == 5
+    # v0.3.1 dogfood: lowered from 5 to 1. With briefings generating one
+    # dense file per session, a single new file is enough signal to justify
+    # a background run on the next SessionEnd.
+    assert auto["minNewMemories"] == 1
     assert auto["minIntervalMinutes"] == 60
 
 
@@ -98,7 +101,7 @@ def test_load_config_populates_auto_defaults(tmp_path):
     cfg = load_config(cfg_path)
 
     assert cfg["extraction"]["auto"]["enabled"] is False
-    assert cfg["extraction"]["auto"]["minNewMemories"] == 5
+    assert cfg["extraction"]["auto"]["minNewMemories"] == 1
     assert cfg["extraction"]["auto"]["minIntervalMinutes"] == 60
 
 
@@ -113,4 +116,32 @@ def test_user_override_of_auto_enabled_preserved(tmp_path):
 
     assert cfg["extraction"]["auto"]["enabled"] is True
     assert cfg["extraction"]["auto"]["minIntervalMinutes"] == 30
-    assert cfg["extraction"]["auto"]["minNewMemories"] == 5  # untouched default
+    assert cfg["extraction"]["auto"]["minNewMemories"] == 1  # untouched default
+
+
+def test_briefings_defaults_are_opt_in():
+    """v0.3.1: per-session briefings are opt-in, matching v0.3 auto-brain pattern."""
+    from mnemo.core.config import DEFAULTS
+
+    assert "briefings" in DEFAULTS
+    assert DEFAULTS["briefings"]["enabled"] is False
+
+
+def test_load_config_populates_briefings_defaults(tmp_path):
+    from mnemo.core.config import load_config
+
+    cfg_path = tmp_path / "mnemo.config.json"
+    cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
+    cfg = load_config(cfg_path)
+
+    assert cfg["briefings"]["enabled"] is False
+
+
+def test_user_override_of_briefings_enabled_preserved(tmp_path):
+    from mnemo.core.config import load_config
+
+    cfg_path = tmp_path / "mnemo.config.json"
+    cfg_path.write_text('{"briefings": {"enabled": true}}')
+    cfg = load_config(cfg_path)
+
+    assert cfg["briefings"]["enabled"] is True

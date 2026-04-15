@@ -24,9 +24,12 @@ DEFAULTS: dict[str, Any] = {
         "costSoftCap": None,
         "auto": {
             "enabled": False,
-            "minNewMemories": 5,
+            "minNewMemories": 1,
             "minIntervalMinutes": 60,
         },
+    },
+    "briefings": {
+        "enabled": False,
     },
 }
 

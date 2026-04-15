@@ -35,7 +35,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
     extract.add_argument("--dry-run", action="store_true", help="show what would run without making LLM calls or writes")
-    extract.add_argument("--force", action="store_true", help="reprocess dismissed and promoted entries")
+    extract.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "reprocess dismissed and promoted entries. DESTRUCTIVE to "
+            "shared/_inbox/<type>/: every .md file in feedback/user/reference "
+            "inbox dirs is deleted before the run, wiping prior slug-drift "
+            "duplicates. Does not touch shared/_inbox/project/ or sacred dirs."
+        ),
+    )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")

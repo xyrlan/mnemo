@@ -23,7 +23,7 @@ def _debounce_passes(
     from datetime import datetime, timedelta
     try:
         auto_cfg = (cfg.get("extraction", {}) or {}).get("auto", {}) or {}
-        min_new = int(auto_cfg.get("minNewMemories", 5) or 5)
+        min_new = int(auto_cfg.get("minNewMemories", 1) or 1)
         min_interval_min = int(auto_cfg.get("minIntervalMinutes", 60) or 60)
 
         last_run = None
