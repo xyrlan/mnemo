@@ -59,6 +59,56 @@ def test_home_template_describes_auto_populated_types(tmp_path: Path):
     )
 
 
+def test_home_template_mentions_v0_3_1_briefings_and_flags(tmp_path: Path):
+    """v0.3.1: HOME.md must describe per-session briefings and the two opt-in
+    background flags so users know those features exist and how to turn them on."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    home = (vault / "HOME.md").read_text(encoding="utf-8")
+
+    # Briefings are documented as Tier 1 capture
+    assert "briefings/sessions/" in home
+    # Both opt-in config flags are named so users can grep them
+    assert "briefings.enabled" in home
+    assert "extraction.auto.enabled" in home
+    # Stability field is mentioned so users understand the evolving/stable split
+    assert "stability" in home.lower()
+
+
+def test_readme_template_does_not_promise_no_network_calls(tmp_path: Path):
+    """v0.3.1: the optional auto-brain/briefings features invoke `claude --print`,
+    which calls Anthropic. README must not claim 'no network calls' anymore —
+    that was accurate in v0.1 but became a lie in v0.3. Instead it must
+    disclose that the opt-in features send memory/briefing content to Anthropic
+    when enabled, and that everything else stays offline."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    readme = (vault / "README.md").read_text(encoding="utf-8")
+
+    assert "no network calls" not in readme.lower(), (
+        "README must not claim 'no network calls' — the auto-brain and briefing "
+        "features call Anthropic's API when enabled"
+    )
+    # Positive assertions: privacy disclosure names the relevant flags
+    assert "extraction.auto.enabled" in readme
+    assert "briefings.enabled" in readme
+    # Anthropic is named so users understand who receives the data
+    assert "Anthropic" in readme
+
+
+def test_readme_template_does_not_mention_removed_working_dir(tmp_path: Path):
+    """v0.3.1: `bots/<agent>/working/` was never created by scaffold and is
+    no longer a documented concept. The README previously promised it as
+    'your scratch space' — remove that line so users don't look for it."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    readme = (vault / "README.md").read_text(encoding="utf-8")
+    assert "working/" not in readme, (
+        "README must not mention bots/<agent>/working/ — it isn't scaffolded "
+        "and no code path creates it"
+    )
+
+
 def test_scaffold_idempotent(tmp_path: Path):
     vault = tmp_path / "vault"
     scaffold.scaffold_vault(vault)
