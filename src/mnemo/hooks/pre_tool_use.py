@@ -16,6 +16,9 @@ from __future__ import annotations
 import json
 import sys
 
+_ENFORCE_TOOL = "Bash"
+_ENRICH_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
+
 
 def main() -> int:
     try:
@@ -23,13 +26,14 @@ def main() -> int:
     except Exception:
         return 0
 
+    if not isinstance(payload, dict):
+        return 0
+
     try:
         from mnemo.core import config, errors, paths
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
-        if not errors.should_run(vault):
-            return 0
 
         enf_cfg = cfg.get("enforcement", {}) or {}
         enr_cfg = cfg.get("enrichment", {}) or {}
@@ -38,11 +42,16 @@ def main() -> int:
         if not (enf_enabled or enr_enabled):
             return 0
 
+        if not errors.should_run(vault):
+            return 0
+
         from mnemo.core import rule_activation as ra
         from mnemo.core.agent import resolve_agent
 
         tool_name = payload.get("tool_name") or ""
-        tool_input = payload.get("tool_input") or {}
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            tool_input = {}
         cwd = payload.get("cwd") or ""
         if not tool_name:
             return 0
@@ -54,7 +63,7 @@ def main() -> int:
         project = resolve_agent(cwd).name
 
         # Enforcement first — if a deny fires, never continue to enrichment
-        if enf_enabled and tool_name == "Bash":
+        if enf_enabled and tool_name == _ENFORCE_TOOL:
             command = tool_input.get("command") or ""
             hit = ra.match_bash_enforce(index, project, command)
             if hit is not None:
@@ -63,7 +72,7 @@ def main() -> int:
                 return 0
 
         # Enrichment for path-based tools
-        if enr_enabled and tool_name in {"Edit", "Write", "MultiEdit"}:
+        if enr_enabled and tool_name in _ENRICH_TOOLS:
             file_path = tool_input.get("file_path") or ""
             if file_path:
                 hits = ra.match_path_enrich(index, project, file_path, tool_name)

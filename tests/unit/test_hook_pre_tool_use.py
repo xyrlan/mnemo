@@ -542,6 +542,31 @@ def test_hook_enriches_write_tool(tmp_vault: Path, monkeypatch):
     assert "additionalContext" in data["hookSpecificOutput"]
 
 
+def test_hook_enriches_multiedit_tool(tmp_vault: Path, monkeypatch):
+    project = "mnemo"
+    _write_enrich_rule(
+        tmp_vault, "ts-config-multi.md",
+        project=project,
+        path_glob="**/*.ts",
+        tools="MultiEdit",
+        body="TypeScript multi-edit rule.",
+    )
+    project_dir = _make_git_project(tmp_vault, project)
+    write_index(tmp_vault, build_index(tmp_vault))
+
+    payload = {
+        "tool_name": "MultiEdit",
+        "tool_input": {"file_path": "src/utils/types.ts"},
+        "cwd": str(project_dir),
+    }
+    rc, out = _run_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
+
+    assert rc == 0
+    assert out
+    data = json.loads(out)
+    assert "additionalContext" in data["hookSpecificOutput"]
+
+
 def test_hook_no_output_when_no_rules_match(tmp_vault: Path, monkeypatch):
     """Bash command that doesn't match any deny rule → silent."""
     project = "mnemo"
