@@ -71,11 +71,12 @@ def test_scan_discovers_briefings_sessions_dir(tmp_vault: Path):
 
     # v0.3.1: briefings route through the feedback extraction path so their
     # durable content (Decisions made, Dead ends) gets mined into Tier 2 pages.
+    # Use .as_posix() so the substring check is stable across Windows backslashes.
     feedback = result.by_type["feedback"]
-    assert any("briefings/sessions/sid42.md" in str(f.path) for f in feedback), (
-        f"briefing file must appear in feedback scan bucket; got {[str(f.path) for f in feedback]}"
+    assert any("briefings/sessions/sid42.md" in f.path.as_posix() for f in feedback), (
+        f"briefing file must appear in feedback scan bucket; got {[f.path.as_posix() for f in feedback]}"
     )
-    hit = next(f for f in feedback if "sid42" in str(f.path))
+    hit = next(f for f in feedback if "sid42" in f.path.as_posix())
     assert hit.agent == "agent_a"
     assert hit.type == "feedback"  # routed into feedback cluster regardless of frontmatter
 
@@ -94,7 +95,7 @@ def test_scan_briefing_and_memory_files_coexist(tmp_vault: Path):
     )
 
     result = scanner.scan(tmp_vault, _empty_state())
-    feedback_paths = [str(f.path) for f in result.by_type["feedback"]]
+    feedback_paths = [f.path.as_posix() for f in result.by_type["feedback"]]
 
     assert any("memory/feedback_use_yarn.md" in p for p in feedback_paths)
     assert any("briefings/sessions/sid.md" in p for p in feedback_paths)
@@ -110,7 +111,7 @@ def test_scan_briefing_unchanged_source_hash_skipped_on_second_run(tmp_vault: Pa
     first = scanner.scan(tmp_vault, _empty_state())
     # Seed state with the briefing's hash
     state = _empty_state()
-    brief = next(f for f in first.by_type["feedback"] if "sid" in str(f.path))
+    brief = next(f for f in first.by_type["feedback"] if "sid" in f.path.as_posix())
     key = f"feedback/{brief.slug}"
     state.entries[key] = scanner.StateEntry(
         source_files=[str(brief.path)],

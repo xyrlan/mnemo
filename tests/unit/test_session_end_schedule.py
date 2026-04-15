@@ -250,6 +250,7 @@ def test_resolve_session_jsonl_path_dash_encodes_cwd(tmp_path, monkeypatch):
     expected = claude_dir / "sid42.jsonl"
     expected.write_text("{}\n")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
     resolved = session_end._resolve_session_jsonl_path("sid42", "/home/xyrlan/github/mnemo")
     assert resolved == expected
@@ -261,6 +262,7 @@ def test_resolve_session_jsonl_path_returns_none_when_missing(tmp_path, monkeypa
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
     resolved = session_end._resolve_session_jsonl_path("nonexistent", "/tmp/nowhere")
     assert resolved is None
@@ -321,6 +323,7 @@ def test_schedule_briefing_spawns_when_enabled_and_jsonl_exists(tmp_path, monkey
     jsonl_dir.mkdir(parents=True)
     (jsonl_dir / "sidA.jsonl").write_text("{}\n")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
     cfg = {"briefings": {"enabled": True}}
     called = []
@@ -342,6 +345,7 @@ def test_schedule_briefing_skips_when_jsonl_missing(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
     cfg = {"briefings": {"enabled": True}}
     called = []
@@ -363,6 +367,7 @@ def test_schedule_briefing_swallows_popen_errors(tmp_path, monkeypatch):
     jsonl_dir.mkdir(parents=True)
     (jsonl_dir / "sid.jsonl").write_text("{}\n")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
     cfg = {"briefings": {"enabled": True}}
 
