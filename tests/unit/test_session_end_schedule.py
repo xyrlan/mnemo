@@ -238,6 +238,150 @@ def test_schedule_extraction_skips_when_lock_held(tmp_path, monkeypatch):
     assert spawn_called == [], "should not spawn when lock is held"
 
 
+# --- v0.3.1: per-session briefing scheduling --------------------------------
+
+
+def test_resolve_session_jsonl_path_dash_encodes_cwd(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    home = tmp_path / "home"
+    claude_dir = home / ".claude" / "projects" / "-home-xyrlan-github-mnemo"
+    claude_dir.mkdir(parents=True)
+    expected = claude_dir / "sid42.jsonl"
+    expected.write_text("{}\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+
+    resolved = session_end._resolve_session_jsonl_path("sid42", "/home/xyrlan/github/mnemo")
+    assert resolved == expected
+
+
+def test_resolve_session_jsonl_path_returns_none_when_missing(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+
+    resolved = session_end._resolve_session_jsonl_path("nonexistent", "/tmp/nowhere")
+    assert resolved is None
+
+
+def test_spawn_detached_briefing_posix_uses_start_new_session(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+    from mnemo.hooks import session_end
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    fake_jsonl = tmp_path / "sid.jsonl"
+    fake_jsonl.write_text("{}\n")
+    session_end._spawn_detached_briefing(fake_jsonl, "agent_a")
+
+    argv = captured["argv"]
+    assert argv[0] == sys.executable
+    assert argv[1:4] == ["-m", "mnemo", "briefing"]
+    assert str(fake_jsonl) in argv
+    assert "agent_a" in argv
+    assert captured["kwargs"].get("start_new_session") is True
+    assert captured["kwargs"].get("close_fds") is True
+    assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
+
+
+def test_schedule_briefing_no_op_when_disabled(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    cfg = {"briefings": {"enabled": False}}
+
+    called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing",
+                        lambda p, a: called.append((p, a)))
+
+    session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="sid", cwd="/tmp")
+    assert called == []
+
+
+def test_schedule_briefing_spawns_when_enabled_and_jsonl_exists(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    home = tmp_path / "home"
+    jsonl_dir = home / ".claude" / "projects" / "-tmp-cwd"
+    jsonl_dir.mkdir(parents=True)
+    (jsonl_dir / "sidA.jsonl").write_text("{}\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+
+    cfg = {"briefings": {"enabled": True}}
+    called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing",
+                        lambda p, a: called.append((p, a)))
+
+    session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="sidA", cwd="/tmp/cwd")
+    assert len(called) == 1
+    assert called[0][1] == "agent_a"
+    assert called[0][0].name == "sidA.jsonl"
+
+
+def test_schedule_briefing_skips_when_jsonl_missing(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+
+    cfg = {"briefings": {"enabled": True}}
+    called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing",
+                        lambda p, a: called.append((p, a)))
+
+    session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="missing", cwd="/nowhere")
+    assert called == []
+
+
+def test_schedule_briefing_swallows_popen_errors(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+
+    home = tmp_path / "home"
+    jsonl_dir = home / ".claude" / "projects" / "-tmp-cwd"
+    jsonl_dir.mkdir(parents=True)
+    (jsonl_dir / "sid.jsonl").write_text("{}\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+
+    cfg = {"briefings": {"enabled": True}}
+
+    def boom(p, a):
+        raise OSError("too many fds")
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing", boom)
+
+    session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="sid", cwd="/tmp/cwd")
+
+    errors_log = vault / ".errors.log"
+    assert errors_log.exists()
+    assert "session_end.briefing" in errors_log.read_text()
+
+
 def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
     from mnemo.hooks import session_end
 

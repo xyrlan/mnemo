@@ -47,6 +47,86 @@ def test_scan_source_hash_is_deterministic(populated_vault: Path):
     assert h1 == h2
 
 
+# --- v0.3.1: briefing files as additional extraction input -------------------
+
+
+def test_scan_discovers_briefings_sessions_dir(tmp_vault: Path):
+    """Files in bots/<agent>/briefings/sessions/*.md must be picked up by the scanner."""
+    briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
+    briefings_dir.mkdir(parents=True)
+    (briefings_dir / "sid42.md").write_text(
+        "---\n"
+        "type: briefing\n"
+        "agent: agent_a\n"
+        "session_id: sid42\n"
+        "date: 2026-04-14\n"
+        "duration_minutes: 42\n"
+        "---\n\n"
+        "# Briefing — agent_a — sid42\n\n"
+        "## Decisions made\n"
+        "- Chose Zustand over Redux because smaller API surface.\n"
+    )
+
+    result = scanner.scan(tmp_vault, _empty_state())
+
+    # v0.3.1: briefings route through the feedback extraction path so their
+    # durable content (Decisions made, Dead ends) gets mined into Tier 2 pages.
+    # Use .as_posix() so the substring check is stable across Windows backslashes.
+    feedback = result.by_type["feedback"]
+    assert any("briefings/sessions/sid42.md" in f.path.as_posix() for f in feedback), (
+        f"briefing file must appear in feedback scan bucket; got {[f.path.as_posix() for f in feedback]}"
+    )
+    hit = next(f for f in feedback if "sid42" in f.path.as_posix())
+    assert hit.agent == "agent_a"
+    assert hit.type == "feedback"  # routed into feedback cluster regardless of frontmatter
+
+
+def test_scan_briefing_and_memory_files_coexist(tmp_vault: Path):
+    """Existing memory/*.md files and briefings/sessions/*.md both get scanned."""
+    memory_dir = tmp_vault / "bots" / "agent_a" / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "feedback_use_yarn.md").write_text(
+        "---\nname: Use yarn\ntype: feedback\n---\nbody"
+    )
+    briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
+    briefings_dir.mkdir(parents=True)
+    (briefings_dir / "sid.md").write_text(
+        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body"
+    )
+
+    result = scanner.scan(tmp_vault, _empty_state())
+    feedback_paths = [f.path.as_posix() for f in result.by_type["feedback"]]
+
+    assert any("memory/feedback_use_yarn.md" in p for p in feedback_paths)
+    assert any("briefings/sessions/sid.md" in p for p in feedback_paths)
+
+
+def test_scan_briefing_unchanged_source_hash_skipped_on_second_run(tmp_vault: Path):
+    briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
+    briefings_dir.mkdir(parents=True)
+    (briefings_dir / "sid.md").write_text(
+        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body"
+    )
+
+    first = scanner.scan(tmp_vault, _empty_state())
+    # Seed state with the briefing's hash
+    state = _empty_state()
+    brief = next(f for f in first.by_type["feedback"] if "sid" in f.path.as_posix())
+    key = f"feedback/{brief.slug}"
+    state.entries[key] = scanner.StateEntry(
+        source_files=[str(brief.path)],
+        source_hash=brief.source_hash,
+        written_hash="",
+        written_at="",
+        status="inbox",
+    )
+
+    second = scanner.scan(tmp_vault, state)
+    # Briefing is still listed, but marked unchanged (not dirty)
+    assert key in second.unchanged_slugs
+    assert not any(f.source_hash == brief.source_hash for f in second.dirty_files)
+
+
 def test_scan_unknown_type_defaults_to_feedback(tmp_vault: Path):
     agent_dir = tmp_vault / "bots" / "x" / "memory"
     agent_dir.mkdir(parents=True)

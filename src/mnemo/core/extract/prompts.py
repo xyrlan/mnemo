@@ -21,6 +21,20 @@ FEEDBACK_SYSTEM_PROMPT = (
     "duplicates in the sacred directory. Only keep files separate when they "
     "address genuinely distinct rules (different domains, different tools, "
     "unrelated behaviors).\n\n"
+    "Input mixing: some input files are session briefings (path contains "
+    "`briefings/sessions/`, frontmatter `type: briefing`). Treat them as dense "
+    "source material — mine their 'Decisions made' and 'Dead ends' sections "
+    "for durable rules, preferences, and architectural conclusions. A single "
+    "briefing may yield multiple feedback pages, or none if it contains only "
+    "episodic content. Briefings always list their source path in the emitted "
+    "`source_files` so the state machine can track them.\n\n"
+    "Stability field: every emitted page carries `stability` set to either "
+    "\"stable\" or \"evolving\". Emit \"evolving\" only when the source material "
+    "shows hesitation, indecision, or active debate — phrases like 'still "
+    "deciding', 'not sure', 'tried both', 'changing my mind', 'this might be "
+    "wrong', or contradictions between sources. Emit \"stable\" (the default) "
+    "for concluded decisions, settled conventions, and factual rules with no "
+    "hedging. When in doubt, default to stable.\n\n"
     "Output MUST be valid JSON matching the requested schema. Do not add "
     "prose before or after the JSON."
 )
@@ -39,6 +53,78 @@ REFERENCE_SYSTEM_PROMPT = (
     "resource cluster. Output MUST be valid JSON matching the requested schema."
 )
 
+BRIEFING_SYSTEM_PROMPT = (
+    "You are writing a shift handoff briefing from a Claude Code session "
+    "transcript. Metaphor: a nurse going off shift writing a short note so "
+    "the nurse coming on at the next shift can pick up without losing the "
+    "thread. The reader is a tired developer (or another AI agent) resuming "
+    "tomorrow — they need both episodic context (where you stopped) and "
+    "durable decisions (what you concluded, and why).\n\n"
+    "Output MUST be markdown ONLY (no frontmatter — the caller adds it). Use "
+    "exactly these top-level sections in order:\n"
+    "## TL;DR — 3-5 sentences summarizing the session.\n"
+    "## What I did — concrete changes grouped by feature, with file paths.\n"
+    "## Decisions made — architectural decisions with **Why:** rationale, "
+    "including rejected alternatives when relevant. Durable content mined by "
+    "downstream extraction.\n"
+    "## Dead ends — what was tried and didn't work, and why.\n"
+    "## Open questions — unresolved items.\n"
+    "## State at end of session — branch, uncommitted files, test status, "
+    "and a **Resume at:** line with a `path:line` pointer and the next action.\n"
+    "## Context I'd forget otherwise — things held in working memory that "
+    "aren't visible in the code.\n\n"
+    "Be specific. Cite file paths. Prefer bullets over prose. Omit a "
+    "section entirely if it genuinely has no content — do not fabricate "
+    "decisions or dead ends. Do not wrap the output in code fences."
+)
+
+
+def build_briefing_prompt(events: list[dict]) -> str:
+    """Render a list of Claude Code jsonl events into a flat text transcript
+    suitable as the user message for the briefing LLM call."""
+    lines: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("type") or "")
+        msg = ev.get("message") or {}
+        role = str(msg.get("role") or etype or "?")
+        content = msg.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif btype == "tool_use":
+                    name = block.get("name") or "tool"
+                    parts.append(f"[tool_use: {name}]")
+                elif btype == "tool_result":
+                    preview = str(block.get("content") or "")
+                    if len(preview) > 400:
+                        preview = preview[:400] + "…"
+                    parts.append(f"[tool_result: {preview}]")
+            text = "\n".join(p for p in parts if p)
+        if not text.strip():
+            continue
+        lines.append(f"[{role}] {text}")
+
+    transcript = "\n\n".join(lines)
+    return (
+        "Task: write the shift handoff briefing markdown body for the "
+        "following Claude Code session transcript. Follow the section "
+        "structure from the system prompt exactly. Output markdown only, "
+        "no frontmatter, no code fences.\n\n"
+        "=== TRANSCRIPT ===\n"
+        f"{transcript}\n"
+        "=== END TRANSCRIPT ===\n"
+    )
+
 # --- Shared fragments -------------------------------------------------------
 
 _SCHEMA_EXAMPLE = """\
@@ -51,10 +137,15 @@ Required JSON output schema:
       "description": "One-line summary",
       "type": "feedback|user|reference",
       "body": "Markdown body including **Why:** and **How to apply:** sections",
-      "source_files": ["bots/<agent>/memory/<file>.md", ...]
+      "source_files": ["bots/<agent>/memory/<file>.md", ...],
+      "stability": "stable"
     }
   ]
 }
+
+`stability` must be either "stable" (default, concluded decision) or "evolving"
+(source shows indecision / still debating / contradicting itself). Default to
+"stable" when in doubt.
 """
 
 _FEW_SHOT_FEEDBACK = """\
@@ -85,7 +176,7 @@ Do not create git commits unless I explicitly ask.
 [END]
 
 Output (ONE merged page, both files listed in source_files):
-{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"]}]}
+{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"],"stability":"stable"}]}
 
 Example 2 — NEGATIVE: two files about genuinely different rules → DO NOT MERGE.
 (Use yarn and no-commits-without-permission are unrelated rules — different
@@ -113,7 +204,7 @@ Do not run `git commit` without permission.
 [END]
 
 Output (TWO separate pages — these rules DO NOT merge):
-{"pages":[{"slug":"use-yarn","name":"Use yarn for JS/TS","description":"Always use yarn, never npm","type":"feedback","body":"Always use yarn for JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile in this repo.\\n\\n**How to apply:** `yarn add <pkg>` for runtime deps, `yarn add -D <pkg>` for dev deps. Never run `npm install`.","source_files":["bots/agent-a/memory/feedback_use_yarn.md"]},{"slug":"no-autonomous-commits","name":"No autonomous commits","description":"Do not run git commit without explicit permission","type":"feedback","body":"Do not run `git commit` without explicit user permission.\\n\\n**Why:** the user owns their commit history.\\n\\n**How to apply:** edit and stage freely, but stop before committing.","source_files":["bots/agent-b/memory/feedback_no_commits.md"]}]}
+{"pages":[{"slug":"use-yarn","name":"Use yarn for JS/TS","description":"Always use yarn, never npm","type":"feedback","body":"Always use yarn for JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile in this repo.\\n\\n**How to apply:** `yarn add <pkg>` for runtime deps, `yarn add -D <pkg>` for dev deps. Never run `npm install`.","source_files":["bots/agent-a/memory/feedback_use_yarn.md"],"stability":"stable"},{"slug":"no-autonomous-commits","name":"No autonomous commits","description":"Do not run git commit without explicit permission","type":"feedback","body":"Do not run `git commit` without explicit user permission.\\n\\n**Why:** the user owns their commit history.\\n\\n**How to apply:** edit and stage freely, but stop before committing.","source_files":["bots/agent-b/memory/feedback_no_commits.md"],"stability":"stable"}]}
 
 Example 3 — ONE input file passing through unchanged:
 
@@ -129,7 +220,27 @@ A rule only agent-z has.
 [END]
 
 Output:
-{"pages":[{"slug":"solo-rule","name":"Solo rule","description":"A rule only agent-z has","type":"feedback","body":"A rule only agent-z has.\\n\\n**Why:** agent-z specific.\\n\\n**How to apply:** only in agent-z.","source_files":["bots/agent-z/memory/feedback_solo.md"]}]}
+{"pages":[{"slug":"solo-rule","name":"Solo rule","description":"A rule only agent-z has","type":"feedback","body":"A rule only agent-z has.\\n\\n**Why:** agent-z specific.\\n\\n**How to apply:** only in agent-z.","source_files":["bots/agent-z/memory/feedback_solo.md"],"stability":"stable"}]}
+
+Example 4 — EVOLVING stability marker.
+(Source hedging language — "still deciding", "might change" — triggers
+stability:"evolving". This signals to downstream consumers that the rule is
+tentative and may be rewritten in the near future.)
+
+Input:
+[FILE: bots/agent-q/memory/feedback_zustand_maybe.md]
+---
+name: Maybe Zustand
+type: feedback
+---
+Leaning toward Zustand over Redux for state management, still deciding.
+Tried both this week and might change my mind next sprint.
+**Why:** smaller API surface, but Redux has better devtools.
+**How to apply:** use Zustand for new stores, keep existing Redux slices.
+[END]
+
+Output (stability marked evolving because of "still deciding" / "might change"):
+{"pages":[{"slug":"state-management-zustand-vs-redux","name":"Zustand over Redux (evolving)","description":"Leaning toward Zustand for new state, but still deciding","type":"feedback","body":"Leaning toward Zustand over Redux for new state management.\\n\\n**Why:** smaller API surface than Redux, though Redux has better devtools.\\n\\n**How to apply:** use Zustand for brand-new stores; keep existing Redux slices untouched until the decision settles.","source_files":["bots/agent-q/memory/feedback_zustand_maybe.md"],"stability":"evolving"}]}
 """
 
 _FEW_SHOT_USER = """\

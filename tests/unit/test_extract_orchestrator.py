@@ -172,6 +172,138 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     assert target.exists()
 
 
+def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault: Path, stub_llm):
+    """v0.3.1: when the LLM emits stability=evolving, the written page keeps it."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "evolving",
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists()
+    assert "stability: evolving" in sacred.read_text()
+
+
+def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populated_vault: Path, stub_llm):
+    """v0.3.1: LLM responses without a stability key default to 'stable' — forward compat."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                # no "stability" field — legacy v0.2/v0.3 schema
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists()
+    assert "stability: stable" in sacred.read_text()
+
+
+def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Path, stub_llm):
+    """v0.3.1: --force nukes shared/_inbox/<type>/*.md so slug-drift duplicates die."""
+    # Seed the inbox with stale slug-drift duplicates from a prior run.
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox.mkdir(parents=True, exist_ok=True)
+    (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n")
+    (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n")
+    (feedback_inbox / "no-git-commits-without-permission.md").write_text("stale body 3\n")
+
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "no-commits",
+                "name": "No commits",
+                "description": "d",
+                "type": "feedback",
+                "body": "canonical body",
+                "source_files": [
+                    "bots/agent-b/memory/feedback_no_commits.md",
+                    "bots/agent-b/memory/feedback_no_commit_without_permission.md",
+                ],
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault), force=True)
+
+    # Old slug-drift duplicates must be gone.
+    assert not (feedback_inbox / "no-commits-only-edits.md").exists()
+    assert not (feedback_inbox / "no-commits-without-permission.md").exists()
+    assert not (feedback_inbox / "no-git-commits-without-permission.md").exists()
+    # The freshly extracted canonical slug is present.
+    assert (feedback_inbox / "no-commits.md").exists()
+
+
+def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stub_llm):
+    """Sanity: without --force, existing inbox files are preserved."""
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox.mkdir(parents=True, exist_ok=True)
+    preserved = feedback_inbox / "preserved.md"
+    preserved.write_text("keep me\n")
+
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    assert preserved.exists(), "non-force runs must not wipe inbox"
+
+
+def test_orchestrator_force_wipes_only_cluster_type_dirs(populated_vault: Path, stub_llm):
+    """Force wipes feedback/user/reference under _inbox, not project/ or random subdirs."""
+    project_inbox = populated_vault / "shared" / "_inbox" / "project"
+    project_inbox.mkdir(parents=True, exist_ok=True)
+    project_stale = project_inbox / "some-project.md"
+    project_stale.write_text("project body\n")
+
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault), force=True)
+
+    # Project inbox untouched (projects don't LLM-cluster, no slug drift)
+    assert project_stale.exists()
+
+
 def test_summary_has_v0_3_fields():
     from mnemo.core.extract import ExtractionSummary
 

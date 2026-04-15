@@ -35,6 +35,7 @@ class ExtractedPage:
     body: str
     source_files: list[str]
     source_hash: str
+    stability: str = "stable"
 
 
 @dataclass
@@ -77,6 +78,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     else:
         extras = ""
         tag = "needs-review"
+    stability = getattr(page, "stability", None) or "stable"
     return (
         "---\n"
         f"name: {page.name}\n"
@@ -84,6 +86,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"type: {page.type}\n"
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
+        f"stability: {stability}\n"
         f"{extras}"
         "sources:\n"
         f"{sources_yaml}\n"
