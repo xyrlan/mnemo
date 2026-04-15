@@ -173,3 +173,17 @@ def test_user_override_of_injection_enabled_preserved(tmp_path):
     cfg = load_config(cfg_path)
 
     assert cfg["injection"]["enabled"] is True
+
+
+def test_defaults_include_activation_blocks():
+    from mnemo.core.config import DEFAULTS
+
+    assert "enforcement" in DEFAULTS
+    assert DEFAULTS["enforcement"]["enabled"] is False
+    assert DEFAULTS["enforcement"]["log"]["maxBytes"] == 1_048_576
+
+    assert "enrichment" in DEFAULTS
+    assert DEFAULTS["enrichment"]["enabled"] is False
+    assert DEFAULTS["enrichment"]["maxRulesPerCall"] == 3
+    assert DEFAULTS["enrichment"]["bodyPreviewChars"] == 300
+    assert DEFAULTS["enrichment"]["log"]["maxBytes"] == 1_048_576

@@ -34,6 +34,16 @@ DEFAULTS: dict[str, Any] = {
     "injection": {
         "enabled": False,
     },
+    "enforcement": {
+        "enabled": False,
+        "log": {"maxBytes": 1_048_576},
+    },
+    "enrichment": {
+        "enabled": False,
+        "maxRulesPerCall": 3,
+        "bodyPreviewChars": 300,
+        "log": {"maxBytes": 1_048_576},
+    },
 }
 
 

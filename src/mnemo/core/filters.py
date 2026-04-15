@@ -74,13 +74,21 @@ def collect_existing_tags(vault_root: Path, page_type: str) -> list[str]:
     return sorted(collected)
 
 
+def _parse_inline_list(value: str) -> list[str]:
+    # parse [a, b, c] → ["a", "b", "c"]
+    inner = value[1:-1]
+    return [item.strip() for item in inner.split(",") if item.strip()]
+
+
 def parse_frontmatter(text: str) -> dict[str, Any]:
     """Parse the specific YAML-ish shape that mnemo writes.
 
-    Supports exactly what ``_render_page`` emits:
+    Supports:
     - scalar strings (``key: value``)
     - inline empty lists (``key: []``)
     - block-style string lists (``key:\\n  - item``)
+    - one level of nested dicts (``key:\\n  subkey: value``) where subkey
+      values can be scalars, inline lists, or 4-space-indented block lists
 
     Anything else is ignored. This is not a general YAML parser — we control
     the writer, so the reader can be strict. Lines without a colon (outside a
@@ -94,19 +102,69 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
     body = text[4:end]
 
     out: dict[str, Any] = {}
-    current_list_key: str | None = None
+    current_list_key: str | None = None   # top-level block-list key
+    current_dict_key: str | None = None   # nested-dict parent key
+    current_sublist_key: str | None = None  # subkey collecting 4-space block list
 
     for raw in body.splitlines():
         if not raw.strip():
             current_list_key = None
+            current_dict_key = None
+            current_sublist_key = None
             continue
-        if raw.startswith("  - ") and current_list_key is not None:
-            out[current_list_key].append(raw[4:].strip())
+
+        # 4-space block-list item inside a nested dict subkey
+        if raw.startswith("    - ") and current_dict_key is not None and current_sublist_key is not None:
+            out[current_dict_key][current_sublist_key].append(raw[6:].strip())
             continue
+
+        # 2-space block-list item — could be top-level list or dict continuation
+        if raw.startswith("  - "):
+            if current_list_key is not None:
+                # top-level block list (already established)
+                out[current_list_key].append(raw[4:].strip())
+                continue
+            if current_dict_key is not None and isinstance(out.get(current_dict_key), dict):
+                # first  "  - " after a bare key: this is a top-level block list
+                # convert the dict placeholder back to a list
+                out[current_dict_key] = [raw[4:].strip()]
+                current_list_key = current_dict_key
+                current_dict_key = None
+                current_sublist_key = None
+                continue
+
+        # 0-indent block-list item (existing parser handled it)
         if raw.startswith("- ") and current_list_key is not None:
             out[current_list_key].append(raw[2:].strip())
             continue
+
+        # 2-space indented subkey line inside a nested dict
+        if raw.startswith("  ") and not raw.startswith("   ") and current_dict_key is not None:
+            subline = raw[2:]
+            if ":" not in subline:
+                continue
+            subkey, _, subval = subline.partition(":")
+            subkey = subkey.strip()
+            subval = subval.strip()
+            if not subkey:
+                continue
+            current_sublist_key = None  # reset unless we open a sub-block list
+            if subval == "[]":
+                out[current_dict_key][subkey] = []
+            elif subval.startswith("[") and subval.endswith("]"):
+                out[current_dict_key][subkey] = _parse_inline_list(subval)
+            elif subval == "":
+                # subkey starts a 4-space block list
+                out[current_dict_key][subkey] = []
+                current_sublist_key = subkey
+            else:
+                out[current_dict_key][subkey] = subval
+            continue
+
+        # top-level key line (no leading spaces)
         current_list_key = None
+        current_dict_key = None
+        current_sublist_key = None
         if ":" not in raw:
             continue
         key, _, value = raw.partition(":")
@@ -115,8 +173,10 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
         if not key:
             continue
         if value == "":
-            out[key] = []
-            current_list_key = key
+            # ambiguous until next line: could be block list or nested dict
+            # initialise as dict; if "  - " comes next we'll convert to list
+            out[key] = {}
+            current_dict_key = key
         elif value == "[]":
             out[key] = []
         else:

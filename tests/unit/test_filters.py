@@ -181,3 +181,112 @@ def test_parse_frontmatter_single_source_list() -> None:
     fm = parse_frontmatter(text)
     assert fm["sources"] == ["one/path.md"]
     assert fm["tags"] == ["auto-promoted"]
+
+
+# --- nested dict tests ---
+
+
+def test_parse_frontmatter_nested_dict_with_scalars() -> None:
+    text = (
+        "---\n"
+        "enforce:\n"
+        "  tool: Bash\n"
+        "  deny_pattern: 'git commit.*Co-Authored-By'\n"
+        "  reason: No Co-Authored-By trailers\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    assert isinstance(fm["enforce"], dict)
+    assert fm["enforce"]["tool"] == "Bash"
+    assert fm["enforce"]["deny_pattern"] == "'git commit.*Co-Authored-By'"
+    assert fm["enforce"]["reason"] == "No Co-Authored-By trailers"
+
+
+def test_parse_frontmatter_nested_dict_with_inline_list() -> None:
+    text = (
+        "---\n"
+        "activates_on:\n"
+        "  tools: [Edit, Write, MultiEdit]\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    assert isinstance(fm["activates_on"], dict)
+    assert fm["activates_on"]["tools"] == ["Edit", "Write", "MultiEdit"]
+
+
+def test_parse_frontmatter_nested_dict_with_block_list() -> None:
+    text = (
+        "---\n"
+        "activates_on:\n"
+        "  path_globs:\n"
+        "    - '**/*modal*.tsx'\n"
+        "    - 'src/app/**/modals/**'\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    assert isinstance(fm["activates_on"], dict)
+    assert fm["activates_on"]["path_globs"] == [
+        "'**/*modal*.tsx'",
+        "'src/app/**/modals/**'",
+    ]
+
+
+def test_parse_frontmatter_multiple_nested_dicts() -> None:
+    text = (
+        "---\n"
+        "enforce:\n"
+        "  tool: Bash\n"
+        "  deny_pattern: 'git commit.*Co-Authored-By'\n"
+        "  reason: No Co-Authored-By trailers\n"
+        "activates_on:\n"
+        "  tools: [Edit, Write, MultiEdit]\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    assert fm["enforce"]["tool"] == "Bash"
+    assert fm["enforce"]["deny_pattern"] == "'git commit.*Co-Authored-By'"
+    assert fm["activates_on"]["tools"] == ["Edit", "Write", "MultiEdit"]
+
+
+def test_parse_frontmatter_flat_and_nested_coexist() -> None:
+    text = (
+        "---\n"
+        "name: my-rule\n"
+        "description: a thing\n"
+        "enforce:\n"
+        "  tool: Bash\n"
+        "  reason: no trailers\n"
+        "tags:\n"
+        "  - auto-promoted\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    assert fm["name"] == "my-rule"
+    assert fm["description"] == "a thing"
+    assert isinstance(fm["enforce"], dict)
+    assert fm["enforce"]["tool"] == "Bash"
+    assert fm["enforce"]["reason"] == "no trailers"
+    assert fm["tags"] == ["auto-promoted"]
+
+
+def test_parse_frontmatter_malformed_nested_falls_through() -> None:
+    # bare key: with no indented children and no following block-list lines
+    text = (
+        "---\n"
+        "name: x\n"
+        "orphan:\n"
+        "description: y\n"
+        "---\n"
+        "body\n"
+    )
+    fm = parse_frontmatter(text)
+    # should not crash; orphan gets an empty dict (safe fallback)
+    assert fm["name"] == "x"
+    assert fm["description"] == "y"
+    assert "orphan" in fm
+    assert isinstance(fm.get("orphan"), (dict, list))
