@@ -46,6 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
     briefing = sub.add_parser("briefing", help=argparse.SUPPRESS)
     briefing.add_argument("jsonl_path", type=str)
     briefing.add_argument("agent", type=str)
+    sub.add_parser("mcp-server", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     sub.add_parser("help", help="list commands")
@@ -494,6 +495,13 @@ def cmd_briefing(args: argparse.Namespace) -> int:
     finally:
         devnull.close()
     return 0
+
+
+@command("mcp-server")
+def cmd_mcp_server(_args: argparse.Namespace) -> int:
+    """Hidden stdio entry point — wired in ~/.claude.json under mcpServers.mnemo."""
+    from mnemo.core.mcp import server as mcp_server
+    return mcp_server.serve()
 
 
 @command("uninstall")
