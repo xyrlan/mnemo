@@ -46,6 +46,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
+    briefing = sub.add_parser("briefing", help=argparse.SUPPRESS)
+    briefing.add_argument("jsonl_path", type=str)
+    briefing.add_argument("agent", type=str)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     sub.add_parser("help", help="list commands")
@@ -459,6 +462,34 @@ def _run_extract_background(cfg: dict, args: argparse.Namespace) -> int:
                 # writes them into last-auto-run.json; this path is for
                 # exceptions that escape (e.g., config issues).
                 err_mod.log_error(vault_root, "extract.bg.outer", exc)
+                return 1
+    finally:
+        devnull.close()
+    return 0
+
+
+@command("briefing")
+def cmd_briefing(args: argparse.Namespace) -> int:
+    """Hidden CLI entry point: `mnemo briefing <jsonl_path> <agent>`.
+
+    Invoked by session_end's detached spawn. Fire-and-forget: errors are
+    logged to ~/.errors.log under the vault but never propagated.
+    """
+    import contextlib
+    import os
+    from mnemo.core import briefing as briefing_mod, config as cfg_mod, errors as err_mod, paths
+
+    cfg = cfg_mod.load_config()
+    vault_root = paths.vault_root(cfg)
+    devnull = open(os.devnull, "w")
+    try:
+        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            try:
+                briefing_mod.generate_session_briefing(
+                    Path(args.jsonl_path), args.agent, cfg,
+                )
+            except Exception as exc:
+                err_mod.log_error(vault_root, "briefing.cli", exc)
                 return 1
     finally:
         devnull.close()

@@ -46,6 +46,78 @@ REFERENCE_SYSTEM_PROMPT = (
     "resource cluster. Output MUST be valid JSON matching the requested schema."
 )
 
+BRIEFING_SYSTEM_PROMPT = (
+    "You are writing a shift handoff briefing from a Claude Code session "
+    "transcript. Metaphor: a nurse going off shift writing a short note so "
+    "the nurse coming on at the next shift can pick up without losing the "
+    "thread. The reader is a tired developer (or another AI agent) resuming "
+    "tomorrow — they need both episodic context (where you stopped) and "
+    "durable decisions (what you concluded, and why).\n\n"
+    "Output MUST be markdown ONLY (no frontmatter — the caller adds it). Use "
+    "exactly these top-level sections in order:\n"
+    "## TL;DR — 3-5 sentences summarizing the session.\n"
+    "## What I did — concrete changes grouped by feature, with file paths.\n"
+    "## Decisions made — architectural decisions with **Why:** rationale, "
+    "including rejected alternatives when relevant. Durable content mined by "
+    "downstream extraction.\n"
+    "## Dead ends — what was tried and didn't work, and why.\n"
+    "## Open questions — unresolved items.\n"
+    "## State at end of session — branch, uncommitted files, test status, "
+    "and a **Resume at:** line with a `path:line` pointer and the next action.\n"
+    "## Context I'd forget otherwise — things held in working memory that "
+    "aren't visible in the code.\n\n"
+    "Be specific. Cite file paths. Prefer bullets over prose. Omit a "
+    "section entirely if it genuinely has no content — do not fabricate "
+    "decisions or dead ends. Do not wrap the output in code fences."
+)
+
+
+def build_briefing_prompt(events: list[dict]) -> str:
+    """Render a list of Claude Code jsonl events into a flat text transcript
+    suitable as the user message for the briefing LLM call."""
+    lines: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("type") or "")
+        msg = ev.get("message") or {}
+        role = str(msg.get("role") or etype or "?")
+        content = msg.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif btype == "tool_use":
+                    name = block.get("name") or "tool"
+                    parts.append(f"[tool_use: {name}]")
+                elif btype == "tool_result":
+                    preview = str(block.get("content") or "")
+                    if len(preview) > 400:
+                        preview = preview[:400] + "…"
+                    parts.append(f"[tool_result: {preview}]")
+            text = "\n".join(p for p in parts if p)
+        if not text.strip():
+            continue
+        lines.append(f"[{role}] {text}")
+
+    transcript = "\n\n".join(lines)
+    return (
+        "Task: write the shift handoff briefing markdown body for the "
+        "following Claude Code session transcript. Follow the section "
+        "structure from the system prompt exactly. Output markdown only, "
+        "no frontmatter, no code fences.\n\n"
+        "=== TRANSCRIPT ===\n"
+        f"{transcript}\n"
+        "=== END TRANSCRIPT ===\n"
+    )
+
 # --- Shared fragments -------------------------------------------------------
 
 _SCHEMA_EXAMPLE = """\

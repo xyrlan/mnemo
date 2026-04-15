@@ -115,6 +115,86 @@ def _spawn_detached_extraction() -> None:
     subprocess.Popen(argv, **kwargs)
 
 
+def _resolve_session_jsonl_path(session_id: str, cwd: str):
+    """Return the Claude Code session transcript path, or None if missing.
+
+    Claude Code stores sessions at
+    `~/.claude/projects/<dash-encoded-cwd>/<session-id>.jsonl`, where the
+    cwd is encoded by replacing every path separator with a dash.
+    """
+    from pathlib import Path
+
+    if not session_id or not cwd:
+        return None
+    encoded = cwd.replace(os.sep, "-")
+    if os.altsep:
+        encoded = encoded.replace(os.altsep, "-")
+    home = Path(os.path.expanduser("~"))
+    path = home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+    return path if path.exists() else None
+
+
+def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
+    """Fire-and-forget background briefing via subprocess.Popen.
+
+    Invokes `mnemo briefing <jsonl_path> <agent>`. Detach semantics match
+    _spawn_detached_extraction so the child survives the hook's exit.
+    """
+    import subprocess
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    argv = [sys.executable, "-m", "mnemo", "briefing", str(jsonl_path), agent]
+    subprocess.Popen(argv, **kwargs)
+
+
+def _maybe_schedule_briefing(
+    cfg: dict,
+    vault_root,
+    agent_name: str,
+    *,
+    session_id: str,
+    cwd: str,
+) -> None:
+    """Spawn a detached per-session briefing when briefings.enabled=True.
+
+    Unlike extraction, briefings skip the count+time debounce — they are
+    cheap and run on every session end so no handoff state is dropped.
+    """
+    try:
+        from mnemo.core import errors as err_mod
+
+        briefings_cfg = cfg.get("briefings") or {}
+        if not bool(briefings_cfg.get("enabled", False)):
+            return
+
+        jsonl_path = _resolve_session_jsonl_path(session_id, cwd)
+        if jsonl_path is None:
+            return
+
+        try:
+            _spawn_detached_briefing(jsonl_path, agent_name)
+        except OSError as exc:
+            err_mod.log_error(vault_root, "session_end.briefing.popen", exc)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_end.briefing", exc)
+        except Exception:
+            pass
+
+
 def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
     """Main entry point called from session_end.main().
 
@@ -190,6 +270,13 @@ def main() -> int:
             _maybe_schedule_extraction(cfg, vault, agent_name)
         except Exception as e:
             errors.log_error(vault, "session_end.schedule_wrap", e)
+        try:
+            cwd = str(payload.get("cwd") or os.getcwd())
+            _maybe_schedule_briefing(
+                cfg, vault, agent_name, session_id=sid, cwd=cwd,
+            )
+        except Exception as e:
+            errors.log_error(vault, "session_end.briefing_wrap", e)
     except Exception as e:
         try:
             from mnemo.core import config as _c, errors as _e, paths as _p
