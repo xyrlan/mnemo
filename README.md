@@ -13,7 +13,8 @@ macOS, and Windows.
 ## Install
 
 ```
-/plugin install mnemo@claude-plugins-official
+/plugin marketplace add xyrlan/mnemo
+/plugin install mnemo@mnemo-marketplace
 /mnemo init
 ```
 

@@ -1,44 +1,156 @@
 # Getting started with mnemo
 
-## Install (Claude Code plugin)
+This is the deeper tour. For the 30-second pitch and the default install
+flow, read the [README](../README.md) first — this page assumes you've
+seen it and want the details.
+
+## Install
+
+### Option A — Claude Code plugin marketplace (recommended)
 
 ```
-/plugin install mnemo@claude-plugins-official
+/plugin marketplace add xyrlan/mnemo
+/plugin install mnemo@mnemo-marketplace
 /mnemo init
 ```
 
-`/mnemo init` will:
-1. Run preflight checks (Python version, writable vault, settings.json access)
-2. Ask where to put your vault (default: `~/mnemo`)
-3. Ask permission to modify `~/.claude/settings.json` (with backup)
-4. Scaffold the vault directory tree
-5. Mirror existing Claude Code memories
+### Option B — manual / dotfiles
 
-## Install (manual / dotfiles)
+For dotfile-managed setups or when you want `mnemo` on your `$PATH`
+without the Claude Code plugin wrapper:
 
 ```bash
 git clone https://github.com/xyrlan/mnemo ~/.mnemo-repo
 cd ~/.mnemo-repo
 pip install -e .
-python -m mnemo init --yes --vault-root ~/Documents/brain
+python -m mnemo init --yes --vault-root ~/mnemo
 ```
 
-## Daily flow
+`python -m mnemo` and the installed `mnemo` console script are
+equivalent. Both work without any Claude Code plugin being installed —
+mnemo's hooks-and-MCP integration is wired by `mnemo init` directly into
+`~/.claude/settings.json` and `~/.claude.json`, regardless of how you
+installed the package itself.
 
-Just use Claude Code. Open your vault in Obsidian whenever you want to browse:
+### What `mnemo init` actually does
+
+It's idempotent — running it twice is safe. On first run it will:
+
+1. Preflight: Python version, writable vault root, `~/.claude/` accessible.
+2. Scaffold the vault tree at `~/mnemo/` (or `--vault-root <path>`).
+3. Inject `SessionStart` and `SessionEnd` hooks into `~/.claude/settings.json` (with backup).
+4. Register the stdio MCP server (`mnemo-mcp`) in `~/.claude.json`.
+5. Wire the additive status line composer, preserving any existing `statusLine` you already had.
+6. Mirror existing Claude Code memories from `~/.claude/projects/*/memory/` into `bots/<repo>/memory/`.
+
+Re-running `mnemo init` reconciles any drift from those steps without
+clobbering your edits.
+
+## First real session
+
+After `mnemo init`, just use Claude Code like you normally would. You'll
+see the heartbeat in your status line:
+
+```
+mnemo mcp · 9 topics · 7↓ today
+```
+
+Open the vault whenever you want to browse what's accumulated:
 
 ```
 /mnemo open
 ```
 
-Your daily log lives at `~/mnemo/bots/<repo-name>/logs/YYYY-MM-DD.md`.
+Your per-session trail lives at
+`~/mnemo/bots/<repo-name>/logs/YYYY-MM-DD.md`, with `🟢` markers at
+session start and `🔴` at session end. Anything Claude saved to its own
+memory directory during the session is mirrored into
+`~/mnemo/bots/<repo-name>/memory/` automatically.
 
-## Promoting notes to the wiki
+## Turning on the loop (opt-in flags)
 
+The three features below ship **disabled by default** — v0.5 ships dark,
+you dogfood, then you flip. Edit `~/mnemo/mnemo.config.json`:
+
+```json
+{
+  "extraction": {
+    "auto": {
+      "enabled": true,
+      "minNewMemories": 1,
+      "minIntervalMinutes": 60
+    }
+  },
+  "briefings": { "enabled": true },
+  "injection": { "enabled": true }
+}
 ```
-/mnemo promote ~/mnemo/shared/people/alice.md
-/mnemo compile
+
+### `extraction.auto.enabled`
+
+At every `SessionEnd`, the hook checks: are there at least
+`minNewMemories` new files in `bots/*/memory/` since the last run, and
+have at least `minIntervalMinutes` passed? If yes, it spawns a detached
+`mnemo extract --background` subprocess and returns in under 100ms. Your
+Claude Code session exits normally while extraction runs asynchronously.
+
+**Output split by source count:**
+
+- **Single-source** pages (one source file, no clustering judgment
+  needed) write directly to `shared/<type>/<slug>.md` with
+  `tags: [auto-promoted]` and a `last_sync` frontmatter key. mnemo treats
+  these as its own territory and rewrites them when the source changes —
+  as long as you haven't edited them.
+- **Multi-source** clusters (cross-agent merges, where the LLM made an
+  editorial decision) land in `shared/_inbox/<type>/<slug>.md` with
+  `tags: [needs-review]`. Review before promoting.
+
+**Your edits are protected by content-addressing.** If you edit an
+auto-promoted page and the source later changes, the new LLM output is
+written as `shared/_inbox/<type>/<slug>.proposed.md` instead of
+overwriting your canonical file.
+
+### `briefings.enabled`
+
+At every `SessionEnd`, generate a per-session briefing into
+`bots/<repo>/briefings/sessions/`. Briefings are the dense input that
+feeds the next extraction run — the difference between mnemo capturing
+~1 file/day and capturing every meaningful decision.
+
+### `injection.enabled`
+
+At every `SessionStart`, emit the ~120-token topic list into Claude's
+`additionalContext`, telling it to call the MCP tools
+(`list_rules_by_topic`, `read_mnemo_rule`, `get_mnemo_topics`) before
+writing code when the task matches a known topic.
+
+The MCP tools themselves are always available after `mnemo init` — this
+flag only controls whether Claude is *told about* them at session start.
+
+## Observing and debugging
+
+```bash
+mnemo status    # vault state, hook health, last auto-run summary, currently-running state
+mnemo doctor    # full diagnostic: statusLine drift, stale locks, recent background failures, legacy dirs
+mnemo extract   # manual extraction (also rebuilds the HOME dashboard)
+mnemo fix       # reset the extraction circuit breaker after repeated failures
 ```
+
+Detailed errors land in `~/mnemo/.errors.log` under `where=extract.bg.*`
+for background failures. If `mnemo doctor` warns about `statusLine`
+drift, it means you hand-edited `~/.claude/settings.json` after
+`mnemo init` — re-run `mnemo init` to reconcile.
+
+### Manual extraction flags
+
+```bash
+mnemo extract --dry-run   # show what would run without calling the LLM
+mnemo extract --force     # reprocess entries previously dismissed or promoted
+```
+
+Each run typically makes 3 LLM calls (one per cluster type) and costs a
+few cents on API-key auth or $0 on a Claude subscription. The command
+prints a token-count summary on completion.
 
 ## Uninstalling
 
@@ -46,98 +158,6 @@ Your daily log lives at `~/mnemo/bots/<repo-name>/logs/YYYY-MM-DD.md`.
 /mnemo uninstall
 ```
 
-This removes hooks but **never** deletes your vault.
-
-## Extracting canonical pages (v0.2)
-
-After a week or two of real use, your `~/mnemo/bots/*/memory/` will contain
-memory files that the Claude Code agents decided were worth remembering. These
-are already in a canonical format but scattered across agents.
-
-To consolidate them into `shared/`:
-
-```bash
-mnemo extract
-```
-
-This runs one `claude --print` subprocess per memory type (reusing your
-existing Claude Code authentication — Pro/Max subscription or API key,
-whichever is configured). The pipeline:
-
-1. Promotes each `project` memory directly to
-   `shared/project/<agent>__<slug>.md` (1:1, no LLM).
-2. Clusters `feedback`, `user`, and `reference` memories across agents via an
-   LLM call per type, producing consolidated pages in
-   `shared/_inbox/<type>/<slug>.md`.
-
-Review the `_inbox/` files, then move the ones you want into their canonical
-location (`shared/feedback/`, `shared/user/`, `shared/reference/`). The plugin
-never touches files outside `_inbox/` for cluster types.
-
-**Flags:**
-- `mnemo extract --dry-run` — show what would run without making any calls.
-- `mnemo extract --force` — reprocess entries previously dismissed or promoted.
-
-**Passive hint (v0.2):** when you close a Claude Code session and there are
-≥5 new memory files since your last extraction, today's log will contain a
-`🟡` line reminding you to run the command.
-
-**Cost:** each run typically makes 3 calls (one per cluster type) and costs
-a few cents on API-key auth, or $0 on subscription. The command prints a
-summary with token counts after completion.
-
-## Auto-brain mode (v0.3)
-
-Starting in v0.3, mnemo can eliminate the manual trigger entirely and
-auto-promote single-source pages directly into `shared/<type>/`:
-
-```json
-{
-  "extraction": {
-    "auto": {
-      "enabled": true,
-      "minNewMemories": 5,
-      "minIntervalMinutes": 60
-    }
-  }
-}
-```
-
-Once you flip `auto.enabled=true`, the `SessionEnd` hook schedules a
-fire-and-forget background extraction when:
-
-- ≥`minNewMemories` memory files have been added since the last run, **and**
-- ≥`minIntervalMinutes` have passed since the last run.
-
-The hook spawns a detached `mnemo extract --background` subprocess and
-returns in under 100ms. The detached process runs asynchronously while
-your Claude Code session exits normally.
-
-**Output split by source count:**
-
-- **Single-source** pages (one source file — no clustering decision) write
-  directly to `shared/<type>/<slug>.md` with `tags: [auto-promoted]` and
-  `last_sync` frontmatter. The plugin treats these as its own territory
-  and will rewrite them as the source changes — as long as you haven't
-  edited them.
-- **Multi-source** clusters (cross-agent merges) stay in
-  `shared/_inbox/<type>/<slug>.md` with `tags: [needs-review]`. The LLM
-  made an editorial decision here, so you review it before promoting.
-
-**Your edits are protected.** If you edit an auto-promoted page and the
-source later changes, the new LLM output is written as
-`shared/_inbox/<type>/<slug>.proposed.md` (bounced into your review
-surface). Your canonical file is never overwritten.
-
-**Observability:**
-
-- `mnemo status` shows the last auto-run summary, currently-running state,
-  and enable/disable status.
-- `mnemo doctor` warns on recent background failures, stale extraction
-  locks, and long gaps since the last successful run.
-- Detailed errors land in `~/mnemo/.errors.log` under
-  `where=extract.bg.*`.
-
-**Default is opt-out.** v0.3 ships with `auto.enabled=false` so existing
-users upgrade without surprises. Flip the flag consciously after reviewing
-a manual run or two.
+Removes hooks, the MCP server registration, and the status line
+composer. Your vault is **never** deleted — if you really want it gone,
+`rm -rf ~/mnemo` is a separate, conscious step.
