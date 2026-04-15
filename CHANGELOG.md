@@ -5,6 +5,44 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## v0.5.0 — 2026-04-15 — MCP injection (the loop closes)
+
+**Added**
+- **MCP stdio server** (`src/mnemo/core/mcp/`): a long-running JSON-RPC 2.0
+  process exposing three read-only tools to Claude Code:
+  - `list_rules_by_topic(topic)` — returns slugs sorted by source_count desc
+    so multi-agent synthesized rules surface first
+  - `read_mnemo_rule(slug)` — returns the full body + frontmatter for a slug
+  - `get_mnemo_topics()` — returns the union of all topic tags in the vault
+  Hand-rolled stdlib-only (no `mcp` SDK dependency, consistent with mnemo's
+  `dependencies = []` policy). Both tools apply the v0.4 shared filter from
+  `core/filters.py` so machine view and the HOME dashboard stay in lockstep.
+  Project pages are excluded by design: they have no topic tags by
+  construction and their sources are already in Claude's auto-memory.
+- **SessionStart MCP topic injection**: when `injection.enabled=true`, the
+  SessionStart hook emits a `hookSpecificOutput.additionalContext` JSON
+  envelope listing the vault's topic tags plus a one-line instruction
+  telling Claude to call `list_rules_by_topic` + `read_mnemo_rule` BEFORE
+  writing code when the task matches a known topic. ~120 tokens per session
+  regardless of vault size.
+- **`mnemo init` registers the MCP server in `~/.claude.json`** under
+  `mcpServers.mnemo`. `mnemo uninstall` removes it. Fully idempotent.
+- **New config flag `injection.enabled`** (default `false`, opt-in per the
+  v0.3 conservative pattern). Flip to `true` in `~/mnemo/mnemo.config.json`
+  to activate after dogfood validates the injection mechanism in your vault.
+- **Hidden CLI subcommand `mnemo mcp-server`**: stdio entry point referenced
+  from `~/.claude.json`. Not surfaced in `mnemo --help`.
+
+**Internal**
+- Injection mechanism de-risked on 2026-04-15 via a throwaway prototype that
+  proved `hookSpecificOutput.additionalContext` injects into interactive
+  Claude sessions, not just `claude --print` one-shot mode. The prototype is
+  removed in this release.
+
+**Tagline status**: "Capture → Present → Inject" is now complete. v0.3
+shipped capture, v0.3.1 shipped dense input (briefings), v0.4 shipped
+auto-presentation (HOME dashboard + tags), v0.5 ships auto-injection.
+
 ## v0.4.0 — 2026-04-14 — HOME dashboard + dimensional tags
 
 **Added**
