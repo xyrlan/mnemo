@@ -192,18 +192,21 @@ def cmd_status(_args: argparse.Namespace) -> int:
 
     vault = _resolve_vault()
     print(f"Vault: {vault}  ({'exists' if vault.exists() else 'MISSING'})")
+    from mnemo.install.settings import HOOK_DEFINITIONS
+
     settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    expected_events = tuple(HOOK_DEFINITIONS.keys())
     if settings_path.exists():
         try:
             data = json.loads(settings_path.read_text())
             installed = sum(
                 1
-                for ev in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse")
+                for ev in expected_events
                 for entry in data.get("hooks", {}).get(ev, [])
                 for h in entry.get("hooks", [])
                 if "mnemo" in h.get("command", "")
             )
-            print(f"Hooks installed: {installed}/4")
+            print(f"Hooks installed: {installed}/{len(expected_events)}")
         except json.JSONDecodeError:
             print("Hooks: settings.json malformed (see mnemo doctor)")
     else:
@@ -364,6 +367,11 @@ def _print_activation_status(vault: Path) -> None:
         n_enrich = len(index.get("enrich_by_project", {}).get(project, []))
         print(f"    Enforce rules: {n_enforce}")
         print(f"    Enrich rules:  {n_enrich}")
+
+        malformed = index.get("malformed", []) or []
+        if malformed:
+            print(f"  Malformed rules (rejected at parse time): {len(malformed)}")
+            print("    (see 'mnemo doctor' for details)")
 
     # Denial log
     entries = _read_denial_log_tail(vault)

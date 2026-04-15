@@ -560,3 +560,55 @@ def test_match_path_enrich_glob_no_double_star_matches_single_segment():
     assert len(hits_flat) == 1
     # Nested should NOT match with plain *.py
     assert len(hits_nested) == 0
+
+
+# ---------------------------------------------------------------------------
+# log_enrichment: tool_name persistence (regression for v0.5.1 polish)
+# ---------------------------------------------------------------------------
+
+
+def test_log_enrichment_persists_tool_name_field(tmp_path):
+    """Regression: log_enrichment must write the tool_name passed by the hook,
+    not read it from tool_input (which never has that key)."""
+    import json as _json
+    from mnemo.core.rule_activation import EnrichHit, log_enrichment
+
+    hit = EnrichHit(slug="my-rule", project="myproj", rule_body_preview="body")
+    tool_input = {"file_path": "/tmp/foo.tsx"}
+
+    log_enrichment(tmp_path, [hit], "Edit", tool_input)
+
+    log_path = tmp_path / ".mnemo" / "enrichment-log.jsonl"
+    assert log_path.exists()
+    line = log_path.read_text(encoding="utf-8").strip()
+    entry = _json.loads(line)
+
+    assert entry["tool_name"] == "Edit"
+    assert entry["file_path"] == "/tmp/foo.tsx"
+    assert entry["project"] == "myproj"
+    assert entry["hit_slugs"] == ["my-rule"]
+
+
+def test_log_enrichment_persists_multiedit_tool_name(tmp_path):
+    """tool_name must be whatever the hook passes — Write, MultiEdit, not just Edit."""
+    import json as _json
+    from mnemo.core.rule_activation import EnrichHit, log_enrichment
+
+    hit = EnrichHit(slug="other", project="p", rule_body_preview="b")
+    log_enrichment(tmp_path, [hit], "MultiEdit", {"file_path": "/x.md"})
+
+    line = (tmp_path / ".mnemo" / "enrichment-log.jsonl").read_text("utf-8").strip()
+    assert _json.loads(line)["tool_name"] == "MultiEdit"
+
+
+def test_log_enrichment_never_raises_on_bad_vault(tmp_path):
+    """log_enrichment must swallow OSError — fail-open contract."""
+    from mnemo.core.rule_activation import EnrichHit, log_enrichment
+
+    # Pass a path that can't be written to (use a file as if it were a dir)
+    bad_vault = tmp_path / "file-not-dir"
+    bad_vault.write_text("not a dir", encoding="utf-8")
+    hit = EnrichHit(slug="s", project="p", rule_body_preview="b")
+
+    # Must return cleanly, no exception
+    log_enrichment(bad_vault, [hit], "Edit", {"file_path": "/x"})

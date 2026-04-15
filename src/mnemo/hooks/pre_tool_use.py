@@ -78,7 +78,7 @@ def main() -> int:
                 hits = ra.match_path_enrich(index, project, file_path, tool_name)
                 if hits:
                     _emit_enrich(hits)
-                    ra.log_enrichment(vault, hits, tool_input)
+                    ra.log_enrichment(vault, hits, tool_name, tool_input)
 
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
