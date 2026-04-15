@@ -13,11 +13,6 @@ DIRS = [
     "shared/user",
     "shared/reference",
     "shared/project",
-    # User-maintained Tier 2 — extraction never touches these; the user
-    # curates them by hand.
-    "shared/people",
-    "shared/companies",
-    "shared/decisions",
     ".obsidian/snippets",
 ]
 
