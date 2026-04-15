@@ -47,7 +47,91 @@ def _mcp_registered(claude_json_path: Path) -> bool:
     return isinstance(servers, dict) and "mnemo" in servers
 
 
-def render(vault_root: Path, claude_json_path: Path) -> str:
+def _count_today_denials(vault_root: Path) -> int:
+    """Count denial-log entries from today UTC. Reads at most the last 1000 lines.
+
+    Returns 0 on any error (file missing, malformed, etc.).
+    """
+    import json as _json
+    from datetime import date, timezone as _tz
+
+    try:
+        log_path = vault_root / ".mnemo" / "denial-log.jsonl"
+        if not log_path.exists():
+            return 0
+        # Read last 1000 lines for speed
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) > 1000:
+            lines = lines[-1000:]
+        today_prefix = date.today().strftime("%Y-%m-%d")
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = _json.loads(line)
+                ts = entry.get("timestamp", "")
+                if isinstance(ts, str) and ts.startswith(today_prefix):
+                    count += 1
+            except (_json.JSONDecodeError, ValueError):
+                continue
+        return count
+    except Exception:
+        return 0
+
+
+def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
+    """Build per-project activation statusline segments.
+
+    Returns an empty list when:
+    - both enforcement and enrichment are disabled, OR
+    - the activation index is absent.
+
+    Never raises.
+    """
+    try:
+        from mnemo.core import config as cfg_mod
+        from mnemo.core.rule_activation import load_index
+
+        cfg = cfg_mod.load_config()
+        enforce_enabled = bool((cfg.get("enforcement") or {}).get("enabled", False))
+        enrich_enabled = bool((cfg.get("enrichment") or {}).get("enabled", False))
+
+        if not enforce_enabled and not enrich_enabled:
+            return []
+
+        index = load_index(vault_root)
+        if index is None:
+            return []
+
+        # Determine current project from cwd
+        from mnemo.core.agent import resolve_agent
+        effective_cwd = cwd or str(Path.cwd())
+        agent = resolve_agent(effective_cwd)
+        project = agent.name
+
+        enforce_rules = index.get("enforce_by_project", {}).get(project, [])
+        enrich_rules = index.get("enrich_by_project", {}).get(project, [])
+
+        n_enforce = len(enforce_rules)
+        n_enrich = len(enrich_rules)
+        n_blocks = _count_today_denials(vault_root)
+
+        parts: list[str] = []
+        if enforce_enabled and n_enforce > 0:
+            parts.append(f"{n_enforce}\u26d4 rules")
+        if enforce_enabled and n_blocks > 0:
+            parts.append(f"{n_blocks} blocks")
+        if enrich_enabled and n_enrich > 0:
+            parts.append(f"{n_enrich}\U0001f4a1 active")
+        return parts
+    except Exception:
+        return []
+
+
+def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) -> str:
     """Return the mnemo statusline segment, or '' when nothing should show."""
     if not _mcp_registered(claude_json_path):
         return ""
@@ -59,7 +143,13 @@ def render(vault_root: Path, claude_json_path: Path) -> str:
         count = read_today(vault_root)
     except Exception:
         return ""
-    return f"mnemo mcp · {len(topics)} topics · {count}↓ today"
+
+    parts = [f"mnemo mcp · {len(topics)} topics · {count}↓ today"]
+
+    activation = _activation_segments(vault_root, cwd)
+    parts.extend(activation)
+
+    return SEPARATOR.join(parts)
 
 
 def _run_original(original_cmd: str | None) -> str:

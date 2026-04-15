@@ -214,6 +214,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     if log.exists():
         print(f"Error log: {log} ({log.stat().st_size} bytes)")
     _print_auto_brain_status(vault)
+    _print_activation_status(vault)
     return 0
 
 
@@ -289,6 +290,126 @@ def _print_auto_brain_status(vault: Path) -> None:
         print(f"  upgrades:    {upgrades} proposed")
 
 
+def _read_denial_log_tail(vault: Path, max_lines: int = 1000) -> list[dict]:
+    """Read last *max_lines* from denial-log.jsonl. Returns [] on any error."""
+    import json as _json
+    try:
+        log_path = vault / ".mnemo" / "denial-log.jsonl"
+        if not log_path.exists():
+            return []
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        entries = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+        return entries
+    except Exception:
+        return []
+
+
+def _count_today_denial_entries(entries: list[dict]) -> int:
+    """Count entries whose timestamp starts with today's date (UTC)."""
+    from datetime import date
+    today_prefix = date.today().strftime("%Y-%m-%d")
+    return sum(
+        1 for e in entries
+        if isinstance(e.get("timestamp"), str) and e["timestamp"].startswith(today_prefix)
+    )
+
+
+def _print_activation_status(vault: Path) -> None:
+    """Print an Activation: section to stdout — only when enforcement or enrichment is on."""
+    import json as _json
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.rule_activation import load_index
+
+    cfg = cfg_mod.load_config()
+    enforce_enabled = bool((cfg.get("enforcement") or {}).get("enabled", False))
+    enrich_enabled = bool((cfg.get("enrichment") or {}).get("enabled", False))
+
+    if not enforce_enabled and not enrich_enabled:
+        return
+
+    print("Activation:")
+    print(f"  Enforcement: {'enabled' if enforce_enabled else 'disabled'}")
+    print(f"  Enrichment:  {'enabled' if enrich_enabled else 'disabled'}")
+
+    index = load_index(vault)
+    if index is None:
+        print("  Rule activation index: missing")
+    else:
+        built_at = index.get("built_at", "?")
+        vault_root_str = index.get("vault_root", "?")
+        print(f"  Rule activation index: present (built_at={built_at}, vault_root={vault_root_str})")
+
+        # Determine current project
+        try:
+            from mnemo.core.agent import resolve_agent
+            import os as _os
+            agent = resolve_agent(_os.getcwd())
+            project = agent.name
+        except Exception:
+            project = ""
+
+        print(f"  Per-project rule counts (current={project}):")
+        n_enforce = len(index.get("enforce_by_project", {}).get(project, []))
+        n_enrich = len(index.get("enrich_by_project", {}).get(project, []))
+        print(f"    Enforce rules: {n_enforce}")
+        print(f"    Enrich rules:  {n_enrich}")
+
+    # Denial log
+    entries = _read_denial_log_tail(vault)
+    n_today = _count_today_denial_entries(entries)
+    print(f"  Recent denials (today): {n_today}")
+
+    if enrich_enabled:
+        enrich_entries = _read_enrichment_log_tail(vault)
+        n_enrich_today = _count_today_denial_entries(enrich_entries)
+        print(f"  Recent enrichments (today): {n_enrich_today}")
+
+    # Last denial
+    if entries:
+        last = entries[-1]
+        ts = last.get("timestamp", "?")
+        cmd = last.get("command", "")
+        print(f"  Last denial: {ts} — {cmd}")
+    else:
+        print("  Last denial: none")
+
+
+def _read_enrichment_log_tail(vault: Path, max_lines: int = 1000) -> list[dict]:
+    """Read last *max_lines* from enrichment-log.jsonl. Returns [] on any error."""
+    import json as _json
+    try:
+        log_path = vault / ".mnemo" / "enrichment-log.jsonl"
+        if not log_path.exists():
+            return []
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        entries = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+        return entries
+    except Exception:
+        return []
+
+
 @command("doctor")
 def cmd_doctor(_args: argparse.Namespace) -> int:
     from mnemo.install import preflight
@@ -302,15 +423,128 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     auto_ok = _doctor_check_auto_brain(vault)
     legacy_ok = _doctor_check_legacy_wiki_dirs(vault)
     statusline_ok = _doctor_check_statusline_drift(vault)
+    activation_ok = _doctor_check_activation(vault)
 
     if not result.ok:
         print("Issues found above.")
         return 1
-    if not auto_ok or not legacy_ok or not statusline_ok:
+    if not auto_ok or not legacy_ok or not statusline_ok or not activation_ok:
         print("Warnings above.")
     else:
         print("OK")
     return 0
+
+
+def _doctor_check_activation(vault: Path) -> bool:
+    """Four activation-related doctor checks:
+
+    1. Malformed activate/enforce blocks in feedback files.
+    2. Stale activation index (index mtime older than newest feedback file mtime).
+    3. Suspicious deny_pattern (< 5 chars, or matches "echo hello").
+    4. Overly-broad activates_on.path_globs (**/* or *).
+
+    Each check is fail-safe: a bad file is skipped, not a crash.
+    Returns True if no warnings were emitted.
+    """
+    import re as _re
+    from mnemo.core.filters import parse_frontmatter
+    from mnemo.core.rule_activation import (
+        parse_enforce_block,
+        parse_activates_on_block,
+        _describe_enforce_error,
+        _describe_enrich_error,
+    )
+
+    feedback_dir = vault / "shared" / "feedback"
+    ok = True
+
+    if not feedback_dir.is_dir():
+        return True
+
+    candidates = sorted(feedback_dir.glob("*.md"))
+    newest_mtime: float = 0.0
+    for md_path in candidates:
+        try:
+            mtime = md_path.stat().st_mtime
+            if mtime > newest_mtime:
+                newest_mtime = mtime
+        except OSError:
+            pass
+
+    # --- Check 1: malformed blocks ---
+    # --- Check 3: suspicious deny_pattern ---
+    # --- Check 4: overly-broad path_globs ---
+    _BENIGN_TEST_INPUT = "echo hello"
+    _BROAD_GLOBS = {"**/*", "*"}
+
+    for md_path in candidates:
+        try:
+            text = md_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue  # skip unreadable files
+
+        try:
+            fm = parse_frontmatter(text)
+        except Exception:
+            continue
+
+        rel = md_path.name
+
+        # --- Check 1: enforce block present-but-invalid ---
+        if fm.get("enforce") is not None:
+            parsed = parse_enforce_block(fm)
+            if parsed is None:
+                err = _describe_enforce_error(fm)
+                print(f"  \u26a0 Malformed enforce block in {rel}: {err}")
+                print(f"       \u2192 fix the frontmatter in shared/feedback/{rel}")
+                ok = False
+            else:
+                # --- Check 3: suspicious deny_pattern ---
+                for pattern in parsed.get("deny_patterns", []):
+                    suspicious = False
+                    reason = ""
+                    if len(pattern) < 5:
+                        suspicious = True
+                        reason = f"pattern {pattern!r} is shorter than 5 characters"
+                    elif _re.search(pattern, _BENIGN_TEST_INPUT, _re.IGNORECASE | _re.DOTALL):
+                        suspicious = True
+                        reason = f"pattern {pattern!r} matches benign input {_BENIGN_TEST_INPUT!r} — too permissive"
+                    if suspicious:
+                        print(f"  \u26a0 Suspicious deny_pattern in {rel}: {reason}")
+                        print(f"       \u2192 tighten the pattern so it doesn't match safe commands")
+                        ok = False
+
+        # --- Check 1: activates_on block present-but-invalid ---
+        if fm.get("activates_on") is not None:
+            parsed_enrich = parse_activates_on_block(fm)
+            if parsed_enrich is None:
+                err = _describe_enrich_error(fm)
+                print(f"  \u26a0 Malformed activates_on block in {rel}: {err}")
+                print(f"       \u2192 fix the frontmatter in shared/feedback/{rel}")
+                ok = False
+            else:
+                # --- Check 4: overly-broad path_globs ---
+                for glob in parsed_enrich.get("path_globs", []):
+                    if glob in _BROAD_GLOBS:
+                        print(f"  \u26a0 Overly-broad path_glob {glob!r} in {rel}: matches virtually every file")
+                        print(f"       \u2192 narrow the glob (e.g. **/*.py, src/**/*.ts) to avoid false positives")
+                        ok = False
+
+    # --- Check 2: stale activation index ---
+    index_path = vault / ".mnemo" / "rule-activation-index.json"
+    if index_path.exists() and newest_mtime > 0:
+        try:
+            index_mtime = index_path.stat().st_mtime
+            if index_mtime < newest_mtime:
+                import datetime as _dt
+                def _fmt(ts: float) -> str:
+                    return _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S")
+                print(f"  \u26a0 Activation index is stale (newest feedback file: {_fmt(newest_mtime)}, index: {_fmt(index_mtime)}). Run 'mnemo extract' to rebuild.")
+                ok = False
+        except OSError:
+            pass
+
+    return ok
 
 
 def _doctor_check_statusline_drift(vault: Path) -> bool:
