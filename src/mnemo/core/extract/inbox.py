@@ -36,6 +36,7 @@ class ExtractedPage:
     source_files: list[str]
     source_hash: str
     stability: str = "stable"
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -74,11 +75,20 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
     if auto_promoted:
         extras = f"last_sync: {run_id}\n"
-        tag = "auto-promoted"
+        system_marker = "auto-promoted"
     else:
         extras = ""
-        tag = "needs-review"
+        system_marker = "needs-review"
     stability = getattr(page, "stability", None) or "stable"
+    # Unified tags list: system marker first, then LLM-emitted topic tags.
+    # The shared filter (core/filters.py) reads this same list; topic_tags()
+    # strips the marker when bucketing by topic in the HOME dashboard.
+    page_tags = list(getattr(page, "tags", None) or [])
+    all_tags = [system_marker]
+    for t in page_tags:
+        if t and t != system_marker and t not in all_tags:
+            all_tags.append(t)
+    tags_yaml = "\n".join(f"  - {t}" for t in all_tags)
     return (
         "---\n"
         f"name: {page.name}\n"
@@ -91,7 +101,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         "sources:\n"
         f"{sources_yaml}\n"
         "tags:\n"
-        f"  - {tag}\n"
+        f"{tags_yaml}\n"
         "---\n\n"
         f"{page.body}\n"
     )
@@ -161,6 +171,13 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
             for sf in p.source_files:
                 if sf not in all_sources:
                     all_sources.append(sf)
+        # Union tags from all merged pages so the LLM's topic vocabulary is
+        # preserved. Preserve order: chosen page first, then any extras.
+        all_tags: list[str] = []
+        for p in [chosen] + [p for p in items if p is not chosen]:
+            for t in getattr(p, "tags", None) or []:
+                if t not in all_tags:
+                    all_tags.append(t)
         merged.append(ExtractedPage(
             slug=chosen.slug,
             type=chosen.type,
@@ -169,6 +186,8 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
             body=chosen.body,
             source_files=all_sources,
             source_hash=chosen.source_hash,
+            stability=getattr(chosen, "stability", None) or "stable",
+            tags=all_tags,
         ))
     return merged
 

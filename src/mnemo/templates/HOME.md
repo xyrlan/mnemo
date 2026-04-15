@@ -1,10 +1,19 @@
 ---
 tags: [home, dashboard]
 ---
+<!-- mnemo:dashboard:begin -->
+## 🧠 Project brain
+
+_The dashboard will populate on the first `mnemo extract` run._
+<!-- mnemo:dashboard:end -->
+
 # 🧠 Welcome to your mnemo vault
 
 This vault is **populated automatically** by mnemo as you use Claude Code.
-The only dirs you edit by hand are the user-maintained Tier 2 ones below.
+The auto-generated dashboard above scans `shared/` every time extraction
+runs, so whatever Claude has learned about your work shows up here without
+any curation on your part. Everything below this paragraph is yours to edit
+— mnemo never touches it.
 
 ## Tier 1 — Raw capture (auto-managed)
 
@@ -18,7 +27,7 @@ Everything under `bots/<agent>/` is captured as you work:
 
 ### Auto-populated by `mnemo extract`
 
-The LLM consolidates cross-agent memories and session briefings into canonical pages. Single-source pages land here directly tagged `auto-promoted`; multi-source clusters stage in [[shared/_inbox]] with `needs-review` until you look them over. Each page carries a `stability` field (`stable` or `evolving`) so unsettled rules stay visible but don't pollute downstream consumers.
+The LLM consolidates cross-agent memories and session briefings into canonical pages. Single-source pages land here directly tagged `auto-promoted`; multi-source clusters stage in [[shared/_inbox]] with `needs-review` until you look them over. Each page carries a `stability` field (`stable` or `evolving`) so unsettled rules stay visible but don't pollute the dashboard. Every page also carries topic `tags` chosen by the LLM from the existing vault vocabulary.
 
 - [[shared/feedback]] — preferences and rules the model should follow
 - [[shared/user]] — user-profile facts (who you are, how you work)
@@ -33,18 +42,11 @@ Not touched by extraction — write here by hand when you want something canonic
 - [[shared/companies]] — companies and orgs in your work context
 - [[shared/decisions]] — architectural decision records (ADR-style)
 
-## Tier 3 — Curated wiki
-
-- [[wiki/sources]] — promoted notes
-- [[wiki/compiled]] — regeneratable index
-
 ## Quick commands
 
 - `/mnemo status` — health check (includes auto-brain state)
 - `/mnemo doctor` — diagnose problems
-- `/mnemo extract` — manually run the consolidation pipeline
-- `/mnemo promote <file>` — move a note into the wiki
-- `/mnemo compile` — regenerate the wiki index
+- `/mnemo extract` — manually run the consolidation pipeline (also rebuilds the dashboard above)
 
 ## Opt-in background features
 

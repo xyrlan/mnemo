@@ -9,8 +9,11 @@ def test_help_lists_all_commands(capsys: pytest.CaptureFixture):
     rc = cli.main(["help"])
     captured = capsys.readouterr()
     assert rc == 0
-    for cmd in ("init", "status", "doctor", "open", "promote", "compile", "fix", "uninstall", "help"):
+    for cmd in ("init", "status", "doctor", "open", "fix", "uninstall", "help"):
         assert cmd in captured.out
+    # v0.4: promote/compile were removed — dashboard auto-regenerates via extraction
+    assert "promote" not in captured.out
+    assert " compile" not in captured.out
 
 
 def test_unknown_command_returns_nonzero(capsys: pytest.CaptureFixture):

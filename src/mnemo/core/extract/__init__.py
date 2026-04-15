@@ -9,10 +9,41 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from mnemo.core import errors, locks, llm, paths
+from mnemo.core import dashboard, errors, locks, llm, paths
 from mnemo.core.extract import inbox, promote, prompts, scanner
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
+from mnemo.core.filters import MANAGED_TAGS
+
+
+def _sanitize_llm_tags(raw: object) -> list[str]:
+    """Normalize an LLM-emitted ``tags`` field into a clean kebab-case list.
+
+    - Must be a list; anything else → empty.
+    - Strings only; strip, lowercase, drop empties.
+    - Reserved managed markers (``auto-promoted``, ``needs-review``, etc.) are
+      silently stripped so the LLM can't hijack system tags even if it copies
+      them from the few-shot or an existing page.
+    - Order is preserved, duplicates removed.
+    - Capped at 5 tags per page (sanity limit against LLM over-emission).
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        t = item.strip().lower()
+        if not t:
+            continue
+        if t in MANAGED_TAGS:
+            continue
+        if t in out:
+            continue
+        out.append(t)
+        if len(out) >= 5:
+            break
+    return out
 
 
 @dataclass
@@ -78,6 +109,7 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
         ).hexdigest()
         stability_raw = str(rp.get("stability") or "stable").strip().lower()
         stability = stability_raw if stability_raw in ("stable", "evolving") else "stable"
+        tags = _sanitize_llm_tags(rp.get("tags"))
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -87,6 +119,7 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
             source_files=source_files,
             source_hash=src_hash,
             stability=stability,
+            tags=tags,
         ))
     return out
 
@@ -230,7 +263,7 @@ def _run_extraction_body(
         all_pages: list[inbox.ExtractedPage] = []
         processed_files: list[scanner.MemoryFile] = []
         for chunk in prompts.chunks_for(files, chunk_size):
-            prompt_text = builder(chunk)
+            prompt_text = builder(chunk, vault_root=vault_root)
             try:
                 response = llm.call(
                     prompt_text,
@@ -294,6 +327,33 @@ def _run_extraction_body(
                 raise
 
 
+def _cleanup_legacy_wiki_dirs(vault_root: Path) -> None:
+    """v0.4: delete the fossil ``wiki/sources/`` and ``wiki/compiled/`` dirs.
+
+    These directories only ever held plugin-managed copies of ``shared/``
+    content (via the now-deleted ``promote_note``/``compile_wiki`` pair). No
+    user-authored work lives there, so we wipe them on first v0.4 extract.
+    Idempotent — silent after the first run.
+    """
+    import shutil
+
+    wiki = vault_root / "wiki"
+    removed: list[str] = []
+    for name in ("sources", "compiled"):
+        target = wiki / name
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=False)
+            removed.append(f"wiki/{name}")
+    if removed:
+        print(f"[mnemo v0.4] removed legacy dir(s): {', '.join(removed)}")
+    # If wiki/ itself is now empty (no user-created files), drop it too.
+    if wiki.is_dir():
+        try:
+            next(wiki.iterdir())
+        except StopIteration:
+            wiki.rmdir()
+
+
 def run_extraction(
     cfg: dict,
     *,
@@ -333,6 +393,17 @@ def run_extraction(
             caught_error = exc
             if not background:
                 raise
+
+        if not dry_run:
+            try:
+                _cleanup_legacy_wiki_dirs(vault_root)
+            except OSError as exc:
+                errors.log_error(vault_root, "extract.legacy_cleanup", exc)
+            try:
+                dashboard.update_home_md(cfg)
+            except OSError as exc:
+                # Dashboard failures must never abort extraction — log and keep going.
+                errors.log_error(vault_root, "extract.dashboard", exc)
 
         summary.wall_time_s = time.monotonic() - start
 

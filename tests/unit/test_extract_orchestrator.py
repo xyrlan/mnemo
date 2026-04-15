@@ -218,6 +218,196 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
     assert "stability: stable" in sacred.read_text()
 
 
+def test_orchestrator_auto_deletes_legacy_wiki_sources(populated_vault: Path, stub_llm, capsys):
+    """v0.4: wiki/sources/ and wiki/compiled/ get removed on the first extract."""
+    (populated_vault / "wiki" / "sources").mkdir(parents=True)
+    (populated_vault / "wiki" / "sources" / "old.md").write_text("stale\n")
+    (populated_vault / "wiki" / "compiled").mkdir(parents=True)
+    (populated_vault / "wiki" / "compiled" / "index.md").write_text("stale\n")
+
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "x",
+                "name": "X",
+                "description": "d",
+                "type": "feedback",
+                "body": "b",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    assert not (populated_vault / "wiki" / "sources").exists()
+    assert not (populated_vault / "wiki" / "compiled").exists()
+    captured = capsys.readouterr()
+    assert "legacy" in captured.out.lower()
+
+
+def test_orchestrator_legacy_cleanup_is_idempotent(populated_vault: Path, stub_llm, capsys):
+    """Second call on a vault with no wiki/ dirs must be silent."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "x", "name": "X", "description": "d", "type": "feedback",
+                "body": "b",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    captured = capsys.readouterr()
+    assert "legacy" not in captured.out.lower()
+
+
+def test_orchestrator_regenerates_home_dashboard_after_run(populated_vault: Path, stub_llm):
+    """v0.4: after run_extraction completes, HOME.md has the managed block populated."""
+    from mnemo.core.dashboard import BLOCK_BEGIN, BLOCK_END
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "b",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "stable",
+                "tags": ["package-management"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    home = populated_vault / "HOME.md"
+    assert home.exists()
+    text = home.read_text()
+    assert BLOCK_BEGIN in text
+    assert BLOCK_END in text
+    assert "use-yarn" in text
+    assert "package-management" in text
+
+
+def test_orchestrator_dashboard_skipped_on_dry_run(populated_vault: Path, stub_llm):
+    """dry_run must not touch HOME.md."""
+    # Don't queue any LLM responses — dry_run shouldn't call the LLM anyway.
+    run_extraction(_make_cfg(populated_vault), dry_run=True)
+    # HOME.md either doesn't exist or was created by an unrelated fixture — both fine,
+    # but it must not contain a dashboard block since we're in dry-run.
+    home = populated_vault / "HOME.md"
+    if home.exists():
+        from mnemo.core.dashboard import BLOCK_BEGIN
+        assert BLOCK_BEGIN not in home.read_text()
+
+
+def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Path, stub_llm):
+    """v0.4: existing shared/feedback/ tags leak into the next extraction prompt."""
+    # Seed a consumer-visible page with topic tags before running extraction.
+    feedback_dir = populated_vault / "shared" / "feedback"
+    feedback_dir.mkdir(parents=True, exist_ok=True)
+    (feedback_dir / "existing-rule.md").write_text(
+        "---\n"
+        "name: Existing\n"
+        "description: d\n"
+        "type: feedback\n"
+        "stability: stable\n"
+        "sources:\n"
+        "  - bots/a/memory/x.md\n"
+        "tags:\n"
+        "  - auto-promoted\n"
+        "  - package-management\n"
+        "---\n"
+        "body\n"
+    )
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "b",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "stable",
+                "tags": ["workflow"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    call = stub_llm.calls[0]
+    assert "Existing vault tags for feedback" in call["prompt"]
+    assert "package-management" in call["prompt"]
+
+
+# --- v0.4: dimensional tags sanitization + forwarding -----------------------
+
+
+def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Path, stub_llm):
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "stable",
+                "tags": ["package-management", "workflow"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    text = sacred.read_text()
+    assert "  - auto-promoted" in text
+    assert "  - package-management" in text
+    assert "  - workflow" in text
+
+
+def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Path, stub_llm):
+    """The LLM might copy 'auto-promoted' from the schema — the sanitizer must drop it."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "stable",
+                "tags": ["auto-promoted", "needs-review", "package-management"],
+            },
+        ]),
+    ])
+    run_extraction(_make_cfg(populated_vault))
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    text = sacred.read_text()
+    # auto-promoted should appear exactly once (system marker) — not twice from the LLM copy
+    assert text.count("  - auto-promoted") == 1
+    # needs-review must never appear in an auto-promoted page
+    assert "  - needs-review" not in text
+    assert "  - package-management" in text
+
+
+def test_sanitize_llm_tags_handles_wrong_type():
+    from mnemo.core.extract import _sanitize_llm_tags
+    assert _sanitize_llm_tags(None) == []
+    assert _sanitize_llm_tags("not a list") == []
+    assert _sanitize_llm_tags(42) == []
+
+
+def test_sanitize_llm_tags_lowercases_and_dedupes():
+    from mnemo.core.extract import _sanitize_llm_tags
+    assert _sanitize_llm_tags(["Git", "GIT", "workflow", "Workflow"]) == ["git", "workflow"]
+
+
+def test_sanitize_llm_tags_caps_at_five():
+    from mnemo.core.extract import _sanitize_llm_tags
+    many = [f"t{i}" for i in range(10)]
+    assert len(_sanitize_llm_tags(many)) == 5
+
+
 def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Path, stub_llm):
     """v0.3.1: --force nukes shared/_inbox/<type>/*.md so slug-drift duplicates die."""
     # Seed the inbox with stale slug-drift duplicates from a prior run.

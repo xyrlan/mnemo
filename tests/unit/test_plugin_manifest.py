@@ -11,9 +11,12 @@ def test_plugin_json_well_formed():
     assert data["name"] == "mnemo"
     assert data["version"]
     assert "commands" in data and isinstance(data["commands"], list)
-    expected_cmds = {"init", "status", "doctor", "open", "promote", "compile", "fix", "uninstall", "help"}
+    expected_cmds = {"init", "status", "doctor", "open", "fix", "uninstall", "help"}
     cmd_names = {c.get("name") for c in data["commands"]}
     assert expected_cmds.issubset(cmd_names)
+    # v0.4: promote/compile removed — dashboard is auto-generated via extraction
+    assert "promote" not in cmd_names
+    assert "compile" not in cmd_names
 
 
 def test_marketplace_json_well_formed():

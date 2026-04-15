@@ -10,12 +10,14 @@ import pytest
 
 @pytest.fixture
 def tmp_vault(tmp_path: Path) -> Path:
-    """Create a minimal vault directory tree and return its root."""
+    """Create a minimal vault directory tree and return its root.
+
+    v0.4: no longer pre-creates ``wiki/`` — that dir is dead as of v0.4. Tests
+    that specifically exercise legacy cleanup can seed it inline.
+    """
     root = tmp_path / "vault"
     (root / "bots").mkdir(parents=True)
     (root / "shared").mkdir()
-    (root / "wiki" / "sources").mkdir(parents=True)
-    (root / "wiki" / "compiled").mkdir()
     (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}))
     return root
 
