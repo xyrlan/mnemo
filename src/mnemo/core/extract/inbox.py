@@ -192,6 +192,80 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
     return merged
 
 
+def _extract_body(text: str) -> str:
+    """Return the markdown body of a mnemo-written page (strip frontmatter)."""
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return text
+    return text[end + len("\n---\n"):]
+
+
+def _bodies_similar(a: str, b: str, threshold: float = 0.6) -> bool:
+    """Cheap Jaccard similarity on lowercase word tokens.
+
+    Used to decide whether a freshly-extracted page is a drifted rewrite of an
+    existing page (same underlying rule, new slug) vs. a legitimately distinct
+    rule that happens to share a source file.
+    """
+    tokens_a = set(a.lower().split())
+    tokens_b = set(b.lower().split())
+    if not tokens_a or not tokens_b:
+        return False
+    common = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(common) / len(union) >= threshold
+
+
+def _detect_drift_slug(
+    page: ExtractedPage,
+    state: ExtractionState,
+    vault_root: Path,
+) -> str | None:
+    """Return an existing slug this page is a drifted rewrite of, or None.
+
+    Guardrail against LLM non-determinism in slug choice. Triggers when an
+    existing state entry for the same ``<type>`` has the EXACT same source
+    file set AND a body similar to the new page. Redirects the new page's
+    slug to the existing one so ``apply_pages`` treats it as an update rather
+    than a fresh write, preventing drift pairs from accumulating.
+
+    Skips stale state entries whose target files no longer exist on disk.
+    Handles the legitimate one-source-many-rules case via the body-similarity
+    check: distinct rules from the same source file have disjoint tokens and
+    fall below the threshold.
+    """
+    if not page.source_files:
+        return None
+    source_set = set(page.source_files)
+    for key, entry in state.entries.items():
+        if not key.startswith(f"{page.type}/"):
+            continue
+        existing_slug = key.split("/", 1)[1]
+        if existing_slug == page.slug:
+            return None  # already matching — no drift
+        if set(entry.source_files or []) != source_set:
+            continue
+        # Same source set. Verify existing target file exists (stale state
+        # entries are skipped) and compare body content.
+        existing_target = vault_root / "shared" / page.type / f"{existing_slug}.md"
+        if not existing_target.exists():
+            existing_target = (
+                vault_root / "shared" / "_inbox" / page.type / f"{existing_slug}.md"
+            )
+            if not existing_target.exists():
+                continue
+        try:
+            existing_text = existing_target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        existing_body = _extract_body(existing_text)
+        if _bodies_similar(page.body, existing_body):
+            return existing_slug
+    return None
+
+
 def apply_pages(
     pages: list[ExtractedPage],
     state: ExtractionState,
@@ -204,6 +278,14 @@ def apply_pages(
     result = ApplyResult()
 
     for page in pages:
+        # Anti-drift guardrail: if the LLM chose a new slug for what is clearly
+        # a rewrite of an existing page (same sources + similar body), redirect
+        # the slug so the existing page gets updated in place instead of a
+        # duplicate being created under the drifted slug.
+        drift_target = _detect_drift_slug(page, state, vault_root)
+        if drift_target is not None:
+            page.slug = drift_target
+
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
         target = _target_path_for_page(page, vault_root)

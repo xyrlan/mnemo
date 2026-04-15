@@ -264,6 +264,232 @@ def test_extracted_page_accepts_stability_field():
     assert page.stability == "stable"
 
 
+# --- v0.4.1: anti-drift guardrail ---------------------------------------------
+
+
+def test_bodies_similar_above_threshold():
+    a = "React reconciles by key. Passing a new array reference just re-renders existing children; state survives."
+    b = "React reconciles by key. Passing a new array reference to a .map just re-renders existing children; state survives."
+    assert inbox._bodies_similar(a, b) is True
+
+
+def test_bodies_similar_below_threshold():
+    a = "React reconciles children by key prop, not by array reference identity."
+    b = "Cache keys must include every upstream dependency version to avoid stale hits."
+    assert inbox._bodies_similar(a, b) is False
+
+
+def test_bodies_similar_handles_empty():
+    assert inbox._bodies_similar("", "") is False
+    assert inbox._bodies_similar("a b c", "") is False
+
+
+def test_extract_body_strips_frontmatter():
+    text = "---\nname: x\ntype: feedback\n---\n\nbody content here\n"
+    assert inbox._extract_body(text) == "\nbody content here\n"
+
+
+def test_extract_body_handles_no_frontmatter():
+    assert inbox._extract_body("raw body") == "raw body"
+
+
+def _mkstate(**entries):
+    from mnemo.core.extract.scanner import ExtractionState
+    return ExtractionState(
+        last_run="2026-04-14T10:00:00",
+        entries=dict(entries),
+        schema_version=2,
+    )
+
+
+def test_guardrail_redirects_drifted_slug_to_existing(tmp_path):
+    """Same source + similar body → LLM picked new slug → redirect to existing slug."""
+    # Seed an existing auto-promoted page on disk + state entry
+    existing_slug = "react-key-remount"
+    existing_body = (
+        "React reconciles children by key. Passing a new array reference to a "
+        ".map just re-renders existing children; useState and useRef inside "
+        "them survive. If you need to reset local state when upstream data "
+        "changes, encode meaningful data into the key prop itself."
+    )
+    sacred = tmp_path / "shared" / "feedback" / f"{existing_slug}.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        f"---\nname: r\ntype: feedback\ntags:\n  - auto-promoted\n  - react\n---\n\n{existing_body}\n"
+    )
+    state = _mkstate(**{
+        f"feedback/{existing_slug}": StateEntry(
+            source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+            source_hash="sha256:oldhash",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+
+    # LLM re-extracts and picks a drifted slug with VERY similar body
+    drifted = inbox.ExtractedPage(
+        slug="react-key-remount-state-reset",  # ← drifted
+        type="feedback",
+        name="React key remount state reset",
+        description="d",
+        body=(
+            "React reconciles children by key. Passing a new array reference "
+            "to a .map just re-renders existing children; useState and useRef "
+            "inside them survive. If you need to reset local state when "
+            "upstream data changes, encode meaningful data into the key prop."
+        ),
+        source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+        source_hash="sha256:newhash",
+        tags=["react"],
+    )
+    inbox.apply_pages([drifted], state, tmp_path, run_id="2026-04-14T11:00:00")
+
+    # Guardrail should have redirected — no drifted file created
+    assert not (tmp_path / "shared" / "feedback" / "react-key-remount-state-reset.md").exists()
+    # Existing sacred file was updated in place
+    assert sacred.exists()
+    assert "react" in sacred.read_text()
+    # State entry count unchanged (no new slug created)
+    assert f"feedback/{existing_slug}" in state.entries
+    assert "feedback/react-key-remount-state-reset" not in state.entries
+
+
+def test_guardrail_does_not_redirect_distinct_rule_from_same_source(tmp_path):
+    """One source file can legitimately produce multiple rules with disjoint bodies —
+    guardrail must NOT collapse them."""
+    sacred = tmp_path / "shared" / "feedback" / "react-key-remount.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        "---\nname: r\ntype: feedback\ntags:\n  - auto-promoted\n  - react\n---\n\n"
+        "React reconciles by key prop. Array reference changes do not remount children.\n"
+    )
+    state = _mkstate(**{
+        "feedback/react-key-remount": StateEntry(
+            source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+            source_hash="sha256:a",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+
+    # Different rule extracted from the SAME source file (cache versioning,
+    # not key-remount). Body tokens are disjoint.
+    distinct = inbox.ExtractedPage(
+        slug="react-cache-versioning",
+        type="feedback",
+        name="Cache keys must include full dependency versioning",
+        description="d",
+        body=(
+            "Cache keys must include every upstream dependency version to "
+            "avoid stale hits. Derived data loses integrity when a base input "
+            "changes silently."
+        ),
+        source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+        source_hash="sha256:b",
+        tags=["react", "caching"],
+    )
+    inbox.apply_pages([distinct], state, tmp_path, run_id="2026-04-14T11:00:00")
+
+    # Both pages must coexist — distinct rules
+    assert sacred.exists()
+    assert (tmp_path / "shared" / "feedback" / "react-cache-versioning.md").exists()
+
+
+def test_guardrail_does_not_redirect_different_source(tmp_path):
+    """Same slug namespace but different source_files → definitely not drift."""
+    sacred = tmp_path / "shared" / "feedback" / "existing.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        "---\nname: e\ntype: feedback\n---\n\nidentical body text for comparison\n"
+    )
+    state = _mkstate(**{
+        "feedback/existing": StateEntry(
+            source_files=["bots/agent-a/memory/feedback_one.md"],
+            source_hash="sha256:a",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+
+    new_page = inbox.ExtractedPage(
+        slug="brand-new",
+        type="feedback",
+        name="Different source",
+        description="d",
+        body="identical body text for comparison",  # same body but DIFFERENT source
+        source_files=["bots/agent-b/memory/feedback_different.md"],
+        source_hash="sha256:b",
+    )
+    inbox.apply_pages([new_page], state, tmp_path, run_id="2026-04-14T11:00:00")
+    assert (tmp_path / "shared" / "feedback" / "brand-new.md").exists()
+    assert sacred.exists()
+
+
+def test_guardrail_skips_stale_state_entries(tmp_path):
+    """State entry for a slug whose file was manually deleted must not block a
+    new write under the same slug-space."""
+    state = _mkstate(**{
+        "feedback/deleted-slug": StateEntry(
+            source_files=["bots/sg-imports/memory/feedback_x.md"],
+            source_hash="sha256:a",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+    # No file on disk for deleted-slug → stale entry
+
+    new_page = inbox.ExtractedPage(
+        slug="new-slug",
+        type="feedback",
+        name="new",
+        description="d",
+        body="some body text that would be similar enough to trigger guardrail",
+        source_files=["bots/sg-imports/memory/feedback_x.md"],
+        source_hash="sha256:b",
+    )
+    inbox.apply_pages([new_page], state, tmp_path, run_id="2026-04-14T11:00:00")
+    # Stale entry ignored → new-slug written fresh, not redirected
+    assert (tmp_path / "shared" / "feedback" / "new-slug.md").exists()
+
+
+def test_guardrail_does_not_trigger_when_slugs_already_match(tmp_path):
+    """Normal update flow (same slug picked again) must not misfire the guardrail."""
+    sacred = tmp_path / "shared" / "feedback" / "stable-slug.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        "---\nname: s\ntype: feedback\n---\n\nconsistent body for both runs\n"
+    )
+    state = _mkstate(**{
+        "feedback/stable-slug": StateEntry(
+            source_files=["bots/a/memory/feedback.md"],
+            source_hash="sha256:old",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+    updated = inbox.ExtractedPage(
+        slug="stable-slug",  # same slug as before
+        type="feedback",
+        name="S", description="d",
+        body="consistent body for both runs, slightly refined",
+        source_files=["bots/a/memory/feedback.md"],
+        source_hash="sha256:new",
+    )
+    result = inbox.apply_pages([updated], state, tmp_path, run_id="2026-04-14T11:00:00")
+    # Update path fired, not drift redirect
+    assert sacred.exists()
+
+
 # --- v0.4: tags frontmatter field --------------------------------------------
 
 
