@@ -179,7 +179,8 @@ def test_defaults_include_activation_blocks():
     from mnemo.core.config import DEFAULTS
 
     assert "enforcement" in DEFAULTS
-    assert DEFAULTS["enforcement"]["enabled"] is False
+    # v0.5: enforcement is enabled by default — see config.py for rationale.
+    assert DEFAULTS["enforcement"]["enabled"] is True
     assert DEFAULTS["enforcement"]["log"]["maxBytes"] == 1_048_576
 
     assert "enrichment" in DEFAULTS

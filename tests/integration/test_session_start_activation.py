@@ -171,7 +171,13 @@ def test_session_start_skips_index_rebuild_when_both_flags_disabled(
     hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ):
     """With both flags off, build_index must NOT be called."""
-    _set_config(hook_env)  # no enforcement or enrichment keys
+    # v0.5: enforcement defaults to True, so we must explicitly disable it
+    # to exercise the "both flags off" path.
+    _set_config(
+        hook_env,
+        enforcement={"enabled": False},
+        enrichment={"enabled": False},
+    )
 
     called = []
 
@@ -264,12 +270,22 @@ def test_session_start_falls_back_to_vault_union_when_no_index(
         },
     )
 
-    # Ensure no index exists
+    # v0.5: enforcement defaults to True, which would cause session_start to
+    # rebuild the index on hook entry — defeating the "no index" precondition
+    # this test relies on. Explicitly disable both activation flags so the
+    # index stays absent and the vault-wide fallback path is exercised.
+    _set_config(
+        hook_env,
+        injection={"enabled": True},
+        enforcement={"enabled": False},
+        enrichment={"enabled": False},
+    )
+
+    # Ensure no index exists (must come AFTER _set_config so a stale rebuild
+    # from a previous test invocation can't beat the unlink to the punch).
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     if index_path.exists():
         index_path.unlink()
-
-    _set_config(hook_env, injection={"enabled": True})
 
     repo = _make_project_repo(tmp_path, "project-a")
     rc, out = _run_hook(hook_env, {"session_id": "S5", "cwd": str(repo)}, monkeypatch, capsys)

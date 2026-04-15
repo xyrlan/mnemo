@@ -35,7 +35,11 @@ DEFAULTS: dict[str, Any] = {
         "enabled": False,
     },
     "enforcement": {
-        "enabled": False,
+        # v0.5: enabled by default. The PreToolUse hook is fail-open at every
+        # stage and only acts on rules that survive the consumer-visible gate
+        # in build_index, so the worst-case impact of a misconfigured rule is
+        # an unblocked tool call — never a broken Claude Code session.
+        "enabled": True,
         "log": {"maxBytes": 1_048_576},
     },
     "enrichment": {
