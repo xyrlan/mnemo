@@ -125,6 +125,29 @@ def test_parse_enforce_missing_enforce_block():
     assert parse_enforce_block({"name": "foo"}) is None
 
 
+def test_parse_enforce_rejects_redos_pattern_via_timing_probe():
+    """A pattern that bypasses the substring heuristic but hangs at match time
+    (e.g. `(a+)+b`) MUST be rejected by the empirical timing probe."""
+    fm = _enforce_fm(
+        tool="Bash",
+        deny_pattern="(a+)+b",
+        reason="bypasses substring heuristic",
+    )
+    assert parse_enforce_block(fm) is None
+
+
+def test_parse_enforce_accepts_benign_pattern_under_probe():
+    """A benign pattern that the probe can evaluate quickly must parse."""
+    fm = _enforce_fm(
+        tool="Bash",
+        deny_pattern="git commit.*Co-Authored-By",
+        reason="no co-authored trailers",
+    )
+    result = parse_enforce_block(fm)
+    assert result is not None
+    assert result["deny_patterns"] == ["git commit.*Co-Authored-By"]
+
+
 def test_parse_enforce_list_of_patterns():
     """deny_pattern can be a list of strings."""
     fm = _enforce_fm(

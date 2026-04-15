@@ -4,9 +4,12 @@ from __future__ import annotations
 from mnemo.core.rule_activation import (
     EnforceHit,
     EnrichHit,
+    _glob_matches,
+    _glob_to_regex,
     match_bash_enforce,
     match_path_enrich,
     normalize_bash_command,
+    parse_activates_on_block,
 )
 
 
@@ -108,6 +111,75 @@ def test_match_normalize_plain_command_unchanged():
 
 def test_match_normalize_empty_string():
     assert normalize_bash_command("") == ""
+
+
+def test_match_normalize_strips_double_sudo():
+    """`sudo sudo git push` must collapse to `git push` (iterative strip)."""
+    assert normalize_bash_command("sudo sudo git push") == "git push"
+
+
+def test_match_normalize_strips_chained_env():
+    """`env A=1 env B=2 git push` must collapse to `git push`."""
+    assert normalize_bash_command("env A=1 env B=2 git push") == "git push"
+
+
+def test_match_normalize_strips_sudo_with_user_flag():
+    """`sudo -u root git push` must NOT leave `root` as the apparent command."""
+    assert normalize_bash_command("sudo -u root git push") == "git push"
+
+
+def test_match_normalize_strips_sudo_with_flag_then_env():
+    """`sudo -E env FOO=1 git push` must collapse to `git push`."""
+    assert normalize_bash_command("sudo -E env FOO=1 git push") == "git push"
+
+
+def test_match_bash_enforce_double_sudo_bypass_now_hits():
+    """Integration: `sudo sudo git push --force` hits deny_command `git push --force`."""
+    index = _make_index(
+        enforce_rules={
+            "proj": [
+                _enforce_rule(
+                    deny_commands=["git push --force"],
+                    reason="no force push",
+                )
+            ]
+        }
+    )
+    hit = match_bash_enforce(index, "proj", "sudo sudo git push --force origin main")
+    assert hit is not None
+    assert hit.reason == "no force push"
+
+
+def test_match_bash_enforce_chained_env_bypass_now_hits():
+    """Integration: `env A=1 env B=2 git push --force` hits deny."""
+    index = _make_index(
+        enforce_rules={
+            "proj": [
+                _enforce_rule(
+                    deny_commands=["git push --force"],
+                    reason="no force push",
+                )
+            ]
+        }
+    )
+    hit = match_bash_enforce(index, "proj", "env A=1 env B=2 git push --force")
+    assert hit is not None
+
+
+def test_match_bash_enforce_sudo_user_flag_bypass_now_hits():
+    """Integration: `sudo -u root git push --force` hits deny."""
+    index = _make_index(
+        enforce_rules={
+            "proj": [
+                _enforce_rule(
+                    deny_commands=["git push --force"],
+                    reason="no force push",
+                )
+            ]
+        }
+    )
+    hit = match_bash_enforce(index, "proj", "sudo -u root git push --force origin main")
+    assert hit is not None
 
 
 # ---------------------------------------------------------------------------
@@ -235,24 +307,7 @@ def test_match_bash_enforce_returns_first_hit():
 
 def test_match_bash_enforce_caps_command_at_4kb():
     """Commands longer than 4096 chars are truncated before matching."""
-    # Create a pattern that only matches if the command is NOT truncated
-    # (i.e., a string that exists only after position 4096)
-    marker = "SHOULDNOTMATCH"
-    long_prefix = "x" * 4090
-    command = long_prefix + marker  # marker starts at char 4090
-
-    index = _make_index(
-        enforce_rules={
-            "proj": [
-                _enforce_rule(
-                    deny_patterns=[marker],
-                    reason="match after 4096",
-                )
-            ]
-        }
-    )
-    # The marker is at char 4090, so after truncation at 4096 it's included
-    # Let's use a marker beyond 4096
+    # A marker placed strictly beyond the 4096 cap must not match.
     marker2 = "BEYONDCAP"
     long_prefix2 = "a" * 4096
     command2 = long_prefix2 + marker2  # marker starts at char 4096+
@@ -432,6 +487,58 @@ def test_match_path_enrich_slug_tiebreak():
     hits = match_path_enrich(index, "proj", "main.py", "Edit")
     assert hits[0].slug == "a-rule"
     assert hits[1].slug == "z-rule"
+
+
+def test_glob_negated_class_excludes_dotfiles():
+    """`[!.]*` should match `foo.py` (starts with non-dot) and NOT `.hidden`."""
+    assert _glob_matches("[!.]*", "foo.py") is True
+    assert _glob_matches("[!.]*", ".hidden") is False
+
+
+def test_glob_character_class_basic():
+    """`[abc]*.py` matches `apple.py` but not `zebra.py`."""
+    assert _glob_matches("[abc]*.py", "apple.py") is True
+    assert _glob_matches("[abc]*.py", "zebra.py") is False
+
+
+def test_glob_unterminated_bracket_rejected_at_parse_time():
+    """An unterminated bracket like `foo[` must be rejected at parse time."""
+    fm = {"activates_on": {"tools": ["Edit"], "path_globs": ["foo["]}}
+    assert parse_activates_on_block(fm) is None
+
+
+def test_glob_unterminated_bracket_in_build_index_malformed(tmp_vault):
+    """A rule with an unterminated glob lands in `malformed`, not `enrich_by_project`."""
+    from mnemo.core.rule_activation import build_index
+
+    content = (
+        "---\n"
+        "name: bad-glob-rule\n"
+        "stability: stable\n"
+        "tags:\n  - auto-promoted\n"
+        "sources:\n  - bots/mnemo/memory/bad-glob-rule.md\n"
+        "activates_on:\n"
+        "  tools: [Edit]\n"
+        "  path_globs: ['foo[']\n"
+        "---\n\nbody\n"
+    )
+    target_dir = tmp_vault / "shared" / "feedback"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "bad-glob-rule.md").write_text(content, encoding="utf-8")
+
+    index = build_index(tmp_vault)
+    malformed_paths = [e["path"] for e in index["malformed"]]
+    assert any("bad-glob-rule.md" in p for p in malformed_paths)
+    # Error message should reference the invalid glob.
+    errors = [e["error"] for e in index["malformed"]]
+    assert any("path_glob invalid" in err for err in errors)
+    # And must NOT appear in enrich_by_project.
+    assert not index["enrich_by_project"]
+
+
+def test_glob_to_regex_returns_none_for_unterminated():
+    """Direct _glob_to_regex contract: unterminated bracket returns None."""
+    assert _glob_to_regex("foo[") is None
 
 
 def test_match_path_enrich_glob_no_double_star_matches_single_segment():
