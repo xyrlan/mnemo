@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import IO, Any
 
+from mnemo.core.mcp import counter as mcp_counter
 from mnemo.core.mcp import tools as mcp_tools
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -99,12 +100,15 @@ def _handle_tool_call(
 
     if name == "list_rules_by_topic":
         result = mcp_tools.list_rules_by_topic(vault_root, str(args.get("topic", "")))
+        mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
     if name == "read_mnemo_rule":
         result = mcp_tools.read_mnemo_rule(vault_root, str(args.get("slug", "")))
+        mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
     if name == "get_mnemo_topics":
         result = mcp_tools.get_mnemo_topics(vault_root)
+        mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
 
     return _err(req_id, -32602, f"unknown tool: {name}")

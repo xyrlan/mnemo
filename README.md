@@ -82,6 +82,27 @@ the only thing pre-loaded; rule bodies are fetched on demand. Filter parity
 with the HOME dashboard is enforced by `core/filters.py` so evolving and
 needs-review pages never reach Claude.
 
+### Status line
+
+After `mnemo init`, your Claude Code status line shows whether the brain is
+alive and how often Claude is using it:
+
+```
+mnemo mcp · 9 topics · 7↓ today
+```
+
+- `mnemo mcp` — MCP server is registered in `~/.claude.json`
+- `9 topics` — topic tags currently known in your vault (live count)
+- `7↓ today` — number of times Claude has called a mnemo MCP tool today
+  (resets at midnight)
+
+mnemo's status line is **additive**: if you already had a custom statusLine
+configured in `~/.claude/settings.json`, mnemo wraps it instead of
+overwriting it. Your original output appears first, then ` · `, then
+mnemo's segment. `mnemo uninstall` restores your original cleanly. If you
+manually edit settings.json after `mnemo init`, `mnemo doctor` will warn
+you about the drift.
+
 ## Privacy
 
 100% local. Zero telemetry. Zero network. No third-party packages. Read the [source](src/mnemo).

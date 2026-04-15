@@ -49,6 +49,46 @@ def test_uninstall_removes_mcp_server_entry(tmp_home: Path):
         assert "mnemo" not in data.get("mcpServers", {})
 
 
+def test_init_installs_statusline_composer(tmp_home: Path):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    settings = json.loads((tmp_home / ".claude" / "settings.json").read_text())
+    assert "statusLine" in settings
+    assert settings["statusLine"]["command"].endswith("statusline-compose")
+
+
+def test_init_preserves_user_statusline_via_composer(tmp_home: Path):
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
+    }))
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+
+    # statusLine in settings.json now points at composer
+    data = json.loads(settings_path.read_text())
+    assert data["statusLine"]["command"].endswith("statusline-compose")
+    # Original captured in mnemo state
+    state_path = tmp_home / "vault" / ".mnemo" / "statusline-original.json"
+    state = json.loads(state_path.read_text())
+    assert state["command"] == "/home/user/my-prompt.sh"
+
+
+def test_uninstall_restores_user_statusline(tmp_home: Path):
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
+    }))
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    cli.main(["uninstall", "--yes"])
+
+    data = json.loads(settings_path.read_text())
+    # Original restored
+    assert data["statusLine"]["command"] == "/home/user/my-prompt.sh"
+
+
 def test_init_idempotent(tmp_home: Path):
     args = ["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"]
     assert cli.main(args) == 0

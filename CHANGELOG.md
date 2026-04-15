@@ -33,6 +33,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Hidden CLI subcommand `mnemo mcp-server`**: stdio entry point referenced
   from `~/.claude.json`. Not surfaced in `mnemo --help`.
 
+- **Status line integration**: `mnemo init` now wires an additive
+  `statusLine` composer into `~/.claude/settings.json`. Output looks like
+  `mnemo mcp · 9 topics · 7↓ today` — topic count from your vault plus
+  the number of times Claude has consulted mnemo via MCP today (counter
+  resets daily, atomic write, lives in `<vault>/.mnemo/mcp-call-counter.json`).
+  If you already had a custom statusLine, mnemo **does not overwrite it** —
+  the composer wraps your original command and concatenates outputs with
+  ` · `. Your original is preserved in `<vault>/.mnemo/statusline-original.json`
+  and restored by `mnemo uninstall`. `mnemo doctor` warns if you edit
+  settings.json manually and drift away from the composer.
+
 **Internal**
 - Injection mechanism de-risked on 2026-04-15 via a throwaway prototype that
   proved `hookSpecificOutput.additionalContext` injects into interactive

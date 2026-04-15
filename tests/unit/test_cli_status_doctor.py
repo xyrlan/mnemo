@@ -41,6 +41,30 @@ def test_doctor_runs_preflight_and_reports(tmp_home: Path, capsys: pytest.Captur
     assert "preflight" in out.lower() or "diagnostic" in out.lower()
 
 
+def test_doctor_warns_about_statusline_drift(tmp_home: Path, capsys: pytest.CaptureFixture):
+    """v0.5: doctor flags settings.json statusLine drift away from the mnemo composer."""
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    # Simulate user editing settings.json after init to replace our composer
+    settings_path = tmp_home / ".claude" / "settings.json"
+    data = json.loads(settings_path.read_text())
+    data["statusLine"] = {"type": "command", "command": "/some/other/script.sh"}
+    settings_path.write_text(json.dumps(data))
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "drift" in out.lower()
+    assert "statusline" in out.lower()
+
+
+def test_doctor_silent_when_statusline_state_absent(tmp_home: Path, capsys: pytest.CaptureFixture):
+    """No state file → never installed (or already uninstalled) → no drift warning."""
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    cli.main(["uninstall", "--yes"])
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "drift" not in out.lower()
+
+
 def test_doctor_warns_about_legacy_wiki_dirs(tmp_home: Path, capsys: pytest.CaptureFixture):
     """v0.4: doctor flags wiki/sources/ and wiki/compiled/ as orphaned v0.3 fossils."""
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])

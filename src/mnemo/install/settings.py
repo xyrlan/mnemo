@@ -243,3 +243,110 @@ def _do_uninject_mcp(claude_json_path: Path) -> None:
     if not servers:
         data.pop("mcpServers", None)
     claude_json_path.write_text(json.dumps(data, indent=2))
+
+
+# --- v0.5: statusLine additive composer registration ---
+
+
+def _statusline_compose_command() -> str:
+    """Build the composer command line. Uses sys.executable for venv correctness."""
+    return f"{sys.executable or 'python3'} -m mnemo statusline-compose"
+
+
+def _is_mnemo_composer(spec: Any) -> bool:
+    """True if the given statusLine entry is our composer (so re-init is a no-op)."""
+    if not isinstance(spec, dict):
+        return False
+    cmd = spec.get("command", "")
+    if not isinstance(cmd, str):
+        return False
+    return cmd.strip().endswith("statusline-compose")
+
+
+def inject_statusline(settings_path: Path, vault_root: Path) -> None:
+    """Install the additive statusLine composer in ``~/.claude/settings.json``.
+
+    If the user has a pre-existing statusLine, it's preserved in
+    ``<vault>/.mnemo/statusline-original.json`` and the composer wraps it.
+    Re-running ``mnemo init`` is a no-op when the composer is already
+    installed (the original is captured exactly once).
+    """
+    settings_path = Path(settings_path)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + 5.0
+    while True:
+        with _with_lock(settings_path) as held:
+            if held:
+                _do_inject_statusline(settings_path, vault_root)
+                return
+        if time.time() > deadline:
+            raise SettingsError("Timed out waiting for settings.json lock (5s)")
+        time.sleep(0.05)
+
+
+def _do_inject_statusline(settings_path: Path, vault_root: Path) -> None:
+    from mnemo import statusline as sl_mod
+
+    data = _read_settings(settings_path)
+    _backup(settings_path)
+    existing = data.get("statusLine")
+
+    if _is_mnemo_composer(existing):
+        # Already installed — do not re-capture original (it's already saved).
+        return
+
+    # Capture original (which may be absent or anything else) into mnemo state.
+    if existing is None:
+        sl_mod.write_state(vault_root, None)
+    elif isinstance(existing, dict):
+        sl_mod.write_state(vault_root, existing)
+    else:
+        # Unknown shape — coerce into a string command for best-effort restore.
+        sl_mod.write_state(vault_root, {"command": str(existing)})
+
+    data["statusLine"] = {
+        "type": "command",
+        "command": _statusline_compose_command(),
+    }
+    settings_path.write_text(json.dumps(data, indent=2))
+
+
+def uninject_statusline(settings_path: Path, vault_root: Path) -> None:
+    """Restore the user's original statusLine and clear mnemo state."""
+    settings_path = Path(settings_path)
+    if not settings_path.exists():
+        return
+    deadline = time.time() + 5.0
+    while True:
+        with _with_lock(settings_path) as held:
+            if held:
+                _do_uninject_statusline(settings_path, vault_root)
+                return
+        if time.time() > deadline:
+            raise SettingsError("Timed out waiting for settings.json lock (5s)")
+        time.sleep(0.05)
+
+
+def _do_uninject_statusline(settings_path: Path, vault_root: Path) -> None:
+    from mnemo import statusline as sl_mod
+
+    data = _read_settings(settings_path)
+    _backup(settings_path)
+    current = data.get("statusLine")
+
+    if not _is_mnemo_composer(current):
+        # Not our composer — leave whatever the user has alone.
+        sl_mod.clear_state(vault_root)
+        return
+
+    state = sl_mod.read_state(vault_root)
+    if state and state.get("command"):
+        data["statusLine"] = {
+            "type": state.get("type") or "command",
+            "command": state["command"],
+        }
+    else:
+        data.pop("statusLine", None)
+
+    sl_mod.clear_state(vault_root)
+    settings_path.write_text(json.dumps(data, indent=2))
