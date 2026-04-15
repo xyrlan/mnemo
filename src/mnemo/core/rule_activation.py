@@ -744,7 +744,12 @@ def log_denial(vault_root: Path, hit: EnforceHit, tool_input: dict) -> None:
         pass
 
 
-def log_enrichment(vault_root: Path, hits: list[EnrichHit], tool_input: dict) -> None:
+def log_enrichment(
+    vault_root: Path,
+    hits: list[EnrichHit],
+    tool_name: str,
+    tool_input: dict,
+) -> None:
     """Append a JSON line to <vault>/.mnemo/enrichment-log.jsonl. Never raises."""
     try:
         from mnemo.core.config import load_config  # lazy import
@@ -761,7 +766,7 @@ def log_enrichment(vault_root: Path, hits: list[EnrichHit], tool_input: dict) ->
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "project": project,
             "hit_slugs": [h.slug for h in hits],
-            "tool_name": tool_input.get("tool_name", ""),
+            "tool_name": tool_name,
             "file_path": tool_input.get("file_path", ""),
         }
 

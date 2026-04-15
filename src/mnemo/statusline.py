@@ -176,9 +176,19 @@ def _run_original(original_cmd: str | None) -> str:
         return ""
 
 
-def compose(out: object = None) -> int:
-    """Read state, run original + mnemo, print concatenated result."""
+def compose(out: object = None, stdin: object = None) -> int:
+    """Read state, run original + mnemo, print concatenated result.
+
+    Claude Code passes a JSON payload on stdin containing the current working
+    directory for the session; we forward it so the mnemo segment resolves the
+    correct per-project rule counts. If stdin is empty or unreadable, fall back
+    to the render() default (Path.cwd()).
+    """
     out_stream = out if out is not None else sys.stdout
+    in_stream = stdin if stdin is not None else sys.stdin
+
+    cwd: str | None = _read_stdin_cwd(in_stream)
+
     try:
         from mnemo.core import config as cfg_mod
         from mnemo.core import paths as paths_mod
@@ -197,12 +207,42 @@ def compose(out: object = None) -> int:
         parts.append(original_segment)
 
     claude_json = Path(os.path.expanduser("~/.claude.json"))
-    mnemo_segment = render(vault, claude_json)
+    mnemo_segment = render(vault, claude_json, cwd=cwd)
     if mnemo_segment:
         parts.append(mnemo_segment)
 
     out_stream.write(SEPARATOR.join(parts))
     return 0
+
+
+def _read_stdin_cwd(in_stream: object) -> str | None:
+    """Best-effort extraction of `cwd` from the Claude Code statusline payload.
+
+    Claude Code sends a JSON object on stdin with (at least) a `workspace.current_dir`
+    field, along with model/session metadata. Older payload shapes used a top-level
+    `cwd` field, which we accept as a fallback. Returns None when stdin is a tty,
+    empty, or malformed — compose() will then fall back to Path.cwd() downstream.
+    """
+    try:
+        if hasattr(in_stream, "isatty") and in_stream.isatty():
+            return None
+        raw = in_stream.read() if hasattr(in_stream, "read") else ""
+        if not raw:
+            return None
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return None
+        workspace = payload.get("workspace")
+        if isinstance(workspace, dict):
+            current_dir = workspace.get("current_dir") or workspace.get("cwd")
+            if isinstance(current_dir, str) and current_dir:
+                return current_dir
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            return cwd
+    except Exception:
+        return None
+    return None
 
 
 def _read_state(vault_root: Path) -> dict[str, Any] | None:

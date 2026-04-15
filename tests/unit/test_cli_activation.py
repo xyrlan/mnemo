@@ -514,3 +514,208 @@ def test_statusline_omits_zero_count_segments(tmp_vault, tmp_path, monkeypatch):
     assert "blocks" not in result
     # But base still renders
     assert "mnemo mcp" in result
+
+
+# ---------------------------------------------------------------------------
+# cmd_status — v0.5.1 polish: hook count derives from HOOK_DEFINITIONS
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_status_hooks_installed_count_derives_from_hook_definitions(tmp_path, monkeypatch, capsys):
+    """Regression: the N/M count in 'Hooks installed' must match len(HOOK_DEFINITIONS),
+    not a hardcoded integer. PR #22 added PreToolUse, so stale '/4' was wrong."""
+    from mnemo.install.settings import HOOK_DEFINITIONS
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    # Plant a settings.json with a mnemo command registered under every current hook event
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    settings = {
+        "hooks": {
+            event: [{
+                "hooks": [{
+                    "type": "command",
+                    "command": f"/venv/bin/python -m mnemo.hooks.{defn['module']}",
+                }],
+                **({"matcher": defn["matcher"]} if defn.get("matcher") else {}),
+            }]
+            for event, defn in HOOK_DEFINITIONS.items()
+        }
+    }
+    (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(home)) if isinstance(p, str) else p)
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": False}},
+    })
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    expected_total = len(HOOK_DEFINITIONS)
+    assert f"Hooks installed: {expected_total}/{expected_total}" in out, (
+        f"Expected 'Hooks installed: {expected_total}/{expected_total}' but got:\n{out}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# cmd_status — v0.5.1 polish: malformed count shown when present
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_status_shows_malformed_count_when_index_has_malformed(tmp_path, monkeypatch, capsys):
+    """When the index has entries in the 'malformed' bucket, cmd_status should
+    surface the count so a user with a typo'd rule knows something was rejected."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    mnemo_dir = vault / ".mnemo"
+    mnemo_dir.mkdir()
+    index = {
+        "schema_version": 1,
+        "built_at": "2026-04-15T12:00:00Z",
+        "vault_root": str(vault),
+        "enforce_by_project": {"myproject": []},
+        "enrich_by_project": {"myproject": []},
+        "malformed": [
+            {"path": "shared/feedback/broken.md", "error": "deny_pattern failed re.compile: unbalanced parenthesis"},
+            {"path": "shared/feedback/broken2.md", "error": "activates_on.path_globs is empty"},
+        ],
+    }
+    (mnemo_dir / "rule-activation-index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": False}},
+        "enforcement": {"enabled": True},
+        "enrichment": {"enabled": True},
+    })
+    monkeypatch.setattr("mnemo.core.agent.resolve_agent", lambda cwd: type("A", (), {"name": "myproject"})())
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Malformed rules" in out
+    assert "2" in out  # count of malformed entries
+
+
+def test_cmd_status_omits_malformed_line_when_zero(tmp_path, monkeypatch, capsys):
+    """Malformed line should NOT appear when there are no malformed entries — silent clean state."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    _write_index(vault, enforce_rules=[], enrich_rules=[], project="myproject")
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
+        "vaultRoot": str(vault),
+        "extraction": {"auto": {"enabled": False}},
+        "enforcement": {"enabled": True},
+        "enrichment": {"enabled": True},
+    })
+    monkeypatch.setattr("mnemo.core.agent.resolve_agent", lambda cwd: type("A", (), {"name": "myproject"})())
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Malformed rules" not in out
+
+
+# ---------------------------------------------------------------------------
+# statusline.compose — v0.5.1 polish: forwards stdin cwd to render()
+# ---------------------------------------------------------------------------
+
+
+def test_compose_reads_cwd_from_stdin_payload(tmp_path, monkeypatch):
+    """Regression: compose() must read Claude Code's JSON stdin payload and
+    forward workspace.current_dir (or top-level cwd) as the cwd kwarg to render()."""
+    import io
+
+    # Capture whatever cwd render() was called with
+    captured: dict = {}
+    def fake_render(vault_root, claude_json_path, *, cwd=None):
+        captured["cwd"] = cwd
+        return "mnemo mcp · 0 topics · 0↓ today"
+    monkeypatch.setattr("mnemo.statusline.render", fake_render)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: vault)
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / ".claude.json") if p == "~/.claude.json" else p)
+
+    payload = json.dumps({
+        "workspace": {"current_dir": "/home/user/projects/sg-imports"},
+        "model": {"id": "claude-sonnet-4-6"},
+    })
+    stdin = io.StringIO(payload)
+    out = io.StringIO()
+
+    sl.compose(out=out, stdin=stdin)
+
+    assert captured["cwd"] == "/home/user/projects/sg-imports"
+
+
+def test_compose_reads_cwd_from_top_level_field(tmp_path, monkeypatch):
+    """Fallback shape: older or alternate payloads with top-level `cwd` key."""
+    import io
+
+    captured: dict = {}
+    def fake_render(vault_root, claude_json_path, *, cwd=None):
+        captured["cwd"] = cwd
+        return ""
+    monkeypatch.setattr("mnemo.statusline.render", fake_render)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: vault)
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / ".claude.json") if p == "~/.claude.json" else p)
+
+    stdin = io.StringIO(json.dumps({"cwd": "/tmp/fallback"}))
+    sl.compose(out=io.StringIO(), stdin=stdin)
+
+    assert captured["cwd"] == "/tmp/fallback"
+
+
+def test_compose_falls_back_to_none_when_stdin_empty(tmp_path, monkeypatch):
+    """Empty stdin (tty, pipe with no data) must not raise — compose passes cwd=None
+    and render() falls back to Path.cwd()."""
+    import io
+
+    captured: dict = {}
+    def fake_render(vault_root, claude_json_path, *, cwd=None):
+        captured["cwd"] = cwd
+        return ""
+    monkeypatch.setattr("mnemo.statusline.render", fake_render)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: vault)
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / ".claude.json") if p == "~/.claude.json" else p)
+
+    sl.compose(out=io.StringIO(), stdin=io.StringIO(""))
+    assert captured["cwd"] is None
+
+
+def test_compose_falls_back_to_none_on_malformed_stdin(tmp_path, monkeypatch):
+    """Malformed JSON must not raise — compose treats it as 'no cwd available'."""
+    import io
+
+    captured: dict = {}
+    def fake_render(vault_root, claude_json_path, *, cwd=None):
+        captured["cwd"] = cwd
+        return ""
+    monkeypatch.setattr("mnemo.statusline.render", fake_render)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: vault)
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / ".claude.json") if p == "~/.claude.json" else p)
+
+    sl.compose(out=io.StringIO(), stdin=io.StringIO("not-json {{{"))
+    assert captured["cwd"] is None

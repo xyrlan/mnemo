@@ -153,6 +153,119 @@ release pattern: ship dark, dogfood, then flip. Enable in `~/mnemo/mnemo.config.
   available once `mnemo init` has run; this flag controls only whether
   Claude is *told about* the topics at session start.
 
+## Rule activation *(v0.5)*
+
+The three flags above tell Claude *that rules exist* at session start. **Rule
+activation** makes mnemo push a rule directly into Claude's turn at the exact
+moment it's about to run a tool — not just once per session. Two modes share
+the same per-project index and the same `PreToolUse` hook:
+
+- **Enforcement** — when Claude is about to run a `Bash` command that
+  matches a `deny_pattern` regex or a `deny_command` prefix from any rule
+  owned by the current project, the hook emits `permissionDecision: deny`
+  and Claude Code blocks the call with the rule's `reason` string visible to
+  the model. Use for hard guardrails: "never commit with Co-Authored-By",
+  "never run `drizzle-kit push`".
+- **Enrichment** — when Claude is about to run `Edit`, `Write`, or
+  `MultiEdit` on a file path that matches one of a rule's `path_globs`, the
+  hook emits `additionalContext` containing the rule body preview (up to 3
+  matching rules, ordered by source count). Claude sees the text as a
+  `<system-reminder>` *before* performing the edit. Use for advisory rules
+  with file-level scope: "HeroUI v3 modals use the Drawer slot pattern",
+  "React key remount is required for these components".
+
+Both modes are **strictly per-project** — a rule captured while working on
+project A never fires while working on project B. Project ownership is
+derived from the `sources:` frontmatter field (e.g. `bots/sg-imports/...`
+belongs to `sg-imports`). Cross-project rules self-heal via repeated
+capture.
+
+### Defaults and kill switch
+
+- **`enforcement.enabled`** defaults to **`true`**. This is safe because
+  enforcement is *inert until you own a rule with an `enforce:` block* — a
+  fresh vault has zero such rules, so the hook fires but matches nothing.
+  Rules gain activation metadata either by hand-editing the frontmatter or
+  when the extraction LLM emits it for a high-confidence rule (see "Rule
+  frontmatter shape" below).
+- **`enrichment.enabled`** defaults to **`false`** because it's slightly
+  more invasive — enrichment surfaces context *every* time you edit a
+  matching file, not just once per block. Turn it on when you have
+  `activates_on:` rules you want visible at edit time.
+
+To disable enforcement (kill switch), add to `~/mnemo/mnemo.config.json`:
+
+```json
+{
+  "enforcement": { "enabled": false }
+}
+```
+
+The `PreToolUse` hook is **absolutely fail-open**: any error at any stage
+(missing index, corrupt JSON, exception in match logic) returns exit code 0
+with empty stdout. The hook can never block Claude Code from running. You
+can trust it not to brick your session even if mnemo itself is broken.
+
+### Rule frontmatter shape
+
+Both blocks are optional and live in a feedback page's YAML frontmatter:
+
+```yaml
+---
+name: no-co-authored-by-in-commits
+description: Never add Co-Authored-By trailers in git commits
+type: feedback
+stability: stable
+sources:
+  - bots/mnemo/memory/feedback_no_coauthored.md
+tags:
+  - git
+  - workflow
+enforce:
+  tool: Bash
+  deny_pattern: git commit.*Co-Authored-By
+  reason: No Co-Authored-By trailers in commits
+activates_on:
+  tools: [Edit, Write, MultiEdit]
+  path_globs:
+    - '**/components/modals/**'
+    - '**/*modal*.tsx'
+---
+```
+
+- `enforce.tool` must be `"Bash"` in v0.5 (the only tool v1 supports
+  for hard-blocking).
+- `enforce.deny_pattern` is a regex compiled with `re.IGNORECASE | re.DOTALL`
+  and pre-validated against ReDoS at index build time (a time-budget probe
+  rejects pathological patterns like `(a+)+b`).
+- `enforce.deny_command` is an alternative to the regex: a list of command
+  prefixes; the hook normalizes the command (strips `sudo`, `env FOO=bar`,
+  shell inline env) before the match.
+- `activates_on.tools` must be a subset of `{Edit, Write, MultiEdit}`.
+- `activates_on.path_globs` supports `**` (match any number of path
+  segments), single `*` (no slash crossing), and bracket classes with
+  `[!...]` negation.
+
+Rules tagged `needs-review` or with `stability: evolving`, and rules still
+in `shared/_inbox/`, **never** become activation rules — they're gated
+through the same `is_consumer_visible` predicate that the dashboard and
+MCP retrieval use.
+
+### Observability
+
+- `mnemo status` — shows per-project rule counts, recent denials, recent
+  enrichments, and the last denied command.
+- `mnemo doctor` — checks for malformed `enforce:`/`activates_on:` blocks,
+  stale activation index, suspicious `deny_pattern` regex, and overly
+  broad `path_globs` (`**/*`, `*`).
+- `<vault>/.mnemo/denial-log.jsonl` — JSONL stream of every deny, with
+  slug, reason, tool, full command (truncated to 500 chars), timestamp.
+- `<vault>/.mnemo/enrichment-log.jsonl` — JSONL stream of every enrichment,
+  with hit slugs, tool name, file path, timestamp.
+- `<vault>/.mnemo/rule-activation-index.json` — the per-project index
+  written by `build_index` after every extraction and on session start. If
+  you suspect drift, delete it; the next session rebuilds it.
+
 ## Commands
 
 ```
