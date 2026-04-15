@@ -1,4 +1,16 @@
-"""Inject mnemo hooks into ~/.claude/settings.json."""
+"""Inject mnemo hooks into ~/.claude/settings.json (and the v0.5 MCP server into ~/.claude.json).
+
+Two parallel injection flows live here:
+
+- ``inject_hooks`` / ``uninject_hooks`` write the SessionStart + SessionEnd
+  command hooks into ``~/.claude/settings.json`` (under the ``hooks`` key).
+- ``inject_mcp_servers`` / ``uninject_mcp_servers`` (v0.5) write the mnemo
+  MCP stdio server entry into ``~/.claude.json`` (under ``mcpServers``).
+  These are *different files* — Claude Code reads hooks from settings.json
+  but reads MCP servers from .claude.json at the home root.
+
+Both flows share the same lock + backup primitives below.
+"""
 from __future__ import annotations
 
 import json
@@ -163,3 +175,71 @@ def _do_uninject(settings_path: Path) -> None:
     if not hooks:
         data.pop("hooks", None)
     settings_path.write_text(json.dumps(data, indent=2))
+
+
+# --- v0.5: MCP server registration in ~/.claude.json ---
+
+
+def _mcp_server_spec() -> dict[str, Any]:
+    """Build the mcpServers entry for the mnemo stdio server.
+
+    Uses ``sys.executable`` so the registration points at the same Python
+    interpreter that ran ``mnemo init`` — important when mnemo is installed
+    in a venv that isn't first on PATH.
+    """
+    return {
+        "command": sys.executable or "python3",
+        "args": ["-m", "mnemo", "mcp-server"],
+    }
+
+
+MCPSERVER_NAME = "mnemo"
+
+
+def inject_mcp_servers(claude_json_path: Path) -> None:
+    """Register the mnemo MCP server in ``~/.claude.json``. Idempotent."""
+    claude_json_path = Path(claude_json_path)
+    claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + 5.0
+    while True:
+        with _with_lock(claude_json_path) as held:
+            if held:
+                _do_inject_mcp(claude_json_path)
+                return
+        if time.time() > deadline:
+            raise SettingsError("Timed out waiting for .claude.json lock (5s)")
+        time.sleep(0.05)
+
+
+def _do_inject_mcp(claude_json_path: Path) -> None:
+    data = _read_settings(claude_json_path)
+    _backup(claude_json_path)
+    servers = data.setdefault("mcpServers", {})
+    servers[MCPSERVER_NAME] = _mcp_server_spec()
+    claude_json_path.write_text(json.dumps(data, indent=2))
+
+
+def uninject_mcp_servers(claude_json_path: Path) -> None:
+    """Remove the mnemo MCP server entry from ``~/.claude.json``. No-op if absent."""
+    claude_json_path = Path(claude_json_path)
+    if not claude_json_path.exists():
+        return
+    deadline = time.time() + 5.0
+    while True:
+        with _with_lock(claude_json_path) as held:
+            if held:
+                _do_uninject_mcp(claude_json_path)
+                return
+        if time.time() > deadline:
+            raise SettingsError("Timed out waiting for .claude.json lock (5s)")
+        time.sleep(0.05)
+
+
+def _do_uninject_mcp(claude_json_path: Path) -> None:
+    data = _read_settings(claude_json_path)
+    _backup(claude_json_path)
+    servers = data.get("mcpServers", {})
+    servers.pop(MCPSERVER_NAME, None)
+    if not servers:
+        data.pop("mcpServers", None)
+    claude_json_path.write_text(json.dumps(data, indent=2))

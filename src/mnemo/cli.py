@@ -119,6 +119,15 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    # 5b. Register MCP server in ~/.claude.json (v0.5)
+    claude_json_path = Path(os.path.expanduser("~/.claude.json"))
+    say(f"Registering MCP server in {claude_json_path}…")
+    try:
+        inj.inject_mcp_servers(claude_json_path)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
     # 6. Optional initial mirror
     if not args.no_mirror:
         say("Mirroring existing Claude memories…")
@@ -517,12 +526,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             print("Aborted.", file=sys.stderr)
             return 2
     settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    claude_json_path = Path(os.path.expanduser("~/.claude.json"))
     try:
         inj.uninject_hooks(settings_path)
+        inj.uninject_mcp_servers(claude_json_path)
     except inj.SettingsError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    print("Hooks removed. Vault preserved.")
+    print("Hooks and MCP server removed. Vault preserved.")
     return 0
 
 
