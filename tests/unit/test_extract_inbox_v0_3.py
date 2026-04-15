@@ -208,6 +208,62 @@ def test_apply_upgrade_proposed_when_single_becomes_multi(tmp_path):
     assert result.upgrade_proposed and result.upgrade_proposed[0][0] == "feedback/use-yarn"
 
 
+# --- v0.3.1: stability frontmatter field -------------------------------------
+
+
+def _page_with_stability(slug, stability, sources):
+    p = _page(slug, sources=sources)
+    p.stability = stability
+    return p
+
+
+def test_render_page_emits_stability_stable_by_default():
+    """Legacy ExtractedPage without stability attr defaults to 'stable' in frontmatter."""
+    page = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
+    # Don't set stability explicitly — exercise the default branch.
+    content = inbox._render_page(page, run_id="2026-04-14T12:00:00-run1", auto_promoted=True)
+    assert "stability: stable" in content
+
+
+def test_render_page_emits_stability_evolving_when_set():
+    page = _page_with_stability(
+        "still-deciding-zustand",
+        stability="evolving",
+        sources=["bots/a/memory/feedback_zustand.md"],
+    )
+    content = inbox._render_page(page, run_id="2026-04-14T12:00:00-run1", auto_promoted=True)
+    assert "stability: evolving" in content
+    assert "stability: stable" not in content
+
+
+def test_render_page_inbox_branch_also_emits_stability():
+    page = _page_with_stability(
+        "two-source-rule",
+        stability="stable",
+        sources=[
+            "bots/a/memory/feedback_x.md",
+            "bots/b/memory/feedback_x.md",
+        ],
+    )
+    content = inbox._render_page(page, run_id="2026-04-14T12:00:00-run1", auto_promoted=False)
+    assert "stability: stable" in content
+    assert "needs-review" in content  # existing tag, not regressed
+
+
+def test_extracted_page_accepts_stability_field():
+    """ExtractedPage dataclass exposes a stability field with default 'stable'."""
+    page = inbox.ExtractedPage(
+        slug="x",
+        type="feedback",
+        name="X",
+        description="d",
+        body="b",
+        source_files=["bots/a/memory/x.md"],
+        source_hash="sha256:x",
+    )
+    assert page.stability == "stable"
+
+
 def test_apply_v0_2_to_v0_3_migration_legacy_inbox_becomes_auto_promoted(tmp_path):
     # Simulate v0.2 state: single-source page with status=inbox + file in _inbox/
     state = _mkstate(**{

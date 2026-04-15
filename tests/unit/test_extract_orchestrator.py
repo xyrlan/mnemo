@@ -172,6 +172,52 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     assert target.exists()
 
 
+def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault: Path, stub_llm):
+    """v0.3.1: when the LLM emits stability=evolving, the written page keeps it."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                "stability": "evolving",
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists()
+    assert "stability: evolving" in sacred.read_text()
+
+
+def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populated_vault: Path, stub_llm):
+    """v0.3.1: LLM responses without a stability key default to 'stable' — forward compat."""
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "use-yarn",
+                "name": "Use yarn",
+                "description": "d",
+                "type": "feedback",
+                "body": "yarn body",
+                "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
+                # no "stability" field — legacy v0.2/v0.3 schema
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    assert sacred.exists()
+    assert "stability: stable" in sacred.read_text()
+
+
 def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Path, stub_llm):
     """v0.3.1: --force nukes shared/_inbox/<type>/*.md so slug-drift duplicates die."""
     # Seed the inbox with stale slug-drift duplicates from a prior run.

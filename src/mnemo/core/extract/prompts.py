@@ -21,6 +21,13 @@ FEEDBACK_SYSTEM_PROMPT = (
     "duplicates in the sacred directory. Only keep files separate when they "
     "address genuinely distinct rules (different domains, different tools, "
     "unrelated behaviors).\n\n"
+    "Stability field: every emitted page carries `stability` set to either "
+    "\"stable\" or \"evolving\". Emit \"evolving\" only when the source material "
+    "shows hesitation, indecision, or active debate — phrases like 'still "
+    "deciding', 'not sure', 'tried both', 'changing my mind', 'this might be "
+    "wrong', or contradictions between sources. Emit \"stable\" (the default) "
+    "for concluded decisions, settled conventions, and factual rules with no "
+    "hedging. When in doubt, default to stable.\n\n"
     "Output MUST be valid JSON matching the requested schema. Do not add "
     "prose before or after the JSON."
 )
@@ -51,10 +58,15 @@ Required JSON output schema:
       "description": "One-line summary",
       "type": "feedback|user|reference",
       "body": "Markdown body including **Why:** and **How to apply:** sections",
-      "source_files": ["bots/<agent>/memory/<file>.md", ...]
+      "source_files": ["bots/<agent>/memory/<file>.md", ...],
+      "stability": "stable"
     }
   ]
 }
+
+`stability` must be either "stable" (default, concluded decision) or "evolving"
+(source shows indecision / still debating / contradicting itself). Default to
+"stable" when in doubt.
 """
 
 _FEW_SHOT_FEEDBACK = """\
@@ -85,7 +97,7 @@ Do not create git commits unless I explicitly ask.
 [END]
 
 Output (ONE merged page, both files listed in source_files):
-{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"]}]}
+{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"],"stability":"stable"}]}
 
 Example 2 — NEGATIVE: two files about genuinely different rules → DO NOT MERGE.
 (Use yarn and no-commits-without-permission are unrelated rules — different
@@ -113,7 +125,7 @@ Do not run `git commit` without permission.
 [END]
 
 Output (TWO separate pages — these rules DO NOT merge):
-{"pages":[{"slug":"use-yarn","name":"Use yarn for JS/TS","description":"Always use yarn, never npm","type":"feedback","body":"Always use yarn for JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile in this repo.\\n\\n**How to apply:** `yarn add <pkg>` for runtime deps, `yarn add -D <pkg>` for dev deps. Never run `npm install`.","source_files":["bots/agent-a/memory/feedback_use_yarn.md"]},{"slug":"no-autonomous-commits","name":"No autonomous commits","description":"Do not run git commit without explicit permission","type":"feedback","body":"Do not run `git commit` without explicit user permission.\\n\\n**Why:** the user owns their commit history.\\n\\n**How to apply:** edit and stage freely, but stop before committing.","source_files":["bots/agent-b/memory/feedback_no_commits.md"]}]}
+{"pages":[{"slug":"use-yarn","name":"Use yarn for JS/TS","description":"Always use yarn, never npm","type":"feedback","body":"Always use yarn for JS/TS package management.\\n\\n**Why:** yarn.lock is the canonical lockfile in this repo.\\n\\n**How to apply:** `yarn add <pkg>` for runtime deps, `yarn add -D <pkg>` for dev deps. Never run `npm install`.","source_files":["bots/agent-a/memory/feedback_use_yarn.md"],"stability":"stable"},{"slug":"no-autonomous-commits","name":"No autonomous commits","description":"Do not run git commit without explicit permission","type":"feedback","body":"Do not run `git commit` without explicit user permission.\\n\\n**Why:** the user owns their commit history.\\n\\n**How to apply:** edit and stage freely, but stop before committing.","source_files":["bots/agent-b/memory/feedback_no_commits.md"],"stability":"stable"}]}
 
 Example 3 — ONE input file passing through unchanged:
 
@@ -129,7 +141,27 @@ A rule only agent-z has.
 [END]
 
 Output:
-{"pages":[{"slug":"solo-rule","name":"Solo rule","description":"A rule only agent-z has","type":"feedback","body":"A rule only agent-z has.\\n\\n**Why:** agent-z specific.\\n\\n**How to apply:** only in agent-z.","source_files":["bots/agent-z/memory/feedback_solo.md"]}]}
+{"pages":[{"slug":"solo-rule","name":"Solo rule","description":"A rule only agent-z has","type":"feedback","body":"A rule only agent-z has.\\n\\n**Why:** agent-z specific.\\n\\n**How to apply:** only in agent-z.","source_files":["bots/agent-z/memory/feedback_solo.md"],"stability":"stable"}]}
+
+Example 4 — EVOLVING stability marker.
+(Source hedging language — "still deciding", "might change" — triggers
+stability:"evolving". This signals to downstream consumers that the rule is
+tentative and may be rewritten in the near future.)
+
+Input:
+[FILE: bots/agent-q/memory/feedback_zustand_maybe.md]
+---
+name: Maybe Zustand
+type: feedback
+---
+Leaning toward Zustand over Redux for state management, still deciding.
+Tried both this week and might change my mind next sprint.
+**Why:** smaller API surface, but Redux has better devtools.
+**How to apply:** use Zustand for new stores, keep existing Redux slices.
+[END]
+
+Output (stability marked evolving because of "still deciding" / "might change"):
+{"pages":[{"slug":"state-management-zustand-vs-redux","name":"Zustand over Redux (evolving)","description":"Leaning toward Zustand for new state, but still deciding","type":"feedback","body":"Leaning toward Zustand over Redux for new state management.\\n\\n**Why:** smaller API surface than Redux, though Redux has better devtools.\\n\\n**How to apply:** use Zustand for brand-new stores; keep existing Redux slices untouched until the decision settles.","source_files":["bots/agent-q/memory/feedback_zustand_maybe.md"],"stability":"evolving"}]}
 """
 
 _FEW_SHOT_USER = """\

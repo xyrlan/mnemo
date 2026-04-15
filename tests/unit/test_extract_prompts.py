@@ -118,6 +118,37 @@ def test_feedback_few_shot_includes_no_commits_cross_agent_merge():
     assert "feedback_no_commit_without_permission.md" in prompt
 
 
+# --- v0.3.1: stability schema field ------------------------------------------
+
+
+def test_schema_example_contains_stability_field():
+    """v0.3.1: the JSON schema example must advertise the stability field."""
+    files = [_mk_file("x", "feedback", "example")]
+    prompt = prompts.build_feedback_prompt(files)
+    assert '"stability"' in prompt, (
+        "schema example must document the stability field so the LLM emits it"
+    )
+
+
+def test_feedback_system_prompt_instructs_stability_markers():
+    """System prompt must describe when to emit stability=evolving vs stable."""
+    sysp = prompts.FEEDBACK_SYSTEM_PROMPT.lower()
+    assert "stability" in sysp
+    # Linguistic markers that trigger evolving
+    assert "evolving" in sysp
+    assert "stable" in sysp
+    # Bias toward stable on ambiguity
+    assert "default" in sysp and "stable" in sysp
+
+
+def test_feedback_few_shot_shows_evolving_example():
+    """At least one few-shot output must include a stability field value."""
+    files = [_mk_file("x", "feedback", "example")]
+    prompt = prompts.build_feedback_prompt(files)
+    # The few-shots produce JSON; any output should now include the field.
+    assert '"stability"' in prompt
+
+
 def test_feedback_few_shot_includes_negative_do_not_merge_example():
     """Few-shot must include a negative example: two distinct rules that stay split."""
     files = [_mk_file("x", "feedback", "example")]

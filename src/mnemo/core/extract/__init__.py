@@ -76,6 +76,8 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
         src_hash = "sha256:" + hashlib.sha256(
             ("|".join(sorted(source_files)) + "||" + body).encode("utf-8")
         ).hexdigest()
+        stability_raw = str(rp.get("stability") or "stable").strip().lower()
+        stability = stability_raw if stability_raw in ("stable", "evolving") else "stable"
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -84,6 +86,7 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
             body=body,
             source_files=source_files,
             source_hash=src_hash,
+            stability=stability,
         ))
     return out
 
