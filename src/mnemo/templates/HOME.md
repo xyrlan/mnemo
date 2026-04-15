@@ -42,7 +42,8 @@ The LLM consolidates cross-agent memories and session briefings into canonical p
 
 ## Opt-in background features
 
-Both off by default. Flip to `true` in `~/mnemo/mnemo.config.json` when you want them:
+All off by default. Flip to `true` in `~/mnemo/mnemo.config.json` when you want them:
 
 - `extraction.auto.enabled` — run `mnemo extract` automatically at session end, gated on `minNewMemories` (default 1) and `minIntervalMinutes` (default 60).
 - `briefings.enabled` — generate a shift-handoff briefing at every session end. Briefings land in `bots/<agent>/briefings/sessions/<session-id>.md` and are fed back into the next extraction run as dense input.
+- `injection.enabled` — Claude reaches your mnemo brain automatically via MCP at session start (v0.5). Injects a topic list and exposes `list_rules_by_topic` + `read_mnemo_rule` tools so the next session can't fail to know your rules.

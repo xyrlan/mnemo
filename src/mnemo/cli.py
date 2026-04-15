@@ -46,6 +46,9 @@ def _build_parser() -> argparse.ArgumentParser:
     briefing = sub.add_parser("briefing", help=argparse.SUPPRESS)
     briefing.add_argument("jsonl_path", type=str)
     briefing.add_argument("agent", type=str)
+    sub.add_parser("mcp-server", help=argparse.SUPPRESS)
+    sub.add_parser("statusline", help=argparse.SUPPRESS)
+    sub.add_parser("statusline-compose", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     sub.add_parser("help", help="list commands")
@@ -114,6 +117,23 @@ def cmd_init(args: argparse.Namespace) -> int:
     say(f"Injecting hooks into {settings_path}…")
     try:
         inj.inject_hooks(settings_path)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # 5b. Register MCP server in ~/.claude.json (v0.5)
+    claude_json_path = Path(os.path.expanduser("~/.claude.json"))
+    say(f"Registering MCP server in {claude_json_path}…")
+    try:
+        inj.inject_mcp_servers(claude_json_path)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # 5c. Install additive statusLine composer (v0.5)
+    say("Installing statusLine composer (additive — preserves your existing line)…")
+    try:
+        inj.inject_statusline(settings_path, vault_root)
     except inj.SettingsError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -281,15 +301,57 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     auto_ok = _doctor_check_auto_brain(vault)
     legacy_ok = _doctor_check_legacy_wiki_dirs(vault)
+    statusline_ok = _doctor_check_statusline_drift(vault)
 
     if not result.ok:
         print("Issues found above.")
         return 1
-    if not auto_ok or not legacy_ok:
+    if not auto_ok or not legacy_ok or not statusline_ok:
         print("Warnings above.")
     else:
         print("OK")
     return 0
+
+
+def _doctor_check_statusline_drift(vault: Path) -> bool:
+    """v0.5: warn when settings.json statusLine drifted away from our composer.
+
+    Three states:
+    - composer present + state file present → healthy (return True)
+    - state file present but settings.json statusLine is something else → drift
+    - no state file at all → mnemo init never ran or already uninstalled (skip)
+    """
+    import os
+    import json as _json
+
+    state_path = vault / ".mnemo" / "statusline-original.json"
+    if not state_path.exists():
+        return True  # never installed or already uninstalled — nothing to drift from
+
+    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    if not settings_path.exists():
+        print("  ⚠ statusLine state file present but ~/.claude/settings.json is missing")
+        print("       → run `mnemo init` to reinstall, or `mnemo uninstall` to clean up state")
+        return False
+
+    try:
+        data = _json.loads(settings_path.read_text())
+    except (OSError, _json.JSONDecodeError):
+        return True  # other doctor checks will report the malformed file
+
+    current = data.get("statusLine")
+    is_ours = (
+        isinstance(current, dict)
+        and isinstance(current.get("command"), str)
+        and current["command"].strip().endswith("statusline-compose")
+    )
+    if is_ours:
+        return True
+
+    print("  ⚠ statusLine drift: settings.json no longer points at the mnemo composer")
+    print("       → if you edited statusLine manually after `mnemo init`, run")
+    print("         `mnemo init` again to re-wrap, or `mnemo uninstall` to clean up state")
+    return False
 
 
 def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
@@ -496,6 +558,38 @@ def cmd_briefing(args: argparse.Namespace) -> int:
     return 0
 
 
+@command("mcp-server")
+def cmd_mcp_server(_args: argparse.Namespace) -> int:
+    """Hidden stdio entry point — wired in ~/.claude.json under mcpServers.mnemo."""
+    from mnemo.core.mcp import server as mcp_server
+    return mcp_server.serve()
+
+
+@command("statusline")
+def cmd_statusline(_args: argparse.Namespace) -> int:
+    """Hidden: emit the mnemo statusline segment to stdout."""
+    import os
+    from mnemo import statusline as sl
+    from mnemo.core import config as cfg_mod
+    from mnemo.core import paths as paths_mod
+
+    try:
+        cfg = cfg_mod.load_config()
+        vault = paths_mod.vault_root(cfg)
+    except Exception:
+        return 0
+    claude_json = Path(os.path.expanduser("~/.claude.json"))
+    sys.stdout.write(sl.render(vault, claude_json))
+    return 0
+
+
+@command("statusline-compose")
+def cmd_statusline_compose(_args: argparse.Namespace) -> int:
+    """Hidden: composer that runs the user's original statusLine + mnemo's segment."""
+    from mnemo import statusline as sl
+    return sl.compose()
+
+
 @command("uninstall")
 def cmd_uninstall(args: argparse.Namespace) -> int:
     import os
@@ -509,12 +603,16 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             print("Aborted.", file=sys.stderr)
             return 2
     settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+    claude_json_path = Path(os.path.expanduser("~/.claude.json"))
     try:
+        vault = _resolve_vault()
+        inj.uninject_statusline(settings_path, vault)
         inj.uninject_hooks(settings_path)
+        inj.uninject_mcp_servers(claude_json_path)
     except inj.SettingsError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    print("Hooks removed. Vault preserved.")
+    print("Hooks, MCP server, and statusLine removed. Vault preserved.")
     return 0
 
 

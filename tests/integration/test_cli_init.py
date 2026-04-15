@@ -21,6 +21,72 @@ def test_init_yes_creates_vault_and_injects(tmp_home: Path, capsys: pytest.Captu
     assert settings_path.exists()
     data = json.loads(settings_path.read_text())
     assert "SessionStart" in data["hooks"]
+    # v0.5: MCP server registered in ~/.claude.json (separate file from settings.json)
+    claude_json_path = tmp_home / ".claude.json"
+    assert claude_json_path.exists()
+    mcp_data = json.loads(claude_json_path.read_text())
+    assert "mnemo" in mcp_data["mcpServers"]
+    assert mcp_data["mcpServers"]["mnemo"]["args"] == ["-m", "mnemo", "mcp-server"]
+
+
+def test_init_idempotent_for_mcp_server(tmp_home: Path):
+    args = ["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"]
+    assert cli.main(args) == 0
+    assert cli.main(args) == 0
+    mcp_data = json.loads((tmp_home / ".claude.json").read_text())
+    # Still exactly one mnemo entry after two inits
+    assert list(mcp_data["mcpServers"].keys()).count("mnemo") == 1
+
+
+def test_uninstall_removes_mcp_server_entry(tmp_home: Path):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    rc = cli.main(["uninstall", "--yes"])
+    assert rc == 0
+    claude_json_path = tmp_home / ".claude.json"
+    if claude_json_path.exists():
+        data = json.loads(claude_json_path.read_text())
+        # mcpServers either gone entirely or no mnemo entry
+        assert "mnemo" not in data.get("mcpServers", {})
+
+
+def test_init_installs_statusline_composer(tmp_home: Path):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    settings = json.loads((tmp_home / ".claude" / "settings.json").read_text())
+    assert "statusLine" in settings
+    assert settings["statusLine"]["command"].endswith("statusline-compose")
+
+
+def test_init_preserves_user_statusline_via_composer(tmp_home: Path):
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
+    }))
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+
+    # statusLine in settings.json now points at composer
+    data = json.loads(settings_path.read_text())
+    assert data["statusLine"]["command"].endswith("statusline-compose")
+    # Original captured in mnemo state
+    state_path = tmp_home / "vault" / ".mnemo" / "statusline-original.json"
+    state = json.loads(state_path.read_text())
+    assert state["command"] == "/home/user/my-prompt.sh"
+
+
+def test_uninstall_restores_user_statusline(tmp_home: Path):
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
+    }))
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    cli.main(["uninstall", "--yes"])
+
+    data = json.loads(settings_path.read_text())
+    # Original restored
+    assert data["statusLine"]["command"] == "/home/user/my-prompt.sh"
 
 
 def test_init_idempotent(tmp_home: Path):

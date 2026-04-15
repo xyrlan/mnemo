@@ -54,6 +54,55 @@ or diagnose problems with `mnemo doctor`. Your manual edits to auto-promoted
 files are protected by content-addressing: a conflict produces a
 `.proposed.md` sibling in `_inbox/` rather than overwriting your work.
 
+## MCP injection (v0.5)
+
+v0.5 closes the loop: Claude Code itself reaches into your mnemo brain
+without you doing anything. `mnemo init` registers a stdio MCP server in
+`~/.claude.json`. When `injection.enabled=true` is set, every new session
+gets a one-line instruction listing the topics Claude can query plus the
+two tools available — `list_rules_by_topic(topic)` and `read_mnemo_rule(slug)`.
+
+When the current task touches a known topic, Claude pulls the matching rules
+out of `shared/<type>/` via MCP and uses them BEFORE writing code. No vector
+DB, no embeddings, no manual `mnemo context` invocation — the LLM navigates
+your tags as an ontology by zero-shot reasoning.
+
+Opt-in via `~/mnemo/mnemo.config.json`:
+
+```json
+{
+  "injection": {
+    "enabled": true
+  }
+}
+```
+
+Cost is ~120 tokens per session regardless of vault size: the topic list is
+the only thing pre-loaded; rule bodies are fetched on demand. Filter parity
+with the HOME dashboard is enforced by `core/filters.py` so evolving and
+needs-review pages never reach Claude.
+
+### Status line
+
+After `mnemo init`, your Claude Code status line shows whether the brain is
+alive and how often Claude is using it:
+
+```
+mnemo mcp · 9 topics · 7↓ today
+```
+
+- `mnemo mcp` — MCP server is registered in `~/.claude.json`
+- `9 topics` — topic tags currently known in your vault (live count)
+- `7↓ today` — number of times Claude has called a mnemo MCP tool today
+  (resets at midnight)
+
+mnemo's status line is **additive**: if you already had a custom statusLine
+configured in `~/.claude/settings.json`, mnemo wraps it instead of
+overwriting it. Your original output appears first, then ` · `, then
+mnemo's segment. `mnemo uninstall` restores your original cleanly. If you
+manually edit settings.json after `mnemo init`, `mnemo doctor` will warn
+you about the drift.
+
 ## Privacy
 
 100% local. Zero telemetry. Zero network. No third-party packages. Read the [source](src/mnemo).
