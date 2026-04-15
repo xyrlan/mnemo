@@ -49,7 +49,11 @@ def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeyp
             "timestamp": "2026-04-14T10:30:00.000Z",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": "Done — wrote retry.py."}],
+                "content": [
+                    {"type": "text", "text": "Writing retry.py."},
+                    {"type": "tool_use", "name": "Write",
+                     "input": {"file_path": "retry.py", "content": "# ..."}},
+                ],
             },
         },
     ])

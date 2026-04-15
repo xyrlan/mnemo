@@ -218,6 +218,82 @@ def _bodies_similar(a: str, b: str, threshold: float = 0.6) -> bool:
     return len(common) / len(union) >= threshold
 
 
+_STEM_SUFFIXES = (
+    "ations", "ation", "ings", "ing", "ied", "ies", "ers", "ed", "es", "er",
+)
+
+
+def _stem_word(word: str) -> str:
+    """Collapse common English inflections to a shared stem.
+
+    Deliberately simple (no Porter stemmer dependency) — just enough to
+    fold the dogfood collision between ``populate`` and ``populating`` into
+    one canonical form. False merges are caught by the body-similarity
+    check in ``_detect_stem_collision``.
+    """
+    w = word.lower()
+    if len(w) < 4:
+        return w
+    for suf in _STEM_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: -len(suf)]
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 4:
+        return w[:-1]
+    if w.endswith("e") and len(w) > 4:
+        return w[:-1]
+    return w
+
+
+def _stem_slug(slug: str) -> str:
+    return "-".join(_stem_word(tok) for tok in slug.split("-") if tok)
+
+
+def _detect_stem_collision(
+    page: ExtractedPage,
+    state: ExtractionState,
+    vault_root: Path,
+) -> str | None:
+    """Return an existing slug whose stem matches ``page.slug``, or None.
+
+    Second-layer guardrail that catches inflection drift across runs:
+    ``auto-populate-…`` and ``auto-populating-…`` from different source
+    sets should collapse to one canonical page. Unlike
+    ``_detect_drift_slug`` (which requires identical source files), this
+    check relies entirely on slug-stem equality plus body similarity.
+
+    Skips the exact-match case (handled by the normal update flow) and
+    stale state entries whose target files no longer exist on disk.
+    """
+    if not page.slug:
+        return None
+    candidate_stem = _stem_slug(page.slug)
+    if not candidate_stem:
+        return None
+    for key, entry in state.entries.items():
+        if not key.startswith(f"{page.type}/"):
+            continue
+        existing_slug = key.split("/", 1)[1]
+        if existing_slug == page.slug:
+            return None  # exact match — update path will handle it
+        if _stem_slug(existing_slug) != candidate_stem:
+            continue
+        existing_target = vault_root / "shared" / page.type / f"{existing_slug}.md"
+        if not existing_target.exists():
+            existing_target = (
+                vault_root / "shared" / "_inbox" / page.type / f"{existing_slug}.md"
+            )
+            if not existing_target.exists():
+                continue
+        try:
+            existing_text = existing_target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        existing_body = _extract_body(existing_text)
+        if _bodies_similar(page.body, existing_body):
+            return existing_slug
+    return None
+
+
 def _detect_drift_slug(
     page: ExtractedPage,
     state: ExtractionState,
@@ -285,6 +361,10 @@ def apply_pages(
         drift_target = _detect_drift_slug(page, state, vault_root)
         if drift_target is not None:
             page.slug = drift_target
+        else:
+            stem_target = _detect_stem_collision(page, state, vault_root)
+            if stem_target is not None:
+                page.slug = stem_target
 
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
