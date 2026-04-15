@@ -46,6 +46,24 @@ FEEDBACK_SYSTEM_PROMPT = (
     "none of the existing tags fit the rule. Emit 1-3 tags per page; do NOT "
     "emit system markers like 'auto-promoted' or 'needs-review' — those are "
     "managed by the plugin.\n\n"
+    "## Optional activation metadata\n\n"
+    "If — and ONLY if — the rule body quotes a literal command in backticks "
+    "OR names a clearly-regex-able pattern, you MAY emit an `enforce` object "
+    "in the page to declare a hard block at the tool-call boundary. Shape: "
+    "`{\"tool\": \"Bash\", \"deny_pattern\": \"<regex>\", \"reason\": \"<short>\"}` "
+    "or `{\"tool\": \"Bash\", \"deny_command\": [\"<prefix>\"], \"reason\": \"<short>\"}`. "
+    "DO NOT emit `enforce` for advisory, stylistic, or taste-based rules. When "
+    "in doubt, omit — a missing enforce block is always safe; a wrong one "
+    "blocks real work.\n\n"
+    "Separately, if the rule is advisory about code in specific files (e.g. "
+    "\"HeroUI modal pattern\", \"React key remount\"), you MAY emit an "
+    "`activates_on` object listing the tools and file glob patterns where the "
+    "rule becomes relevant. Shape: `{\"tools\": [\"Edit\", \"Write\", \"MultiEdit\"], "
+    "\"path_globs\": [\"<glob1>\", \"<glob2>\"]}`. Use concrete, narrow globs — "
+    "`src/components/modals/**` not `**/*.tsx`. When the rule is about general "
+    "coding style with no natural file boundary (e.g. \"prefer clear names\"), "
+    "omit `activates_on`.\n\n"
+    "Both fields are optional. Most pages should have neither.\n\n"
     "Output MUST be valid JSON matching the requested schema. Do not add "
     "prose before or after the JSON."
 )
@@ -172,10 +190,15 @@ Required JSON output schema:
       "body": "Markdown body including **Why:** and **How to apply:** sections",
       "source_files": ["bots/<agent>/memory/<file>.md", ...],
       "stability": "stable",
-      "tags": ["topic1", "topic2"]
+      "tags": ["topic1", "topic2"],
+      "enforce": {"tool": "Bash", "deny_pattern": "...", "reason": "..."} | null,
+      "activates_on": {"tools": ["Edit"], "path_globs": ["..."]} | null
     }
   ]
 }
+
+`enforce` and `activates_on` are OPTIONAL. Omit them (or emit null) for any
+rule that doesn't cleanly fit the shapes documented in the system prompt.
 
 `stability` must be either "stable" (default, concluded decision) or "evolving"
 (source shows indecision / still debating / contradicting itself). Default to
@@ -281,6 +304,64 @@ Tried both this week and might change my mind next sprint.
 
 Output (stability marked evolving because of "still deciding" / "might change"):
 {"pages":[{"slug":"state-management-zustand-vs-redux","name":"Zustand over Redux (evolving)","description":"Leaning toward Zustand for new state, but still deciding","type":"feedback","body":"Leaning toward Zustand over Redux for new state management.\\n\\n**Why:** smaller API surface than Redux, though Redux has better devtools.\\n\\n**How to apply:** use Zustand for brand-new stores; keep existing Redux slices untouched until the decision settles.","source_files":["bots/agent-q/memory/feedback_zustand_maybe.md"],"stability":"evolving"}]}
+
+Example 5 — POSITIVE enforce: rule quotes a literal bash command → emit enforce.
+(A rule that says "never add Co-Authored-By trailers" is exactly the shape
+that earns an enforce block: the bad behavior maps to a concrete bash pattern
+we can block at the tool-call boundary. NO activates_on — the rule is not
+scoped to any particular file.)
+
+Input:
+[FILE: bots/agent-c/memory/feedback_no_coauthored.md]
+---
+name: No Co-Authored-By
+type: feedback
+---
+Never add Co-Authored-By trailers in git commits.
+**Why:** the user owns attribution on their commits.
+**How to apply:** write commit messages without any `Co-Authored-By:` lines.
+[END]
+
+Output:
+{"pages":[{"slug":"no-co-authored-by-trailers","name":"No Co-Authored-By trailers","description":"Never add Co-Authored-By trailers to git commits","type":"feedback","body":"Never add `Co-Authored-By:` trailers to git commits.\\n\\n**Why:** the user owns attribution on their own commits.\\n\\n**How to apply:** when running `git commit`, never include a `Co-Authored-By:` line in the message body.","source_files":["bots/agent-c/memory/feedback_no_coauthored.md"],"stability":"stable","tags":["git","workflow"],"enforce":{"tool":"Bash","deny_pattern":"git commit.*Co-Authored-By","reason":"No Co-Authored-By trailers in commits"},"activates_on":null}]}
+
+Example 6 — POSITIVE activates_on: rule about code in specific files → emit activates_on.
+(A rule like "HeroUI v3 uses the Drawer slot pattern for modals" is advisory
+about a concrete set of files. We emit activates_on with narrow globs so the
+hook fires only when the agent is editing modal components. NO enforce —
+this is a coding-style hint, not a hard block.)
+
+Input:
+[FILE: bots/agent-d/memory/briefings/sessions/2026-04-10_heroui.md]
+---
+type: briefing
+---
+## Decisions made
+- HeroUI v3 uses the Drawer slot pattern for modals, NOT the old Modal component.
+  **Why:** the Modal component was removed in v3; Drawer with `placement="center"` replaces it.
+[END]
+
+Output:
+{"pages":[{"slug":"heroui-v3-drawer-modal-pattern","name":"HeroUI v3 Drawer modal pattern","description":"Use Drawer slot with placement=center for modals in HeroUI v3","type":"feedback","body":"In HeroUI v3 use the Drawer slot pattern for modals instead of the old Modal component.\\n\\n**Why:** the Modal component was removed in v3; Drawer with `placement=\\"center\\"` replaces it.\\n\\n**How to apply:** when building a modal, import Drawer from @heroui/react and set `placement=\\"center\\"`; never reach for a Modal component.","source_files":["bots/agent-d/memory/briefings/sessions/2026-04-10_heroui.md"],"stability":"stable","tags":["heroui","ui"],"enforce":null,"activates_on":{"tools":["Edit","Write","MultiEdit"],"path_globs":["**/components/modals/**","**/*modal*.tsx"]}}]}
+
+Example 7 — NEGATIVE: stylistic rule with no file boundary → BOTH fields null.
+("Prefer descriptive variable names" is exactly the "when in doubt, omit"
+case. No literal command to block, no natural file boundary. Emit enforce:null
+and activates_on:null — advisory rules like this should NOT activate hooks.)
+
+Input:
+[FILE: bots/agent-e/memory/feedback_clear_names.md]
+---
+name: Clear variable names
+type: feedback
+---
+Prefer descriptive variable names over short cryptic ones.
+**Why:** readability beats keystrokes saved.
+**How to apply:** pick names that spell out the domain concept.
+[END]
+
+Output:
+{"pages":[{"slug":"descriptive-variable-names","name":"Descriptive variable names","description":"Prefer descriptive names over short cryptic ones","type":"feedback","body":"Prefer descriptive variable names over short cryptic abbreviations.\\n\\n**Why:** readability beats the keystrokes saved; future readers (including you) pay the cost of cryptic names.\\n\\n**How to apply:** pick names that spell out the domain concept instead of abbreviating.","source_files":["bots/agent-e/memory/feedback_clear_names.md"],"stability":"stable","tags":["code-style"],"enforce":null,"activates_on":null}]}
 """
 
 _FEW_SHOT_USER = """\

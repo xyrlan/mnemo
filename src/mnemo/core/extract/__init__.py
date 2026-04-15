@@ -46,6 +46,84 @@ def _sanitize_llm_tags(raw: object) -> list[str]:
     return out
 
 
+def _sanitize_llm_enforce(raw: object) -> dict | None:
+    """Normalize an LLM-emitted ``enforce`` block into a serializable dict.
+
+    Shape:
+        {"tool": "Bash", "deny_pattern"|"deny_patterns"|"deny_command"|"deny_commands": ..., "reason": "..."}
+
+    We keep the sanitizer deliberately lax — full validation lives in
+    rule_activation.parse_enforce_block which runs at index-build time. Here
+    we only normalize enough to survive the round-trip to disk: strings,
+    lists-of-strings, and the required keys. Anything weird is silently
+    dropped (returning None) so a malformed LLM emission can't break the
+    extraction pipeline.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None
+    tool = raw.get("tool")
+    if not isinstance(tool, str) or not tool:
+        return None
+    out: dict = {"tool": tool}
+
+    def _coerce_str_list(value: object) -> list[str] | None:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            cleaned = [v for v in value if isinstance(v, str) and v]
+            return cleaned or None
+        return None
+
+    patterns = _coerce_str_list(raw.get("deny_pattern") or raw.get("deny_patterns"))
+    if patterns:
+        # Emit as deny_pattern (singular) when exactly one, else deny_patterns
+        # list — keeps the frontmatter readable for the common case while
+        # still round-tripping multiple values.
+        if len(patterns) == 1:
+            out["deny_pattern"] = patterns[0]
+        else:
+            out["deny_patterns"] = patterns
+    commands = _coerce_str_list(raw.get("deny_command") or raw.get("deny_commands"))
+    if commands:
+        if len(commands) == 1:
+            out["deny_command"] = commands[0]
+        else:
+            out["deny_commands"] = commands
+    if "deny_pattern" not in out and "deny_patterns" not in out and \
+       "deny_command" not in out and "deny_commands" not in out:
+        return None
+    reason = raw.get("reason")
+    if isinstance(reason, str) and reason:
+        out["reason"] = reason
+    else:
+        return None
+    return out
+
+
+def _sanitize_llm_activates_on(raw: object) -> dict | None:
+    """Normalize an LLM-emitted ``activates_on`` block.
+
+    Shape: ``{"tools": [...], "path_globs": [...]}``. Both must be non-empty
+    lists of strings; otherwise return None and let the rule pass through
+    without activation metadata.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None
+    tools_raw = raw.get("tools")
+    if not isinstance(tools_raw, list):
+        return None
+    tools = [t for t in tools_raw if isinstance(t, str) and t]
+    if not tools:
+        return None
+    globs_raw = raw.get("path_globs")
+    if not isinstance(globs_raw, list):
+        return None
+    globs = [g for g in globs_raw if isinstance(g, str) and g]
+    if not globs:
+        return None
+    return {"tools": tools, "path_globs": globs}
+
+
 @dataclass
 class ExtractionSummary:
     projects_promoted: int = 0
@@ -110,6 +188,8 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
         stability_raw = str(rp.get("stability") or "stable").strip().lower()
         stability = stability_raw if stability_raw in ("stable", "evolving") else "stable"
         tags = _sanitize_llm_tags(rp.get("tags"))
+        enforce = _sanitize_llm_enforce(rp.get("enforce"))
+        activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -120,6 +200,8 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
             source_hash=src_hash,
             stability=stability,
             tags=tags,
+            enforce=enforce,
+            activates_on=activates_on,
         ))
     return out
 
@@ -404,6 +486,16 @@ def run_extraction(
             except OSError as exc:
                 # Dashboard failures must never abort extraction — log and keep going.
                 errors.log_error(vault_root, "extract.dashboard", exc)
+            # Rebuild the rule-activation index so the PreToolUse hook sees
+            # any newly-emitted enforce / activates_on blocks on the next
+            # tool call. Never raises — extraction always moves on.
+            try:
+                from mnemo.core import rule_activation
+                rule_activation.write_index(
+                    vault_root, rule_activation.build_index(vault_root)
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-open by design
+                errors.log_error(vault_root, "extract.rule_activation_index", exc)
 
         summary.wall_time_s = time.monotonic() - start
 

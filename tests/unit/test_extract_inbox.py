@@ -296,6 +296,96 @@ def test_load_state_corrupt_backs_up_and_returns_empty(tmp_vault: Path):
     assert len(backups) == 1
 
 
+def test_extracted_page_roundtrip_preserves_activation_fields(tmp_vault: Path):
+    """A page rendered with enforce + activates_on must parse back cleanly
+    through filters.parse_frontmatter — this is the Task 1 ↔ Task 5 contract."""
+    from mnemo.core.filters import parse_frontmatter
+
+    state = _empty_state()
+    page = inbox.ExtractedPage(
+        slug="no-coauthored",
+        type="feedback",
+        name="No Co-Authored-By trailers",
+        description="Never add Co-Authored-By trailers to commits",
+        body="rule body",
+        source_files=["bots/agent-c/memory/feedback_no_coauthored.md"],
+        source_hash=_hash("x"),
+        stability="stable",
+        tags=["git", "workflow"],
+        enforce={
+            "tool": "Bash",
+            "deny_pattern": "git commit.*Co-Authored-By",
+            "reason": "No Co-Authored-By trailers in commits",
+        },
+        activates_on={
+            "tools": ["Edit", "Write", "MultiEdit"],
+            "path_globs": [
+                "**/components/modals/**",
+                "**/*modal*.tsx",
+            ],
+        },
+    )
+    inbox.apply_pages([page], state, tmp_vault)
+    # Single-source → auto-promoted to shared/feedback/
+    target = tmp_vault / "shared" / "feedback" / "no-coauthored.md"
+    assert target.exists(), "single-source page must auto-promote"
+
+    text = target.read_text()
+    fm = parse_frontmatter(text)
+
+    assert isinstance(fm.get("enforce"), dict), fm
+    assert fm["enforce"]["tool"] == "Bash"
+    assert fm["enforce"]["deny_pattern"] == "git commit.*Co-Authored-By"
+    assert fm["enforce"]["reason"] == "No Co-Authored-By trailers in commits"
+
+    assert isinstance(fm.get("activates_on"), dict)
+    assert fm["activates_on"]["tools"] == ["Edit", "Write", "MultiEdit"]
+    assert fm["activates_on"]["path_globs"] == [
+        "**/components/modals/**",
+        "**/*modal*.tsx",
+    ]
+
+
+def test_extracted_page_without_activation_fields_omits_blocks(tmp_vault: Path):
+    """A page without enforce/activates_on must not leak empty blocks into
+    the frontmatter."""
+    state = _empty_state()
+    page = _page("use-yarn")  # 2 sources, no activation fields
+    inbox.apply_pages([page], state, tmp_vault)
+    target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
+    text = target.read_text()
+    assert "\nenforce:" not in text
+    assert "\nactivates_on:" not in text
+
+
+def test_extracted_page_enforce_with_multiple_patterns_uses_block_list(tmp_vault: Path):
+    """Multiple deny_patterns must survive the round-trip via block list."""
+    from mnemo.core.filters import parse_frontmatter
+
+    state = _empty_state()
+    page = inbox.ExtractedPage(
+        slug="multi-deny",
+        type="feedback",
+        name="Multi deny",
+        description="multi",
+        body="b",
+        source_files=["bots/agent-x/memory/feedback_multi.md"],
+        source_hash=_hash("m"),
+        enforce={
+            "tool": "Bash",
+            "deny_patterns": ["git push.*--force", "rm -rf /"],
+            "reason": "dangerous ops",
+        },
+    )
+    inbox.apply_pages([page], state, tmp_vault)
+    target = tmp_vault / "shared" / "feedback" / "multi-deny.md"
+    fm = parse_frontmatter(target.read_text())
+    assert isinstance(fm.get("enforce"), dict)
+    assert fm["enforce"]["tool"] == "Bash"
+    assert fm["enforce"]["deny_patterns"] == ["git push.*--force", "rm -rf /"]
+    assert fm["enforce"]["reason"] == "dangerous ops"
+
+
 def test_load_state_unknown_schema_version_raises(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "extraction-state.json"
     path.parent.mkdir(parents=True)

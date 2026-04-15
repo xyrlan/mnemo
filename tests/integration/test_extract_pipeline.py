@@ -130,6 +130,87 @@ def test_dry_run_zero_writes(populated_vault, stub_llm_integration):
     assert not (populated_vault / ".mnemo" / "extraction-state.json").exists()
 
 
+def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_integration):
+    """Full pipeline: LLM emits enforce + activates_on, the extract pipeline
+    persists them into frontmatter, and the rule_activation index on disk
+    reflects both.
+    """
+    from mnemo.core import rule_activation
+
+    stub_llm_integration([
+        _resp([
+            # Single-source page → auto-promoted to shared/feedback/ so it
+            # passes is_consumer_visible and ends up in the index.
+            {
+                "slug": "no-coauthored",
+                "name": "No Co-Authored-By trailers",
+                "description": "never add Co-Authored-By trailers",
+                "type": "feedback",
+                "body": "rule body",
+                "source_files": [
+                    "bots/agent-a/memory/feedback_use_yarn.md",
+                ],
+                "stability": "stable",
+                "tags": ["git"],
+                "enforce": {
+                    "tool": "Bash",
+                    "deny_pattern": "git commit.*Co-Authored-By",
+                    "reason": "No Co-Authored-By trailers in commits",
+                },
+            },
+            {
+                "slug": "heroui-drawer",
+                "name": "HeroUI Drawer modal pattern",
+                "description": "use Drawer for modals",
+                "type": "feedback",
+                "body": "HeroUI v3 drawer pattern",
+                "source_files": [
+                    "bots/agent-b/memory/feedback_no_commits.md",
+                ],
+                "stability": "stable",
+                "tags": ["heroui"],
+                "activates_on": {
+                    "tools": ["Edit", "Write", "MultiEdit"],
+                    "path_globs": [
+                        "**/components/modals/**",
+                        "**/*modal*.tsx",
+                    ],
+                },
+            },
+        ]),
+    ])
+
+    summary = run_extraction(_cfg(populated_vault))
+    assert summary.failed_chunks == 0
+
+    index_path = populated_vault / ".mnemo" / "rule-activation-index.json"
+    assert index_path.exists(), "extraction must rebuild the rule-activation index"
+
+    index = rule_activation.load_index(populated_vault)
+    assert index is not None, "index must load cleanly"
+    assert index.get("malformed") == []
+
+    enforce_by_project = index.get("enforce_by_project") or {}
+    assert "agent-a" in enforce_by_project, enforce_by_project
+    enforce_entries = enforce_by_project["agent-a"]
+    assert any(
+        e.get("tool") == "Bash"
+        and "git commit.*Co-Authored-By" in (e.get("deny_patterns") or [])
+        and "Co-Authored-By" in e.get("reason", "")
+        for e in enforce_entries
+    ), enforce_entries
+
+    enrich_by_project = index.get("enrich_by_project") or {}
+    assert "agent-b" in enrich_by_project, enrich_by_project
+    enrich_entries = enrich_by_project["agent-b"]
+    assert any(
+        "Edit" in r.get("tools", [])
+        and "**/components/modals/**" in r.get("path_globs", [])
+        and "**/*modal*.tsx" in r.get("path_globs", [])
+        for r in enrich_entries
+    ), enrich_entries
+
+
 def test_conflict_flow_sibling_bounced(populated_vault, stub_llm_integration):
     # Single-source page is auto-promoted to shared/feedback/; when user edits
     # the sacred file and source changes, v0.3 writes a .proposed.md sibling
