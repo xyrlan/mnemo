@@ -92,6 +92,30 @@ def _read_memory_file(path: Path, agent: str) -> MemoryFile:
     )
 
 
+def _read_briefing_file(path: Path, agent: str) -> MemoryFile:
+    """Read a briefing file and route it through the feedback cluster.
+
+    Briefings carry `type: briefing` in their frontmatter, but v0.3.1 routes
+    them through the existing feedback extraction path so their Decisions
+    made / Dead ends sections get mined into Tier 2 pages. The slug is the
+    session id (the filename stem) so multiple briefings do not collide.
+    """
+    raw = path.read_bytes()
+    source_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    text = raw.decode("utf-8", errors="replace")
+    fm, body = _parse_frontmatter(text)
+    slug = _normalize_slug(f"briefing-{path.stem}")
+    return MemoryFile(
+        path=path,
+        agent=agent,
+        type="feedback",
+        slug=slug,
+        frontmatter=fm,
+        body=body,
+        source_hash=source_hash,
+    )
+
+
 def scan(vault_root: Path, state: ExtractionState) -> ScanResult:
     by_type: dict[str, list[MemoryFile]] = {t: [] for t in _VALID_TYPES}
 
@@ -101,16 +125,24 @@ def scan(vault_root: Path, state: ExtractionState) -> ScanResult:
             if not agent_dir.is_dir():
                 continue
             memory_dir = agent_dir / "memory"
-            if not memory_dir.is_dir():
-                continue
-            for md in sorted(memory_dir.glob("*.md")):
-                if md.name == "MEMORY.md":
-                    continue
-                try:
-                    mf = _read_memory_file(md, agent=agent_dir.name)
-                except OSError:
-                    continue
-                by_type[mf.type].append(mf)
+            if memory_dir.is_dir():
+                for md in sorted(memory_dir.glob("*.md")):
+                    if md.name == "MEMORY.md":
+                        continue
+                    try:
+                        mf = _read_memory_file(md, agent=agent_dir.name)
+                    except OSError:
+                        continue
+                    by_type[mf.type].append(mf)
+
+            briefings_dir = agent_dir / "briefings" / "sessions"
+            if briefings_dir.is_dir():
+                for md in sorted(briefings_dir.glob("*.md")):
+                    try:
+                        mf = _read_briefing_file(md, agent=agent_dir.name)
+                    except OSError:
+                        continue
+                    by_type["feedback"].append(mf)
 
     dirty: list[MemoryFile] = []
     unchanged: set[str] = set()
