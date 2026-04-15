@@ -26,9 +26,8 @@ def test_scaffold_creates_full_tree(tmp_path: Path):
     assert (vault / "shared" / "people").is_dir()
     assert (vault / "shared" / "companies").is_dir()
     assert (vault / "shared" / "decisions").is_dir()
-    # Tier 3
-    assert (vault / "wiki" / "sources").is_dir()
-    assert (vault / "wiki" / "compiled").is_dir()
+    # v0.4: wiki/ is dead — the dashboard lives inside HOME.md instead.
+    assert not (vault / "wiki").exists()
 
 
 def test_scaffold_does_not_create_stale_plural_projects_dir(tmp_path: Path):
@@ -57,6 +56,30 @@ def test_home_template_describes_auto_populated_types(tmp_path: Path):
     assert "[[shared/projects]]" not in home, (
         "HOME.md still points to the legacy empty shared/projects/ dir"
     )
+
+
+def test_home_template_ships_dashboard_block_skeleton(tmp_path: Path):
+    """v0.4: fresh HOME.md must contain the managed dashboard block delimiters
+    so the first `mnemo extract` run can upsert content into them."""
+    from mnemo.core.dashboard import BLOCK_BEGIN, BLOCK_END
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    home = (vault / "HOME.md").read_text(encoding="utf-8")
+    assert BLOCK_BEGIN in home
+    assert BLOCK_END in home
+    # Block sits at the top of the file (after frontmatter), before user content
+    assert home.find(BLOCK_BEGIN) < home.find("# 🧠 Welcome")
+
+
+def test_home_template_no_longer_references_wiki_dirs(tmp_path: Path):
+    """v0.4 kills wiki/sources and wiki/compiled — HOME must not mention them."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    home = (vault / "HOME.md").read_text(encoding="utf-8")
+    assert "wiki/sources" not in home
+    assert "wiki/compiled" not in home
+    assert "/mnemo promote" not in home
+    assert "/mnemo compile" not in home
 
 
 def test_home_template_mentions_v0_3_1_briefings_and_flags(tmp_path: Path):

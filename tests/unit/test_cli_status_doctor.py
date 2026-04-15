@@ -41,6 +41,26 @@ def test_doctor_runs_preflight_and_reports(tmp_home: Path, capsys: pytest.Captur
     assert "preflight" in out.lower() or "diagnostic" in out.lower()
 
 
+def test_doctor_warns_about_legacy_wiki_dirs(tmp_home: Path, capsys: pytest.CaptureFixture):
+    """v0.4: doctor flags wiki/sources/ and wiki/compiled/ as orphaned v0.3 fossils."""
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    vault = tmp_home / "v"
+    (vault / "wiki" / "sources").mkdir(parents=True)
+    (vault / "wiki" / "compiled").mkdir()
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "legacy" in out.lower()
+    assert "wiki/sources" in out
+    assert "wiki/compiled" in out
+
+
+def test_doctor_silent_when_no_legacy_wiki_dirs(tmp_home: Path, capsys: pytest.CaptureFixture):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Legacy v0.3" not in out
+
+
 def test_fix_resets_breaker(tmp_home: Path, capsys: pytest.CaptureFixture):
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
     vault = tmp_home / "v"

@@ -168,3 +168,123 @@ def test_feedback_few_shot_includes_negative_do_not_merge_example():
         "few-shot should show at least 3 slugs across examples "
         "(positive merge + negative 2-page + passthrough)"
     )
+
+
+# --- v0.4: dimensional tags -------------------------------------------------
+
+
+def test_schema_example_contains_tags_field():
+    files = [_mk_file("a", "feedback", "x")]
+    prompt = prompts.build_feedback_prompt(files)
+    assert '"tags":' in prompt
+
+
+def test_feedback_system_prompt_teaches_controlled_vocabulary():
+    sp = prompts.FEEDBACK_SYSTEM_PROMPT
+    lowered = sp.lower()
+    assert "tags" in lowered
+    assert "existing vault tags" in lowered
+    assert "kebab-case" in lowered
+    assert "auto-promoted" in lowered  # warning not to emit system marker
+    assert "needs-review" in lowered
+
+
+def test_user_and_reference_system_prompts_mention_tags():
+    assert "tags" in prompts.USER_SYSTEM_PROMPT.lower()
+    assert "tags" in prompts.REFERENCE_SYSTEM_PROMPT.lower()
+
+
+def test_builder_without_vault_root_omits_existing_tags_fragment():
+    files = [_mk_file("a", "feedback", "x")]
+    prompt = prompts.build_feedback_prompt(files)
+    # The schema example mentions "Existing vault tags" as instructional prose,
+    # but the scoped injection header "Existing vault tags for feedback:" must
+    # NOT appear unless a vault_root was supplied.
+    assert "Existing vault tags for feedback" not in prompt
+
+
+def test_builder_with_empty_vault_injects_none_yet_fragment(tmp_path):
+    files = [_mk_file("a", "feedback", "x")]
+    prompt = prompts.build_feedback_prompt(files, vault_root=tmp_path)
+    assert "Existing vault tags for feedback" in prompt
+    assert "(none yet" in prompt
+
+
+def test_builder_with_populated_vault_injects_existing_tags(tmp_path):
+    # Seed a real shared/feedback/ page with topic tags
+    feedback_dir = tmp_path / "shared" / "feedback"
+    feedback_dir.mkdir(parents=True)
+    (feedback_dir / "use-yarn.md").write_text(
+        "---\n"
+        "name: Use yarn\n"
+        "description: d\n"
+        "type: feedback\n"
+        "stability: stable\n"
+        "sources:\n"
+        "  - bots/a/memory/x.md\n"
+        "tags:\n"
+        "  - auto-promoted\n"
+        "  - package-management\n"
+        "  - workflow\n"
+        "---\n"
+        "body\n"
+    )
+    files = [_mk_file("a", "feedback", "x")]
+    prompt = prompts.build_feedback_prompt(files, vault_root=tmp_path)
+    assert "Existing vault tags for feedback" in prompt
+    assert "package-management" in prompt
+    assert "workflow" in prompt
+    # System marker must NOT leak into the hint
+    assert "auto-promoted" not in prompt.split("Existing vault tags")[1].split("\n\n")[0]
+
+
+def test_builder_vault_scope_is_per_type(tmp_path):
+    """Feedback builder should NOT see user-type tags and vice versa."""
+    (tmp_path / "shared" / "feedback").mkdir(parents=True)
+    (tmp_path / "shared" / "user").mkdir(parents=True)
+    (tmp_path / "shared" / "feedback" / "a.md").write_text(
+        "---\nname: a\ntags:\n  - auto-promoted\n  - feedback-only-tag\n---\nbody\n"
+    )
+    (tmp_path / "shared" / "user" / "b.md").write_text(
+        "---\nname: b\ntags:\n  - auto-promoted\n  - user-only-tag\n---\nbody\n"
+    )
+    files_fb = [_mk_file("a", "feedback", "x")]
+    files_usr = [_mk_file("a", "user", "y")]
+
+    fb_prompt = prompts.build_feedback_prompt(files_fb, vault_root=tmp_path)
+    usr_prompt = prompts.build_user_prompt(files_usr, vault_root=tmp_path)
+
+    fb_hint = fb_prompt.split("Existing vault tags")[1].split("\n\n")[0]
+    usr_hint = usr_prompt.split("Existing vault tags")[1].split("\n\n")[0]
+
+    assert "feedback-only-tag" in fb_hint
+    assert "user-only-tag" not in fb_hint
+    assert "user-only-tag" in usr_hint
+    assert "feedback-only-tag" not in usr_hint
+
+
+def test_collect_existing_tags_ignores_inbox(tmp_path):
+    """Drafts under _inbox/ must not leak into the controlled vocabulary."""
+    from mnemo.core.filters import collect_existing_tags
+    (tmp_path / "shared" / "feedback").mkdir(parents=True)
+    (tmp_path / "shared" / "_inbox" / "feedback").mkdir(parents=True)
+    (tmp_path / "shared" / "feedback" / "visible.md").write_text(
+        "---\nname: v\ntags:\n  - auto-promoted\n  - real-topic\n---\nbody\n"
+    )
+    (tmp_path / "shared" / "_inbox" / "feedback" / "draft.md").write_text(
+        "---\nname: d\ntags:\n  - needs-review\n  - draft-only-topic\n---\nbody\n"
+    )
+    tags = collect_existing_tags(tmp_path, "feedback")
+    assert "real-topic" in tags
+    assert "draft-only-topic" not in tags
+    assert "auto-promoted" not in tags
+    assert "needs-review" not in tags
+
+
+def test_collect_existing_tags_returns_sorted_unique():
+    from mnemo.core.filters import collect_existing_tags
+    # Use a tmp path via pytest fixture would be cleaner but this smoke check
+    # hits the empty-dir branch explicitly.
+    from pathlib import Path as _P
+    nonexistent = _P("/tmp/__mnemo_nonexistent_vault_for_test__")
+    assert collect_existing_tags(nonexistent, "feedback") == []

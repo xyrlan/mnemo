@@ -18,8 +18,6 @@ DIRS = [
     "shared/people",
     "shared/companies",
     "shared/decisions",
-    "wiki/sources",
-    "wiki/compiled",
     ".obsidian/snippets",
 ]
 

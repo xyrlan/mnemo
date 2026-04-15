@@ -1,6 +1,6 @@
 {
   "name": "mnemo",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "The Obsidian that populates itself so your Claude never forgets.",
   "author": "xyrlan",
   "license": "MIT",
@@ -10,8 +10,6 @@
     { "name": "status",    "description": "vault state + hook health", "command": "python3 -m mnemo status" },
     { "name": "doctor",    "description": "full diagnostic", "command": "python3 -m mnemo doctor" },
     { "name": "open",      "description": "open vault in Obsidian", "command": "python3 -m mnemo open" },
-    { "name": "promote",   "description": "promote a note to wiki/sources", "command": "python3 -m mnemo promote" },
-    { "name": "compile",   "description": "regenerate wiki/compiled", "command": "python3 -m mnemo compile" },
     { "name": "fix",       "description": "reset circuit breaker", "command": "python3 -m mnemo fix" },
     { "name": "uninstall", "description": "remove hooks (keeps vault)", "command": "python3 -m mnemo uninstall" },
     { "name": "help",      "description": "list commands", "command": "python3 -m mnemo help" }

@@ -1,9 +1,11 @@
 """Prompt builders for v0.2 extraction — one per cluster type."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterator
 
 from mnemo.core.extract.scanner import MemoryFile
+from mnemo.core.filters import collect_existing_tags
 
 # --- System prompts ---------------------------------------------------------
 
@@ -35,22 +37,40 @@ FEEDBACK_SYSTEM_PROMPT = (
     "wrong', or contradictions between sources. Emit \"stable\" (the default) "
     "for concluded decisions, settled conventions, and factual rules with no "
     "hedging. When in doubt, default to stable.\n\n"
+    "Tags field: every emitted page carries `tags`, a list of short kebab-case "
+    "topic identifiers (e.g. `[\"git\", \"workflow\"]`, `[\"react\", \"ui\"]`, "
+    "`[\"auth\", \"oauth2\"]`). Tags are the ontology a downstream consumer uses "
+    "to navigate the vault — cleaner vocabulary is better than more vocabulary. "
+    "The user message includes an 'Existing vault tags' list — PREFER reusing "
+    "those exact strings over inventing new ones; only invent a new tag when "
+    "none of the existing tags fit the rule. Emit 1-3 tags per page; do NOT "
+    "emit system markers like 'auto-promoted' or 'needs-review' — those are "
+    "managed by the plugin.\n\n"
     "Output MUST be valid JSON matching the requested schema. Do not add "
     "prose before or after the JSON."
+)
+
+_TAGS_GUIDANCE_SHORT = (
+    " Each page also carries `tags`, a list of 1-3 short kebab-case topic "
+    "identifiers. The user message includes an 'Existing vault tags' list — "
+    "prefer reusing those exact strings; only invent new tags when none fit. "
+    "Do not emit system markers like 'auto-promoted' or 'needs-review'."
 )
 
 USER_SYSTEM_PROMPT = (
     "You are consolidating user-profile memories across multiple Claude Code "
     "agents into canonical pages. Group files that describe the SAME trait or "
     "role. Produce one page per trait cluster. Preserve the 'Why' / 'How to "
-    "apply' structure. Output MUST be valid JSON matching the requested schema."
+    "apply' structure." + _TAGS_GUIDANCE_SHORT + " Output MUST be valid JSON "
+    "matching the requested schema."
 )
 
 REFERENCE_SYSTEM_PROMPT = (
     "You are consolidating reference memories (pointers to external systems "
     "like Linear, Grafana, Notion) across agents into canonical pages. Group "
     "files that point to the SAME external resource. Produce one page per "
-    "resource cluster. Output MUST be valid JSON matching the requested schema."
+    "resource cluster." + _TAGS_GUIDANCE_SHORT + " Output MUST be valid JSON "
+    "matching the requested schema."
 )
 
 BRIEFING_SYSTEM_PROMPT = (
@@ -151,7 +171,8 @@ Required JSON output schema:
       "type": "feedback|user|reference",
       "body": "Markdown body including **Why:** and **How to apply:** sections",
       "source_files": ["bots/<agent>/memory/<file>.md", ...],
-      "stability": "stable"
+      "stability": "stable",
+      "tags": ["topic1", "topic2"]
     }
   ]
 }
@@ -159,6 +180,12 @@ Required JSON output schema:
 `stability` must be either "stable" (default, concluded decision) or "evolving"
 (source shows indecision / still debating / contradicting itself). Default to
 "stable" when in doubt.
+
+`tags` is a list of 1-3 short kebab-case topic identifiers (e.g. "git",
+"workflow", "react", "auth"). Prefer tags from the "Existing vault tags" list
+in the user message; only invent a new tag when none of the existing ones fit.
+Never emit "auto-promoted" or "needs-review" — those are system markers the
+plugin manages.
 """
 
 _FEW_SHOT_FEEDBACK = """\
@@ -319,10 +346,38 @@ def _render_files(files: list[MemoryFile]) -> str:
 # --- Builders ---------------------------------------------------------------
 
 
-def build_feedback_prompt(files: list[MemoryFile]) -> str:
+def _existing_tags_fragment(vault_root: Path | None, page_type: str) -> str:
+    """Render the controlled-vocabulary hint shown in the user message.
+
+    Per-page-type scope: feedback prompts see only tags from
+    ``shared/feedback/``, etc. Keeps vocab domains separate (v0.4 decision).
+    Returns an empty string when no vault_root is provided or no tags exist
+    yet (fresh vault), so prompts stay valid in test fixtures and first runs.
+    """
+    if vault_root is None:
+        return ""
+    existing = collect_existing_tags(vault_root, page_type)
+    if not existing:
+        return (
+            f"Existing vault tags for {page_type}: (none yet — this is an "
+            f"early extraction; invent clean kebab-case topics like "
+            f"\"git\", \"workflow\", \"auth\").\n\n"
+        )
+    return (
+        f"Existing vault tags for {page_type}: {existing}. Prefer reusing "
+        f"these exact strings; only invent a new tag when none of the above fit.\n\n"
+    )
+
+
+def build_feedback_prompt(
+    files: list[MemoryFile],
+    *,
+    vault_root: Path | None = None,
+) -> str:
     return (
         "Task: consolidate these FEEDBACK memory files into canonical Tier 2 "
         "pages. Cluster files that express the same conceptual rule.\n\n"
+        f"{_existing_tags_fragment(vault_root, 'feedback')}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{_FEW_SHOT_FEEDBACK}\n"
         "Now consolidate these input files:\n\n"
@@ -331,10 +386,15 @@ def build_feedback_prompt(files: list[MemoryFile]) -> str:
     )
 
 
-def build_user_prompt(files: list[MemoryFile]) -> str:
+def build_user_prompt(
+    files: list[MemoryFile],
+    *,
+    vault_root: Path | None = None,
+) -> str:
     return (
         "Task: consolidate these USER-profile memory files into canonical "
         "Tier 2 pages. Cluster files describing the same user trait.\n\n"
+        f"{_existing_tags_fragment(vault_root, 'user')}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{_FEW_SHOT_USER}\n"
         "Now consolidate these input files:\n\n"
@@ -343,10 +403,15 @@ def build_user_prompt(files: list[MemoryFile]) -> str:
     )
 
 
-def build_reference_prompt(files: list[MemoryFile]) -> str:
+def build_reference_prompt(
+    files: list[MemoryFile],
+    *,
+    vault_root: Path | None = None,
+) -> str:
     return (
         "Task: consolidate these REFERENCE memory files into canonical Tier 2 "
         "pages. Cluster files that point to the same external resource.\n\n"
+        f"{_existing_tags_fragment(vault_root, 'reference')}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{_FEW_SHOT_REFERENCE}\n"
         "Now consolidate these input files:\n\n"

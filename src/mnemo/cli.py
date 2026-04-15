@@ -29,9 +29,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="vault state + hook health + recent activity")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
-    promote = sub.add_parser("promote", help="promote a note to wiki/sources/")
-    promote.add_argument("source", type=str)
-    sub.add_parser("compile", help="regenerate wiki/compiled/ from sources")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
     extract.add_argument("--dry-run", action="store_true", help="show what would run without making LLM calls or writes")
@@ -283,15 +280,36 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         print(f"       → {issue.remediation}")
 
     auto_ok = _doctor_check_auto_brain(vault)
+    legacy_ok = _doctor_check_legacy_wiki_dirs(vault)
 
     if not result.ok:
         print("Issues found above.")
         return 1
-    if not auto_ok:
-        print("Auto-brain warnings above.")
+    if not auto_ok or not legacy_ok:
+        print("Warnings above.")
     else:
         print("OK")
     return 0
+
+
+def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
+    """v0.4: flag the fossil ``wiki/sources/`` and ``wiki/compiled/`` dirs.
+
+    Extraction auto-deletes these on first v0.4 run, but users who haven't
+    triggered an extract yet still see the dead dirs — warn them and tell
+    them the auto-cleanup is harmless and runs next extract.
+    """
+    dead = [
+        d for d in (vault / "wiki" / "sources", vault / "wiki" / "compiled")
+        if d.exists()
+    ]
+    if not dead:
+        return True
+    rel = ", ".join(str(d.relative_to(vault)) for d in dead)
+    print(f"  ⚠ Legacy v0.3 directories present: {rel}")
+    print("       → harmless; next `mnemo extract` run will auto-delete them")
+    print("         (the wiki/ hierarchy was replaced by a dashboard inside HOME.md in v0.4)")
+    return False
 
 
 def _doctor_check_auto_brain(vault: Path) -> bool:
@@ -367,28 +385,6 @@ def cmd_open(_args: argparse.Namespace) -> int:
     vault = _resolve_vault()
     _run_open(vault)
     print(f"Opened {vault}")
-    return 0
-
-
-@command("promote")
-def cmd_promote(args: argparse.Namespace) -> int:
-    from mnemo.core import config as cfg_mod, wiki
-    cfg = cfg_mod.load_config()
-    src = Path(args.source)
-    if not src.exists():
-        print(f"Source not found: {src}", file=sys.stderr)
-        return 1
-    out = wiki.promote_note(src, cfg)
-    print(f"Promoted to {out}")
-    return 0
-
-
-@command("compile")
-def cmd_compile(_args: argparse.Namespace) -> int:
-    from mnemo.core import config as cfg_mod, wiki
-    cfg = cfg_mod.load_config()
-    out = wiki.compile_wiki(cfg)
-    print(f"Compiled wiki index: {out}")
     return 0
 
 
