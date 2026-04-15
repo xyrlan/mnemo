@@ -22,10 +22,11 @@ def test_scaffold_creates_full_tree(tmp_path: Path):
     assert (vault / "shared" / "user").is_dir()
     assert (vault / "shared" / "reference").is_dir()
     assert (vault / "shared" / "project").is_dir()
-    # User-maintained Tier 2
-    assert (vault / "shared" / "people").is_dir()
-    assert (vault / "shared" / "companies").is_dir()
-    assert (vault / "shared" / "decisions").is_dir()
+    # v0.4.1: v0.1 vestigial user-curated dirs (people/companies/decisions) are
+    # no longer created — they were always empty ghost towns in practice.
+    assert not (vault / "shared" / "people").exists()
+    assert not (vault / "shared" / "companies").exists()
+    assert not (vault / "shared" / "decisions").exists()
     # v0.4: wiki/ is dead — the dashboard lives inside HOME.md instead.
     assert not (vault / "wiki").exists()
 
@@ -69,6 +70,20 @@ def test_home_template_ships_dashboard_block_skeleton(tmp_path: Path):
     assert BLOCK_END in home
     # Block sits at the top of the file (after frontmatter), before user content
     assert home.find(BLOCK_BEGIN) < home.find("# 🧠 Welcome")
+
+
+def test_home_template_no_longer_references_vestigial_user_dirs(tmp_path: Path):
+    """v0.4.1: HOME.md must not link to shared/people|companies|decisions
+    since those aren't scaffolded anymore. They were speculative v0.1 taxonomy
+    that stayed empty forever — the tagline 'populates itself' makes
+    user-curated-only dirs an anti-pattern."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    home = (vault / "HOME.md").read_text(encoding="utf-8")
+    assert "[[shared/people]]" not in home
+    assert "[[shared/companies]]" not in home
+    assert "[[shared/decisions]]" not in home
+    assert "You maintain manually" not in home
 
 
 def test_home_template_no_longer_references_wiki_dirs(tmp_path: Path):

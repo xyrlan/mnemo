@@ -34,14 +34,6 @@ The LLM consolidates cross-agent memories and session briefings into canonical p
 - [[shared/reference]] — pointers to external systems (Linear, Grafana, Notion, etc.)
 - [[shared/project]] — per-repo project context and decisions
 
-### You maintain manually
-
-Not touched by extraction — write here by hand when you want something canonical the LLM shouldn't rewrite.
-
-- [[shared/people]] — people you collaborate with
-- [[shared/companies]] — companies and orgs in your work context
-- [[shared/decisions]] — architectural decision records (ADR-style)
-
 ## Quick commands
 
 - `/mnemo status` — health check (includes auto-brain state)
