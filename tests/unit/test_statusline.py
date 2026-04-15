@@ -189,7 +189,11 @@ def test_compose_with_original_concatenates(tmp_vault, monkeypatch):
         tags=["auto-promoted", "git"],
         sources=["bots/a/m.md"],
     )
-    sl.write_state(tmp_vault, {"command": "echo -n 'BATTERY 87'"})
+    # Use printf, NOT `echo -n` — `echo -n` is non-portable: macOS bash 3 and
+    # Windows cmd.exe both treat -n as literal text instead of suppressing
+    # the newline. printf is POSIX and available on all CI platforms via
+    # /usr/bin/printf (Linux/macOS) or Git for Windows printf.exe.
+    sl.write_state(tmp_vault, {"command": "printf 'BATTERY 87'"})
 
     claude_json = tmp_vault / ".claude.json"
     _write_claude_json_with_mnemo(claude_json)
