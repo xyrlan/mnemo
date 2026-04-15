@@ -200,6 +200,36 @@ def test_briefing_system_prompt_mentions_handoff_semantics():
     assert "resume at" in sysp
 
 
+def test_briefing_system_prompt_lists_headers_bare_without_inline_descriptions():
+    """Regression: 2026-04-14 dogfood showed the LLM was echoing instruction
+    text into actual section headers (e.g., emitting
+    `## TL;DR — 3-5 sentences summarizing the session.` as its section header
+    instead of a bare `## TL;DR`). The prompt must list the required headers
+    as bare markdown lines, separate from the description of what goes under
+    each one, so the model has a clean literal to copy.
+    """
+    from mnemo.core.extract import prompts
+
+    sysp = prompts.BRIEFING_SYSTEM_PROMPT
+    required_bare_headers = [
+        "## TL;DR",
+        "## What I did",
+        "## Decisions made",
+        "## Dead ends",
+        "## Open questions",
+        "## State at end of session",
+        "## Context I'd forget otherwise",
+    ]
+    for header in required_bare_headers:
+        assert header in sysp, f"prompt must mention the '{header}' header"
+        bad_pattern = f"{header} —"
+        assert bad_pattern not in sysp, (
+            f"section header '{header}' must be listed bare in the prompt, "
+            f"not followed by ' — description' inline — the LLM echoes "
+            f"whatever comes after the header name into its own output"
+        )
+
+
 def test_build_briefing_prompt_includes_rendered_events():
     from mnemo.core.extract import prompts
 
