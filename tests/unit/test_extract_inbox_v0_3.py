@@ -490,6 +490,139 @@ def test_guardrail_does_not_trigger_when_slugs_already_match(tmp_path):
     assert sacred.exists()
 
 
+# --- stem-collision guardrail (post-dogfood, v0.5.x) -------------------------
+
+
+def test_stem_slug_normalizes_common_inflections():
+    # -ing / -e normalization is the concrete bug from dogfood:
+    # 'auto-populate-over-manual-curation' vs 'auto-populating-over-manual-curation'
+    assert inbox._stem_slug("auto-populate-over-manual-curation") == \
+        inbox._stem_slug("auto-populating-over-manual-curation")
+    # -s / -es plural collapse
+    assert inbox._stem_slug("brief-as-handoff-fuel") == \
+        inbox._stem_slug("briefs-as-handoff-fuel")
+    # Same-stem rules that are genuinely different words must NOT collide —
+    # this is what the body-similarity second check protects against.
+    assert inbox._stem_slug("react-use-state") != inbox._stem_slug("react-cache-versioning")
+
+
+def test_stem_collision_redirects_inflection_variant_across_source_sets(tmp_path):
+    """The concrete dogfood bug: two canonical files for the same concept,
+    one from a memory mirror and one from a briefing, with slug forms
+    'auto-populate-…' and 'auto-populating-…'.  _detect_drift_slug can't
+    catch it (different source sets); stem collision can (similar body)."""
+    existing_slug = "auto-populate-over-manual-curation"
+    shared_body = (
+        "Prefer plugin handles it invisibly over nice manual workflow when "
+        "designing mnemo features. Manual curation workflows become ghost towns."
+    )
+    sacred = tmp_path / "shared" / "feedback" / f"{existing_slug}.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        f"---\nname: a\ntype: feedback\ntags:\n  - auto-promoted\n---\n\n{shared_body}\n"
+    )
+    state = _mkstate(**{
+        f"feedback/{existing_slug}": StateEntry(
+            source_files=["bots/mnemo/memory/feedback_auto_populating_priority.md"],
+            source_hash="sha256:memoryhash",
+            written_hash="sha256:wr1",
+            written_at="2026-04-15T01:48:48",
+            status="auto_promoted",
+            last_sync="2026-04-15T01:48:48",
+        ),
+    })
+
+    drifted_inflection = inbox.ExtractedPage(
+        slug="auto-populating-over-manual-curation",  # ← stem-equal, different form
+        type="feedback",
+        name="Prefer auto-populating features over manual workflows",
+        description="d",
+        body=(
+            "Prefer plugin handles it invisibly over nice manual workflow when "
+            "designing mnemo features. Manual curation workflows become ghost towns "
+            "and waste user attention."
+        ),
+        source_files=["bots/mnemo/briefings/sessions/2ee67806.md"],  # DIFFERENT source
+        source_hash="sha256:briefinghash",
+        tags=["product-design", "automation"],
+    )
+
+    inbox.apply_pages([drifted_inflection], state, tmp_path,
+                      run_id="2026-04-15T08:43:05")
+
+    # Must redirect — no duplicate slug created
+    assert not (tmp_path / "shared" / "feedback" / "auto-populating-over-manual-curation.md").exists()
+    assert sacred.exists()
+    assert f"feedback/{existing_slug}" in state.entries
+    assert "feedback/auto-populating-over-manual-curation" not in state.entries
+
+
+def test_stem_collision_does_not_redirect_when_bodies_diverge(tmp_path):
+    """Same stem, disjoint bodies → two genuinely distinct rules, keep both."""
+    sacred = tmp_path / "shared" / "feedback" / "cache-key-versioning.md"
+    sacred.parent.mkdir(parents=True)
+    sacred.write_text(
+        "---\nname: c\ntype: feedback\n---\n\n"
+        "Cache keys must include upstream dependency versions to avoid stale hits.\n"
+    )
+    state = _mkstate(**{
+        "feedback/cache-key-versioning": StateEntry(
+            source_files=["bots/a/memory/feedback_cache.md"],
+            source_hash="sha256:one",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+
+    # Stem-equivalent slug but completely different rule content
+    distinct = inbox.ExtractedPage(
+        slug="cache-keys-versioning",  # singular→plural: same stem
+        type="feedback",
+        name="Different cache rule",
+        description="d",
+        body=(
+            "Bust every React Query cache entry during migration by bumping the "
+            "global query client version. The router layer handles rehydration."
+        ),
+        source_files=["bots/b/memory/feedback_migrations.md"],
+        source_hash="sha256:two",
+    )
+    inbox.apply_pages([distinct], state, tmp_path, run_id="2026-04-14T11:00:00")
+
+    # Both coexist — body divergence prevented the merge
+    assert sacred.exists()
+    assert (tmp_path / "shared" / "feedback" / "cache-keys-versioning.md").exists()
+
+
+def test_stem_collision_skips_stale_state_entries(tmp_path):
+    """Orphaned state entry (file deleted by hand) must not intercept a new slug."""
+    state = _mkstate(**{
+        "feedback/auto-populate-rule": StateEntry(
+            source_files=["bots/a/memory/feedback_x.md"],
+            source_hash="sha256:a",
+            written_hash="sha256:wr1",
+            written_at="2026-04-14T10:00:00",
+            status="auto_promoted",
+            last_sync="2026-04-14T10:00:00",
+        ),
+    })
+    # No file on disk for auto-populate-rule → entry is stale
+
+    new_page = inbox.ExtractedPage(
+        slug="auto-populating-rule",  # stem-equal
+        type="feedback",
+        name="n",
+        description="d",
+        body="Prefer plugin handles it invisibly over nice manual workflow.",
+        source_files=["bots/b/memory/feedback_y.md"],
+        source_hash="sha256:b",
+    )
+    inbox.apply_pages([new_page], state, tmp_path, run_id="2026-04-14T11:00:00")
+    assert (tmp_path / "shared" / "feedback" / "auto-populating-rule.md").exists()
+
+
 # --- v0.4: tags frontmatter field --------------------------------------------
 
 

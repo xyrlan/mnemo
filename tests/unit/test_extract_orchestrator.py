@@ -553,6 +553,110 @@ def test_run_extraction_background_writes_last_auto_run_json_on_success(tmp_path
     assert summary.mode == "background"
 
 
+# --- Task 5: LLM response parser — optional activation fields --------------
+
+
+def _parse_one_page(rp: dict):
+    """Helper: feed a raw LLM page dict through _parse_pages_from_response."""
+    from mnemo.core.extract import _parse_pages_from_response
+    payload = json.dumps({"pages": [rp]})
+    return _parse_pages_from_response(payload, "feedback")
+
+
+_BASE_PAGE = {
+    "slug": "some-rule",
+    "name": "Some rule",
+    "description": "d",
+    "type": "feedback",
+    "body": "b",
+    "source_files": ["bots/a/memory/feedback_some_rule.md"],
+    "stability": "stable",
+}
+
+
+def test_parser_reads_enforce_only():
+    rp = dict(_BASE_PAGE)
+    rp["enforce"] = {
+        "tool": "Bash",
+        "deny_pattern": "git commit.*Co-Authored-By",
+        "reason": "no co-author trailers",
+    }
+    pages = _parse_one_page(rp)
+    assert len(pages) == 1
+    assert pages[0].enforce == {
+        "tool": "Bash",
+        "deny_pattern": "git commit.*Co-Authored-By",
+        "reason": "no co-author trailers",
+    }
+    assert pages[0].activates_on is None
+
+
+def test_parser_reads_activates_on_only():
+    rp = dict(_BASE_PAGE)
+    rp["activates_on"] = {
+        "tools": ["Edit", "Write"],
+        "path_globs": ["**/components/modals/**"],
+    }
+    pages = _parse_one_page(rp)
+    assert len(pages) == 1
+    assert pages[0].enforce is None
+    assert pages[0].activates_on == {
+        "tools": ["Edit", "Write"],
+        "path_globs": ["**/components/modals/**"],
+    }
+
+
+def test_parser_reads_both_fields():
+    rp = dict(_BASE_PAGE)
+    rp["enforce"] = {
+        "tool": "Bash",
+        "deny_command": ["git push --force"],
+        "reason": "no force pushes",
+    }
+    rp["activates_on"] = {
+        "tools": ["Edit"],
+        "path_globs": ["src/**/*.tsx"],
+    }
+    pages = _parse_one_page(rp)
+    assert pages[0].enforce["tool"] == "Bash"
+    assert pages[0].enforce["deny_command"] == "git push --force"
+    assert pages[0].enforce["reason"] == "no force pushes"
+    assert pages[0].activates_on == {
+        "tools": ["Edit"],
+        "path_globs": ["src/**/*.tsx"],
+    }
+
+
+def test_parser_handles_neither_field():
+    pages = _parse_one_page(dict(_BASE_PAGE))
+    assert pages[0].enforce is None
+    assert pages[0].activates_on is None
+
+
+def test_parser_handles_explicit_null_fields():
+    rp = dict(_BASE_PAGE)
+    rp["enforce"] = None
+    rp["activates_on"] = None
+    pages = _parse_one_page(rp)
+    assert pages[0].enforce is None
+    assert pages[0].activates_on is None
+
+
+def test_parser_drops_malformed_enforce_missing_reason():
+    rp = dict(_BASE_PAGE)
+    rp["enforce"] = {"tool": "Bash", "deny_pattern": "rm -rf /"}  # no reason
+    pages = _parse_one_page(rp)
+    # Page still parses, but enforce silently dropped
+    assert pages[0].enforce is None
+
+
+def test_parser_drops_malformed_activates_on_empty_tools():
+    rp = dict(_BASE_PAGE)
+    rp["activates_on"] = {"tools": [], "path_globs": ["**/*.tsx"]}
+    pages = _parse_one_page(rp)
+    assert pages[0].activates_on is None
+
+
 def test_run_extraction_manual_does_not_write_last_auto_run_json(tmp_path):
     from mnemo.core.extract import run_extraction
 

@@ -37,6 +37,11 @@ class ExtractedPage:
     source_hash: str
     stability: str = "stable"
     tags: list[str] = field(default_factory=list)
+    # Optional activation metadata (Task 5). Both are serialized into the
+    # page frontmatter when non-None and consumed by rule_activation.build_index
+    # on the next extraction run.
+    enforce: dict | None = None
+    activates_on: dict | None = None
 
 
 @dataclass
@@ -71,6 +76,74 @@ def _atomic_write(path: Path, content: str) -> None:
         raise ExtractionIOError(f"failed to write {path}: {exc}") from exc
 
 
+_YAML_SPECIALS = (":", "#", '"', "'", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "%", "@", "`")
+
+
+def _yaml_scalar(value: object) -> str:
+    """Serialize *value* as a minimal YAML-safe scalar.
+
+    Quotes only when the string contains YAML-special characters or leading/
+    trailing whitespace. Uses single-quoted form with doubled inner quotes —
+    the cheapest form that round-trips cleanly through the parse_frontmatter
+    extension from Task 1 (which strips a matched pair of surrounding
+    single/double quotes via ``_dequote``).
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    s = str(value)
+    if s == "":
+        return "''"
+    needs_quoting = (
+        s != s.strip()
+        or any(c in s for c in _YAML_SPECIALS)
+    )
+    if not needs_quoting:
+        return s
+    escaped = s.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _yaml_inline_list(items: list) -> str:
+    return "[" + ", ".join(_yaml_scalar(i) for i in items) + "]"
+
+
+def _render_nested_block(key: str, data: dict) -> str:
+    """Render a top-level key whose value is a dict of scalars / lists.
+
+    Writes::
+
+        key:
+          subkey: scalar
+          subkey2: [a, b, c]
+          subkey3:
+            - long item one
+            - long item two
+
+    Conforms to the Task 1 parse_frontmatter extension — 2-space indent for
+    subkeys, 4-space indent for sub-block-list items.
+    """
+    lines = [f"{key}:"]
+    for subkey, subval in data.items():
+        if isinstance(subval, list):
+            # Inline short, block long. path_globs always goes block.
+            if subkey == "path_globs":
+                use_inline = False
+            else:
+                total_len = sum(len(str(i)) for i in subval) + 2 * len(subval)
+                use_inline = len(subval) <= 4 and total_len < 60
+            if use_inline:
+                lines.append(f"  {subkey}: {_yaml_inline_list(subval)}")
+            else:
+                lines.append(f"  {subkey}:")
+                for item in subval:
+                    lines.append(f"    - {_yaml_scalar(item)}")
+        else:
+            lines.append(f"  {subkey}: {_yaml_scalar(subval)}")
+    return "\n".join(lines) + "\n"
+
+
 def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
     if auto_promoted:
@@ -89,10 +162,19 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         if t and t != system_marker and t not in all_tags:
             all_tags.append(t)
     tags_yaml = "\n".join(f"  - {t}" for t in all_tags)
+    # Optional activation blocks — only written when non-empty. Both flow
+    # through _render_nested_block so indentation is guaranteed to match
+    # what parse_frontmatter (Task 1 extension) expects.
+    enforce_block = ""
+    if isinstance(page.enforce, dict) and page.enforce:
+        enforce_block = _render_nested_block("enforce", page.enforce)
+    activates_on_block = ""
+    if isinstance(page.activates_on, dict) and page.activates_on:
+        activates_on_block = _render_nested_block("activates_on", page.activates_on)
     return (
         "---\n"
-        f"name: {page.name}\n"
-        f"description: {page.description}\n"
+        f"name: {_yaml_scalar(page.name)}\n"
+        f"description: {_yaml_scalar(page.description)}\n"
         f"type: {page.type}\n"
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
@@ -102,6 +184,8 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{sources_yaml}\n"
         "tags:\n"
         f"{tags_yaml}\n"
+        f"{enforce_block}"
+        f"{activates_on_block}"
         "---\n\n"
         f"{page.body}\n"
     )
@@ -188,6 +272,8 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
             source_hash=chosen.source_hash,
             stability=getattr(chosen, "stability", None) or "stable",
             tags=all_tags,
+            enforce=getattr(chosen, "enforce", None),
+            activates_on=getattr(chosen, "activates_on", None),
         ))
     return merged
 
@@ -216,6 +302,82 @@ def _bodies_similar(a: str, b: str, threshold: float = 0.6) -> bool:
     common = tokens_a & tokens_b
     union = tokens_a | tokens_b
     return len(common) / len(union) >= threshold
+
+
+_STEM_SUFFIXES = (
+    "ations", "ation", "ings", "ing", "ied", "ies", "ers", "ed", "es", "er",
+)
+
+
+def _stem_word(word: str) -> str:
+    """Collapse common English inflections to a shared stem.
+
+    Deliberately simple (no Porter stemmer dependency) — just enough to
+    fold the dogfood collision between ``populate`` and ``populating`` into
+    one canonical form. False merges are caught by the body-similarity
+    check in ``_detect_stem_collision``.
+    """
+    w = word.lower()
+    if len(w) < 4:
+        return w
+    for suf in _STEM_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: -len(suf)]
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 4:
+        return w[:-1]
+    if w.endswith("e") and len(w) > 4:
+        return w[:-1]
+    return w
+
+
+def _stem_slug(slug: str) -> str:
+    return "-".join(_stem_word(tok) for tok in slug.split("-") if tok)
+
+
+def _detect_stem_collision(
+    page: ExtractedPage,
+    state: ExtractionState,
+    vault_root: Path,
+) -> str | None:
+    """Return an existing slug whose stem matches ``page.slug``, or None.
+
+    Second-layer guardrail that catches inflection drift across runs:
+    ``auto-populate-…`` and ``auto-populating-…`` from different source
+    sets should collapse to one canonical page. Unlike
+    ``_detect_drift_slug`` (which requires identical source files), this
+    check relies entirely on slug-stem equality plus body similarity.
+
+    Skips the exact-match case (handled by the normal update flow) and
+    stale state entries whose target files no longer exist on disk.
+    """
+    if not page.slug:
+        return None
+    candidate_stem = _stem_slug(page.slug)
+    if not candidate_stem:
+        return None
+    for key, entry in state.entries.items():
+        if not key.startswith(f"{page.type}/"):
+            continue
+        existing_slug = key.split("/", 1)[1]
+        if existing_slug == page.slug:
+            return None  # exact match — update path will handle it
+        if _stem_slug(existing_slug) != candidate_stem:
+            continue
+        existing_target = vault_root / "shared" / page.type / f"{existing_slug}.md"
+        if not existing_target.exists():
+            existing_target = (
+                vault_root / "shared" / "_inbox" / page.type / f"{existing_slug}.md"
+            )
+            if not existing_target.exists():
+                continue
+        try:
+            existing_text = existing_target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        existing_body = _extract_body(existing_text)
+        if _bodies_similar(page.body, existing_body):
+            return existing_slug
+    return None
 
 
 def _detect_drift_slug(
@@ -285,6 +447,10 @@ def apply_pages(
         drift_target = _detect_drift_slug(page, state, vault_root)
         if drift_target is not None:
             page.slug = drift_target
+        else:
+            stem_target = _detect_stem_collision(page, state, vault_root)
+            if stem_target is not None:
+                page.slug = stem_target
 
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)

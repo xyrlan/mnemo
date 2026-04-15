@@ -60,7 +60,11 @@ def _minimal_jsonl(tmp_path: Path, session_id: str = "abc123") -> Path:
             "timestamp": "2026-04-14T10:05:00.000Z",
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": "I'll add the helper."}],
+                "content": [
+                    {"type": "text", "text": "I'll add the helper."},
+                    {"type": "tool_use", "name": "Write",
+                     "input": {"file_path": "retry.py", "content": "# ..."}},
+                ],
             },
         },
         {
@@ -174,9 +178,15 @@ def test_generate_briefing_skips_malformed_jsonl_lines(tmp_vault: Path, tmp_path
         })
         + "\nthis is not json\n"
         + json.dumps({
-            "type": "user",
+            "type": "assistant",
             "timestamp": "2026-04-14T10:05:00.000Z",
-            "message": {"role": "user", "content": "end"},
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": "x.py"}},
+                ],
+            },
         })
         + "\n"
     )
@@ -318,9 +328,15 @@ def test_generate_briefing_handles_malformed_timestamps_gracefully(tmp_vault: Pa
         })
         + "\n"
         + json.dumps({
-            "type": "user",
+            "type": "assistant",
             "timestamp": None,
-            "message": {"role": "user", "content": "no ts at all"},
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": "x.py"}},
+                ],
+            },
         })
         + "\n"
     )
@@ -339,9 +355,76 @@ def test_generate_briefing_handles_unreadable_jsonl(tmp_vault: Path, tmp_path: P
     missing = tmp_path / "does-not-exist.jsonl"
     cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
 
-    # Missing file → _load_jsonl_events returns [], generator still runs with empty transcript.
+    # Missing file → _load_jsonl_events returns [] → zero mutations → skip gate.
+    # Prior behavior (writing an empty-shell briefing) was the exact noise this
+    # gate exists to prevent.
     out = briefing.generate_session_briefing(missing, agent="agent_a", cfg=cfg)
+    assert out is None
+    assert not stub_llm["calls"]
+
+
+def _jsonl_with_events(path: Path, events: list[dict]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    return path
+
+
+def test_generate_briefing_skips_when_session_has_no_file_mutations(
+    tmp_vault: Path, tmp_path: Path, stub_llm
+):
+    """A session with only reads, bash, and text chat is not worth a briefing.
+
+    The fix addresses real dogfood noise: sessions where the user only ran
+    /context or called MCP read tools produced empty-shell briefings that
+    polluted the extraction cluster. Gate on at least one file-mutation
+    tool_use before spending an LLM call.
+    """
+    from mnemo.core import briefing
+
+    jsonl = _jsonl_with_events(tmp_path / "jsonls" / "noop.jsonl", [
+        {"type": "user", "timestamp": "2026-04-15T09:00:00.000Z",
+         "message": {"role": "user", "content": "check context"}},
+        {"type": "assistant", "timestamp": "2026-04-15T09:00:05.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "name": "Read", "input": {"path": "/tmp/x"}},
+         ]}},
+        {"type": "assistant", "timestamp": "2026-04-15T09:00:07.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+         ]}},
+    ])
+    cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
+
+    out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
+
+    assert out is None, "briefing with no mutations must return None"
+    assert not stub_llm["calls"], "LLM must not be called for noop sessions"
+    briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
+    assert not briefings_dir.exists() or not any(briefings_dir.iterdir()), \
+        "no briefing file should be written for noop sessions"
+
+
+@pytest.mark.parametrize("mutation_tool", ["Edit", "Write", "MultiEdit", "NotebookEdit"])
+def test_generate_briefing_runs_when_session_has_any_file_mutation(
+    tmp_vault: Path, tmp_path: Path, stub_llm, mutation_tool: str
+):
+    from mnemo.core import briefing
+
+    jsonl = _jsonl_with_events(tmp_path / "jsonls" / f"{mutation_tool}.jsonl", [
+        {"type": "user", "timestamp": "2026-04-15T09:00:00.000Z",
+         "message": {"role": "user", "content": "do the thing"}},
+        {"type": "assistant", "timestamp": "2026-04-15T09:05:00.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "name": mutation_tool, "input": {"file_path": "/tmp/x"}},
+         ]}},
+    ])
+    cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
+
+    out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
+
+    assert out is not None, f"briefing with {mutation_tool} must not be skipped"
     assert out.exists()
+    assert len(stub_llm["calls"]) == 1
 
 
 def test_cmd_briefing_logs_and_returns_1_on_llm_failure(tmp_vault: Path, tmp_path: Path, monkeypatch):

@@ -16,6 +16,28 @@ from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
 
 
+MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+
+def _count_file_mutations(events: list[dict]) -> int:
+    count = 0
+    for ev in events:
+        msg = ev.get("message") if isinstance(ev, dict) else None
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            if block.get("name") in MUTATION_TOOL_NAMES:
+                count += 1
+    return count
+
+
 def _load_jsonl_events(path: Path) -> list[dict]:
     events: list[dict] = []
     try:
@@ -89,14 +111,19 @@ def _render_briefing(
     )
 
 
-def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path:
+def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path | None:
     """Produce a briefing markdown file for one Claude Code session.
 
-    Returns the filesystem path of the written briefing. Raises on I/O
-    failure or LLM failure — callers that want fire-and-forget semantics
-    should wrap this in a try/except.
+    Returns the filesystem path of the written briefing, or ``None`` when
+    the session produced no file mutations and was therefore skipped (the
+    signal threshold: at least one Edit/Write/MultiEdit/NotebookEdit
+    tool_use in the transcript). Raises on I/O or LLM failure — callers
+    that want fire-and-forget semantics should wrap this in a try/except.
     """
     events = _load_jsonl_events(jsonl_path)
+
+    if _count_file_mutations(events) == 0:
+        return None
 
     extraction_cfg = cfg.get("extraction") or {}
     model = extraction_cfg.get("model") or "claude-haiku-4-5"
