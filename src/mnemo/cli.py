@@ -305,7 +305,11 @@ def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
     ]
     if not dead:
         return True
-    rel = ", ".join(str(d.relative_to(vault)) for d in dead)
+    # Forward slashes in user-facing output for cross-platform consistency —
+    # matches the wikilink convention used everywhere else in mnemo.
+    rel = ", ".join(
+        str(d.relative_to(vault)).replace("\\", "/") for d in dead
+    )
     print(f"  ⚠ Legacy v0.3 directories present: {rel}")
     print("       → harmless; next `mnemo extract` run will auto-delete them")
     print("         (the wiki/ hierarchy was replaced by a dashboard inside HOME.md in v0.4)")
