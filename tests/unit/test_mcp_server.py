@@ -15,6 +15,15 @@ from mnemo.core.mcp.server import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_project_resolution(monkeypatch):
+    """Existing server tests expect vault-wide behavior (no project filter)."""
+    monkeypatch.setattr(
+        "mnemo.core.mcp.tools._resolve_current_project",
+        lambda vault_root: None,
+    )
+
+
 def _write_page(
     vault: Path,
     page_type: str,
@@ -338,3 +347,91 @@ def test_serve_loop_survives_load_config_failure(tmp_vault, monkeypatch):
     line = stdout.getvalue().strip()
     parsed = json.loads(line)
     assert parsed["error"]["code"] == -32603
+
+
+def test_server_passes_scope_and_project_to_tools(tmp_vault, monkeypatch):
+    """Server resolves project once and passes it to the tool function."""
+    _write_page(
+        tmp_vault, "feedback", "alpha-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    _write_page(
+        tmp_vault, "feedback", "beta-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/beta/memory/m.md"],
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.tools._resolve_current_project",
+        lambda vault_root: "alpha",
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 50,
+        "method": "tools/call",
+        "params": {
+            "name": "list_rules_by_topic",
+            "arguments": {"topic": "git"},
+        },
+    }
+    resp = handle_request(req, vault_root=tmp_vault)
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    slugs = [r["slug"] for r in payload]
+    assert "alpha-rule" in slugs
+    assert "beta-rule" not in slugs
+
+
+def test_server_vault_scope_overrides_project_filter(tmp_vault, monkeypatch):
+    _write_page(
+        tmp_vault, "feedback", "alpha-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    _write_page(
+        tmp_vault, "feedback", "beta-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/beta/memory/m.md"],
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.tools._resolve_current_project",
+        lambda vault_root: "alpha",
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 51,
+        "method": "tools/call",
+        "params": {
+            "name": "list_rules_by_topic",
+            "arguments": {"topic": "git", "scope": "vault"},
+        },
+    }
+    resp = handle_request(req, vault_root=tmp_vault)
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    slugs = [r["slug"] for r in payload]
+    assert "alpha-rule" in slugs
+    assert "beta-rule" in slugs
+
+
+def test_server_project_resolution_failure_falls_back_to_vault(tmp_vault, monkeypatch):
+    _write_page(
+        tmp_vault, "feedback", "any-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.tools._resolve_current_project",
+        lambda vault_root: None,
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 52,
+        "method": "tools/call",
+        "params": {
+            "name": "list_rules_by_topic",
+            "arguments": {"topic": "git"},
+        },
+    }
+    resp = handle_request(req, vault_root=tmp_vault)
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert len(payload) == 1
+    assert payload[0]["slug"] == "any-rule"

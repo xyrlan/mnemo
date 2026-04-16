@@ -98,16 +98,28 @@ def _handle_tool_call(
     if vault_root is None:
         return _err(req_id, -32603, "vault_root not configured")
 
+    project = mcp_tools._resolve_current_project(vault_root)
+    scope = str(args.get("scope", "project"))
+
     if name == "list_rules_by_topic":
-        result = mcp_tools.list_rules_by_topic(vault_root, str(args.get("topic", "")))
+        result = mcp_tools.list_rules_by_topic(
+            vault_root, str(args.get("topic", "")),
+            scope=scope, project=project,
+        )
         mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
     if name == "read_mnemo_rule":
-        result = mcp_tools.read_mnemo_rule(vault_root, str(args.get("slug", "")))
+        result = mcp_tools.read_mnemo_rule(
+            vault_root, str(args.get("slug", "")),
+            scope=scope, project=project,
+        )
         mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
     if name == "get_mnemo_topics":
-        result = mcp_tools.get_mnemo_topics(vault_root)
+        result = mcp_tools.get_mnemo_topics(
+            vault_root,
+            scope=scope, project=project,
+        )
         mcp_counter.increment(vault_root)
         return _ok(req_id, _text_content(result))
 
