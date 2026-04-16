@@ -67,10 +67,12 @@ session start and `🔴` at session end. Anything Claude saved to its own
 memory directory during the session is mirrored into
 `~/mnemo/bots/<repo-name>/memory/` automatically.
 
-## Turning on the loop (opt-in flags)
+## The loop (on by default)
 
-The three features below ship **disabled by default** — v0.5 ships dark,
-you dogfood, then you flip. Edit `~/mnemo/mnemo.config.json`:
+The full Capture → Present → Inject loop is **enabled by default** during
+the dogfood phase. `mnemo init` gives you a working product, not an inert
+scaffold. If you want to disable any individual feature, flip it to `false`
+in `~/mnemo/mnemo.config.json`:
 
 ```json
 {
@@ -82,7 +84,8 @@ you dogfood, then you flip. Edit `~/mnemo/mnemo.config.json`:
     }
   },
   "briefings": { "enabled": true },
-  "injection": { "enabled": true }
+  "injection": { "enabled": true },
+  "enrichment": { "enabled": true }
 }
 ```
 

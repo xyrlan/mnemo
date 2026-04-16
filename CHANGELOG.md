@@ -5,6 +5,35 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## v0.6.0 — 2026-04-16 — Loop enabled by default
+
+**Changed**
+- Defaults flipped from `false` → `true` for `extraction.auto.enabled`,
+  `briefings.enabled`, `injection.enabled`, and `enrichment.enabled`.
+  `mnemo init` now produces a working product from session one, instead
+  of an inert scaffold awaiting manual JSON configuration.
+- `enforcement.enabled` was already `true` since v0.5; unchanged.
+
+**Backward compatibility**
+- `_deep_merge` in `core/config.py` preserves explicit `enabled: false`
+  values in existing user configs. Users who had opted out of specific
+  features continue to see opt-out behavior with no action required.
+
+**Rationale**
+- The opt-in pattern shipped since v0.3 ("ship dark, dogfood, then flip")
+  imposed JSON-editing friction without safety benefit during solo
+  dogfood, and contradicted the project tagline ("the Obsidian that
+  populates itself"). Flipping defaults aligns the zero-config experience
+  with the product promise.
+
+**Migration**
+- Users who wanted the features on: no action needed — defaults now match
+  your existing explicit config.
+- Users who wanted the features off: add `"enabled": false` blocks to
+  `~/mnemo/mnemo.config.json`. See README "Runtime flags".
+
+**Tests**: 779 passing, 2 skipped (opt-in E2E only).
+
 ## v0.5.0 — 2026-04-15 — MCP injection (the loop closes)
 
 **Added**

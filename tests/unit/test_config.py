@@ -80,15 +80,12 @@ def test_extraction_user_override_preserved(tmp_path):
     assert cfg["extraction"]["subprocessTimeout"] == 60
 
 
-def test_extraction_auto_defaults_are_opt_in():
+def test_extraction_auto_defaults_enabled():
     from mnemo.core.config import DEFAULTS
 
     assert "auto" in DEFAULTS["extraction"]
     auto = DEFAULTS["extraction"]["auto"]
-    assert auto["enabled"] is False
-    # v0.3.1 dogfood: lowered from 5 to 1. With briefings generating one
-    # dense file per session, a single new file is enough signal to justify
-    # a background run on the next SessionEnd.
+    assert auto["enabled"] is True
     assert auto["minNewMemories"] == 1
     assert auto["minIntervalMinutes"] == 60
 
@@ -100,7 +97,7 @@ def test_load_config_populates_auto_defaults(tmp_path):
     cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
     cfg = load_config(cfg_path)
 
-    assert cfg["extraction"]["auto"]["enabled"] is False
+    assert cfg["extraction"]["auto"]["enabled"] is True
     assert cfg["extraction"]["auto"]["minNewMemories"] == 1
     assert cfg["extraction"]["auto"]["minIntervalMinutes"] == 60
 
@@ -110,21 +107,20 @@ def test_user_override_of_auto_enabled_preserved(tmp_path):
 
     cfg_path = tmp_path / "mnemo.config.json"
     cfg_path.write_text(
-        '{"extraction": {"auto": {"enabled": true, "minIntervalMinutes": 30}}}'
+        '{"extraction": {"auto": {"enabled": false, "minIntervalMinutes": 30}}}'
     )
     cfg = load_config(cfg_path)
 
-    assert cfg["extraction"]["auto"]["enabled"] is True
+    assert cfg["extraction"]["auto"]["enabled"] is False
     assert cfg["extraction"]["auto"]["minIntervalMinutes"] == 30
     assert cfg["extraction"]["auto"]["minNewMemories"] == 1  # untouched default
 
 
-def test_briefings_defaults_are_opt_in():
-    """v0.3.1: per-session briefings are opt-in, matching v0.3 auto-brain pattern."""
+def test_briefings_defaults_enabled():
     from mnemo.core.config import DEFAULTS
 
     assert "briefings" in DEFAULTS
-    assert DEFAULTS["briefings"]["enabled"] is False
+    assert DEFAULTS["briefings"]["enabled"] is True
 
 
 def test_load_config_populates_briefings_defaults(tmp_path):
@@ -134,25 +130,24 @@ def test_load_config_populates_briefings_defaults(tmp_path):
     cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
     cfg = load_config(cfg_path)
 
-    assert cfg["briefings"]["enabled"] is False
+    assert cfg["briefings"]["enabled"] is True
 
 
 def test_user_override_of_briefings_enabled_preserved(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"briefings": {"enabled": true}}')
+    cfg_path.write_text('{"briefings": {"enabled": false}}')
     cfg = load_config(cfg_path)
 
-    assert cfg["briefings"]["enabled"] is True
+    assert cfg["briefings"]["enabled"] is False
 
 
-def test_injection_defaults_are_opt_in():
-    """v0.5: SessionStart MCP injection is opt-in, matching v0.3 conservative pattern."""
+def test_injection_defaults_enabled():
     from mnemo.core.config import DEFAULTS
 
     assert "injection" in DEFAULTS
-    assert DEFAULTS["injection"]["enabled"] is False
+    assert DEFAULTS["injection"]["enabled"] is True
 
 
 def test_load_config_populates_injection_defaults(tmp_path):
@@ -162,29 +157,28 @@ def test_load_config_populates_injection_defaults(tmp_path):
     cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
     cfg = load_config(cfg_path)
 
-    assert cfg["injection"]["enabled"] is False
+    assert cfg["injection"]["enabled"] is True
 
 
 def test_user_override_of_injection_enabled_preserved(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"injection": {"enabled": true}}')
+    cfg_path.write_text('{"injection": {"enabled": false}}')
     cfg = load_config(cfg_path)
 
-    assert cfg["injection"]["enabled"] is True
+    assert cfg["injection"]["enabled"] is False
 
 
 def test_defaults_include_activation_blocks():
     from mnemo.core.config import DEFAULTS
 
     assert "enforcement" in DEFAULTS
-    # v0.5: enforcement is enabled by default — see config.py for rationale.
     assert DEFAULTS["enforcement"]["enabled"] is True
     assert DEFAULTS["enforcement"]["log"]["maxBytes"] == 1_048_576
 
     assert "enrichment" in DEFAULTS
-    assert DEFAULTS["enrichment"]["enabled"] is False
+    assert DEFAULTS["enrichment"]["enabled"] is True
     assert DEFAULTS["enrichment"]["maxRulesPerCall"] == 3
     assert DEFAULTS["enrichment"]["bodyPreviewChars"] == 300
     assert DEFAULTS["enrichment"]["log"]["maxBytes"] == 1_048_576

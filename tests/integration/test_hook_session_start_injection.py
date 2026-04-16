@@ -96,7 +96,7 @@ def test_session_start_silent_when_injection_disabled(
         tags=["auto-promoted", "git"],
         sources=["bots/a/m.md"],
     )
-    _set_config(hook_env)  # injection defaults to false
+    _set_config(hook_env, injection={"enabled": False})
     repo = tmp_path / "myrepo"
     (repo / ".git").mkdir(parents=True)
 
