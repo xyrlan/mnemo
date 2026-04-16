@@ -33,6 +33,10 @@ DEFAULTS: dict[str, Any] = {
     },
     "injection": {
         "enabled": False,
+        "telemetry": {
+            "enabled": True,
+            "log": {"maxBytes": 1_048_576},
+        },
     },
     "enforcement": {
         # v0.5: enabled by default. The PreToolUse hook is fail-open at every

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import IO, Any
 
+from mnemo.core.mcp import access_log as mcp_access_log
 from mnemo.core.mcp import counter as mcp_counter
 from mnemo.core.mcp import tools as mcp_tools
 
@@ -117,6 +119,11 @@ def handle_request(req: dict[str, Any], vault_root: Path | None) -> dict[str, An
     return _err(req_id, -32601, f"method not found: {method}")
 
 
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _handle_tool_call(
     req_id: Any,
     params: dict[str, Any],
@@ -130,29 +137,53 @@ def _handle_tool_call(
     project = mcp_tools._resolve_current_project(vault_root)
     scope = str(args.get("scope", "project"))
 
+    t0 = time.perf_counter()
+    result = None
+    hit_slugs: list[str] = []
+    result_count = 0
+
     if name == "list_rules_by_topic":
         result = mcp_tools.list_rules_by_topic(
             vault_root, str(args.get("topic", "")),
             scope=scope, project=project,
         )
-        mcp_counter.increment(vault_root)
-        return _ok(req_id, _text_content(result))
-    if name == "read_mnemo_rule":
+        result_count = len(result)
+        hit_slugs = [r["slug"] for r in result]
+    elif name == "read_mnemo_rule":
         result = mcp_tools.read_mnemo_rule(
             vault_root, str(args.get("slug", "")),
             scope=scope, project=project,
         )
-        mcp_counter.increment(vault_root)
-        return _ok(req_id, _text_content(result))
-    if name == "get_mnemo_topics":
+        result_count = 1 if result is not None else 0
+        hit_slugs = [result["slug"]] if result is not None else []
+    elif name == "get_mnemo_topics":
         result = mcp_tools.get_mnemo_topics(
             vault_root,
             scope=scope, project=project,
         )
-        mcp_counter.increment(vault_root)
-        return _ok(req_id, _text_content(result))
+        result_count = len(result)
+    else:
+        return _err(req_id, -32602, f"unknown tool: {name}")
 
-    return _err(req_id, -32602, f"unknown tool: {name}")
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    mcp_counter.increment(vault_root)
+    try:
+        mcp_access_log.record(vault_root, {
+            "timestamp": _utc_now_iso(),
+            "tool": name,
+            "args": {**args, "scope": scope},
+            "scope_requested": scope,
+            "scope_effective": scope if project is not None else "vault",
+            "project": project,
+            "result_count": result_count,
+            "hit_slugs": hit_slugs,
+            "elapsed_ms": round(elapsed_ms, 2),
+        })
+    except Exception:
+        pass
+
+    return _ok(req_id, _text_content(result))
 
 
 def _text_content(obj: Any) -> dict[str, Any]:

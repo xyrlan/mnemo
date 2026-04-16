@@ -122,10 +122,13 @@ feeds the next extraction run — the difference between mnemo capturing
 At every `SessionStart`, emit the ~120-token topic list into Claude's
 `additionalContext`, telling it to call the MCP tools
 (`list_rules_by_topic`, `read_mnemo_rule`, `get_mnemo_topics`) before
-writing code when the task matches a known topic.
+writing code when the task matches a known topic. Topics are filtered
+to the current project by default.
 
 The MCP tools themselves are always available after `mnemo init` — this
 flag only controls whether Claude is *told about* them at session start.
+All three tools default to `scope="project"` (rules owned by the current
+repo only); pass `scope="vault"` for cross-project lookups.
 
 ## Observing and debugging
 
