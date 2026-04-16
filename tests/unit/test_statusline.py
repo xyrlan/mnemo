@@ -35,6 +35,15 @@ def _write_page(
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_project_resolution(monkeypatch):
+    """Statusline tests expect vault-wide topic counts unless overridden."""
+    monkeypatch.setattr(
+        "mnemo.core.agent.resolve_agent",
+        lambda cwd: type("A", (), {"name": None, "repo_root": cwd, "has_git": False})(),
+    )
+
+
 def _write_claude_json_with_mnemo(path: Path) -> None:
     path.write_text(json.dumps({
         "mcpServers": {
@@ -69,7 +78,7 @@ def test_render_returns_empty_when_other_servers_but_no_mnemo(tmp_vault, tmp_pat
 def test_render_zero_topics_zero_calls(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     _write_claude_json_with_mnemo(claude_json)
-    assert sl.render(tmp_vault, claude_json) == "mnemo mcp · 0 topics · 0↓ today"
+    assert sl.render(tmp_vault, claude_json) == "mnemo · 0 topics · 0↓"
 
 
 def test_render_with_topics_and_calls(tmp_vault, tmp_path):
@@ -91,7 +100,7 @@ def test_render_with_topics_and_calls(tmp_vault, tmp_path):
 
     claude_json = tmp_path / ".claude.json"
     _write_claude_json_with_mnemo(claude_json)
-    assert sl.render(tmp_vault, claude_json) == "mnemo mcp · 2 topics · 3↓ today"
+    assert sl.render(tmp_vault, claude_json) == "mnemo · 2 topics · 3↓"
 
 
 def test_render_handles_malformed_claude_json(tmp_vault, tmp_path):
@@ -180,7 +189,7 @@ def test_compose_with_no_original_emits_only_mnemo(tmp_vault, monkeypatch, capsy
     out = io.StringIO()
     sl.compose(out=out)
     text = out.getvalue()
-    assert text == "mnemo mcp · 1 topics · 0↓ today"
+    assert text == "mnemo · 1 topics · 0↓"
 
 
 def test_compose_with_original_concatenates(tmp_vault, monkeypatch):
@@ -205,7 +214,7 @@ def test_compose_with_original_concatenates(tmp_vault, monkeypatch):
     out = io.StringIO()
     sl.compose(out=out)
     text = out.getvalue()
-    assert text == "BATTERY 87 · mnemo mcp · 1 topics · 0↓ today"
+    assert text == "BATTERY 87 · mnemo · 1 topics · 0↓"
 
 
 def test_compose_with_failing_original_still_emits_mnemo(tmp_vault, monkeypatch):
@@ -226,7 +235,7 @@ def test_compose_with_failing_original_still_emits_mnemo(tmp_vault, monkeypatch)
     out = io.StringIO()
     sl.compose(out=out)
     text = out.getvalue()
-    assert text == "mnemo mcp · 1 topics · 0↓ today"
+    assert text == "mnemo · 1 topics · 0↓"
 
 
 def test_compose_with_no_mnemo_segment_only_emits_original(tmp_vault, monkeypatch):
@@ -283,7 +292,7 @@ def test_cli_statusline_invokes_render(tmp_vault, monkeypatch, capsys):
     rc = main(["statusline"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert out == "mnemo mcp · 1 topics · 0↓ today"
+    assert out == "mnemo · 1 topics · 0↓"
 
 
 def test_cli_statusline_compose_invokes_compose(monkeypatch):

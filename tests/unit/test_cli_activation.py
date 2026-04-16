@@ -463,7 +463,7 @@ def test_statusline_omits_activation_segments_when_index_missing(tmp_vault, tmp_
     assert "⛔" not in result
     assert "💡" not in result
     # Base segment still renders
-    assert "mnemo mcp" in result
+    assert "mnemo ·" in result
 
 
 def test_statusline_counts_today_denials_only(tmp_vault, tmp_path, monkeypatch):
@@ -513,7 +513,7 @@ def test_statusline_omits_zero_count_segments(tmp_vault, tmp_path, monkeypatch):
     assert "💡" not in result
     assert "blocks" not in result
     # But base still renders
-    assert "mnemo mcp" in result
+    assert "mnemo ·" in result
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +637,7 @@ def test_compose_reads_cwd_from_stdin_payload(tmp_path, monkeypatch):
     captured: dict = {}
     def fake_render(vault_root, claude_json_path, *, cwd=None):
         captured["cwd"] = cwd
-        return "mnemo mcp · 0 topics · 0↓ today"
+        return "mnemo · 0 topics · 0↓"
     monkeypatch.setattr("mnemo.statusline.render", fake_render)
 
     vault = tmp_path / "vault"

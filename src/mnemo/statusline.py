@@ -2,7 +2,7 @@
 
 Two pieces:
 
-- :func:`render` — emits the mnemo segment, e.g. ``mnemo mcp · 9 topics · 7↓ today``.
+- :func:`render` — emits the mnemo segment, e.g. ``mnemo · 3 topics · 7↓``.
   Returns an empty string when the MCP server is not registered in
   ``~/.claude.json`` (so the status line silently disappears for users who
   haven't run ``mnemo init``).
@@ -136,15 +136,22 @@ def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) 
     if not _mcp_registered(claude_json_path):
         return ""
     try:
+        from mnemo.core.agent import resolve_agent
         from mnemo.core.mcp.counter import read_today
         from mnemo.core.mcp.tools import get_mnemo_topics
 
-        topics = get_mnemo_topics(vault_root)
+        effective_cwd = cwd or str(Path.cwd())
+        try:
+            project = resolve_agent(effective_cwd).name
+        except Exception:
+            project = None
+
+        topics = get_mnemo_topics(vault_root, project=project)
         count = read_today(vault_root)
     except Exception:
         return ""
 
-    parts = [f"mnemo mcp · {len(topics)} topics · {count}↓ today"]
+    parts = [f"mnemo · {len(topics)} topics · {count}↓"]
 
     activation = _activation_segments(vault_root, cwd)
     parts.extend(activation)
