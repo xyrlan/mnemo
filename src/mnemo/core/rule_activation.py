@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mnemo.core.filters import is_consumer_visible, parse_frontmatter
+from mnemo.core.log_utils import rotate_if_needed
 
 INDEX_VERSION = 1
 INDEX_FILENAME = "rule-activation-index.json"
@@ -698,19 +699,6 @@ def match_path_enrich(
 # ---------------------------------------------------------------------------
 
 
-def _rotate_if_needed(log_path: Path, max_bytes: int) -> None:
-    """Rotate log_path to log_path.1 if it exceeds max_bytes.
-
-    Known: concurrent hooks may race here; 1-level rotation best-effort.
-    """
-    try:
-        if log_path.exists() and log_path.stat().st_size > max_bytes:
-            rotated = log_path.with_suffix(log_path.suffix + ".1")
-            os.rename(log_path, rotated)
-    except OSError:
-        pass
-
-
 def log_denial(vault_root: Path, hit: EnforceHit, tool_input: dict) -> None:
     """Append a JSON line to <vault>/.mnemo/denial-log.jsonl. Never raises."""
     try:
@@ -721,7 +709,7 @@ def log_denial(vault_root: Path, hit: EnforceHit, tool_input: dict) -> None:
         )
 
         log_path = vault_root / ".mnemo" / "denial-log.jsonl"
-        _rotate_if_needed(log_path, max_bytes)
+        rotate_if_needed(log_path, max_bytes)
 
         command = tool_input.get("command", "")
         if isinstance(command, str):
@@ -759,7 +747,7 @@ def log_enrichment(
         )
 
         log_path = vault_root / ".mnemo" / "enrichment-log.jsonl"
-        _rotate_if_needed(log_path, max_bytes)
+        rotate_if_needed(log_path, max_bytes)
 
         project = hits[0].project if hits else ""
         entry = {
