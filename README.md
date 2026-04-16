@@ -7,7 +7,7 @@ self-organizing knowledge base — and then feeds that knowledge back into
 Claude so it stops forgetting what you taught it last week.
 
 It runs as a hooks-only, stdlib-only Python package. Zero third-party
-dependencies, zero telemetry, zero network calls. Identical on Linux,
+dependencies, zero network calls. Identical on Linux,
 macOS, and Windows.
 
 ## Install
@@ -80,11 +80,13 @@ The loop closes. Claude Code itself reaches into mnemo at the start of
 every session, no manual command needed.
 
 - **MCP stdio server** — `mnemo init` registers a long-running JSON-RPC
-  server in `~/.claude.json` exposing three read-only tools:
-  - `list_rules_by_topic(topic)` — slugs sorted by source count desc
+  server in `~/.claude.json` exposing three read-only tools. All three
+  default to `scope="project"` (only rules owned by the current repo);
+  pass `scope="vault"` for cross-project lookups:
+  - `list_rules_by_topic(topic, scope?)` — slugs sorted by source count desc
     (multi-agent synthesized rules surface first)
-  - `read_mnemo_rule(slug)` — full body + frontmatter
-  - `get_mnemo_topics()` — sorted union of all topic tags in the vault
+  - `read_mnemo_rule(slug, scope?)` — full body + frontmatter
+  - `get_mnemo_topics(scope?)` — sorted union of topic tags
 - **SessionStart topic injection** *(opt-in)* — the SessionStart hook
   emits a ~120-token instruction listing the topics in your vault and
   telling Claude to call the MCP tools BEFORE writing code when the task
@@ -298,6 +300,7 @@ mnemo help       list commands
     ├── extract.lock                  background extraction lock
     ├── last-auto-run.json            background extraction telemetry
     ├── mcp-call-counter.json         daily MCP tool call counter (v0.5)
+    ├── mcp-access-log.jsonl          per-call MCP telemetry (v0.5.3, local only)
     └── statusline-original.json      preserved user statusLine (v0.5)
 
 ~/.claude/settings.json               hooks + status line composer
@@ -308,9 +311,10 @@ See [docs/getting-started.md](docs/getting-started.md) for a deeper tour.
 
 ## Privacy
 
-100% local. Zero telemetry. Zero network. No third-party Python packages
+100% local. Zero network. No third-party Python packages
 (`pyproject.toml` declares `dependencies = []` as a load-bearing
-architectural choice). Read the [source](src/mnemo).
+architectural choice). MCP access telemetry (`.mnemo/mcp-access-log.jsonl`)
+stays on disk — nothing leaves your machine. Read the [source](src/mnemo).
 
 ## License
 
