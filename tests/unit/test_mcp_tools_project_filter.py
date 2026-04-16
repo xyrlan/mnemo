@@ -151,3 +151,103 @@ def test_list_rules_by_topic_multi_source_rule_matches_any_project(tmp_vault):
     result_beta = list_rules_by_topic(tmp_vault, "git", project="beta")
     assert len(result_alpha) == 1
     assert len(result_beta) == 1
+
+
+from mnemo.core.mcp.tools import read_mnemo_rule, get_mnemo_topics
+
+
+# --- read_mnemo_rule project filter ---
+
+
+def test_read_mnemo_rule_project_scope_blocks_cross_project(tmp_vault):
+    """NON-NEGOTIABLE: reading a rule from another project returns None."""
+    _write_page(
+        tmp_vault, "feedback", "their-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/beta/memory/m.md"],
+        body="beta's rule body\n",
+    )
+    result = read_mnemo_rule(tmp_vault, "their-rule", project="alpha")
+    assert result is None
+
+
+def test_read_mnemo_rule_project_scope_allows_own_project(tmp_vault):
+    _write_page(
+        tmp_vault, "feedback", "my-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+        body="alpha's rule body\n",
+    )
+    result = read_mnemo_rule(tmp_vault, "my-rule", project="alpha")
+    assert result is not None
+    assert result["slug"] == "my-rule"
+    assert result["body"] == "alpha's rule body\n"
+
+
+def test_read_mnemo_rule_vault_scope_allows_cross_project(tmp_vault):
+    _write_page(
+        tmp_vault, "feedback", "their-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/beta/memory/m.md"],
+        body="beta's rule body\n",
+    )
+    result = read_mnemo_rule(tmp_vault, "their-rule", scope="vault", project="alpha")
+    assert result is not None
+    assert result["slug"] == "their-rule"
+
+
+def test_read_mnemo_rule_project_none_falls_back_to_vault(tmp_vault):
+    _write_page(
+        tmp_vault, "feedback", "any-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/beta/memory/m.md"],
+        body="some body\n",
+    )
+    result = read_mnemo_rule(tmp_vault, "any-rule", scope="project", project=None)
+    assert result is not None
+
+
+# --- get_mnemo_topics project filter ---
+
+
+def test_get_mnemo_topics_project_scope_filters_tags(tmp_vault):
+    """NON-NEGOTIABLE: project scope returns only tags from that project's rules."""
+    _write_page(
+        tmp_vault, "feedback", "alpha-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    _write_page(
+        tmp_vault, "feedback", "beta-rule",
+        tags=["auto-promoted", "database"],
+        sources=["bots/beta/memory/m.md"],
+    )
+    topics = get_mnemo_topics(tmp_vault, project="alpha")
+    assert "git" in topics
+    assert "database" not in topics
+
+
+def test_get_mnemo_topics_vault_scope_returns_all_tags(tmp_vault):
+    _write_page(
+        tmp_vault, "feedback", "alpha-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    _write_page(
+        tmp_vault, "feedback", "beta-rule",
+        tags=["auto-promoted", "database"],
+        sources=["bots/beta/memory/m.md"],
+    )
+    topics = get_mnemo_topics(tmp_vault, scope="vault")
+    assert "git" in topics
+    assert "database" in topics
+
+
+def test_get_mnemo_topics_project_none_falls_back_to_vault(tmp_vault):
+    _write_page(
+        tmp_vault, "feedback", "any-rule",
+        tags=["auto-promoted", "git"],
+        sources=["bots/alpha/memory/m.md"],
+    )
+    topics = get_mnemo_topics(tmp_vault, scope="project", project=None)
+    assert "git" in topics

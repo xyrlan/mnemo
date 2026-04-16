@@ -114,8 +114,15 @@ def list_rules_by_topic(
     return matches
 
 
-def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
+def read_mnemo_rule(
+    vault_root: Path,
+    slug: str,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> RuleBody | None:
     """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs."""
+    filter_project = scope == "project" and project is not None
     for page_type in _RETRIEVAL_TYPES:
         candidate = vault_root / "shared" / page_type / f"{slug}.md"
         if not candidate.is_file():
@@ -126,6 +133,8 @@ def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
             return None
         fm = parse_frontmatter(text)
         if not is_consumer_visible(candidate, fm, vault_root):
+            return None
+        if filter_project and not _rule_belongs_to_project(fm, project):
             return None
         return {
             "slug": slug,
@@ -138,9 +147,28 @@ def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
     return None
 
 
-def get_mnemo_topics(vault_root: Path) -> list[str]:
+def get_mnemo_topics(
+    vault_root: Path,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> list[str]:
     """Return the sorted union of topic tags across every retrieval-eligible type."""
+    filter_project = scope == "project" and project is not None
     seen: set[str] = set()
     for page_type in _RETRIEVAL_TYPES:
-        seen.update(collect_existing_tags(vault_root, page_type))
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
+            continue
+        for md in type_dir.glob("*.md"):
+            try:
+                text = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = parse_frontmatter(text)
+            if not is_consumer_visible(md, fm, vault_root):
+                continue
+            if filter_project and not _rule_belongs_to_project(fm, project):
+                continue
+            seen.update(topic_tags(fm))
     return sorted(seen)
