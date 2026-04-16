@@ -33,11 +33,20 @@ _TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "List mnemo rules tagged with a given topic. Returns slugs sorted "
             "by source_count desc (multi-agent synthesized rules first). "
+            "Results are scoped to the current project by default. "
+            "Pass scope=\"vault\" to include rules from all projects. "
             "Call this BEFORE writing code when the task matches a known topic."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"topic": {"type": "string"}},
+            "properties": {
+                "topic": {"type": "string"},
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "vault"],
+                    "description": "Filter scope. Default: project (current project only).",
+                },
+            },
             "required": ["topic"],
         },
     },
@@ -45,11 +54,20 @@ _TOOL_DEFS: list[dict[str, Any]] = [
         "name": "read_mnemo_rule",
         "description": (
             "Read the full body and frontmatter of a mnemo rule by slug. "
-            "Use after list_rules_by_topic to fetch the actual rule content."
+            "Use after list_rules_by_topic to fetch the actual rule content. "
+            "Results are scoped to the current project by default. "
+            "Pass scope=\"vault\" to read rules from any project."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"slug": {"type": "string"}},
+            "properties": {
+                "slug": {"type": "string"},
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "vault"],
+                    "description": "Filter scope. Default: project (current project only).",
+                },
+            },
             "required": ["slug"],
         },
     },
@@ -57,9 +75,20 @@ _TOOL_DEFS: list[dict[str, Any]] = [
         "name": "get_mnemo_topics",
         "description": (
             "Return all topic tags currently known in the mnemo brain. "
+            "Results are scoped to the current project by default. "
+            "Pass scope=\"vault\" to include topics from all projects. "
             "Fallback for when the SessionStart topic injection is stale."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "vault"],
+                    "description": "Filter scope. Default: project (current project only).",
+                },
+            },
+        },
     },
 ]
 

@@ -435,3 +435,13 @@ def test_server_project_resolution_failure_falls_back_to_vault(tmp_vault, monkey
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert len(payload) == 1
     assert payload[0]["slug"] == "any-rule"
+
+
+def test_tool_defs_include_scope_property():
+    """All three tools must advertise the optional scope parameter."""
+    req = {"jsonrpc": "2.0", "id": 60, "method": "tools/list"}
+    resp = handle_request(req, vault_root=None)
+    for tool in resp["result"]["tools"]:
+        props = tool["inputSchema"]["properties"]
+        assert "scope" in props, f"{tool['name']} missing scope property"
+        assert props["scope"]["type"] == "string"
