@@ -23,16 +23,16 @@ DEFAULTS: dict[str, Any] = {
         "subprocessTimeout": 60,
         "costSoftCap": None,
         "auto": {
-            "enabled": False,
+            "enabled": True,
             "minNewMemories": 1,
             "minIntervalMinutes": 60,
         },
     },
     "briefings": {
-        "enabled": False,
+        "enabled": True,
     },
     "injection": {
-        "enabled": False,
+        "enabled": True,
         "telemetry": {
             "enabled": True,
             "log": {"maxBytes": 1_048_576},
@@ -47,7 +47,7 @@ DEFAULTS: dict[str, Any] = {
         "log": {"maxBytes": 1_048_576},
     },
     "enrichment": {
-        "enabled": False,
+        "enabled": True,
         "maxRulesPerCall": 3,
         "bodyPreviewChars": 300,
         "log": {"maxBytes": 1_048_576},

@@ -119,10 +119,12 @@ Your original output appears first, then ` · `, then mnemo's segment.
 `mnemo uninstall` restores your original cleanly. If you manually edit
 settings.json after `mnemo init`, `mnemo doctor` warns about the drift.
 
-## Opt-in flags
+## Runtime flags
 
-Three runtime features default to **off**, matching the conservative
-release pattern: ship dark, dogfood, then flip. Enable in `~/mnemo/mnemo.config.json`:
+The Capture → Present → Inject loop is **on by default** during the dogfood
+phase — `mnemo init` gives you the full product, not an inert scaffold. The
+four runtime flags can be flipped to `false` in `~/mnemo/mnemo.config.json`
+if you want to disable specific behaviors:
 
 ```json
 {
@@ -138,22 +140,30 @@ release pattern: ship dark, dogfood, then flip. Enable in `~/mnemo/mnemo.config.
   },
   "injection": {
     "enabled": true
+  },
+  "enrichment": {
+    "enabled": true
   }
 }
 ```
 
-- **`extraction.auto.enabled`** — at every session end, if there are at
-  least `minNewMemories` new files (default 1) and at least
-  `minIntervalMinutes` since the last run (default 60), spawn a detached
-  background extraction. The hook returns in <100ms; extraction runs
-  asynchronously. Check progress via `mnemo status`, diagnose with `mnemo doctor`.
-- **`briefings.enabled`** — at every session end, generate a per-session
-  briefing into `bots/<repo>/briefings/sessions/`. Briefings feed the
-  next extraction run as dense input.
-- **`injection.enabled`** *(v0.5)* — at every session start, emit the MCP
-  topic list into Claude's `additionalContext`. The MCP tools are always
-  available once `mnemo init` has run; this flag controls only whether
-  Claude is *told about* the topics at session start.
+- **`extraction.auto.enabled`** *(default `true`)* — at every session end,
+  if there are at least `minNewMemories` new files (default 1) and at
+  least `minIntervalMinutes` since the last run (default 60), spawn a
+  detached background extraction. The hook returns in <100ms; extraction
+  runs asynchronously. Check progress via `mnemo status`, diagnose with
+  `mnemo doctor`.
+- **`briefings.enabled`** *(default `true`)* — at every session end,
+  generate a per-session briefing into `bots/<repo>/briefings/sessions/`.
+  Briefings feed the next extraction run as dense input.
+- **`injection.enabled`** *(default `true`, v0.5)* — at every session
+  start, emit the MCP topic list into Claude's `additionalContext`. The
+  MCP tools are always available once `mnemo init` has run; this flag
+  controls only whether Claude is *told about* the topics at session start.
+- **`enrichment.enabled`** *(default `true`, v0.5)* — when Claude is about
+  to `Edit`/`Write`/`MultiEdit` a file matching a rule's `path_globs`, the
+  PreToolUse hook injects the rule body as additional context before the
+  tool runs. See "Rule activation" below for details.
 
 ## Rule activation *(v0.5)*
 
@@ -190,10 +200,10 @@ capture.
   Rules gain activation metadata either by hand-editing the frontmatter or
   when the extraction LLM emits it for a high-confidence rule (see "Rule
   frontmatter shape" below).
-- **`enrichment.enabled`** defaults to **`false`** because it's slightly
-  more invasive — enrichment surfaces context *every* time you edit a
-  matching file, not just once per block. Turn it on when you have
-  `activates_on:` rules you want visible at edit time.
+- **`enrichment.enabled`** defaults to **`true`** during the dogfood
+  phase. Enrichment surfaces context every time you edit a file matching a
+  rule's `path_globs`. If you want to silence it temporarily while iterating
+  on rules, set to `false` in `mnemo.config.json`.
 
 To disable enforcement (kill switch), add to `~/mnemo/mnemo.config.json`:
 
