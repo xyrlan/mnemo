@@ -54,6 +54,12 @@ def _extract_body(text: str) -> str:
     return text[end + len("\n---\n"):].lstrip("\n")
 
 
+def _rule_belongs_to_project(fm: dict, project: str) -> bool:
+    """True if any source path starts with ``bots/<project>/``."""
+    prefix = f"bots/{project}/"
+    return any(s.startswith(prefix) for s in (fm.get("sources") or []))
+
+
 def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
     """Return slugs whose topic tags include ``topic``.
 
