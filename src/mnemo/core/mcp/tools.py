@@ -18,7 +18,6 @@ from typing import TypedDict
 
 from mnemo.core.agent import resolve_agent
 from mnemo.core.filters import (
-    collect_existing_tags,
     is_consumer_visible,
     parse_frontmatter,
     topic_tags,
