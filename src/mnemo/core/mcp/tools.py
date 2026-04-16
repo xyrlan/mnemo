@@ -69,12 +69,24 @@ def _resolve_current_project(vault_root: Path) -> str | None:
         return None
 
 
-def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
+def list_rules_by_topic(
+    vault_root: Path,
+    topic: str,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> list[RuleRef]:
     """Return slugs whose topic tags include ``topic``.
 
     Sorted by source_count desc, then slug asc — multi-agent synthesized rules
     surface first because they represent stronger trust signal.
+
+    ``scope="project"`` (default) filters results to rules whose sources include
+    the given ``project``.  When ``project`` is ``None`` the filter is silently
+    skipped, preserving backwards-compatible vault-wide behaviour.  Pass
+    ``scope="vault"`` to disable project filtering entirely.
     """
+    filter_project = scope == "project" and project is not None
     matches: list[RuleRef] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
@@ -89,6 +101,8 @@ def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
             if not is_consumer_visible(md, fm, vault_root):
                 continue
             if topic not in topic_tags(fm):
+                continue
+            if filter_project and not _rule_belongs_to_project(fm, project):
                 continue
             sources = fm.get("sources") or []
             matches.append({
