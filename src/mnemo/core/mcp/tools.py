@@ -16,8 +16,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypedDict
 
+from mnemo.core.agent import resolve_agent
 from mnemo.core.filters import (
-    collect_existing_tags,
     is_consumer_visible,
     parse_frontmatter,
     topic_tags,
@@ -54,12 +54,38 @@ def _extract_body(text: str) -> str:
     return text[end + len("\n---\n"):].lstrip("\n")
 
 
-def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
+def _rule_belongs_to_project(fm: dict, project: str) -> bool:
+    """True if any source path starts with ``bots/<project>/``."""
+    prefix = f"bots/{project}/"
+    return any(s.startswith(prefix) for s in (fm.get("sources") or []))
+
+
+def _resolve_current_project(vault_root: Path) -> str | None:
+    """Derive current project from cwd. Returns ``None`` on any failure."""
+    try:
+        return resolve_agent(str(Path.cwd())).name
+    except Exception:
+        return None
+
+
+def list_rules_by_topic(
+    vault_root: Path,
+    topic: str,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> list[RuleRef]:
     """Return slugs whose topic tags include ``topic``.
 
     Sorted by source_count desc, then slug asc — multi-agent synthesized rules
     surface first because they represent stronger trust signal.
+
+    ``scope="project"`` (default) filters results to rules whose sources include
+    the given ``project``.  When ``project`` is ``None`` the filter is silently
+    skipped, preserving backwards-compatible vault-wide behaviour.  Pass
+    ``scope="vault"`` to disable project filtering entirely.
     """
+    filter_project = scope == "project" and project is not None
     matches: list[RuleRef] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
@@ -75,6 +101,8 @@ def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
                 continue
             if topic not in topic_tags(fm):
                 continue
+            if filter_project and not _rule_belongs_to_project(fm, project):
+                continue
             sources = fm.get("sources") or []
             matches.append({
                 "slug": md.stem,
@@ -85,8 +113,15 @@ def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:
     return matches
 
 
-def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
+def read_mnemo_rule(
+    vault_root: Path,
+    slug: str,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> RuleBody | None:
     """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs."""
+    filter_project = scope == "project" and project is not None
     for page_type in _RETRIEVAL_TYPES:
         candidate = vault_root / "shared" / page_type / f"{slug}.md"
         if not candidate.is_file():
@@ -97,6 +132,8 @@ def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
             return None
         fm = parse_frontmatter(text)
         if not is_consumer_visible(candidate, fm, vault_root):
+            return None
+        if filter_project and not _rule_belongs_to_project(fm, project):
             return None
         return {
             "slug": slug,
@@ -109,9 +146,28 @@ def read_mnemo_rule(vault_root: Path, slug: str) -> RuleBody | None:
     return None
 
 
-def get_mnemo_topics(vault_root: Path) -> list[str]:
+def get_mnemo_topics(
+    vault_root: Path,
+    *,
+    scope: str = "project",
+    project: str | None = None,
+) -> list[str]:
     """Return the sorted union of topic tags across every retrieval-eligible type."""
+    filter_project = scope == "project" and project is not None
     seen: set[str] = set()
     for page_type in _RETRIEVAL_TYPES:
-        seen.update(collect_existing_tags(vault_root, page_type))
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
+            continue
+        for md in type_dir.glob("*.md"):
+            try:
+                text = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = parse_frontmatter(text)
+            if not is_consumer_visible(md, fm, vault_root):
+                continue
+            if filter_project and not _rule_belongs_to_project(fm, project):
+                continue
+            seen.update(topic_tags(fm))
     return sorted(seen)

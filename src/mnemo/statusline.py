@@ -53,7 +53,7 @@ def _count_today_denials(vault_root: Path) -> int:
     Returns 0 on any error (file missing, malformed, etc.).
     """
     import json as _json
-    from datetime import date, timezone as _tz
+    from datetime import datetime, timezone as _tz
 
     try:
         log_path = vault_root / ".mnemo" / "denial-log.jsonl"
@@ -64,7 +64,7 @@ def _count_today_denials(vault_root: Path) -> int:
         lines = text.splitlines()
         if len(lines) > 1000:
             lines = lines[-1000:]
-        today_prefix = date.today().strftime("%Y-%m-%d")
+        today_prefix = datetime.now(_tz.utc).strftime("%Y-%m-%d")
         count = 0
         for line in lines:
             line = line.strip()

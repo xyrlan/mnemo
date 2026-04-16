@@ -320,8 +320,8 @@ def _read_denial_log_tail(vault: Path, max_lines: int = 1000) -> list[dict]:
 
 def _count_today_denial_entries(entries: list[dict]) -> int:
     """Count entries whose timestamp starts with today's date (UTC)."""
-    from datetime import date
-    today_prefix = date.today().strftime("%Y-%m-%d")
+    from datetime import datetime, timezone
+    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return sum(
         1 for e in entries
         if isinstance(e.get("timestamp"), str) and e["timestamp"].startswith(today_prefix)
