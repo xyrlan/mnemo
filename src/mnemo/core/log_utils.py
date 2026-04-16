@@ -10,6 +10,6 @@ def rotate_if_needed(log_path: Path, max_bytes: int) -> None:
     try:
         if log_path.exists() and log_path.stat().st_size > max_bytes:
             rotated = log_path.with_suffix(log_path.suffix + ".1")
-            os.rename(log_path, rotated)
+            os.replace(log_path, rotated)
     except OSError:
         pass
