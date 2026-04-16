@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypedDict
 
+from mnemo.core.agent import resolve_agent
 from mnemo.core.filters import (
     collect_existing_tags,
     is_consumer_visible,
@@ -58,6 +59,14 @@ def _rule_belongs_to_project(fm: dict, project: str) -> bool:
     """True if any source path starts with ``bots/<project>/``."""
     prefix = f"bots/{project}/"
     return any(s.startswith(prefix) for s in (fm.get("sources") or []))
+
+
+def _resolve_current_project(vault_root: Path) -> str | None:
+    """Derive current project from cwd. Returns ``None`` on any failure."""
+    try:
+        return resolve_agent(str(Path.cwd())).name
+    except Exception:
+        return None
 
 
 def list_rules_by_topic(vault_root: Path, topic: str) -> list[RuleRef]:

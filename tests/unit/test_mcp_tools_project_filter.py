@@ -31,3 +31,25 @@ def test_rule_belongs_partial_prefix_no_false_positive():
     """'bots/mn/' must NOT match project 'mnemo'."""
     fm = {"sources": ["bots/mn/memory/m.md"]}
     assert _rule_belongs_to_project(fm, "mnemo") is False
+
+
+from unittest.mock import patch
+from pathlib import Path
+
+from mnemo.core.mcp.tools import _resolve_current_project
+
+
+def test_resolve_current_project_returns_project_name(tmp_vault):
+    """When cwd is inside a git repo, return the sanitized repo name."""
+    git_dir = tmp_vault / ".git"
+    git_dir.mkdir()
+    with patch("mnemo.core.mcp.tools.Path") as MockPath:
+        MockPath.cwd.return_value = tmp_vault
+        result = _resolve_current_project(tmp_vault)
+    assert result == "vault"  # tmp_vault dir name is "vault" per conftest
+
+
+def test_resolve_current_project_returns_none_on_failure(tmp_vault):
+    with patch("mnemo.core.mcp.tools.resolve_agent", side_effect=RuntimeError("boom")):
+        result = _resolve_current_project(tmp_vault)
+    assert result is None
