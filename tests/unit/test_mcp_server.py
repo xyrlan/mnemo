@@ -445,3 +445,84 @@ def test_tool_defs_include_scope_property():
         props = tool["inputSchema"]["properties"]
         assert "scope" in props, f"{tool['name']} missing scope property"
         assert props["scope"]["type"] == "string"
+
+
+def test_server_records_access_log_entry(tmp_vault, monkeypatch):
+    """NON-NEGOTIABLE: server writes access log after each tool dispatch."""
+    _write_page(
+        tmp_vault, "feedback", "f1",
+        tags=["auto-promoted", "git"],
+        sources=["bots/a/m.md"],
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.access_log._load_telemetry_config",
+        lambda: (True, 1_048_576),
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 70,
+        "method": "tools/call",
+        "params": {
+            "name": "list_rules_by_topic",
+            "arguments": {"topic": "git"},
+        },
+    }
+    handle_request(req, vault_root=tmp_vault)
+
+    log_path = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
+    assert log_path.exists()
+    entry = json.loads(log_path.read_text().strip())
+    assert entry["tool"] == "list_rules_by_topic"
+    assert entry["args"] == {"topic": "git", "scope": "project"}
+    assert entry["result_count"] >= 0
+    assert isinstance(entry["elapsed_ms"], float)
+    assert isinstance(entry["hit_slugs"], list)
+
+
+def test_server_access_log_records_scope_and_project(tmp_vault, monkeypatch):
+    monkeypatch.setattr(
+        "mnemo.core.mcp.tools._resolve_current_project",
+        lambda vault_root: "test-proj",
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.access_log._load_telemetry_config",
+        lambda: (True, 1_048_576),
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/call",
+        "params": {
+            "name": "get_mnemo_topics",
+            "arguments": {"scope": "vault"},
+        },
+    }
+    handle_request(req, vault_root=tmp_vault)
+    log_path = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
+    entry = json.loads(log_path.read_text().strip())
+    assert entry["scope_requested"] == "vault"
+    assert entry["project"] == "test-proj"
+
+
+def test_server_access_log_failure_does_not_break_tool_call(tmp_vault, monkeypatch):
+    _write_page(
+        tmp_vault, "feedback", "f1",
+        tags=["auto-promoted", "git"],
+        sources=["bots/a/m.md"],
+    )
+    monkeypatch.setattr(
+        "mnemo.core.mcp.access_log.record",
+        lambda vault_root, entry: (_ for _ in ()).throw(RuntimeError("log boom")),
+    )
+    req = {
+        "jsonrpc": "2.0",
+        "id": 72,
+        "method": "tools/call",
+        "params": {
+            "name": "list_rules_by_topic",
+            "arguments": {"topic": "git"},
+        },
+    }
+    resp = handle_request(req, vault_root=tmp_vault)
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert isinstance(payload, list)
