@@ -576,7 +576,11 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
             except Exception:
                 continue
 
-            slug = md_path.stem
+            # Match `build_index`'s slug derivation exactly
+            # (src/mnemo/core/rule_activation.py:323) — the index stores
+            # `fm.get("slug") or fm.get("name") or md_path.stem`, NOT just
+            # the filename stem. Getting this wrong silently misses hits.
+            slug = fm.get("slug") or fm.get("name") or md_path.stem
             rel = md_path.name
 
             has_enforce = parse_enforce_block(fm) is not None
