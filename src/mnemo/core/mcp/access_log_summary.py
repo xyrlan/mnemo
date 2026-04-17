@@ -13,6 +13,11 @@ _LOG_FILENAME = "mcp-access-log.jsonl"
 _NULL_PROJECT_BUCKET = "(unresolved)"
 _REQUIRED_FIELDS = ("tool", "result_count")
 
+# Warn threshold for `mnemo doctor` zero-hit check. Derived from
+# docs/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md §5.3 Question B:
+# ">30% zero-hit rate indicates ontology gaps".
+_ZERO_HIT_THRESHOLD = 0.30
+
 
 def _is_well_formed(entry: dict) -> bool:
     return all(key in entry for key in _REQUIRED_FIELDS)

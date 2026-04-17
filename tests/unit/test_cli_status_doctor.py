@@ -313,3 +313,224 @@ def test_doctor_silent_when_recall_report_malformed(
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "Recall" not in out
+
+
+# --- Zero-hit doctor check -------------------------------------------------
+
+def _seed_access_log(vault: Path, entries: list[dict]) -> None:
+    mnemo_dir = vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "mcp-access-log.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8",
+    )
+
+
+def _preflight_noop(monkeypatch, vault: Path):
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr(
+        "mnemo.install.preflight.run_preflight",
+        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})(),
+    )
+
+
+def test_doctor_zero_hit_silent_when_below_threshold(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    entries = [{"tool": "list_rules_by_topic", "result_count": 1, "project": "p"} for _ in range(18)]
+    entries += [{"tool": "list_rules_by_topic", "result_count": 0, "project": "p"} for _ in range(2)]
+    _seed_access_log(vault, entries)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Zero-hit" not in out
+
+
+def test_doctor_zero_hit_silent_when_few_calls(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    entries = [{"tool": "list_rules_by_topic", "result_count": 0, "project": "p"} for _ in range(4)]
+    entries += [{"tool": "list_rules_by_topic", "result_count": 1, "project": "p"}]
+    _seed_access_log(vault, entries)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Zero-hit" not in out
+
+
+def test_doctor_zero_hit_warns_when_above_threshold(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    entries = [{"tool": "list_rules_by_topic", "result_count": 0, "project": "proj-a"} for _ in range(10)]
+    entries += [{"tool": "list_rules_by_topic", "result_count": 1, "project": "proj-a"} for _ in range(10)]
+    _seed_access_log(vault, entries)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Zero-hit calls: 50.0%" in out
+    assert "proj-a" in out
+    assert "review the tag ontology" in out
+
+
+# --- Activation fidelity doctor check --------------------------------------
+
+def _seed_feedback_rule(
+    vault: Path,
+    slug: str,
+    *,
+    enforce: dict | None = None,
+    activates_on: dict | None = None,
+    body: str = "some body content\n",
+) -> None:
+    d = vault / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    lines = ["---", "type: feedback", "tags:", "  - workflow", "sources:", f"  - bots/proj-x/memory/{slug}.md"]
+    if enforce:
+        lines.append("enforce:")
+        for k, v in enforce.items():
+            if isinstance(v, list):
+                lines.append(f"  {k}:")
+                for item in v:
+                    lines.append(f"    - {item}")
+            else:
+                lines.append(f"  {k}: {v}")
+    if activates_on:
+        lines.append("activates_on:")
+        for k, v in activates_on.items():
+            if isinstance(v, list):
+                lines.append(f"  {k}:")
+                for item in v:
+                    lines.append(f"    - {item}")
+            else:
+                lines.append(f"  {k}: {v}")
+    lines.append("---")
+    lines.append("")
+    lines.append(body)
+    (d / f"{slug}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_doctor_activation_fidelity_silent_when_index_missing(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "absent from the activation index" not in out
+    assert "does not self-activate" not in out
+
+
+def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
+    tmp_path, monkeypatch, capsys,
+):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    _seed_feedback_rule(
+        vault, "orphan-rule",
+        enforce={"tool": "Bash", "reason": "blocked", "deny_patterns": ["dangerous-command"]},
+    )
+    (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
+        "schema_version": 1,
+        "enforce_by_project": {},
+        "enrich_by_project": {},
+    }))
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "orphan-rule.md" in out
+    assert "absent from the activation index" in out
+
+
+def test_doctor_activation_fidelity_info_line_for_complex_globs(
+    tmp_path, monkeypatch, capsys,
+):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
+        "schema_version": 1,
+        "enforce_by_project": {},
+        "enrich_by_project": {
+            "proj-x": [{
+                "slug": "char-class-rule",
+                "path_globs": ["src/[abc]*.py"],
+                "tools": ["Edit"],
+                "rule_body_preview": "",
+                "source_count": 1,
+            }],
+        },
+    }))
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "no auto-testable path_globs" in out
+    assert "Warnings above." not in out
+
+
+# --- Rule-integrity doctor check -------------------------------------------
+
+def _seed_canonical_rule(
+    vault: Path, page_type: str, slug: str,
+    *, sources_exist: bool = True, body: str = "a" * 100,
+) -> None:
+    d = vault / "shared" / page_type
+    d.mkdir(parents=True, exist_ok=True)
+    source_path = f"bots/proj-x/memory/{slug}.md"
+    if sources_exist:
+        src_dir = vault / "bots" / "proj-x" / "memory"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / f"{slug}.md").write_text("original source\n")
+    lines = ["---", f"type: {page_type}", "tags:", "  - workflow", "sources:", f"  - {source_path}", "---", "", body]
+    (d / f"{slug}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_doctor_rule_integrity_warns_on_missing_source(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    _seed_canonical_rule(vault, "feedback", "ghost", sources_exist=False)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "source path does not resolve" in out
+    assert "feedback/ghost.md" in out
+
+
+def test_doctor_rule_integrity_warns_on_short_body(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    _seed_canonical_rule(vault, "feedback", "tiny", body="too short")
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "body has" in out
+    assert "feedback/tiny.md" in out
+
+
+def test_doctor_rule_integrity_ignores_inbox_drafts(tmp_path, monkeypatch, capsys):
+    """Drafts under shared/_inbox/ must be skipped even when malformed."""
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    inbox = vault / "shared" / "_inbox" / "feedback"
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "draft.md").write_text("---\ntype: feedback\ntags: []\nsources: []\n---\n\nx\n")
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "draft.md" not in out
+
+
+def test_doctor_rule_integrity_happy_path_silent(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    _seed_canonical_rule(vault, "feedback", "good-rule", body="b" * 200)
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "good-rule.md" not in out

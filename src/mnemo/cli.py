@@ -438,12 +438,16 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     legacy_ok = _doctor_check_legacy_wiki_dirs(vault)
     statusline_ok = _doctor_check_statusline_drift(vault)
     activation_ok = _doctor_check_activation(vault)
+    zero_hit_ok = _doctor_check_zero_hit(vault)
+    activation_fidelity_ok = _doctor_check_activation_fidelity(vault)
+    rule_integrity_ok = _doctor_check_rule_integrity(vault)
     _doctor_report_recall(vault)
 
     if not result.ok:
         print("Issues found above.")
         return 1
-    if not auto_ok or not legacy_ok or not statusline_ok or not activation_ok:
+    if not (auto_ok and legacy_ok and statusline_ok and activation_ok
+            and zero_hit_ok and activation_fidelity_ok and rule_integrity_ok):
         print("Warnings above.")
     else:
         print("OK")
@@ -473,6 +477,224 @@ def _doctor_report_recall(vault: Path) -> None:
     ts = data.get("generated_at")
     suffix = f" (measured {ts})" if ts else ""
     print(f"  ℹ Recall: primacy@5 = {rate:.1%} over {cases} cases{suffix}")
+
+
+def _doctor_check_zero_hit(vault: Path) -> bool:
+    """Warn if the access log shows a high zero-hit rate — ontology may have gaps.
+
+    Silent when fewer than 10 total calls have been logged (small samples
+    produce noise). Emits a single warning + project-level breakdown (top 3
+    projects by zero-hit count) when `zero_hit_rate > _ZERO_HIT_THRESHOLD`.
+    """
+    from mnemo.core.mcp import access_log_summary as summary_mod
+
+    entries = summary_mod.read_log(vault)
+    summary = summary_mod.summarize(entries)
+    total = summary["total_calls"]
+    if total < 10:
+        return True
+
+    rate = summary["zero_hit_rate"]
+    if rate <= summary_mod._ZERO_HIT_THRESHOLD:
+        return True
+
+    print(f"  \u26a0 Zero-hit calls: {rate:.1%} of {total} MCP calls returned no rules (threshold {summary_mod._ZERO_HIT_THRESHOLD:.0%})")
+    offenders = sorted(
+        summary["by_project"].items(),
+        key=lambda kv: -int(kv[1]["zero_hit"]),
+    )[:3]
+    for project, bucket in offenders:
+        zh = int(bucket["zero_hit"])
+        calls = int(bucket["calls"])
+        if zh == 0:
+            continue
+        print(f"       \u2192 {project}: {zh}/{calls} zero-hit")
+    print("       \u2192 review the tag ontology or add rules for under-covered topics")
+    return False
+
+
+def _synthesize_path_for_glob(glob: str) -> str | None:
+    """Produce a concrete file path that should match the glob, or None.
+
+    Deterministic replacements:
+      ``**/`` -> ``a/``   (match-zero-or-more-segments case)
+      ``**``  -> ``a``    (trailing double-star)
+      ``*``   -> ``sample`` (single segment)
+    Returns None when the glob contains character classes or ``?`` — those
+    cannot be safely synthesized without guessing which characters the author
+    intended to match.
+    """
+    if "?" in glob or "[" in glob:
+        return None
+    out = glob.replace("**/", "a/").replace("**", "a").replace("*", "sample")
+    return out or None
+
+
+def _doctor_check_activation_fidelity(vault: Path) -> bool:
+    """Positive self-check: every enforce/activates_on rule reaches the index
+    and its globs actually match a synthesized path.
+
+    Complements `_doctor_check_activation` (which validates malformed blocks)
+    with a round-trip: if the frontmatter parses but the slug never enters the
+    index or never self-activates on a representative path, something broke
+    between authoring and dispatch.
+
+    Returns True iff no warnings were emitted. `ℹ` info lines (for rules whose
+    globs are un-synthesizable) are NOT warnings.
+    """
+    from mnemo.core.filters import parse_frontmatter
+    from mnemo.core.rule_activation import (
+        load_index,
+        match_path_enrich,
+        parse_activates_on_block,
+        parse_enforce_block,
+    )
+
+    index = load_index(vault)
+    if index is None:
+        return True  # no index yet; _doctor_check_activation surfaces staleness
+
+    indexed_slugs: set[str] = set()
+    for bucket in (index.get("enforce_by_project", {}), index.get("enrich_by_project", {})):
+        for rules in bucket.values():
+            for r in rules:
+                slug = r.get("slug")
+                if slug:
+                    indexed_slugs.add(slug)
+
+    ok = True
+
+    feedback_dir = vault / "shared" / "feedback"
+    if feedback_dir.is_dir():
+        for md_path in sorted(feedback_dir.glob("*.md")):
+            try:
+                text = md_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                fm = parse_frontmatter(text)
+            except Exception:
+                continue
+
+            slug = md_path.stem
+            rel = md_path.name
+
+            has_enforce = parse_enforce_block(fm) is not None
+            has_enrich = parse_activates_on_block(fm) is not None
+
+            if has_enforce and slug not in indexed_slugs:
+                print(f"  \u26a0 Rule {rel!r} has a valid enforce block but is absent from the activation index")
+                print(f"       \u2192 run 'mnemo extract' to rebuild the index")
+                ok = False
+            if has_enrich and slug not in indexed_slugs:
+                print(f"  \u26a0 Rule {rel!r} has a valid activates_on block but is absent from the activation index")
+                print(f"       \u2192 run 'mnemo extract' to rebuild the index")
+                ok = False
+
+    for project, rules in index.get("enrich_by_project", {}).items():
+        for rule in rules:
+            slug = rule.get("slug")
+            if not slug:
+                continue
+            globs = rule.get("path_globs", []) or []
+            tools = rule.get("tools", []) or []
+            if not globs or not tools:
+                continue
+            any_testable = False
+            mismatched = False
+            for glob in globs:
+                sample = _synthesize_path_for_glob(glob)
+                if sample is None:
+                    continue
+                any_testable = True
+                for tool in tools:
+                    hits = match_path_enrich(index, project, sample, tool)
+                    if slug not in [h.slug for h in hits]:
+                        print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
+                        print(f"       \u2192 review the glob shape or the enrich build pipeline")
+                        ok = False
+                        mismatched = True
+                        break
+                if mismatched:
+                    break
+            if not any_testable and not mismatched:
+                print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
+
+    return ok
+
+
+def _doctor_check_rule_integrity(vault: Path) -> bool:
+    """Validate canonical rules in shared/{feedback,user,reference}/.
+
+    Checks, per file:
+      - frontmatter parses non-empty
+      - required fields present: type, tags (non-empty), sources (non-empty)
+      - every source path resolves under the vault
+      - body (text after frontmatter) >= _MIN_BODY_CHARS
+    Files that the shared filter marks as non-canonical (drafts in
+    ``shared/_inbox/``, ``needs-review``-tagged, ``stability: evolving``) are
+    excluded to avoid noise on transient extraction artefacts.
+    """
+    from mnemo.core.filters import is_consumer_visible, parse_frontmatter
+    from mnemo.core.mcp.tools import _RETRIEVAL_TYPES, _extract_body
+
+    shared = vault / "shared"
+    if not shared.is_dir():
+        return True
+
+    ok = True
+    for page_type in _RETRIEVAL_TYPES:
+        type_dir = shared / page_type
+        if not type_dir.is_dir():
+            continue
+        for md_path in sorted(type_dir.glob("*.md")):
+            try:
+                text = md_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                fm = parse_frontmatter(text)
+            except Exception:
+                fm = {}
+
+            if not fm:
+                print(f"  \u26a0 Rule {page_type}/{md_path.name}: frontmatter unparseable or missing")
+                print(f"       \u2192 re-run 'mnemo extract' or fix the frontmatter manually")
+                ok = False
+                continue
+
+            if not is_consumer_visible(md_path, fm, vault):
+                continue  # draft / needs-review / evolving — skip integrity
+
+            rel = f"{page_type}/{md_path.name}"
+            if not fm.get("type"):
+                print(f"  \u26a0 Rule {rel}: missing 'type' field in frontmatter")
+                ok = False
+            if not fm.get("tags"):
+                print(f"  \u26a0 Rule {rel}: 'tags' field is empty or missing")
+                ok = False
+
+            sources = fm.get("sources") or []
+            if not sources:
+                print(f"  \u26a0 Rule {rel}: 'sources' field is empty or missing")
+                ok = False
+            else:
+                for src in sources:
+                    if not isinstance(src, str):
+                        continue
+                    if not (vault / src).is_file():
+                        print(f"  \u26a0 Rule {rel}: source path does not resolve: {src}")
+                        ok = False
+
+            body = _extract_body(text).strip()
+            if len(body) < _MIN_BODY_CHARS:
+                print(f"  \u26a0 Rule {rel}: body has {len(body)} chars (min {_MIN_BODY_CHARS})")
+                ok = False
+
+    return ok
+
+
+_MIN_BODY_CHARS = 50
 
 
 def _doctor_check_activation(vault: Path) -> bool:
