@@ -444,6 +444,50 @@ def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
     assert "absent from the activation index" in out
 
 
+def test_doctor_activation_fidelity_matches_index_slug_from_name_field(
+    tmp_path, monkeypatch, capsys,
+):
+    """Regression: build_index uses ``fm.name`` (or fm.slug) as the index slug,
+    not the filename stem. Fidelity must derive slug the same way, otherwise
+    any rule with a human-readable ``name`` field is falsely flagged as absent.
+    """
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    # Feedback file whose frontmatter declares a different `name` than filename
+    d = vault / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "my-rule.md").write_text(
+        "---\n"
+        "type: feedback\n"
+        "name: Display Name For Rule\n"
+        "tags:\n"
+        "  - workflow\n"
+        "sources:\n"
+        "  - bots/proj-x/memory/my-rule.md\n"
+        "enforce:\n"
+        "  tool: Bash\n"
+        "  reason: blocked\n"
+        "  deny_patterns:\n"
+        "    - rm -rf /\n"
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+    # Index stores the display name as the slug — matching build_index
+    (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
+        "schema_version": 1,
+        "enforce_by_project": {
+            "proj-x": [{"slug": "Display Name For Rule", "deny_patterns": ["rm -rf /"], "source_count": 1}],
+        },
+        "enrich_by_project": {},
+    }))
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    # MUST NOT report absent — the slug is present under the name-field key
+    assert "absent from the activation index" not in out
+
+
 def test_doctor_activation_fidelity_info_line_for_complex_globs(
     tmp_path, monkeypatch, capsys,
 ):
