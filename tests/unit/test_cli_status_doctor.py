@@ -250,3 +250,66 @@ def test_doctor_warns_when_auto_enabled_but_no_recent_run(tmp_path, monkeypatch,
     cli.main(["doctor"])
     captured = capsys.readouterr()
     assert "7" in captured.out or "days" in captured.out.lower()
+
+
+def test_doctor_surfaces_recall_report_when_present(
+    tmp_path, monkeypatch, capsys: pytest.CaptureFixture,
+):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    payload = {
+        "generated_at": "2026-04-17T12:00:00Z",
+        "report": {
+            "cases": 8,
+            "primacy_rate_at_5": 0.75,
+        },
+        "results": [],
+    }
+    (vault / ".mnemo" / "recall-report.json").write_text(json.dumps(payload))
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr(
+        "mnemo.install.preflight.run_preflight",
+        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})(),
+    )
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Recall" in out
+    assert "primacy@5 = 75.0%" in out
+    assert "over 8 cases" in out
+    assert "2026-04-17T12:00:00Z" in out
+
+
+def test_doctor_silent_when_recall_report_absent(
+    tmp_path, monkeypatch, capsys: pytest.CaptureFixture,
+):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr(
+        "mnemo.install.preflight.run_preflight",
+        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})(),
+    )
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Recall" not in out
+    assert "primacy" not in out
+
+
+def test_doctor_silent_when_recall_report_malformed(
+    tmp_path, monkeypatch, capsys: pytest.CaptureFixture,
+):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    (vault / ".mnemo" / "recall-report.json").write_text("not json")
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
+    monkeypatch.setattr(
+        "mnemo.install.preflight.run_preflight",
+        lambda vault_root=None: type("R", (), {"issues": [], "ok": True})(),
+    )
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Recall" not in out

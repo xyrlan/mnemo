@@ -11,3 +11,4 @@ venv/
 .mypy_cache/
 .DS_Store
 .claude/
+tests/recall/last-report.json

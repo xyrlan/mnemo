@@ -1,0 +1,58 @@
+[
+  {
+    "id": "mnemo:automation:auto-populate-over-manual-curation",
+    "project": "mnemo",
+    "topic": "automation",
+    "expect_slug": "auto-populate-over-manual-curation",
+    "rank_at_bootstrap": 1
+  },
+  {
+    "id": "mnemo:automation:defer-semantic-search-until-telemetry-proves-need",
+    "project": "mnemo",
+    "topic": "automation",
+    "expect_slug": "defer-semantic-search-until-telemetry-proves-need",
+    "rank_at_bootstrap": 4
+  },
+  {
+    "id": "mnemo:automation:shared-filter-spec-source-of-truth",
+    "project": "mnemo",
+    "topic": "automation",
+    "expect_slug": "shared-filter-spec-source-of-truth",
+    "rank_at_bootstrap": 7
+  },
+  {
+    "id": "mnemo:workflow:briefs-as-dense-handoff-fuel",
+    "project": "mnemo",
+    "topic": "workflow",
+    "expect_slug": "briefs-as-dense-handoff-fuel",
+    "rank_at_bootstrap": 1
+  },
+  {
+    "id": "mnemo:workflow:gate-briefings-on-file-mutations",
+    "project": "mnemo",
+    "topic": "workflow",
+    "expect_slug": "gate-briefings-on-file-mutations",
+    "rank_at_bootstrap": 2
+  },
+  {
+    "id": "mnemo:workflow:vault-segregation-by-project",
+    "project": "mnemo",
+    "topic": "workflow",
+    "expect_slug": "vault-segregation-by-project",
+    "rank_at_bootstrap": 5
+  },
+  {
+    "id": "sg-imports:database:financial-data-immutability",
+    "project": "sg-imports",
+    "topic": "database",
+    "expect_slug": "financial-data-immutability",
+    "rank_at_bootstrap": 1
+  },
+  {
+    "id": "sg-imports:workflow:translate-all-three-locales-always",
+    "project": "sg-imports",
+    "topic": "workflow",
+    "expect_slug": "translate-all-three-locales-always",
+    "rank_at_bootstrap": 1
+  }
+]

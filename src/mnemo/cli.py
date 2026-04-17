@@ -53,6 +53,10 @@ def _build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--yes", "-y", action="store_true")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")
+    recall.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    recall.add_argument("--no-bootstrap", action="store_true", help="reuse existing cases.json instead of regenerating")
+    recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")
     sub.add_parser("help", help="list commands")
     return p
 
@@ -434,6 +438,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     legacy_ok = _doctor_check_legacy_wiki_dirs(vault)
     statusline_ok = _doctor_check_statusline_drift(vault)
     activation_ok = _doctor_check_activation(vault)
+    _doctor_report_recall(vault)
 
     if not result.ok:
         print("Issues found above.")
@@ -443,6 +448,31 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     else:
         print("OK")
     return 0
+
+
+def _doctor_report_recall(vault: Path) -> None:
+    """Emit one informational line from `.mnemo/recall-report.json` if present.
+
+    Purely advisory — never turns doctor into a warning/error, since the recall
+    suite is opt-in and the primacy rate is a trend indicator, not a pass/fail
+    gate. Silent when the report is missing, malformed, or empty.
+    """
+    import json as _json
+    path = vault / ".mnemo" / "recall-report.json"
+    if not path.is_file():
+        return
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        return
+    report = (data.get("report") or {}) if isinstance(data, dict) else {}
+    cases = report.get("cases", 0) or 0
+    rate = report.get("primacy_rate_at_5")
+    if cases == 0 or rate is None:
+        return
+    ts = data.get("generated_at")
+    suffix = f" (measured {ts})" if ts else ""
+    print(f"  ℹ Recall: primacy@5 = {rate:.1%} over {cases} cases{suffix}")
 
 
 def _doctor_check_activation(vault: Path) -> bool:
@@ -848,6 +878,71 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
         print(_json.dumps(summary, indent=2))
     else:
         print(summary_mod.format_human(summary))
+    return 0
+
+
+@command("recall")
+def cmd_recall(args: argparse.Namespace) -> int:
+    """Measure retrieval ranking against historical queries captured in the access log.
+
+    Reads ``.mnemo/mcp-access-log.jsonl``, pairs each ``list_rules_by_topic`` call with
+    the ``read_mnemo_rule`` that consumed it, re-runs the live ranking, and reports
+    hit@3/@5/@10 + MRR + p95 latency. Outputs to ``.mnemo/recall-cases.json`` (fixture)
+    and ``.mnemo/recall-report.json`` (last run).
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    from mnemo.core.mcp.recall import (
+        aggregate, bootstrap_cases, count_log_entries, format_report, run_case,
+    )
+
+    vault = _resolve_vault()
+    mnemo_dir = vault / ".mnemo"
+    cases_path = mnemo_dir / "recall-cases.json"
+    report_path = mnemo_dir / "recall-report.json"
+    log_path = mnemo_dir / "mcp-access-log.jsonl"
+    use_json = bool(getattr(args, "json", False))
+
+    if not args.no_bootstrap:
+        if not log_path.is_file():
+            print(f"error: access log missing: {log_path}", file=sys.stderr)
+            return 1
+        cases = bootstrap_cases(log_path, pair_window_s=args.window_s)
+        mnemo_dir.mkdir(parents=True, exist_ok=True)
+        cases_path.write_text(_json.dumps(cases, indent=2) + "\n", encoding="utf-8")
+    else:
+        if not cases_path.is_file():
+            print(
+                f"error: cases file missing: {cases_path} — run `mnemo recall` without --no-bootstrap first",
+                file=sys.stderr,
+            )
+            return 1
+        cases = _json.loads(cases_path.read_text(encoding="utf-8"))
+
+    if not cases:
+        msg = "no cases generated — access log has no matching list→read pairs yet."
+        if use_json:
+            print(_json.dumps({"report": None, "results": [], "reason": msg}))
+        else:
+            print(msg)
+        return 0
+
+    results = [run_case(vault, c) for c in cases]
+    log_entries = count_log_entries(log_path)
+    report = aggregate(results, log_entries=log_entries)
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "report": report,
+        "results": results,
+    }
+    report_path.write_text(_json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    if use_json:
+        print(_json.dumps(payload, indent=2))
+    else:
+        print(format_report(report))
+        print(f"\n(written to {report_path})")
     return 0
 
 
