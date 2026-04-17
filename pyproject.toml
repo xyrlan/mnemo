@@ -29,7 +29,10 @@ mnemo = ["templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not recall'"
+markers = [
+    "recall: live retrieval regression suite (opt-in; runs against a real vault)",
+]
 
 [tool.coverage.run]
 branch = true
