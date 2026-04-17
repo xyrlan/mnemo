@@ -51,6 +51,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("statusline-compose", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
+    telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
+    telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     sub.add_parser("help", help="list commands")
     return p
 
@@ -830,6 +832,23 @@ def cmd_statusline_compose(_args: argparse.Namespace) -> int:
     """Hidden: composer that runs the user's original statusLine + mnemo's segment."""
     from mnemo import statusline as sl
     return sl.compose()
+
+
+@command("telemetry")
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    """Summarize `.mnemo/mcp-access-log.jsonl` — calls per tool + zero-hit per project."""
+    import json as _json
+    from mnemo.core.mcp import access_log_summary as summary_mod
+
+    vault = _resolve_vault()
+    entries = summary_mod.read_log(vault)
+    summary = summary_mod.summarize(entries)
+
+    if bool(getattr(args, "json", False)):
+        print(_json.dumps(summary, indent=2))
+    else:
+        print(summary_mod.format_human(summary))
+    return 0
 
 
 @command("uninstall")
