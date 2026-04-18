@@ -141,8 +141,9 @@ def list_rules_by_topic(
             if filter_project and not _rule_belongs_to_project(fm, project):
                 continue
             sources = fm.get("sources") or []
+            slug = fm.get("slug") or fm.get("name") or md.stem
             legacy.append({
-                "slug": md.stem,
+                "slug": slug,
                 "type": page_type,
                 "source_count": len(sources),
             })
@@ -184,28 +185,33 @@ def read_mnemo_rule(
         }
 
     # Fallback: legacy glob. All rules treated as local (no universality).
+    # Scan for the file whose derived slug (fm.slug/fm.name/stem) matches.
     filter_project = scope in ("project", "local-only") and project is not None
     for page_type in _RETRIEVAL_TYPES:
-        candidate = vault_root / "shared" / page_type / f"{slug}.md"
-        if not candidate.is_file():
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
             continue
-        try:
-            text = candidate.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        fm = parse_frontmatter(text)
-        if not is_consumer_visible(candidate, fm, vault_root):
-            return None
-        if filter_project and not _rule_belongs_to_project(fm, project):
-            return None
-        return {
-            "slug": slug,
-            "type": page_type,
-            "name": fm.get("name", slug),
-            "tags": topic_tags(fm),
-            "sources": fm.get("sources") or [],
-            "body": _extract_body(text),
-        }
+        for candidate in type_dir.glob("*.md"):
+            try:
+                text = candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = parse_frontmatter(text)
+            derived_slug = fm.get("slug") or fm.get("name") or candidate.stem
+            if derived_slug != slug:
+                continue
+            if not is_consumer_visible(candidate, fm, vault_root):
+                return None
+            if filter_project and not _rule_belongs_to_project(fm, project):
+                return None
+            return {
+                "slug": slug,
+                "type": page_type,
+                "name": fm.get("name", slug),
+                "tags": topic_tags(fm),
+                "sources": fm.get("sources") or [],
+                "body": _extract_body(text),
+            }
     return None
 
 

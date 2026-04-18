@@ -95,9 +95,9 @@ def test_list_rules_by_topic_falls_back_when_index_missing(tmp_vault):
     _write_feedback(tmp_vault, "local", name="local-rule",
                     tags=["git", "auto-promoted"],
                     sources=["bots/alpha/memory/l.md"])
-    # No write_index call — fallback path must work
+    # No write_index call — fallback path must work; slug derived from fm.name
     results = list_rules_by_topic(tmp_vault, "git", scope="project", project="alpha")
-    assert any(r["slug"] == "local" for r in results)
+    assert any(r["slug"] == "local-rule" for r in results)
 
 
 from mnemo.core.mcp.tools import read_mnemo_rule
@@ -154,3 +154,42 @@ def test_get_mnemo_topics_vault_union(tmp_vault):
     write_index(tmp_vault, build_index(tmp_vault))
     topics = get_mnemo_topics(tmp_vault, scope="vault")
     assert "x" in topics and "y" in topics
+
+
+def test_fallback_slug_matches_fast_path_when_name_differs_from_stem(tmp_vault):
+    """Slug derivation must be consistent between fast-path (index) and fallback.
+
+    Regression: when fm.name differs from file stem, the fast path returned the
+    name-derived slug, but the fallback returned md.stem. Callers couldn't chain
+    list_rules_by_topic -> read_mnemo_rule when the index was absent.
+    """
+    # Write a feedback file where stem != name
+    (tmp_vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    (tmp_vault / "shared" / "feedback" / "feedback_foo.md").write_text(
+        "---\n"
+        "name: use-tabs\n"
+        "stability: stable\n"
+        "tags:\n  - code-style\n"
+        "sources:\n  - bots/alpha/memory/f.md\n"
+        "---\n\n"
+        "Body.\n"
+    )
+
+    # Fast path: write index, query should return slug "use-tabs"
+    write_index(tmp_vault, build_index(tmp_vault))
+    fast = {r["slug"] for r in list_rules_by_topic(
+        tmp_vault, "code-style", scope="local-only", project="alpha"
+    )}
+    assert fast == {"use-tabs"}
+
+    # Fallback path: delete index, query should return the SAME slug
+    (tmp_vault / ".mnemo" / "rule-activation-index.json").unlink()
+    fallback = {r["slug"] for r in list_rules_by_topic(
+        tmp_vault, "code-style", scope="local-only", project="alpha"
+    )}
+    assert fallback == fast, f"fallback returned different slug: {fallback} vs {fast}"
+
+    # And read_mnemo_rule must find the rule body via the slug from either path
+    body = read_mnemo_rule(tmp_vault, "use-tabs", scope="local-only", project="alpha")
+    assert body is not None
+    assert body["slug"] == "use-tabs"

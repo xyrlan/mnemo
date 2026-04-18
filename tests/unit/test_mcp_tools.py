@@ -31,7 +31,7 @@ def _write_page(
     tags_yaml = "\n".join(f"  - {t}" for t in tags)
     text = (
         "---\n"
-        f"name: {slug.replace('-', ' ').title()}\n"
+        f"name: {slug}\n"
         f"description: a description for {slug}\n"
         f"type: {page_type}\n"
         f"stability: {stability}\n"
