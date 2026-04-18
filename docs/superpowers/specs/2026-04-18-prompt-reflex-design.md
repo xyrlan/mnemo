@@ -36,7 +36,9 @@ about retrieval.
 
 - **Not** a semantic search. No embeddings, no vector DB. mnemo is stdlib-only.
 - **Not** a replacement for SessionStart injection or PreToolUse enrichment.
-  All three coexist; dedupe is per-slug + TTL.
+  All three coexist. Reflex and enrichment share a per-slug session-lifetime
+  dedupe cache; SessionStart is excluded (different granularity — topic
+  lists vs rule bodies).
 - **Not** cross-project. Reflex reads the same scope as v0.7 default:
   `local + universal` rules owned by the current project.
 - **Not** a training loop. Reflex does not rewrite rules based on usage.
@@ -51,13 +53,52 @@ Each rule indexed as a multi-field document with weights:
 |----------------|--------|---------------------------------------|
 | `name`         | 3.0    | frontmatter `name:`                   |
 | `topic_tags`   | 3.0    | frontmatter `tags:` (topic tags only) |
+| `aliases`      | 2.5    | frontmatter `aliases:` (new in v0.8)  |
 | `description`  | 2.0    | frontmatter `description:`            |
 | `body`         | 1.0    | rule body (markdown, trimmed)         |
 
 Rationale: `name` + `tags` are the curated signal (controlled vocabulary,
-hand-tuned). `description` is the curated summary. `body` contains code
-examples and prose that match too eagerly — it's the tiebreaker, not the
-driver.
+hand-tuned). `aliases` carries bilingual / synonym bridges for pure lexical
+BM25 (see "Aliases field" below). `description` is the curated summary.
+`body` contains code examples and prose that match too eagerly — it's the
+tiebreaker, not the driver.
+
+### Aliases field (recall bridge for bilingual/synonym gap)
+
+BM25 is pure lexical — no stemming, no synonyms, no cross-lingual
+matching. For codebases where developers prompt in Portuguese against
+English-tagged rules ("como mockar o **banco**" vs rule about
+"mock the **database**"), recall silently collapses to zero.
+
+Fix: optional `aliases: [...]` frontmatter field, indexed as a fourth
+BM25F field with weight 2.5 (between `topic_tags` and `description`).
+
+```yaml
+---
+name: use-prisma-mock
+description: Always use jest-mock-extended to mock Prisma in tests
+aliases:
+  - banco
+  - database
+  - db
+  - prisma
+  - orm
+---
+```
+
+**Who writes aliases**:
+- Extraction LLM emits `aliases:` for any rule whose `description` or
+  `body` contains obvious bilingual terms or domain synonyms. One-line
+  addition to the extraction prompt in `src/mnemo/core/extract/prompts.py`.
+- Users can hand-edit aliases on their own rules; content-addressed
+  merge already protects edits.
+
+**Degradation**: rules without `aliases:` still score normally via the
+other 4 fields. The feature is strictly additive — zero regressions on
+existing vault content.
+
+**Cost**: ~30 LOC in the extract pipeline prompt + 1 field path in the
+tokenizer + 1 row in the index `avg_field_length` map.
 
 **Tokenizer** (stdlib):
 - Lowercase.
@@ -87,19 +128,20 @@ to keep concerns clean).
   "avg_field_length": {
     "name": 3.2,
     "topic_tags": 2.1,
+    "aliases": 3.8,
     "description": 12.4,
     "body": 184.7
   },
   "doc_count": 47,
   "postings": {
     "prisma": [
-      {"slug": "use-prisma-mock", "tf": {"name": 0, "topic_tags": 1, "description": 2, "body": 6}}
+      {"slug": "use-prisma-mock", "tf": {"name": 0, "topic_tags": 1, "aliases": 1, "description": 2, "body": 6}}
     ],
     ...
   },
   "docs": {
     "use-prisma-mock": {
-      "field_length": {"name": 3, "topic_tags": 1, "description": 11, "body": 240},
+      "field_length": {"name": 3, "topic_tags": 1, "aliases": 5, "description": 11, "body": 240},
       "preview": "To mock prisma in tests, always use jest-mock-extended...",
       "stability": "stable",
       "universal": false,
@@ -128,7 +170,9 @@ triggers in `session_start.py`:
 2. If reflex.enabled=false → return (exit 0, empty stdout).
 3. If circuit breaker tripped (errors.should_run(vault) false) → return.
 4. Read session state from .mnemo/mnemo-session-state.json:
-   - If `date` != today, wipe `injected_cache`.
+   - If `date` != today, wipe `injected_cache` and `session_emissions`.
+   - If `session_emissions[sid].reflex_count >= reflex.maxEmissionsPerSession`
+     → return (log `silence_reason: "session_cap_reached"`).
 5. Tokenize prompt, strip stopwords, drop fenced code blocks first.
    - Pre-gate: if remaining tokens < 3 distinct non-stopwords → return.
    - Cap query at 200 tokens (protects against pasted stack traces).
@@ -147,11 +191,13 @@ triggers in `session_start.py`:
    - Include top-2 iff (a) it also passes term-overlap, (b) s[1] >= 2.0,
      (c) it is not already in injected_cache within TTL.
 10. Dedupe against injected_cache:
-    - For each candidate slug, skip if cache[slug] + TTL > now.
+    - Any slug already present in `injected_cache` (same-session or within
+      the global `dedupeTtlMinutes` floor) → skip.
     - If no candidates survive → return (silence).
 11. Emit hookSpecificOutput.additionalContext with the canonical format.
 12. Update injected_cache[slug] = now for each emitted slug.
-13. Append one reflex-log.jsonl line per emitted slug.
+13. Increment session_emissions[sid].reflex_count by number of slugs emitted.
+14. Append one reflex-log.jsonl line per emitted slug.
 ```
 
 ### Payload format
@@ -169,7 +215,7 @@ mnemo reflex context:
 - Double-wikilink `[[slug]]` format matches enrichment payload style for
   visual consistency.
 
-### Dedupe: session-state.json
+### Dedupe & session budget: session-state.json
 
 Extend `mcp-call-counter.json` into `.mnemo/mnemo-session-state.json`:
 
@@ -180,21 +226,62 @@ Extend `mcp-call-counter.json` into `.mnemo/mnemo-session-state.json`:
   "injected_cache": {
     "use-prisma-mock": 1713456000,
     "react-cache-versioning": 1713457800
+  },
+  "session_emissions": {
+    "sid-abc123": {
+      "started_at": 1713455000,
+      "reflex_count": 3,
+      "enrich_count": 1
+    }
   }
 }
 ```
 
 **Migration**: on first read with old shape, upgrade in place
-(`injected_cache: {}`). `mnemo-session-state.json` is a **rename** of
-`mcp-call-counter.json`:
+(`injected_cache: {}`, `session_emissions: {}`).
+`mnemo-session-state.json` is a **rename** of `mcp-call-counter.json`:
 
 - Install-time migration writes the new file and removes the old one.
 - Status line + any existing reader of the old name must be updated in the
   same PR (already owned by mnemo; no external consumers).
 
-**TTL**: `reflex.dedupeTtlMinutes` (default 120). Any hook that emits a slug
-writes its `now()` into the cache. Any hook about to emit a slug reads the
-cache and skips if `cache[slug] + TTL > now`.
+**TTL — session-lifetime default** (revised for long-running sessions):
+
+- Default dedupe behaviour: **a slug injected once stays suppressed for the
+  entire session**, not just a wall-clock window. The cache key
+  `injected_cache[slug]` is consulted; if it exists at all and belongs to
+  the current session, skip.
+- `reflex.dedupeTtlMinutes` (default `120`) acts as a **floor**, not a
+  ceiling: if a session runs longer than 2h, dedupe still holds — the
+  entry does not "expire back" into re-injection territory within the same
+  session.
+- The cache is wiped on two triggers only:
+  1. Daily rollover (`date` mismatch, same as today).
+  2. `SessionEnd` hook (new behaviour — clears `session_emissions[sid]` and
+     removes `injected_cache` entries last-touched by that sid).
+
+This reflects the corrected understanding that `additionalContext` from
+`UserPromptSubmit` persists in the transcript. Once Claude has seen the
+rule body, re-injecting it adds context-bloat with no recall benefit.
+
+**Per-session hard cap** (new safety rail):
+
+- `reflex.maxEmissionsPerSession` (default `10`). Once
+  `session_emissions[sid].reflex_count >= cap`, Reflex returns silence for
+  the remainder of the session regardless of score.
+- `enrichment.maxEmissionsPerSession` (default `15`, slightly higher
+  because path-based triggering is more targeted). Same mechanic.
+- Combined caps are independent: Reflex hitting its cap does not silence
+  Enrichment, and vice versa.
+- When a cap is hit, the hook logs a single `silence_reason:
+  "session_cap_reached"` line to the respective log and then stays quiet
+  until SessionEnd clears the counter.
+
+**Worst-case accounting**: 10 Reflex × 2 bullets × 300 chars = 6 KB ≈
+~1.5K tokens max accumulated over any session, regardless of length.
+Adding the enrichment cap (15 × 1 bullet × 300) = 4.5 KB ≈ ~1.1K tokens.
+Session-wide ceiling for mnemo-injected content: **~2.6K tokens** — below
+the compaction trigger for any reasonable session length.
 
 **Scope of dedupe**: cross-hook between **Reflex and PreToolUse enrichment**
 only. Both hooks emit rule bodies keyed by slug, so a shared slug cache
@@ -205,14 +292,22 @@ prevents the "same body twice" problem.
 would require tracking a different granularity (topics vs slugs) with no
 user-visible benefit.
 
-**Required cross-module change**: `src/mnemo/hooks/pre_tool_use.py`
-(`_emit_enrich`) must be updated in the same PR to:
-1. Read `mnemo-session-state.json` before emitting.
-2. Filter `hits` against `injected_cache` + TTL.
-3. Write emitted slugs back into the cache.
+**Required cross-module changes** (same PR):
 
-This is a small, clearly-scoped extension of the existing enrichment path —
-not a rewrite.
+1. `src/mnemo/hooks/pre_tool_use.py` (`_emit_enrich`):
+   - Read `mnemo-session-state.json` before emitting.
+   - Enforce `enrichment.maxEmissionsPerSession` cap first — if
+     `session_emissions[sid].enrich_count >= cap`, return silence.
+   - Filter `hits` against `injected_cache` (session-lifetime scope).
+   - Write emitted slugs back into the cache and increment
+     `session_emissions[sid].enrich_count`.
+2. `src/mnemo/hooks/session_end.py`:
+   - After the existing session-clear logic, remove `session_emissions[sid]`
+     and evict `injected_cache` entries last-touched by that sid.
+   - Fail-silent; state corruption here never breaks SessionEnd.
+
+These are small, clearly-scoped extensions of existing hook code — not
+rewrites.
 
 **Rotation**: daily, driven by the existing `date` mismatch logic. New day
 → wipe `injected_cache` alongside `count` reset.
@@ -234,16 +329,21 @@ New block in `~/mnemo/mnemo.config.json`:
       "absoluteFloor": 2.0,
       "minQueryTokens": 3
     },
+    "maxEmissionsPerSession": 10,
     "bm25f": {
       "k1": 1.5,
       "b": 0.75,
       "fieldWeights": {
         "name": 3.0,
         "topic_tags": 3.0,
+        "aliases": 2.5,
         "description": 2.0,
         "body": 1.0
       }
     }
+  },
+  "enrichment": {
+    "maxEmissionsPerSession": 15
   }
 }
 ```
@@ -292,7 +392,8 @@ SessionStart/SessionEnd/PreToolUse.
   ```
   When silenced, `emitted: []` and `silence_reason` is one of
   `below_min_tokens` | `term_overlap_fail` | `relative_gap_fail` |
-  `absolute_floor_fail` | `deduped` | `index_missing`.
+  `absolute_floor_fail` | `deduped` | `session_cap_reached` |
+  `index_missing`.
 
   **Privacy**: only `prompt_hash` is logged, not the raw prompt. `prompt_tokens`
   is the count after stopword removal. Users who want to debug live can
@@ -311,6 +412,11 @@ SessionStart/SessionEnd/PreToolUse.
     loose; tune up).
   - `reflex-broken-frontmatter` — rule has empty `description` + no
     `topic_tags` + name < 3 tokens (effectively invisible to Reflex).
+  - `reflex-session-cap-hit` — >20% of sessions in the last 7d hit
+    `maxEmissionsPerSession` (cap too low, or noise leaked past gates).
+  - `reflex-bilingual-gap` — vault has >=3 rules with `description`
+    containing non-ASCII chars but no `aliases:` field (hint to
+    extraction-LLM prompt tuning or manual authoring).
 
 - **`mnemo status`** shows: reflex emissions today, last 3 emissions
   (slug + score), current thresholds, dedupe cache size.
@@ -337,13 +443,19 @@ repeated failures.
 - `test_tokenizer.py` — stopwords, kebab/snake preservation, fenced code
   stripping, 200-token cap.
 - `test_bm25f.py` — known corpus + known queries, pinned expected scores
-  (golden regression).
+  (golden regression); includes aliases-field contribution test.
 - `test_gates.py` — each of the triple-gate failures produces silence; all
   three passing produces emission.
 - `test_index_build.py` — from a synthetic vault of 5 rules, build index,
-  assert shape + previews.
-- `test_dedupe.py` — cache hit skips emission, TTL expiry restores
-  emission, day rollover wipes cache.
+  assert shape + previews + aliases indexing.
+- `test_dedupe.py` — session-lifetime dedupe holds across turns; day
+  rollover wipes cache; SessionEnd wipes session_emissions + sid-scoped
+  cache entries.
+- `test_session_cap.py` — after N emissions in one session, further
+  Reflex calls return silence with `session_cap_reached` reason;
+  enrichment cap behaves independently.
+- `test_aliases_bilingual.py` — PT prompt ("mockar o banco") matches
+  EN-described rule with `aliases: [banco]`; fails without aliases.
 
 **Integration tests** (`tests/integration/reflex/`):
 - `test_hook_silent.py` — prompt "ok continua" → exit 0, empty stdout.
