@@ -414,11 +414,36 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
                 "activates_on": enrich_entry,
             }
 
+    by_project: dict[str, dict] = {}
+    universal_slugs: list[str] = []
+    universal_topics: set[str] = set()
+
+    for slug, rule in rules.items():
+        for proj in rule["projects"]:
+            bucket = by_project.setdefault(proj, {"local_slugs": [], "topics": set()})
+            bucket["local_slugs"].append(slug)
+            for t in rule["topic_tags"]:
+                bucket["topics"].add(t)
+        if rule["universal"]:
+            universal_slugs.append(slug)
+            for t in rule["topic_tags"]:
+                universal_topics.add(t)
+
+    # Normalise sets to sorted lists for JSON stability
+    for proj, bucket in by_project.items():
+        bucket["topics"] = sorted(bucket["topics"])
+        bucket["local_slugs"] = sorted(set(bucket["local_slugs"]))
+
     return {
         "schema_version": INDEX_VERSION,
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "vault_root": str(vault_root),
         "rules": rules,
+        "by_project": by_project,
+        "universal": {
+            "slugs": sorted(set(universal_slugs)),
+            "topics": sorted(universal_topics),
+        },
         "enforce_by_project": enforce_by_project,
         "enrich_by_project": enrich_by_project,
         "malformed": malformed,

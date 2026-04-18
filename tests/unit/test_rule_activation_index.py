@@ -476,3 +476,51 @@ def test_build_index_accepts_universal_threshold_kwarg(tmp_vault):
 
     idx_strict = build_index(tmp_vault, universal_threshold=3)
     assert idx_strict["rules"]["two-proj"]["universal"] is False
+
+
+def test_build_index_v2_by_project_lookup(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_alpha_only.md",
+        name="alpha-rule",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/x.md"],
+    )
+    _write_rule(
+        tmp_vault,
+        "feedback_both.md",
+        name="shared-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/alpha/memory/s.md", "bots/beta/memory/s.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "by_project" in idx
+    assert "alpha-rule" in idx["by_project"]["alpha"]["local_slugs"]
+    assert "shared-rule" in idx["by_project"]["alpha"]["local_slugs"]
+    assert "shared-rule" in idx["by_project"]["beta"]["local_slugs"]
+    assert "alpha-rule" not in idx["by_project"].get("beta", {}).get("local_slugs", [])
+    assert "code-style" in idx["by_project"]["alpha"]["topics"]
+    assert "git" in idx["by_project"]["alpha"]["topics"]
+
+
+def test_build_index_v2_universal_lookup(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_universal.md",
+        name="universal-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"],
+    )
+    _write_rule(
+        tmp_vault,
+        "feedback_local.md",
+        name="local-rule",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/l.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "universal" in idx
+    assert "universal-rule" in idx["universal"]["slugs"]
+    assert "local-rule" not in idx["universal"]["slugs"]
+    assert "git" in idx["universal"]["topics"]
+    assert "code-style" not in idx["universal"]["topics"]
