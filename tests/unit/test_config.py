@@ -182,3 +182,15 @@ def test_defaults_include_activation_blocks():
     assert DEFAULTS["enrichment"]["maxRulesPerCall"] == 3
     assert DEFAULTS["enrichment"]["bodyPreviewChars"] == 300
     assert DEFAULTS["enrichment"]["log"]["maxBytes"] == 1_048_576
+
+
+def test_defaults_include_scoping_threshold():
+    from mnemo.core.config import load_config
+    cfg = load_config(missing_path=Path("/nonexistent/path.json"))
+    assert cfg["scoping"]["universalThreshold"] == 2
+
+
+def test_defaults_include_injection_max_topics():
+    from mnemo.core.config import load_config
+    cfg = load_config(missing_path=Path("/nonexistent/path.json"))
+    assert cfg["injection"]["maxTopicsPerScope"] == 15
