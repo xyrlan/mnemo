@@ -444,6 +444,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     zero_hit_ok = _doctor_check_zero_hit(vault)
     activation_fidelity_ok = _doctor_check_activation_fidelity(vault)
     rule_integrity_ok = _doctor_check_rule_integrity(vault)
+    _doctor_check_universal_promotion(vault)
     _doctor_report_recall(vault)
 
     if not result.ok:
@@ -702,6 +703,41 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
 
 
 _MIN_BODY_CHARS = 50
+
+
+def _doctor_check_universal_promotion(vault: Path) -> bool:
+    """Report universal-promotion health: count + on-verge rules.
+
+    Returns True always — this is an informational check, not a pass/fail gate.
+    (If there is no index yet, we still print a placeholder line for consistency.)
+    """
+    from mnemo.core import rule_activation
+    from mnemo.core.config import load_config
+
+    idx = rule_activation.load_index(vault)
+    if idx is None or "rules" not in idx:
+        print("Universal promotion health: index unavailable (run a SessionStart).")
+        return True
+
+    threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
+    universal_slugs = idx.get("universal", {}).get("slugs", [])
+    universal_topics = idx.get("universal", {}).get("topics", [])
+
+    on_verge: list[str] = [
+        slug for slug, rule in idx["rules"].items()
+        if not rule.get("universal")
+        and len(rule.get("projects", [])) == threshold - 1
+    ]
+
+    print(f"Universal promotion health: {len(universal_slugs)} universal rule(s).")
+    if universal_topics:
+        print("  Top universal topics: " + ", ".join(universal_topics[:5]))
+    if on_verge:
+        print(
+            f"  {len(on_verge)} rule(s) one project away from promotion: "
+            + ", ".join(sorted(on_verge)[:5])
+        )
+    return True
 
 
 def _doctor_check_activation(vault: Path) -> bool:

@@ -616,3 +616,59 @@ def test_doctor_rule_integrity_happy_path_silent(tmp_path, monkeypatch, capsys):
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "good-rule.md" not in out
+
+
+def test_doctor_reports_universal_promotion_health(
+    tmp_home: Path, capsys: pytest.CaptureFixture,
+):
+    """Doctor surfaces a 'Universal promotion health' line with a count."""
+    from tests.unit.test_rule_activation_index import _write_rule
+    from mnemo.core.rule_activation import build_index, write_index
+    from mnemo.core.paths import vault_root as _vault_root
+    from mnemo.core.config import load_config
+    from mnemo import cli
+
+    vault = _vault_root(load_config())
+    (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    _write_rule(
+        vault, "uni.md", name="uni-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/a/memory/u.md", "bots/b/memory/u.md"],
+    )
+    _write_rule(
+        vault, "local.md", name="local-rule",
+        tags=["x", "auto-promoted"],
+        sources=["bots/a/memory/l.md"],
+    )
+    write_index(vault, build_index(vault))
+
+    rc = cli.main(["doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Universal promotion health" in out
+    assert "1 universal" in out.lower()
+
+
+def test_doctor_universal_promotion_on_verge_warning(
+    tmp_home: Path, capsys: pytest.CaptureFixture,
+):
+    """Rules one project short of the threshold surface as on-verge."""
+    from tests.unit.test_rule_activation_index import _write_rule
+    from mnemo.core.rule_activation import build_index, write_index
+    from mnemo.core.paths import vault_root as _vault_root
+    from mnemo.core.config import load_config
+    from mnemo import cli
+
+    vault = _vault_root(load_config())
+    (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    _write_rule(
+        vault, "onverge.md", name="on-verge",
+        tags=["git", "auto-promoted"],
+        sources=["bots/a/memory/v.md"],  # 1 project — 1 away from threshold=2
+    )
+    write_index(vault, build_index(vault))
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "one project away" in out
+    assert "on-verge" in out
