@@ -94,18 +94,36 @@ def list_rules_by_topic(
     scope: str = "project",
     project: str | None = None,
 ) -> list[RuleRef]:
-    """Return slugs whose topic tags include ``topic``.
+    """Return slugs whose topic tags include ``topic``, filtered by scope.
 
-    Sorted by source_count desc, then slug asc — multi-agent synthesized rules
-    surface first because they represent stronger trust signal.
+    Reads from the unified rule-activation-index.json when available;
+    falls back to a glob+parse walk of shared/{feedback,user,reference}/ when
+    the index is missing. In fallback mode, every rule is treated as local
+    (universality is only available when the index is built).
 
-    ``scope="project"`` (default) filters results to rules whose sources include
-    the given ``project``.  When ``project`` is ``None`` the filter is silently
-    skipped, preserving backwards-compatible vault-wide behaviour.  Pass
-    ``scope="vault"`` to disable project filtering entirely.
+    Sorted by source_count desc, then slug asc.
     """
-    filter_project = scope == "project" and project is not None
-    matches: list[RuleRef] = []
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        matches: list[RuleRef] = []
+        for slug, rule in idx["rules"].items():
+            if topic not in rule.get("topic_tags", []):
+                continue
+            if not _rule_in_scope(rule, project, scope):
+                continue
+            matches.append({
+                "slug": slug,
+                "type": rule.get("type", "feedback"),
+                "source_count": rule.get("source_count", 0),
+            })
+        matches.sort(key=lambda r: (-r["source_count"], r["slug"]))
+        return matches
+
+    # Fallback: legacy glob+parse. Universality unavailable; treat all as local.
+    filter_project = scope in ("project", "local-only") and project is not None
+    legacy: list[RuleRef] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
@@ -123,13 +141,13 @@ def list_rules_by_topic(
             if filter_project and not _rule_belongs_to_project(fm, project):
                 continue
             sources = fm.get("sources") or []
-            matches.append({
+            legacy.append({
                 "slug": md.stem,
                 "type": page_type,
                 "source_count": len(sources),
             })
-    matches.sort(key=lambda r: (-r["source_count"], r["slug"]))
-    return matches
+    legacy.sort(key=lambda r: (-r["source_count"], r["slug"]))
+    return legacy
 
 
 def read_mnemo_rule(
