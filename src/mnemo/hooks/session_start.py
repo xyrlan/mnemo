@@ -23,45 +23,76 @@ from pathlib import Path
 
 
 def _build_injection_payload(vault_root: Path, current_project: str | None = None) -> str:
-    """Return the ~120-token instruction string, or '' when there's nothing to inject.
+    """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
-    When *current_project* is provided, topics are filtered to those owned by
-    that project in the rule-activation index. Falls back to the vault-wide
-    union when the index is absent or the project has no indexed rules.
+    Reads the rule-activation-index.json for per-scope topic lists; degrades to
+    ``get_mnemo_topics`` over glob+parse when the index is unavailable. Applies
+    ``injection.maxTopicsPerScope`` as a cap on each of the local and universal
+    topic lines. Topics are ordered by aggregated ``source_count`` descending,
+    with a stable secondary sort by name.
     """
+    from mnemo.core import config as cfg_mod
+    from mnemo.core import rule_activation
     from mnemo.core.mcp.tools import get_mnemo_topics
 
-    vault_wide_topics = get_mnemo_topics(vault_root)
+    cfg = cfg_mod.load_config()
+    max_topics = int(cfg.get("injection", {}).get("maxTopicsPerScope", 15))
 
-    topics: list[str] = vault_wide_topics  # default: vault-wide union
+    idx = rule_activation.load_index(vault_root)
 
-    if current_project:
-        try:
-            from mnemo.core import rule_activation
-            idx = rule_activation.load_index(vault_root)
-            if idx is not None:
-                current_project_topics: set[str] = set()
-                for rule in idx.get("enrich_by_project", {}).get(current_project, []):
-                    for tag in rule.get("topic_tags", []):
-                        current_project_topics.add(tag)
-                for rule in idx.get("enforce_by_project", {}).get(current_project, []):
-                    for tag in rule.get("topic_tags", []):
-                        current_project_topics.add(tag)
-                if current_project_topics:
-                    topics = sorted(current_project_topics)
-        except Exception:
-            pass  # fall through to vault_wide_topics already assigned
+    def _aggregate_topic_counts(rules_subset: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for rule in rules_subset:
+            weight = rule.get("source_count", 0)
+            for t in rule.get("topic_tags", []):
+                counts[t] = counts.get(t, 0) + weight
+        return counts
 
-    if not topics:
+    local_topics: list[str] = []
+    universal_topics: list[str] = []
+
+    if idx is not None and "rules" in idx:
+        rules_table = idx["rules"]
+        # Local (excluding those that are also universal — avoid double listing
+        # across both lines).
+        if current_project:
+            local_slugs = idx.get("by_project", {}).get(current_project, {}).get("local_slugs", [])
+            local_rules = [rules_table[s] for s in local_slugs if s in rules_table and not rules_table[s].get("universal")]
+            local_counts = _aggregate_topic_counts(local_rules)
+            local_topics = [
+                t for t, _ in sorted(local_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ][:max_topics]
+        # Universal
+        universal_slugs = idx.get("universal", {}).get("slugs", [])
+        universal_rules = [rules_table[s] for s in universal_slugs if s in rules_table]
+        universal_counts = _aggregate_topic_counts(universal_rules)
+        universal_topics = [
+            t for t, _ in sorted(universal_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ][:max_topics]
+    else:
+        # Fallback: use vault-wide topics, split cannot be derived.
+        vault_wide = get_mnemo_topics(vault_root, scope="vault")
+        universal_topics = vault_wide[:max_topics]
+
+    if not local_topics and not universal_topics:
         return ""
-    topics_str = ", ".join(topics)
-    return (
-        "You have access to the mnemo project brain via MCP. "
-        f"Known topics in this vault: [{topics_str}]. "
-        "When the current task touches any of these, call "
-        "`list_rules_by_topic(topic)` then `read_mnemo_rule(slug)` "
-        "BEFORE writing code."
+
+    lines: list[str] = []
+    header = "mnemo://v1"
+    if current_project and local_topics:
+        header += f" project={current_project}"
+    lines.append(header)
+    if local_topics:
+        lines.append(f"local: [{', '.join(local_topics)}]")
+    if universal_topics:
+        lines.append(f"universal: [{', '.join(universal_topics)}]")
+    lines.append(
+        "Call list_rules_by_topic(topic) then read_mnemo_rule(slug) BEFORE writing code."
     )
+    lines.append(
+        'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
+    )
+    return "\n".join(lines)
 
 
 def _emit_injection(payload_text: str, out: object = None) -> None:
