@@ -1,7 +1,7 @@
 # Prompt Reflex — UserPromptSubmit inline rule injection
 
 **Date:** 2026-04-18
-**Status:** Design — awaiting user review
+**Status:** Design — approved after engineering review (2026-04-18)
 **Target release:** v0.8.0 (next minor after v0.7.0)
 
 ## One-liner
@@ -88,8 +88,14 @@ aliases:
 
 **Who writes aliases**:
 - Extraction LLM emits `aliases:` for any rule whose `description` or
-  `body` contains obvious bilingual terms or domain synonyms. One-line
-  addition to the extraction prompt in `src/mnemo/core/extract/prompts.py`.
+  `body` contains bilingual terms or common domain synonyms. Requires
+  updating **all three** system prompts in `src/mnemo/core/extract/prompts.py`:
+  `FEEDBACK_SYSTEM_PROMPT`, `USER_SYSTEM_PROMPT`, and
+  `REFERENCE_SYSTEM_PROMPT`. Long architecture references written in
+  Portuguese must also match EN prompts; user-profile rules benefit the
+  least but stay consistent for schema simplicity. The per-prompt JSON
+  schema each references must also carry the new `aliases: string[]`
+  field.
 - Users can hand-edit aliases on their own rules; content-addressed
   merge already protects edits.
 
@@ -116,15 +122,16 @@ tokenizer + 1 row in the index `avg_field_length` map.
 
 ### Index artifact
 
-New file: `.mnemo/reflex-index.json` (separate from `rule-activation-index.json`
-to keep concerns clean).
+New file: `.mnemo/reflex-index.json` — **vault-wide**, mirroring the structure
+of the existing `rule-activation-index.json`. One index covers all projects;
+project filtering happens at query time via each doc's `projects[]` + `universal`
+fields. This avoids the orchestration nightmare of per-project indexes when
+the user switches cwds mid-session.
 
 ```json
 {
-  "version": 1,
+  "schema_version": 1,
   "generated_at": "2026-04-18T12:34:56Z",
-  "scope": "project",
-  "project": "mnemo",
   "avg_field_length": {
     "name": 3.2,
     "topic_tags": 2.1,
@@ -144,23 +151,42 @@ to keep concerns clean).
       "field_length": {"name": 3, "topic_tags": 1, "aliases": 5, "description": 11, "body": 240},
       "preview": "To mock prisma in tests, always use jest-mock-extended...",
       "stability": "stable",
-      "universal": false,
-      "project": "mnemo"
+      "projects": ["mnemo"],
+      "universal": false
     },
     ...
   }
 }
 ```
 
-**Preview** is the first 300 chars of body (whitespace-normalized), stored
-once at index-build time, so the hook never touches the source `.md` file.
+**Consumer-visibility gate** (non-negotiable): the index builder walks
+`shared/{feedback,user,reference}/*.md` and calls `is_consumer_visible` on
+every candidate — same gate as `rule_activation.build_index`
+(`src/mnemo/core/rule_activation.py:342`). Pages under `_inbox/`, tagged
+`needs-review`, or with `stability: evolving` are **skipped**. This keeps
+Reflex in lockstep with the v0.4 filter-parity contract: if the HOME
+dashboard can't see a rule, Reflex can't inject it either.
+
+**Preview** reuses `mnemo.core.rule_activation._body_preview(text, max_chars=300)`
+— the existing helper strips frontmatter and truncates on whitespace
+boundaries, avoiding mid-word cuts. Do **not** reimplement. If Reflex lives
+outside `rule_activation`'s module, promote `_body_preview` to a public
+helper (e.g. `core/text_utils.py`) rather than duplicating.
+
+**Per-doc `projects` + `universal`** are derived from the rule's
+`sources[]` frontmatter using `projects_for_rule` + `_is_universal` helpers
+already in `rule_activation.py`. Reuse these — no new scope-derivation
+logic.
 
 **Index lifecycle** — piggyback on the existing rule-activation rebuild
-triggers in `session_start.py`:
+triggers in `session_start.py:148-153`:
 
 - When `reflex.enabled` is true OR `enforcement.enabled` OR `enrichment.enabled`
-  OR `injection.enabled`, rebuild runs on every SessionStart.
-- `mnemo extract` rebuilds after every extraction pass.
+  OR `injection.enabled`, rebuild runs on every SessionStart. Call
+  `reflex.build_index(vault)` + `reflex.write_index(vault, idx)` right
+  after `rule_activation.write_index`.
+- `mnemo extract` rebuilds after every extraction pass (same extension
+  point).
 - Failure to rebuild = fail-open (hook finds no index → returns silently).
 
 ### Retrieval flow (`UserPromptSubmit` hook)
@@ -169,35 +195,46 @@ triggers in `session_start.py`:
 1. Parse stdin payload.
 2. If reflex.enabled=false → return (exit 0, empty stdout).
 3. If circuit breaker tripped (errors.should_run(vault) false) → return.
-4. Read session state from .mnemo/mnemo-session-state.json:
+4. Resolve current project:
+   - cwd = payload.get("cwd") or str(Path.cwd())
+   - project = resolve_agent(cwd).name
+   (Same pattern as pre_tool_use.py:63 — do not diverge.)
+5. Read session state from .mnemo/mnemo-session-state.json:
    - If `date` != today, wipe `injected_cache` and `session_emissions`.
+   - GC: remove entries from `session_emissions` whose `started_at` is
+     older than 24h (handles crashed sessions where SessionEnd never ran).
    - If `session_emissions[sid].reflex_count >= reflex.maxEmissionsPerSession`
      → return (log `silence_reason: "session_cap_reached"`).
-5. Tokenize prompt, strip stopwords, drop fenced code blocks first.
+6. Tokenize prompt, strip stopwords, drop fenced code blocks first.
    - Pre-gate: if remaining tokens < 3 distinct non-stopwords → return.
    - Cap query at 200 tokens (protects against pasted stack traces).
-6. Load reflex-index.json.
+7. Load reflex-index.json.
    - If missing/corrupt → return (fail-open).
-7. Score all docs via BM25F; sort desc.
-8. Triple-gate:
-   - (a) Term-overlap: at least 2 distinct query tokens (post-stopword)
-         must appear in the top-1 doc's combined indexed content (union of
-         name + topic_tags + description + body token sets).
-   - (b) Relative gap: s[0] >= 1.5 * s[1] (or s[1] == 0).
-   - (c) Absolute floor: s[0] >= 2.0.
-   If any fails → return (silence).
-9. Build hit list:
-   - Always include top-1.
-   - Include top-2 iff (a) it also passes term-overlap, (b) s[1] >= 2.0,
-     (c) it is not already in injected_cache within TTL.
-10. Dedupe against injected_cache:
-    - Any slug already present in `injected_cache` (same-session or within
-      the global `dedupeTtlMinutes` floor) → skip.
-    - If no candidates survive → return (silence).
-11. Emit hookSpecificOutput.additionalContext with the canonical format.
-12. Update injected_cache[slug] = now for each emitted slug.
-13. Increment session_emissions[sid].reflex_count by number of slugs emitted.
-14. Append one reflex-log.jsonl line per emitted slug.
+8. Build candidate slug set (project-scoped):
+   - candidates = union of
+       {slug for slug,doc in index.docs if project in doc.projects}
+       {slug for slug,doc in index.docs if doc.universal}
+   - Dedup; this is exactly `local + universal` per the v0.7 scope model.
+9. Score only candidates via BM25F; sort desc.
+10. Triple-gate:
+    - (a) Term-overlap: at least 2 distinct query tokens (post-stopword)
+          must appear in the top-1 doc's combined indexed content (union of
+          name + topic_tags + aliases + description + body token sets).
+    - (b) Relative gap: s[0] >= 1.5 * s[1] (or s[1] == 0).
+    - (c) Absolute floor: s[0] >= 2.0.
+    If any fails → return (silence).
+11. Build final hit list, deduped in one pass:
+    - Start with top-1. Always kept (gates above guarantee it's confident).
+    - Append top-2 iff (a) it passes term-overlap, (b) s[1] >= 2.0.
+    - Filter the resulting list against `injected_cache`: any slug already
+      present (session-lifetime scope) is dropped. No separate second
+      dedupe pass.
+    - If the filtered list is empty → return (silence).
+12. Emit hookSpecificOutput.additionalContext with the canonical format.
+13. Update injected_cache[slug] = now for each emitted slug.
+14. Increment session_emissions[sid].reflex_count by number of slugs emitted.
+15. Append one reflex-log.jsonl line per emitted slug, via the
+    access_log.record pattern (rotate_if_needed + _sanitize for free).
 ```
 
 ### Payload format
@@ -215,9 +252,12 @@ mnemo reflex context:
 - Double-wikilink `[[slug]]` format matches enrichment payload style for
   visual consistency.
 
-### Dedupe & session budget: session-state.json
+### Dedupe & session budget: extending `mcp-call-counter.json` in place
 
-Extend `mcp-call-counter.json` into `.mnemo/mnemo-session-state.json`:
+**Decision: extend, do not rename.** The file stays at
+`.mnemo/mcp-call-counter.json`. The `{date, count}` contract that
+`statusline.py:143` and `mcp/server.py:170` depend on is preserved
+verbatim. Two new top-level keys are added:
 
 ```json
 {
@@ -237,13 +277,37 @@ Extend `mcp-call-counter.json` into `.mnemo/mnemo-session-state.json`:
 }
 ```
 
-**Migration**: on first read with old shape, upgrade in place
-(`injected_cache: {}`, `session_emissions: {}`).
-`mnemo-session-state.json` is a **rename** of `mcp-call-counter.json`:
+**Module rename (code-hygiene)**: `src/mnemo/core/mcp/counter.py` is renamed
+to `src/mnemo/core/mcp/session_state.py`. The old module path stays as a
+thin compat shim re-exporting `increment` and `read_today` so statusline
+and server.py continue to import from `mnemo.core.mcp.counter` without
+churn. The shim can be removed in v0.9. Name-vs-content consistency: future
+readers see `session_state` and understand the module owns more than a
+counter.
 
-- Install-time migration writes the new file and removes the old one.
-- Status line + any existing reader of the old name must be updated in the
-  same PR (already owned by mnemo; no external consumers).
+**Critical `increment()` fix**: the current
+`counter.py:increment()` rebuilds the entire JSON as `{date, count}` on
+each call (line 41: `data = {"date": today, "count": 0}`). This would
+**silently wipe `injected_cache` and `session_emissions` on every MCP
+call**. The new `session_state.increment()` MUST read-modify-write,
+preserving unknown keys:
+
+```python
+# Correct shape:
+data = _load_or_init(path)  # preserves injected_cache / session_emissions
+if data.get("date") != today:
+    # Daily rollover wipes the session-state keys; count too.
+    data = {"date": today, "count": 0, "injected_cache": {}, "session_emissions": {}}
+data["count"] = int(data.get("count", 0)) + 1
+_atomic_write(path, data)
+```
+
+Any new helper (`read_injected_cache`, `add_injection`, `bump_emission`,
+`gc_old_sessions`) applies the same read-modify-write discipline.
+
+**Migration at runtime**: on first read of an old-shape file (no
+`injected_cache` / `session_emissions`), auto-upgrade in memory by seeding
+those keys to `{}`. No install-time migration script needed.
 
 **TTL — session-lifetime default** (revised for long-running sessions):
 
@@ -255,10 +319,15 @@ Extend `mcp-call-counter.json` into `.mnemo/mnemo-session-state.json`:
   ceiling: if a session runs longer than 2h, dedupe still holds — the
   entry does not "expire back" into re-injection territory within the same
   session.
-- The cache is wiped on two triggers only:
+- The cache is wiped on three triggers:
   1. Daily rollover (`date` mismatch, same as today).
   2. `SessionEnd` hook (new behaviour — clears `session_emissions[sid]` and
      removes `injected_cache` entries last-touched by that sid).
+  3. **24h session GC** (new): on every UserPromptSubmit / PreToolUse read
+     of session-state, entries in `session_emissions` whose `started_at`
+     is older than 24h are removed. Handles crashed sessions (SIGKILL,
+     hardware reset) where SessionEnd never ran. Prevents unbounded JSON
+     growth over months.
 
 This reflects the corrected understanding that `additionalContext` from
 `UserPromptSubmit` persists in the transcript. Once Claude has seen the
@@ -294,23 +363,44 @@ user-visible benefit.
 
 **Required cross-module changes** (same PR):
 
-1. `src/mnemo/hooks/pre_tool_use.py` (`_emit_enrich`):
-   - Read `mnemo-session-state.json` before emitting.
+1. `src/mnemo/core/mcp/counter.py` → renamed to
+   `src/mnemo/core/mcp/session_state.py`:
+   - Old module path becomes a thin shim re-exporting `increment` and
+     `read_today` (preserves imports from `statusline.py:143` and
+     `mcp/server.py:25,170`). Shim removable in v0.9.
+   - `increment` rewritten as read-modify-write that preserves unknown
+     top-level keys (see "Critical `increment()` fix" above).
+   - New public helpers: `read_injected_cache`, `add_injection`,
+     `bump_emission`, `gc_old_sessions` — all applying the same
+     read-modify-write discipline.
+2. `src/mnemo/hooks/pre_tool_use.py` (`_emit_enrich`):
+   - Read session-state before emitting.
    - Enforce `enrichment.maxEmissionsPerSession` cap first — if
      `session_emissions[sid].enrich_count >= cap`, return silence.
    - Filter `hits` against `injected_cache` (session-lifetime scope).
    - Write emitted slugs back into the cache and increment
      `session_emissions[sid].enrich_count`.
-2. `src/mnemo/hooks/session_end.py`:
+3. `src/mnemo/hooks/session_end.py`:
    - After the existing session-clear logic, remove `session_emissions[sid]`
      and evict `injected_cache` entries last-touched by that sid.
    - Fail-silent; state corruption here never breaks SessionEnd.
+4. `src/mnemo/install/settings.py`:
+   - Add `"UserPromptSubmit"` entry to `HOOK_DEFINITIONS` (matcher=None).
+   - No other changes — inject/uninject logic iterates the dict and
+     handles the rest.
+5. `src/mnemo/core/extract/prompts.py`:
+   - Add `aliases:` guidance block to all three system prompts
+     (`FEEDBACK_SYSTEM_PROMPT`, `USER_SYSTEM_PROMPT`,
+     `REFERENCE_SYSTEM_PROMPT`) and the JSON schema each references.
+6. `src/mnemo/statusline.py`:
+   - Add `3⚡` segment (no "today" suffix) pulled from
+     `session_state.read_today_emissions()` (new helper).
 
-These are small, clearly-scoped extensions of existing hook code — not
-rewrites.
+These are small, clearly-scoped extensions of existing hook / install /
+statusline code — not rewrites.
 
 **Rotation**: daily, driven by the existing `date` mismatch logic. New day
-→ wipe `injected_cache` alongside `count` reset.
+→ wipe `injected_cache` and `session_emissions` alongside `count` reset.
 
 ## Config
 
@@ -366,43 +456,60 @@ reaches a size where Reflex has ground-truth to stand on.
 
 New hook module: `src/mnemo/hooks/user_prompt_submit.py`.
 
-Registered in `~/.claude/settings.json` by `mnemo init`:
+**Registration**: do NOT hand-roll settings.json. Add an entry to
+`HOOK_DEFINITIONS` in `src/mnemo/install/settings.py:44`:
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "python -m mnemo.hooks.user_prompt_submit"}]}
-    ]
-  }
+```python
+HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "SessionStart": {"module": "session_start", "matcher": None, "async": False},
+    "PreToolUse":   {"module": "pre_tool_use",  "matcher": "Bash|Edit|Write|MultiEdit", "async": False},
+    "SessionEnd":   {"module": "session_end",   "matcher": None, "async": False},
+    # new:
+    "UserPromptSubmit": {"module": "user_prompt_submit", "matcher": None, "async": False},
 }
 ```
 
-**Uninstall**: `mnemo uninstall` removes the entry cleanly, same pattern as
-SessionStart/SessionEnd/PreToolUse.
+`matcher=None` means no matcher key in the JSON (Claude Code applies the
+hook to every event of that type). This matches the SessionStart /
+SessionEnd convention — do not set `matcher: "*"`.
+
+**Uninstall comes for free**: `_strip_mnemo_entries` uses the `mnemo.hooks.`
+tag embedded in the command string, and `_do_inject`/`_do_uninject` iterate
+`HOOK_DEFINITIONS` automatically. No changes needed to uninstall code.
 
 ## Observability
 
-- `.mnemo/reflex-log.jsonl` — per-emission log:
+- `.mnemo/reflex-log.jsonl` — per-emission log, written via the
+  `mnemo.core.mcp.access_log.record` pattern (reuse that writer verbatim or
+  factor out a shared helper):
+  - `rotate_if_needed(log_path, cfg.reflex.log.maxBytes or 1_048_576)`
+    before every append — same rotation infra as denial/enrichment logs.
+  - `_sanitize(entry)` applies 1024-char truncation per string value,
+    guarding against rogue long fields (free secret-spill mitigation if
+    `logRawPrompt` is on).
+  Log entry shape:
   ```json
   {"ts": "2026-04-18T12:34:56Z", "session_id": "abc", "project": "mnemo",
-   "prompt_hash": "sha256:...", "prompt_tokens": 8,
+   "prompt_hash": "sha256:3a7f0b9c1d2e", "prompt_tokens": 8,
    "emitted": ["use-prisma-mock"], "scores": [4.7, 1.1],
    "silence_reason": null}
   ```
-  When silenced, `emitted: []` and `silence_reason` is one of
-  `below_min_tokens` | `term_overlap_fail` | `relative_gap_fail` |
-  `absolute_floor_fail` | `deduped` | `session_cap_reached` |
-  `index_missing`.
+  `prompt_hash` uses the first 12 hex chars of sha256 (collision rate
+  1/16^12 is sufficient for debugging). When silenced, `emitted: []` and
+  `silence_reason` is one of `below_min_tokens` | `term_overlap_fail` |
+  `relative_gap_fail` | `absolute_floor_fail` | `deduped` |
+  `session_cap_reached` | `index_missing`.
 
-  **Privacy**: only `prompt_hash` is logged, not the raw prompt. `prompt_tokens`
-  is the count after stopword removal. Users who want to debug live can
-  opt-in to `reflex.debug.logRawPrompt: true` to record the full prompt in
-  the log line — off by default so the log is safe to share.
+  **Privacy**: only the truncated hash is logged, not the raw prompt.
+  `prompt_tokens` is the count after stopword removal. Users who want to
+  debug live can opt in to `reflex.debug.logRawPrompt: true` to record the
+  full prompt — off by default, and `_sanitize` caps any value at 1024
+  chars on write anyway.
 
-- **Status line**: new segment `3⚡ today` (count of emissions today) next to
-  the existing `7↓ today` MCP call counter. Uses the same session-state file,
-  so no new disk reads.
+- **Status line**: new segment `3⚡` next to the existing
+  `mnemo · 3 topics · 7↓` format. No "today" suffix — matches the existing
+  style (`7↓`, `3⛔ rules`, `2 blocks`, `1💡 active`). Uses the same
+  session-state file, so no new disk reads.
 
 - **`mnemo doctor`** new checks:
   - `reflex-index-stale` — index older than last extraction.
@@ -439,6 +546,11 @@ repeated failures.
 
 ## Testing
 
+> **Test surface scales with the revisions**: after the design-review
+> corrections, the test plan grew from ~13 to ~20 files. Implementers
+> should budget accordingly; the golden regression set alone is load-
+> bearing for the "silence vs emission" contract.
+
 **Unit tests** (`tests/core/reflex/`):
 - `test_tokenizer.py` — stopwords, kebab/snake preservation, fenced code
   stripping, 200-token cap.
@@ -456,6 +568,29 @@ repeated failures.
   enrichment cap behaves independently.
 - `test_aliases_bilingual.py` — PT prompt ("mockar o banco") matches
   EN-described rule with `aliases: [banco]`; fails without aliases.
+  Matrix: three rule types (feedback / user / reference) × with-aliases
+  and without-aliases, to prove all three extraction prompts emit the
+  field.
+
+**New unit tests from design-review corrections**:
+- `test_project_filter.py` (C1) — vault with rules from project A and
+  project B; prompt that matches both lexically. From cwd of project A,
+  only project-A-local + universal rules are candidates; project-B-local
+  rule never surfaces regardless of score.
+- `test_counter_preserves_unknown_keys.py` (C2) — seed
+  `mcp-call-counter.json` with `count`, `injected_cache`,
+  `session_emissions`. Call `mcp.counter.increment` (the shim). Assert
+  `count` bumps AND `injected_cache` / `session_emissions` survive verbatim.
+- `test_vault_wide_index_shape.py` (C3) — build index across a 3-project
+  synthetic vault; every doc has `projects: list[str]` and
+  `universal: bool`; no top-level `project` / `scope` fields remain.
+- `test_consumer_visible_gate.py` (C4) — vault includes a rule under
+  `shared/_inbox/feedback/`, a rule tagged `needs-review`, and a rule
+  with `stability: evolving`. Build index, assert none of the three
+  appear in `docs`.
+- `test_session_emissions_gc.py` (W7) — seed `session_emissions` with two
+  entries, one with `started_at` 25h ago, one 30min ago. After next read
+  via session-state helper, only the fresh entry remains.
 
 **Integration tests** (`tests/integration/reflex/`):
 - `test_hook_silent.py` — prompt "ok continua" → exit 0, empty stdout.
