@@ -158,7 +158,33 @@ def read_mnemo_rule(
     project: str | None = None,
 ) -> RuleBody | None:
     """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs."""
-    filter_project = scope == "project" and project is not None
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        rule = idx["rules"].get(slug)
+        if rule is None:
+            return None
+        if not _rule_in_scope(rule, project, scope):
+            return None
+        # Still need the full body — read the file once, the index only has a preview.
+        page_type = rule.get("type", "feedback")
+        candidate = vault_root / "shared" / page_type / f"{slug}.md"
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return {
+            "slug": slug,
+            "type": page_type,
+            "name": rule.get("name", slug),
+            "tags": rule.get("topic_tags", []),
+            "sources": rule.get("source_files", []),
+            "body": _extract_body(text),
+        }
+
+    # Fallback: legacy glob. All rules treated as local (no universality).
+    filter_project = scope in ("project", "local-only") and project is not None
     for page_type in _RETRIEVAL_TYPES:
         candidate = vault_root / "shared" / page_type / f"{slug}.md"
         if not candidate.is_file():

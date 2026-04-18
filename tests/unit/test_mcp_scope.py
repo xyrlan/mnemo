@@ -98,3 +98,30 @@ def test_list_rules_by_topic_falls_back_when_index_missing(tmp_vault):
     # No write_index call — fallback path must work
     results = list_rules_by_topic(tmp_vault, "git", scope="project", project="alpha")
     assert any(r["slug"] == "local" for r in results)
+
+
+from mnemo.core.mcp.tools import read_mnemo_rule
+
+
+def test_read_mnemo_rule_returns_universal_from_foreign_project(tmp_vault):
+    _write_feedback(tmp_vault, "universal-rule", name="universal-rule",
+                    tags=["git", "auto-promoted"],
+                    sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"])
+    write_index(tmp_vault, build_index(tmp_vault))
+    result = read_mnemo_rule(tmp_vault, "universal-rule", scope="project", project="gamma")
+    assert result is not None
+    assert result["slug"] == "universal-rule"
+
+
+def test_read_mnemo_rule_local_only_rejects_universal_from_foreign_project(tmp_vault):
+    _write_feedback(tmp_vault, "universal-rule", name="universal-rule",
+                    tags=["git", "auto-promoted"],
+                    sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"])
+    write_index(tmp_vault, build_index(tmp_vault))
+    assert read_mnemo_rule(tmp_vault, "universal-rule",
+                           scope="local-only", project="gamma") is None
+
+
+def test_read_mnemo_rule_returns_none_for_unknown_slug(tmp_vault):
+    write_index(tmp_vault, build_index(tmp_vault))
+    assert read_mnemo_rule(tmp_vault, "ghost", scope="vault") is None
