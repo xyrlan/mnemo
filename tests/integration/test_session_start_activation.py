@@ -250,8 +250,9 @@ def test_session_start_filters_topics_by_project(
 def test_session_start_falls_back_to_vault_union_when_no_index(
     hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ):
-    """When the index file doesn't exist, injection falls back to vault-wide topics."""
-    # Two rules from different projects — both should appear in vault-wide fallback
+    """When the index file is absent (e.g. vault is read-only and rebuild fails),
+    injection falls back to a vault-wide topic union from shared/feedback/*.md."""
+    # Two rules from different projects — both topics should appear in fallback
     _write_feedback_page(
         hook_env, "react-best-practices",
         sources=["bots/project-a/MEMORY.md"],
@@ -271,19 +272,21 @@ def test_session_start_falls_back_to_vault_union_when_no_index(
         },
     )
 
-    # v0.5: enforcement defaults to True, which would cause session_start to
-    # rebuild the index on hook entry — defeating the "no index" precondition
-    # this test relies on. Explicitly disable both activation flags so the
-    # index stays absent and the vault-wide fallback path is exercised.
+    # v0.7: enable injection, keep enforcement/enrichment off. We want the
+    # injection path to run and hit its fallback branch — simulate a failed
+    # rebuild by patching write_index to a no-op so no index file lands on disk.
     _set_config(
         hook_env,
-        injection={"enabled": False},
+        injection={"enabled": True},
         enforcement={"enabled": False},
         enrichment={"enabled": False},
     )
+    monkeypatch.setattr(
+        "mnemo.core.rule_activation.write_index",
+        lambda *a, **kw: None,
+    )
 
-    # Ensure no index exists (must come AFTER _set_config so a stale rebuild
-    # from a previous test invocation can't beat the unlink to the punch).
+    # Ensure no stale index file from a previous run can defeat the fallback.
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     if index_path.exists():
         index_path.unlink()
@@ -292,9 +295,13 @@ def test_session_start_falls_back_to_vault_union_when_no_index(
     rc, out = _run_hook(hook_env, {"session_id": "S5", "cwd": str(repo)}, monkeypatch, capsys)
 
     assert rc == 0
-    # With all three flags off, no rebuild occurs and no injection output is emitted
-    assert not out, "no injection payload when injection disabled"
-    assert not index_path.exists(), "no index rebuild when all flags off"
+    # Injection fires and falls back to vault-wide topics
+    assert "mnemo://v1" in out, f"injection payload not emitted (fallback failed): {out!r}"
+    # Both vault-wide topics present via get_mnemo_topics(scope="vault") fallback
+    assert "react" in out
+    assert "database" in out
+    # No index file was written (rebuild was patched to no-op)
+    assert not index_path.exists(), "index should not exist — write_index was patched"
 
 
 # ---------------------------------------------------------------------------
