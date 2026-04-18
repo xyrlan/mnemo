@@ -60,6 +60,25 @@ def _rule_belongs_to_project(fm: dict, project: str) -> bool:
     return any(s.startswith(prefix) for s in (fm.get("sources") or []))
 
 
+def _rule_in_scope(rule: dict, project: str | None, scope: str) -> bool:
+    """Apply v0.7 scope semantics to a rule entry from the unified index.
+
+    - ``scope="project"`` (default): local to *project* OR universal.
+    - ``scope="local-only"``: local to *project* only (legacy v0.6.2 behaviour).
+    - ``scope="vault"``: always True.
+    """
+    if scope == "vault":
+        return True
+    projects: list[str] = rule.get("projects", []) or []
+    is_local = project is not None and project in projects
+    if scope == "local-only":
+        return is_local
+    # Default: "project"
+    if is_local:
+        return True
+    return bool(rule.get("universal"))
+
+
 def _resolve_current_project(vault_root: Path) -> str | None:
     """Derive current project from cwd. Returns ``None`` on any failure."""
     try:
