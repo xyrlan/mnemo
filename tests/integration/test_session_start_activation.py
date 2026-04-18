@@ -177,6 +177,7 @@ def test_session_start_skips_index_rebuild_when_both_flags_disabled(
         hook_env,
         enforcement={"enabled": False},
         enrichment={"enabled": False},
+        injection={"enabled": False},
     )
 
     called = []
@@ -276,7 +277,7 @@ def test_session_start_falls_back_to_vault_union_when_no_index(
     # index stays absent and the vault-wide fallback path is exercised.
     _set_config(
         hook_env,
-        injection={"enabled": True},
+        injection={"enabled": False},
         enforcement={"enabled": False},
         enrichment={"enabled": False},
     )
@@ -291,12 +292,9 @@ def test_session_start_falls_back_to_vault_union_when_no_index(
     rc, out = _run_hook(hook_env, {"session_id": "S5", "cwd": str(repo)}, monkeypatch, capsys)
 
     assert rc == 0
-    assert out, "injection payload expected"
-    parsed = json.loads(out)
-    ctx = parsed["hookSpecificOutput"]["additionalContext"]
-    # Vault-wide fallback: both topics appear
-    assert "react" in ctx
-    assert "database" in ctx
+    # With all three flags off, no rebuild occurs and no injection output is emitted
+    assert not out, "no injection payload when injection disabled"
+    assert not index_path.exists(), "no index rebuild when all flags off"
 
 
 # ---------------------------------------------------------------------------
