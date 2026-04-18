@@ -612,3 +612,86 @@ def test_log_enrichment_never_raises_on_bad_vault(tmp_path):
 
     # Must return cleanly, no exception
     log_enrichment(bad_vault, [hit], "Edit", {"file_path": "/x"})
+
+
+# ---------------------------------------------------------------------------
+# v2 layout tests (Task 5a)
+# ---------------------------------------------------------------------------
+
+
+def test_match_bash_enforce_reads_v2_layout(tmp_vault):
+    """Match helper must iterate by_project[proj].local_slugs + universal.slugs,
+    reading the enforce block from rules[slug]."""
+    from mnemo.core.rule_activation import (
+        build_index, match_bash_enforce, INDEX_VERSION,
+    )
+    from tests.unit.test_rule_activation_index import _write_rule
+
+    _write_rule(
+        tmp_vault,
+        "feedback_no_force.md",
+        name="no-force-push",
+        sources=["bots/mnemo/memory/g.md"],
+        enforce=(
+            "enforce:\n"
+            "  tool: Bash\n"
+            "  deny_pattern: git push --force\n"
+            "  reason: never force push\n"
+        ),
+    )
+    idx = build_index(tmp_vault)
+    assert idx["schema_version"] == INDEX_VERSION
+    hit = match_bash_enforce(idx, "mnemo", "git push --force origin main")
+    assert hit is not None
+    assert hit.slug == "no-force-push"
+
+
+def test_match_path_enrich_reads_v2_layout(tmp_vault):
+    from mnemo.core.rule_activation import build_index, match_path_enrich
+    from tests.unit.test_rule_activation_index import _write_rule
+
+    _write_rule(
+        tmp_vault,
+        "feedback_py_rule.md",
+        name="python-style",
+        sources=["bots/mnemo/memory/p.md"],
+        activates_on=(
+            "activates_on:\n"
+            "  tools:\n"
+            "    - Edit\n"
+            "  path_globs:\n"
+            "    - \"**/*.py\"\n"
+        ),
+    )
+    idx = build_index(tmp_vault)
+    hits = match_path_enrich(idx, "mnemo", "src/foo/bar.py", "Edit")
+    assert len(hits) == 1
+    assert hits[0].slug == "python-style"
+
+
+def test_index_version_is_2():
+    from mnemo.core.rule_activation import INDEX_VERSION
+    assert INDEX_VERSION == 2
+
+
+def test_build_index_5a_keeps_legacy_projections_populated(tmp_vault):
+    """Task 5a explicit contract: build_index STILL emits enforce_by_project /
+    enrich_by_project during the 5a→5b window. Task 5b removes them."""
+    from mnemo.core.rule_activation import build_index
+    from tests.unit.test_rule_activation_index import _write_rule
+
+    _write_rule(
+        tmp_vault,
+        "feedback_enf.md",
+        name="enf-rule",
+        sources=["bots/mnemo/memory/e.md"],
+        enforce=(
+            "enforce:\n"
+            "  tool: Bash\n"
+            "  deny_pattern: rm -rf\n"
+            "  reason: no rm -rf\n"
+        ),
+    )
+    idx = build_index(tmp_vault)
+    assert "enforce_by_project" in idx
+    assert idx["enforce_by_project"].get("mnemo")  # at least one entry

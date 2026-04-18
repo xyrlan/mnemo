@@ -30,7 +30,7 @@ from pathlib import Path
 from mnemo.core.filters import is_consumer_visible, parse_frontmatter
 from mnemo.core.log_utils import rotate_if_needed
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 INDEX_FILENAME = "rule-activation-index.json"
 
 # System tags that should be stripped from topic_tags in the index.
@@ -573,42 +573,51 @@ def match_bash_enforce(index: dict, project: str, command: str) -> EnforceHit | 
     """Test command against the project's enforce rules.
 
     Hard cap: truncates to 4 KB BEFORE any matching.
-    deny_patterns use re.IGNORECASE on the RAW command.
-    deny_commands use prefix matching on the NORMALIZED command.
-    Returns the first matching EnforceHit or None.
+    Reads from v2 layout: iterates by_project[proj].local_slugs + universal.slugs,
+    reads the enforce block from rules[slug].
     """
-    # Hard cap — applied BEFORE any matching
     if len(command) > 4096:
         command = command[:4096]
 
     normalized = normalize_bash_command(command)
 
-    for rule in index.get("enforce_by_project", {}).get(project, []):
-        # deny_patterns run on the raw command with _MATCH_FLAGS. Because
-        # parse_enforce_block compiled with the same flags and ran the ReDoS
-        # probe, this search is guaranteed safe to execute. We still wrap in
-        # try/except as belt-and-suspenders — any re.error here would be a
-        # broken invariant, so we skip the pattern rather than crash the hook.
-        for pattern in rule.get("deny_patterns", []):
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    # De-dupe while preserving priority: local first, then universal
+    seen: set[str] = set()
+    ordered_slugs: list[str] = []
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        ordered_slugs.append(slug)
+
+    for slug in ordered_slugs:
+        rule = rules_table.get(slug)
+        if not rule:
+            continue
+        enforce = rule.get("enforce")
+        if not enforce:
+            continue
+
+        for pattern in enforce.get("deny_patterns", []):
             try:
                 if re.search(pattern, command, _MATCH_FLAGS):
                     return EnforceHit(
-                        slug=rule["slug"],
+                        slug=slug,
                         project=project,
-                        reason=rule.get("reason", rule["slug"]),
+                        reason=enforce.get("reason", slug),
                     )
             except re.error:
                 continue
 
-        # Try deny_commands on normalized command (prefix match). deny_commands
-        # are pre-normalized at build_index time, so we can compare directly
-        # without re-normalizing per match.
-        for dc_normalized in rule.get("deny_commands", []):
+        for dc_normalized in enforce.get("deny_commands", []):
             if normalized == dc_normalized or normalized.startswith(dc_normalized + " "):
                 return EnforceHit(
-                    slug=rule["slug"],
+                    slug=slug,
                     project=project,
-                    reason=rule.get("reason", rule["slug"]),
+                    reason=enforce.get("reason", slug),
                 )
 
     return None
@@ -720,28 +729,40 @@ def match_path_enrich(
 ) -> list[EnrichHit]:
     """Return up to 3 matching EnrichHit for *file_path* filtered by *tool_name*.
 
-    Ordered by source_count descending, then slug ascending for determinism.
+    Ordered by source_count desc, then slug asc. Reads v2 layout.
     """
-    matches: list[dict] = []
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
 
-    for rule in index.get("enrich_by_project", {}).get(project, []):
-        if tool_name not in rule.get("tools", []):
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
             continue
-        for glob in rule.get("path_globs", []):
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if not rule:
+            continue
+        enrich = rule.get("activates_on")
+        if not enrich:
+            continue
+        if tool_name not in enrich.get("tools", []):
+            continue
+        for glob in enrich.get("path_globs", []):
             if _glob_matches(glob, file_path):
-                matches.append(rule)
-                break  # one glob match is enough per rule
+                candidates.append({
+                    "slug": slug,
+                    "source_count": enrich.get("source_count", 0),
+                    "rule_body_preview": enrich.get("rule_body_preview", ""),
+                })
+                break
 
-    # Sort: source_count desc, slug asc
-    matches.sort(key=lambda r: (-r.get("source_count", 0), r.get("slug", "")))
+    candidates.sort(key=lambda r: (-r["source_count"], r["slug"]))
 
     return [
-        EnrichHit(
-            slug=r["slug"],
-            project=project,
-            rule_body_preview=r.get("rule_body_preview", ""),
-        )
-        for r in matches[:3]
+        EnrichHit(slug=c["slug"], project=project, rule_body_preview=c["rule_body_preview"])
+        for c in candidates[:3]
     ]
 
 
