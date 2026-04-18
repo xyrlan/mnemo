@@ -100,6 +100,26 @@ The result: Claude consumes in real time the rules you taught it weeks
 earlier in a different session, without you having to remember to copy
 them in.
 
+## Scope model (v0.7+)
+
+Rules in `shared/{feedback,user,reference}/` are **local by default**: a rule
+is visible only from projects that appear in its `sources[]` frontmatter. A
+rule is automatically promoted to **universal** when it has been seen in at
+least `scoping.universalThreshold` distinct projects (default: 2). Universal
+rules are visible from every project.
+
+MCP retrieval accepts three `scope` values:
+
+| `scope`       | Returns                                              |
+|---------------|------------------------------------------------------|
+| `"project"`   | local rules + universal rules (default)              |
+| `"local-only"`| local rules only (legacy v0.6.2 behaviour)           |
+| `"vault"`     | every consumer-visible rule                          |
+
+Promotion and demotion are automatic: the index is re-derived from `sources[]`
+on every SessionStart. To change the threshold, set
+`scoping.universalThreshold` in `mnemo.config.json`.
+
 ## Status line
 
 After `mnemo init`, your Claude Code status line shows the brain's heartbeat:
