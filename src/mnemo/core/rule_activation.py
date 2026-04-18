@@ -304,106 +304,121 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_index(vault_root: Path) -> dict:
-    """Walk shared/feedback/*.md, build and return the full index dict.
+def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> dict:
+    """Walk shared/{feedback,user,reference}/*.md, build and return the v2 index dict.
 
     NON-NEGOTIABLE: calls is_consumer_visible for every candidate file.
     Never raises on bad files — records them in ``malformed``.
+
+    ``universal_threshold`` overrides ``scoping.universalThreshold`` from
+    config. Pass explicitly in tests to avoid monkeypatching load_config.
     """
+    if universal_threshold is None:
+        from mnemo.core.config import load_config
+        universal_threshold = int(
+            load_config().get("scoping", {}).get("universalThreshold", 2)
+        )
+    threshold = universal_threshold
+
+    rules: dict[str, dict] = {}
     enforce_by_project: dict[str, list[dict]] = {}
     enrich_by_project: dict[str, list[dict]] = {}
     malformed: list[dict] = []
 
-    feedback_dir = vault_root / "shared" / "feedback"
-    candidates = sorted(feedback_dir.glob("*.md")) if feedback_dir.is_dir() else []
+    retrieval_types = ("feedback", "user", "reference")
 
-    for md_path in candidates:
-        try:
-            text = md_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            malformed.append({"path": str(md_path), "error": f"read error: {exc}"})
+    for page_type in retrieval_types:
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
             continue
 
-        fm = parse_frontmatter(text)
+        for md_path in sorted(type_dir.glob("*.md")):
+            try:
+                text = md_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                malformed.append({"path": str(md_path), "error": f"read error: {exc}"})
+                continue
 
-        # NON-NEGOTIABLE gate
-        if not is_consumer_visible(md_path, fm, vault_root):
-            continue
+            fm = parse_frontmatter(text)
 
-        # Derive slug
-        slug = fm.get("slug") or fm.get("name") or md_path.stem
+            if not is_consumer_visible(md_path, fm, vault_root):
+                continue
 
-        # Source files
-        sources_raw = fm.get("sources") or []
-        if isinstance(sources_raw, str):
-            sources_raw = [sources_raw]
-        source_files: list[str] = [s for s in sources_raw if isinstance(s, str)]
+            slug = fm.get("slug") or fm.get("name") or md_path.stem
 
-        # Topic tags — strip system markers
-        tags_raw = fm.get("tags") or []
-        topic_tags_list = [t for t in tags_raw if isinstance(t, str) and t not in _SYSTEM_TAGS]
+            sources_raw = fm.get("sources") or []
+            if isinstance(sources_raw, str):
+                sources_raw = [sources_raw]
+            source_files: list[str] = [s for s in sources_raw if isinstance(s, str)]
 
-        # Body preview
-        preview = _body_preview(text)
+            tags_raw = fm.get("tags") or []
+            topic_tags_list = [t for t in tags_raw if isinstance(t, str) and t not in _SYSTEM_TAGS]
 
-        projects = projects_for_rule(source_files)
-        # If no bots/ sources, still index under empty string so rules aren't
-        # silently lost — but per spec, "Files not under bots/<name>/ are
-        # ignored", so such rules simply don't appear in any project bucket.
-        # That is correct behaviour.
+            preview = _body_preview(text)
+            projects = projects_for_rule(source_files)
+            universal = _is_universal(projects, threshold)
 
-        # --- enforce block ---
-        enforce_block_raw = fm.get("enforce")
-        if enforce_block_raw is not None:
-            parsed_enforce = parse_enforce_block(fm)
-            if parsed_enforce is None:
-                # Determine a useful error string
-                _err = _describe_enforce_error(fm)
-                malformed.append({"path": str(md_path), "error": _err})
-            else:
-                # Pre-normalize deny_commands so match_bash_enforce can compare
-                # directly against an already-normalized incoming command
-                # without re-normalizing every stored entry on every call.
-                normalized_deny_commands = [
-                    normalize_bash_command(c)
-                    for c in parsed_enforce["deny_commands"]
-                ]
-                entry = {
-                    "slug": slug,
-                    "tool": parsed_enforce["tool"],
-                    "deny_patterns": parsed_enforce["deny_patterns"],
-                    "deny_commands": normalized_deny_commands,
-                    "reason": parsed_enforce["reason"],
-                    "source_files": source_files,
-                    "source_count": len(source_files),
-                }
-                for proj in projects:
-                    enforce_by_project.setdefault(proj, []).append(entry)
+            # --- enforce block ---
+            enforce_entry = None
+            enforce_block_raw = fm.get("enforce")
+            if enforce_block_raw is not None:
+                parsed_enforce = parse_enforce_block(fm)
+                if parsed_enforce is None:
+                    malformed.append({"path": str(md_path), "error": _describe_enforce_error(fm)})
+                else:
+                    normalized_deny_commands = [
+                        normalize_bash_command(c) for c in parsed_enforce["deny_commands"]
+                    ]
+                    enforce_entry = {
+                        "slug": slug,
+                        "tool": parsed_enforce["tool"],
+                        "deny_patterns": parsed_enforce["deny_patterns"],
+                        "deny_commands": normalized_deny_commands,
+                        "reason": parsed_enforce["reason"],
+                        "source_files": source_files,
+                        "source_count": len(source_files),
+                    }
+                    for proj in projects:
+                        enforce_by_project.setdefault(proj, []).append(enforce_entry)
 
-        # --- activates_on block ---
-        activates_on_raw = fm.get("activates_on")
-        if activates_on_raw is not None:
-            parsed_enrich = parse_activates_on_block(fm)
-            if parsed_enrich is None:
-                _err = _describe_enrich_error(fm)
-                malformed.append({"path": str(md_path), "error": _err})
-            else:
-                entry = {
-                    "slug": slug,
-                    "tools": parsed_enrich["tools"],
-                    "path_globs": parsed_enrich["path_globs"],
-                    "topic_tags": topic_tags_list,
-                    "rule_body_preview": preview,
-                    "source_files": source_files,
-                    "source_count": len(source_files),
-                }
-                for proj in projects:
-                    enrich_by_project.setdefault(proj, []).append(entry)
+            # --- activates_on block ---
+            enrich_entry = None
+            activates_on_raw = fm.get("activates_on")
+            if activates_on_raw is not None:
+                parsed_enrich = parse_activates_on_block(fm)
+                if parsed_enrich is None:
+                    malformed.append({"path": str(md_path), "error": _describe_enrich_error(fm)})
+                else:
+                    enrich_entry = {
+                        "slug": slug,
+                        "tools": parsed_enrich["tools"],
+                        "path_globs": parsed_enrich["path_globs"],
+                        "topic_tags": topic_tags_list,
+                        "rule_body_preview": preview,
+                        "source_files": source_files,
+                        "source_count": len(source_files),
+                    }
+                    for proj in projects:
+                        enrich_by_project.setdefault(proj, []).append(enrich_entry)
+
+            rules[slug] = {
+                "type": page_type,
+                "name": fm.get("name", slug),
+                "topic_tags": topic_tags_list,
+                "source_files": source_files,
+                "source_count": len(source_files),
+                "projects": projects,
+                "universal": universal,
+                "body_preview": preview,
+                "enforce": enforce_entry,
+                "activates_on": enrich_entry,
+            }
 
     return {
         "schema_version": INDEX_VERSION,
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "vault_root": str(vault_root),
+        "rules": rules,
         "enforce_by_project": enforce_by_project,
         "enrich_by_project": enrich_by_project,
         "malformed": malformed,

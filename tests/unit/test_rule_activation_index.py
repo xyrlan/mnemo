@@ -409,3 +409,70 @@ def test_is_universal_higher_threshold():
     from mnemo.core.rule_activation import _is_universal
     assert _is_universal(["a", "b"], threshold=3) is False
     assert _is_universal(["a", "b", "c"], threshold=3) is True
+
+
+def test_build_index_v2_rules_table_has_entry_per_feedback_rule(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_tabs.md",
+        name="use-tabs",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/tabs.md", "bots/beta/memory/tabs.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "rules" in idx
+    assert "use-tabs" in idx["rules"]
+    rule = idx["rules"]["use-tabs"]
+    assert rule["type"] == "feedback"
+    assert sorted(rule["projects"]) == ["alpha", "beta"]
+    assert rule["source_count"] == 2
+    assert rule["universal"] is True
+    assert "code-style" in rule["topic_tags"]
+    assert "auto-promoted" not in rule["topic_tags"]  # system tag stripped
+    assert rule["body_preview"]  # non-empty
+    assert rule["enforce"] is None
+    assert rule["activates_on"] is None
+
+
+def test_build_index_v2_local_rule_has_universal_false(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_local.md",
+        name="local-only",
+        sources=["bots/alpha/memory/x.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert idx["rules"]["local-only"]["universal"] is False
+    assert idx["rules"]["local-only"]["projects"] == ["alpha"]
+
+
+def test_build_index_v2_covers_user_and_reference_types(tmp_vault):
+    """Spec §7 promises the builder walks feedback+user+reference. Lock it down."""
+    _write_rule(
+        tmp_vault, "user_me.md", name="user-rule",
+        tags=["profile", "auto-promoted"],
+        sources=["bots/alpha/memory/u.md"],
+        subdir="user",
+    )
+    _write_rule(
+        tmp_vault, "ref_x.md", name="ref-rule",
+        tags=["external", "auto-promoted"],
+        sources=["bots/alpha/memory/r.md"],
+        subdir="reference",
+    )
+    idx = build_index(tmp_vault)
+    assert idx["rules"]["user-rule"]["type"] == "user"
+    assert idx["rules"]["ref-rule"]["type"] == "reference"
+
+
+def test_build_index_accepts_universal_threshold_kwarg(tmp_vault):
+    """Explicit threshold avoids load_config coupling in tests."""
+    _write_rule(
+        tmp_vault, "feedback_two.md", name="two-proj",
+        sources=["bots/a/memory/x.md", "bots/b/memory/x.md"],
+    )
+    idx_default = build_index(tmp_vault)  # threshold=2
+    assert idx_default["rules"]["two-proj"]["universal"] is True
+
+    idx_strict = build_index(tmp_vault, universal_threshold=3)
+    assert idx_strict["rules"]["two-proj"]["universal"] is False
