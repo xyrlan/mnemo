@@ -215,9 +215,31 @@ def get_mnemo_topics(
     scope: str = "project",
     project: str | None = None,
 ) -> list[str]:
-    """Return the sorted union of topic tags across every retrieval-eligible type."""
-    filter_project = scope == "project" and project is not None
-    seen: set[str] = set()
+    """Return the sorted union of topic tags across rules visible at *scope*."""
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        seen: set[str] = set()
+        if scope == "vault":
+            for rule in idx["rules"].values():
+                seen.update(rule.get("topic_tags", []))
+        elif scope == "local-only":
+            if project is not None:
+                seen.update(
+                    idx.get("by_project", {}).get(project, {}).get("topics", [])
+                )
+        else:  # "project" default: local + universal
+            if project is not None:
+                seen.update(
+                    idx.get("by_project", {}).get(project, {}).get("topics", [])
+                )
+            seen.update(idx.get("universal", {}).get("topics", []))
+        return sorted(seen)
+
+    # Fallback: legacy glob.
+    filter_project = scope in ("project", "local-only") and project is not None
+    seen = set()
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():

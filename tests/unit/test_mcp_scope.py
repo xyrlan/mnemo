@@ -125,3 +125,32 @@ def test_read_mnemo_rule_local_only_rejects_universal_from_foreign_project(tmp_v
 def test_read_mnemo_rule_returns_none_for_unknown_slug(tmp_vault):
     write_index(tmp_vault, build_index(tmp_vault))
     assert read_mnemo_rule(tmp_vault, "ghost", scope="vault") is None
+
+
+from mnemo.core.mcp.tools import get_mnemo_topics
+
+
+def test_get_mnemo_topics_project_includes_universal(tmp_vault):
+    _write_feedback(tmp_vault, "uni", name="universal-rule",
+                    tags=["git", "auto-promoted"],
+                    sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"])
+    _write_feedback(tmp_vault, "local", name="local-rule",
+                    tags=["code-style", "auto-promoted"],
+                    sources=["bots/alpha/memory/l.md"])
+    write_index(tmp_vault, build_index(tmp_vault))
+    topics = get_mnemo_topics(tmp_vault, scope="project", project="gamma")
+    # gamma has no local rules but inherits universal
+    assert "git" in topics
+    assert "code-style" not in topics
+
+
+def test_get_mnemo_topics_vault_union(tmp_vault):
+    _write_feedback(tmp_vault, "a", name="a-rule",
+                    tags=["x", "auto-promoted"],
+                    sources=["bots/alpha/memory/a.md"])
+    _write_feedback(tmp_vault, "b", name="b-rule",
+                    tags=["y", "auto-promoted"],
+                    sources=["bots/beta/memory/b.md"])
+    write_index(tmp_vault, build_index(tmp_vault))
+    topics = get_mnemo_topics(tmp_vault, scope="vault")
+    assert "x" in topics and "y" in topics
