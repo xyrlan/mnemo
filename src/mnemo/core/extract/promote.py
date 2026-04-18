@@ -28,6 +28,7 @@ def _render_project_page(file: MemoryFile, *, run_id: str) -> str:
         f"name: {file.frontmatter.get('name', file.slug)}\n"
         f"description: {file.frontmatter.get('description', '')}\n"
         "type: project\n"
+        "runtime: false\n"
         f"agent: {file.agent}\n"
         f"promoted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"

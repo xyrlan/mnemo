@@ -34,6 +34,10 @@ The LLM consolidates cross-agent memories and session briefings into canonical p
 - [[shared/reference]] — pointers to external systems (Linear, Grafana, Notion, etc.)
 - [[shared/project]] — per-repo project context and decisions
 
+Pages under [[shared/project]] are a **human navigation surface only** — they
+carry `runtime: false` in their frontmatter. Project-specific runtime context
+reaches Claude via native auto-memory over `bots/<agent>/memory/`.
+
 ## Quick commands
 
 - `/mnemo status` — health check (includes auto-brain state)

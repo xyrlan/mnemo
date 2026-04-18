@@ -5,6 +5,46 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## v0.7.0 — 2026-04-18
+
+### Breaking
+
+- `scope="project"` on MCP retrieval (`list_rules_by_topic`,
+  `read_mnemo_rule`, `get_mnemo_topics`) now returns **local + universal**
+  rules. Pass `scope="local-only"` to preserve v0.6.2 "strict local" behaviour.
+- Rule-activation index schema bumped to v2. Existing v1 indexes load as
+  `None` and are regenerated automatically on the next SessionStart.
+- Index top-level keys `enforce_by_project` and `enrich_by_project` are
+  removed. Consumers read the unified `rules` table plus the derived
+  `by_project` / `universal` lookup tables, or use the new iterators
+  `iter_enforce_rules_for_project` / `iter_enrich_rules_for_project`.
+
+### Note on MCP fallback
+
+If MCP is invoked *before* the first SessionStart of v0.7.0 has rebuilt the
+index, retrieval falls back to a glob+parse walk of `shared/{feedback,user,reference}/`.
+In that fallback path, **universality is not evaluated** — every rule is
+treated as local (equivalent to `scope="local-only"`). Running a SessionStart
+(or `mnemo extract`) after upgrade is all that's needed to enable the full
+v0.7 semantics.
+
+### Added
+
+- Automatic **universal promotion** at `distinct_projects >= 2`
+  (configurable via `scoping.universalThreshold`).
+- Structured `mnemo://v1` SessionStart injection envelope with per-scope
+  topic lines and a `injection.maxTopicsPerScope` cap (default 15).
+- `mnemo doctor` reports universal promotion health.
+- `shared/project/` pages now carry `runtime: false` to document their
+  human-surface-only role.
+
+### Changed
+
+- MCP retrieval now reads the unified index for O(1) lookups; glob+parse is
+  kept as a fallback for missing/stale indexes.
+- SessionStart rebuilds the index whenever `injection.enabled` is true
+  (in addition to the existing enforcement/enrichment triggers).
+
 ## v0.6.0 — 2026-04-16 — Loop enabled by default
 
 **Changed**

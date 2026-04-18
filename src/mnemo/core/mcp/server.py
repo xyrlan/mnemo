@@ -27,7 +27,7 @@ from mnemo.core.mcp import tools as mcp_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "mnemo"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.7.0"
 
 _TOOL_DEFS: list[dict[str, Any]] = [
     {
@@ -45,8 +45,8 @@ _TOOL_DEFS: list[dict[str, Any]] = [
                 "topic": {"type": "string"},
                 "scope": {
                     "type": "string",
-                    "enum": ["project", "vault"],
-                    "description": "Filter scope. Default: project (current project only).",
+                    "enum": ["project", "local-only", "vault"],
+                    "description": "Filter scope. Default: project (local rules + universal rules). Use local-only to exclude universal; vault for everything.",
                 },
             },
             "required": ["topic"],
@@ -66,8 +66,8 @@ _TOOL_DEFS: list[dict[str, Any]] = [
                 "slug": {"type": "string"},
                 "scope": {
                     "type": "string",
-                    "enum": ["project", "vault"],
-                    "description": "Filter scope. Default: project (current project only).",
+                    "enum": ["project", "local-only", "vault"],
+                    "description": "Filter scope. Default: project (local rules + universal rules). Use local-only to exclude universal; vault for everything.",
                 },
             },
             "required": ["slug"],
@@ -86,8 +86,8 @@ _TOOL_DEFS: list[dict[str, Any]] = [
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["project", "vault"],
-                    "description": "Filter scope. Default: project (current project only).",
+                    "enum": ["project", "local-only", "vault"],
+                    "description": "Filter scope. Default: project (local rules + universal rules). Use local-only to exclude universal; vault for everything.",
                 },
             },
         },

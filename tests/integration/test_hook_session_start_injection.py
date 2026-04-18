@@ -110,10 +110,11 @@ def test_session_start_silent_when_injection_disabled(
 def test_session_start_emits_hook_specific_output_when_enabled(
     hook_env: Path, tmp_path: Path, monkeypatch, capsys,
 ):
+    # Two sources → universal rule; shows up in envelope for any project
     _write_page(
         hook_env, "feedback", "f1",
         tags=["auto-promoted", "package-management"],
-        sources=["bots/a/m.md"],
+        sources=["bots/a/m.md", "bots/b/m.md"],
     )
     _set_config(hook_env, injection={"enabled": True})
     repo = tmp_path / "myrepo"
@@ -127,6 +128,7 @@ def test_session_start_emits_hook_specific_output_when_enabled(
     parsed = json.loads(out)
     assert parsed["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     ctx = parsed["hookSpecificOutput"]["additionalContext"]
+    assert "mnemo://v1" in ctx
     assert "package-management" in ctx
     assert "list_rules_by_topic" in ctx
 
@@ -178,10 +180,11 @@ def test_session_start_with_injection_still_runs_session_save(
     """Existing session.save + log behavior must be preserved when injection is on."""
     from mnemo.core import session
 
+    # Two sources → universal rule; shows up in envelope for any project
     _write_page(
         hook_env, "feedback", "f1",
         tags=["auto-promoted", "git"],
-        sources=["bots/a/m.md"],
+        sources=["bots/a/m.md", "bots/b/m.md"],
     )
     _set_config(hook_env, injection={"enabled": True})
     repo = tmp_path / "myrepo"
@@ -192,6 +195,8 @@ def test_session_start_with_injection_still_runs_session_save(
         monkeypatch, capsys,
     )
     assert out  # injection emitted
+    parsed = json.loads(out)
+    assert "mnemo://v1" in parsed["hookSpecificOutput"]["additionalContext"]
     cached = session.load("S5")
     assert cached is not None
     assert cached["name"] == "myrepo"

@@ -190,9 +190,12 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
     assert index is not None, "index must load cleanly"
     assert index.get("malformed") == []
 
-    enforce_by_project = index.get("enforce_by_project") or {}
-    assert "agent-a" in enforce_by_project, enforce_by_project
-    enforce_entries = enforce_by_project["agent-a"]
+    rules_with_enforce = {
+        slug: rule for slug, rule in index.get("rules", {}).items()
+        if rule.get("enforce") and "agent-a" in rule.get("projects", [])
+    }
+    assert rules_with_enforce, f"no enforce rules for agent-a: {index.get('rules')}"
+    enforce_entries = [rule["enforce"] for rule in rules_with_enforce.values()]
     assert any(
         e.get("tool") == "Bash"
         and "git commit.*Co-Authored-By" in (e.get("deny_patterns") or [])
@@ -200,9 +203,12 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
         for e in enforce_entries
     ), enforce_entries
 
-    enrich_by_project = index.get("enrich_by_project") or {}
-    assert "agent-b" in enrich_by_project, enrich_by_project
-    enrich_entries = enrich_by_project["agent-b"]
+    rules_with_enrich = {
+        slug: rule for slug, rule in index.get("rules", {}).items()
+        if rule.get("activates_on") and "agent-b" in rule.get("projects", [])
+    }
+    assert rules_with_enrich, f"no enrich rules for agent-b: {index.get('rules')}"
+    enrich_entries = [rule["activates_on"] for rule in rules_with_enrich.values()]
     assert any(
         "Edit" in r.get("tools", [])
         and "**/components/modals/**" in r.get("path_globs", [])

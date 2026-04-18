@@ -30,7 +30,7 @@ from pathlib import Path
 from mnemo.core.filters import is_consumer_visible, parse_frontmatter
 from mnemo.core.log_utils import rotate_if_needed
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 INDEX_FILENAME = "rule-activation-index.json"
 
 # System tags that should be stripped from topic_tags in the index.
@@ -248,6 +248,17 @@ def projects_for_rule(source_files: list[str]) -> list[str]:
     return sorted(projects)
 
 
+def _is_universal(projects: list[str], threshold: int) -> bool:
+    """Return True when the rule's distinct project count meets the universal threshold.
+
+    Always False for an empty project list, regardless of threshold (a rule with
+    no bots/ sources is not attributable to any project and cannot be universal).
+    """
+    if not projects:
+        return False
+    return len(projects) >= threshold
+
+
 # ---------------------------------------------------------------------------
 # Body preview helper
 # ---------------------------------------------------------------------------
@@ -293,108 +304,140 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_index(vault_root: Path) -> dict:
-    """Walk shared/feedback/*.md, build and return the full index dict.
+def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> dict:
+    """Walk shared/{feedback,user,reference}/*.md, build and return the v2 index dict.
 
     NON-NEGOTIABLE: calls is_consumer_visible for every candidate file.
     Never raises on bad files — records them in ``malformed``.
+
+    ``universal_threshold`` overrides ``scoping.universalThreshold`` from
+    config. Pass explicitly in tests to avoid monkeypatching load_config.
     """
-    enforce_by_project: dict[str, list[dict]] = {}
-    enrich_by_project: dict[str, list[dict]] = {}
+    if universal_threshold is None:
+        from mnemo.core.config import load_config
+        universal_threshold = int(
+            load_config().get("scoping", {}).get("universalThreshold", 2)
+        )
+    threshold = universal_threshold
+
+    rules: dict[str, dict] = {}
     malformed: list[dict] = []
 
-    feedback_dir = vault_root / "shared" / "feedback"
-    candidates = sorted(feedback_dir.glob("*.md")) if feedback_dir.is_dir() else []
+    retrieval_types = ("feedback", "user", "reference")
 
-    for md_path in candidates:
-        try:
-            text = md_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            malformed.append({"path": str(md_path), "error": f"read error: {exc}"})
+    for page_type in retrieval_types:
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
             continue
 
-        fm = parse_frontmatter(text)
+        for md_path in sorted(type_dir.glob("*.md")):
+            try:
+                text = md_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                malformed.append({"path": str(md_path), "error": f"read error: {exc}"})
+                continue
 
-        # NON-NEGOTIABLE gate
-        if not is_consumer_visible(md_path, fm, vault_root):
-            continue
+            fm = parse_frontmatter(text)
 
-        # Derive slug
-        slug = fm.get("slug") or fm.get("name") or md_path.stem
+            if not is_consumer_visible(md_path, fm, vault_root):
+                continue
 
-        # Source files
-        sources_raw = fm.get("sources") or []
-        if isinstance(sources_raw, str):
-            sources_raw = [sources_raw]
-        source_files: list[str] = [s for s in sources_raw if isinstance(s, str)]
+            slug = fm.get("slug") or fm.get("name") or md_path.stem
 
-        # Topic tags — strip system markers
-        tags_raw = fm.get("tags") or []
-        topic_tags_list = [t for t in tags_raw if isinstance(t, str) and t not in _SYSTEM_TAGS]
+            sources_raw = fm.get("sources") or []
+            if isinstance(sources_raw, str):
+                sources_raw = [sources_raw]
+            source_files: list[str] = [s for s in sources_raw if isinstance(s, str)]
 
-        # Body preview
-        preview = _body_preview(text)
+            tags_raw = fm.get("tags") or []
+            topic_tags_list = [t for t in tags_raw if isinstance(t, str) and t not in _SYSTEM_TAGS]
 
-        projects = projects_for_rule(source_files)
-        # If no bots/ sources, still index under empty string so rules aren't
-        # silently lost — but per spec, "Files not under bots/<name>/ are
-        # ignored", so such rules simply don't appear in any project bucket.
-        # That is correct behaviour.
+            preview = _body_preview(text)
+            projects = projects_for_rule(source_files)
+            universal = _is_universal(projects, threshold)
 
-        # --- enforce block ---
-        enforce_block_raw = fm.get("enforce")
-        if enforce_block_raw is not None:
-            parsed_enforce = parse_enforce_block(fm)
-            if parsed_enforce is None:
-                # Determine a useful error string
-                _err = _describe_enforce_error(fm)
-                malformed.append({"path": str(md_path), "error": _err})
-            else:
-                # Pre-normalize deny_commands so match_bash_enforce can compare
-                # directly against an already-normalized incoming command
-                # without re-normalizing every stored entry on every call.
-                normalized_deny_commands = [
-                    normalize_bash_command(c)
-                    for c in parsed_enforce["deny_commands"]
-                ]
-                entry = {
-                    "slug": slug,
-                    "tool": parsed_enforce["tool"],
-                    "deny_patterns": parsed_enforce["deny_patterns"],
-                    "deny_commands": normalized_deny_commands,
-                    "reason": parsed_enforce["reason"],
-                    "source_files": source_files,
-                    "source_count": len(source_files),
-                }
-                for proj in projects:
-                    enforce_by_project.setdefault(proj, []).append(entry)
+            # --- enforce block ---
+            enforce_entry = None
+            enforce_block_raw = fm.get("enforce")
+            if enforce_block_raw is not None:
+                parsed_enforce = parse_enforce_block(fm)
+                if parsed_enforce is None:
+                    malformed.append({"path": str(md_path), "error": _describe_enforce_error(fm)})
+                else:
+                    normalized_deny_commands = [
+                        normalize_bash_command(c) for c in parsed_enforce["deny_commands"]
+                    ]
+                    enforce_entry = {
+                        "slug": slug,
+                        "tool": parsed_enforce["tool"],
+                        "deny_patterns": parsed_enforce["deny_patterns"],
+                        "deny_commands": normalized_deny_commands,
+                        "reason": parsed_enforce["reason"],
+                        "source_files": source_files,
+                        "source_count": len(source_files),
+                    }
 
-        # --- activates_on block ---
-        activates_on_raw = fm.get("activates_on")
-        if activates_on_raw is not None:
-            parsed_enrich = parse_activates_on_block(fm)
-            if parsed_enrich is None:
-                _err = _describe_enrich_error(fm)
-                malformed.append({"path": str(md_path), "error": _err})
-            else:
-                entry = {
-                    "slug": slug,
-                    "tools": parsed_enrich["tools"],
-                    "path_globs": parsed_enrich["path_globs"],
-                    "topic_tags": topic_tags_list,
-                    "rule_body_preview": preview,
-                    "source_files": source_files,
-                    "source_count": len(source_files),
-                }
-                for proj in projects:
-                    enrich_by_project.setdefault(proj, []).append(entry)
+            # --- activates_on block ---
+            enrich_entry = None
+            activates_on_raw = fm.get("activates_on")
+            if activates_on_raw is not None:
+                parsed_enrich = parse_activates_on_block(fm)
+                if parsed_enrich is None:
+                    malformed.append({"path": str(md_path), "error": _describe_enrich_error(fm)})
+                else:
+                    enrich_entry = {
+                        "slug": slug,
+                        "tools": parsed_enrich["tools"],
+                        "path_globs": parsed_enrich["path_globs"],
+                        "topic_tags": topic_tags_list,
+                        "rule_body_preview": preview,
+                        "source_files": source_files,
+                        "source_count": len(source_files),
+                    }
+
+            rules[slug] = {
+                "type": page_type,
+                "name": fm.get("name", slug),
+                "topic_tags": topic_tags_list,
+                "source_files": source_files,
+                "source_count": len(source_files),
+                "projects": projects,
+                "universal": universal,
+                "body_preview": preview,
+                "enforce": enforce_entry,
+                "activates_on": enrich_entry,
+            }
+
+    by_project: dict[str, dict] = {}
+    universal_slugs: list[str] = []
+    universal_topics: set[str] = set()
+
+    for slug, rule in rules.items():
+        for proj in rule["projects"]:
+            bucket = by_project.setdefault(proj, {"local_slugs": [], "topics": set()})
+            bucket["local_slugs"].append(slug)
+            for t in rule["topic_tags"]:
+                bucket["topics"].add(t)
+        if rule["universal"]:
+            universal_slugs.append(slug)
+            for t in rule["topic_tags"]:
+                universal_topics.add(t)
+
+    # Normalise sets to sorted lists for JSON stability
+    for proj, bucket in by_project.items():
+        bucket["topics"] = sorted(bucket["topics"])
+        bucket["local_slugs"] = sorted(set(bucket["local_slugs"]))
 
     return {
         "schema_version": INDEX_VERSION,
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "vault_root": str(vault_root),
-        "enforce_by_project": enforce_by_project,
-        "enrich_by_project": enrich_by_project,
+        "rules": rules,
+        "by_project": by_project,
+        "universal": {
+            "slugs": sorted(set(universal_slugs)),
+            "topics": sorted(universal_topics),
+        },
         "malformed": malformed,
     }
 
@@ -522,42 +565,51 @@ def match_bash_enforce(index: dict, project: str, command: str) -> EnforceHit | 
     """Test command against the project's enforce rules.
 
     Hard cap: truncates to 4 KB BEFORE any matching.
-    deny_patterns use re.IGNORECASE on the RAW command.
-    deny_commands use prefix matching on the NORMALIZED command.
-    Returns the first matching EnforceHit or None.
+    Reads from v2 layout: iterates by_project[proj].local_slugs + universal.slugs,
+    reads the enforce block from rules[slug].
     """
-    # Hard cap — applied BEFORE any matching
     if len(command) > 4096:
         command = command[:4096]
 
     normalized = normalize_bash_command(command)
 
-    for rule in index.get("enforce_by_project", {}).get(project, []):
-        # deny_patterns run on the raw command with _MATCH_FLAGS. Because
-        # parse_enforce_block compiled with the same flags and ran the ReDoS
-        # probe, this search is guaranteed safe to execute. We still wrap in
-        # try/except as belt-and-suspenders — any re.error here would be a
-        # broken invariant, so we skip the pattern rather than crash the hook.
-        for pattern in rule.get("deny_patterns", []):
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    # De-dupe while preserving priority: local first, then universal
+    seen: set[str] = set()
+    ordered_slugs: list[str] = []
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        ordered_slugs.append(slug)
+
+    for slug in ordered_slugs:
+        rule = rules_table.get(slug)
+        if not rule:
+            continue
+        enforce = rule.get("enforce")
+        if not enforce:
+            continue
+
+        for pattern in enforce.get("deny_patterns", []):
             try:
                 if re.search(pattern, command, _MATCH_FLAGS):
                     return EnforceHit(
-                        slug=rule["slug"],
+                        slug=slug,
                         project=project,
-                        reason=rule.get("reason", rule["slug"]),
+                        reason=enforce.get("reason", slug),
                     )
             except re.error:
                 continue
 
-        # Try deny_commands on normalized command (prefix match). deny_commands
-        # are pre-normalized at build_index time, so we can compare directly
-        # without re-normalizing per match.
-        for dc_normalized in rule.get("deny_commands", []):
+        for dc_normalized in enforce.get("deny_commands", []):
             if normalized == dc_normalized or normalized.startswith(dc_normalized + " "):
                 return EnforceHit(
-                    slug=rule["slug"],
+                    slug=slug,
                     project=project,
-                    reason=rule.get("reason", rule["slug"]),
+                    reason=enforce.get("reason", slug),
                 )
 
     return None
@@ -669,29 +721,80 @@ def match_path_enrich(
 ) -> list[EnrichHit]:
     """Return up to 3 matching EnrichHit for *file_path* filtered by *tool_name*.
 
-    Ordered by source_count descending, then slug ascending for determinism.
+    Ordered by source_count desc, then slug asc. Reads v2 layout.
     """
-    matches: list[dict] = []
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
 
-    for rule in index.get("enrich_by_project", {}).get(project, []):
-        if tool_name not in rule.get("tools", []):
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
             continue
-        for glob in rule.get("path_globs", []):
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if not rule:
+            continue
+        enrich = rule.get("activates_on")
+        if not enrich:
+            continue
+        if tool_name not in enrich.get("tools", []):
+            continue
+        for glob in enrich.get("path_globs", []):
             if _glob_matches(glob, file_path):
-                matches.append(rule)
-                break  # one glob match is enough per rule
+                candidates.append({
+                    "slug": slug,
+                    "source_count": enrich.get("source_count", 0),
+                    "rule_body_preview": enrich.get("rule_body_preview", ""),
+                })
+                break
 
-    # Sort: source_count desc, slug asc
-    matches.sort(key=lambda r: (-r.get("source_count", 0), r.get("slug", "")))
+    candidates.sort(key=lambda r: (-r["source_count"], r["slug"]))
 
     return [
-        EnrichHit(
-            slug=r["slug"],
-            project=project,
-            rule_body_preview=r.get("rule_body_preview", ""),
-        )
-        for r in matches[:3]
+        EnrichHit(slug=c["slug"], project=project, rule_body_preview=c["rule_body_preview"])
+        for c in candidates[:3]
     ]
+
+
+def iter_enforce_rules_for_project(index: dict, project: str):
+    """Yield rule dicts that carry an enforce block and are visible from *project*.
+
+    Visibility = local to project OR universal. De-duplicated on slug.
+    Each yielded dict is the per-slug rule entry from ``index["rules"]``
+    with an additional ``slug`` key injected for convenience.
+    """
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    seen: set[str] = set()
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if rule and rule.get("enforce"):
+            yield {"slug": slug, **rule}
+
+
+def iter_enrich_rules_for_project(index: dict, project: str):
+    """Yield rule dicts with an activates_on block visible from *project*.
+
+    Each yielded dict is the per-slug rule entry from ``index["rules"]``
+    with an additional ``slug`` key injected for convenience.
+    """
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    seen: set[str] = set()
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if rule and rule.get("activates_on"):
+            yield {"slug": slug, **rule}
 
 
 # ---------------------------------------------------------------------------

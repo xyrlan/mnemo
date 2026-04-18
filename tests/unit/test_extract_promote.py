@@ -97,3 +97,22 @@ def test_promote_namespaces_by_agent(tmp_vault: Path):
     assert target_a.exists() and target_b.exists()
     assert "a body" in target_a.read_text()
     assert "b body" in target_b.read_text()
+
+
+def test_project_page_includes_runtime_false_marker(tmp_vault: Path):
+    """Project pages must carry runtime: false to formalize them as human-surface only."""
+    from mnemo.core.extract.promote import _render_project_page
+    from mnemo.core.extract.scanner import MemoryFile
+    from pathlib import Path
+
+    file = MemoryFile(
+        path=Path("bots/mnemo/memory/project_x.md"),
+        agent="mnemo",
+        type="project",
+        slug="project-x",
+        frontmatter={"name": "Project X", "description": "desc"},
+        body="Some project context.",
+        source_hash="sha256:abc",
+    )
+    rendered = _render_project_page(file, run_id="2026-04-18T00:00:00")
+    assert "runtime: false" in rendered

@@ -60,6 +60,25 @@ def _rule_belongs_to_project(fm: dict, project: str) -> bool:
     return any(s.startswith(prefix) for s in (fm.get("sources") or []))
 
 
+def _rule_in_scope(rule: dict, project: str | None, scope: str) -> bool:
+    """Apply v0.7 scope semantics to a rule entry from the unified index.
+
+    - ``scope="project"`` (default): local to *project* OR universal.
+    - ``scope="local-only"``: local to *project* only (legacy v0.6.2 behaviour).
+    - ``scope="vault"``: always True.
+    """
+    if scope == "vault":
+        return True
+    projects: list[str] = rule.get("projects", []) or []
+    is_local = project is not None and project in projects
+    if scope == "local-only":
+        return is_local
+    # Default: "project"
+    if is_local:
+        return True
+    return bool(rule.get("universal"))
+
+
 def _resolve_current_project(vault_root: Path) -> str | None:
     """Derive current project from cwd. Returns ``None`` on any failure."""
     try:
@@ -75,18 +94,36 @@ def list_rules_by_topic(
     scope: str = "project",
     project: str | None = None,
 ) -> list[RuleRef]:
-    """Return slugs whose topic tags include ``topic``.
+    """Return slugs whose topic tags include ``topic``, filtered by scope.
 
-    Sorted by source_count desc, then slug asc — multi-agent synthesized rules
-    surface first because they represent stronger trust signal.
+    Reads from the unified rule-activation-index.json when available;
+    falls back to a glob+parse walk of shared/{feedback,user,reference}/ when
+    the index is missing. In fallback mode, every rule is treated as local
+    (universality is only available when the index is built).
 
-    ``scope="project"`` (default) filters results to rules whose sources include
-    the given ``project``.  When ``project`` is ``None`` the filter is silently
-    skipped, preserving backwards-compatible vault-wide behaviour.  Pass
-    ``scope="vault"`` to disable project filtering entirely.
+    Sorted by source_count desc, then slug asc.
     """
-    filter_project = scope == "project" and project is not None
-    matches: list[RuleRef] = []
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        matches: list[RuleRef] = []
+        for slug, rule in idx["rules"].items():
+            if topic not in rule.get("topic_tags", []):
+                continue
+            if not _rule_in_scope(rule, project, scope):
+                continue
+            matches.append({
+                "slug": slug,
+                "type": rule.get("type", "feedback"),
+                "source_count": rule.get("source_count", 0),
+            })
+        matches.sort(key=lambda r: (-r["source_count"], r["slug"]))
+        return matches
+
+    # Fallback: legacy glob+parse. Universality unavailable; treat all as local.
+    filter_project = scope in ("project", "local-only") and project is not None
+    legacy: list[RuleRef] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
@@ -104,13 +141,14 @@ def list_rules_by_topic(
             if filter_project and not _rule_belongs_to_project(fm, project):
                 continue
             sources = fm.get("sources") or []
-            matches.append({
-                "slug": md.stem,
+            slug = fm.get("slug") or fm.get("name") or md.stem
+            legacy.append({
+                "slug": slug,
                 "type": page_type,
                 "source_count": len(sources),
             })
-    matches.sort(key=lambda r: (-r["source_count"], r["slug"]))
-    return matches
+    legacy.sort(key=lambda r: (-r["source_count"], r["slug"]))
+    return legacy
 
 
 def read_mnemo_rule(
@@ -121,28 +159,59 @@ def read_mnemo_rule(
     project: str | None = None,
 ) -> RuleBody | None:
     """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs."""
-    filter_project = scope == "project" and project is not None
-    for page_type in _RETRIEVAL_TYPES:
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        rule = idx["rules"].get(slug)
+        if rule is None:
+            return None
+        if not _rule_in_scope(rule, project, scope):
+            return None
+        # Still need the full body — read the file once, the index only has a preview.
+        page_type = rule.get("type", "feedback")
         candidate = vault_root / "shared" / page_type / f"{slug}.md"
-        if not candidate.is_file():
-            continue
         try:
             text = candidate.read_text(encoding="utf-8")
         except OSError:
             return None
-        fm = parse_frontmatter(text)
-        if not is_consumer_visible(candidate, fm, vault_root):
-            return None
-        if filter_project and not _rule_belongs_to_project(fm, project):
-            return None
         return {
             "slug": slug,
             "type": page_type,
-            "name": fm.get("name", slug),
-            "tags": topic_tags(fm),
-            "sources": fm.get("sources") or [],
+            "name": rule.get("name", slug),
+            "tags": rule.get("topic_tags", []),
+            "sources": rule.get("source_files", []),
             "body": _extract_body(text),
         }
+
+    # Fallback: legacy glob. All rules treated as local (no universality).
+    # Scan for the file whose derived slug (fm.slug/fm.name/stem) matches.
+    filter_project = scope in ("project", "local-only") and project is not None
+    for page_type in _RETRIEVAL_TYPES:
+        type_dir = vault_root / "shared" / page_type
+        if not type_dir.is_dir():
+            continue
+        for candidate in type_dir.glob("*.md"):
+            try:
+                text = candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = parse_frontmatter(text)
+            derived_slug = fm.get("slug") or fm.get("name") or candidate.stem
+            if derived_slug != slug:
+                continue
+            if not is_consumer_visible(candidate, fm, vault_root):
+                return None
+            if filter_project and not _rule_belongs_to_project(fm, project):
+                return None
+            return {
+                "slug": slug,
+                "type": page_type,
+                "name": fm.get("name", slug),
+                "tags": topic_tags(fm),
+                "sources": fm.get("sources") or [],
+                "body": _extract_body(text),
+            }
     return None
 
 
@@ -152,9 +221,31 @@ def get_mnemo_topics(
     scope: str = "project",
     project: str | None = None,
 ) -> list[str]:
-    """Return the sorted union of topic tags across every retrieval-eligible type."""
-    filter_project = scope == "project" and project is not None
-    seen: set[str] = set()
+    """Return the sorted union of topic tags across rules visible at *scope*."""
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is not None and "rules" in idx:
+        seen: set[str] = set()
+        if scope == "vault":
+            for rule in idx["rules"].values():
+                seen.update(rule.get("topic_tags", []))
+        elif scope == "local-only":
+            if project is not None:
+                seen.update(
+                    idx.get("by_project", {}).get(project, {}).get("topics", [])
+                )
+        else:  # "project" default: local + universal
+            if project is not None:
+                seen.update(
+                    idx.get("by_project", {}).get(project, {}).get("topics", [])
+                )
+            seen.update(idx.get("universal", {}).get("topics", []))
+        return sorted(seen)
+
+    # Fallback: legacy glob.
+    filter_project = scope in ("project", "local-only") and project is not None
+    seen = set()
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():

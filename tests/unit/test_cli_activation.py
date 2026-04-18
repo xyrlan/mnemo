@@ -16,13 +16,46 @@ from mnemo import cli, statusline as sl
 # ---------------------------------------------------------------------------
 
 def _write_index(vault: Path, *, enforce_rules: list | None = None, enrich_rules: list | None = None, project: str = "myproject") -> None:
-    """Write a minimal rule-activation-index.json to vault/.mnemo/."""
+    """Write a minimal rule-activation-index.json (v2) to vault/.mnemo/."""
+    rules: dict = {}
+    local_slugs: list[str] = []
+    for rule_dict in (enforce_rules or []):
+        slug = rule_dict.get("slug", "test-rule")
+        rules[slug] = {
+            "type": "feedback",
+            "name": slug,
+            "topic_tags": [],
+            "source_files": rule_dict.get("source_files", []),
+            "source_count": rule_dict.get("source_count", 1),
+            "projects": [project],
+            "universal": False,
+            "body_preview": "",
+            "enforce": rule_dict,
+            "activates_on": None,
+        }
+        local_slugs.append(slug)
+    for rule_dict in (enrich_rules or []):
+        slug = rule_dict.get("slug", "enrich-rule")
+        rules[slug] = {
+            "type": "feedback",
+            "name": slug,
+            "topic_tags": rule_dict.get("topic_tags", []),
+            "source_files": rule_dict.get("source_files", []),
+            "source_count": rule_dict.get("source_count", 1),
+            "projects": [project],
+            "universal": False,
+            "body_preview": rule_dict.get("rule_body_preview", ""),
+            "enforce": None,
+            "activates_on": rule_dict,
+        }
+        local_slugs.append(slug)
     index = {
-        "schema_version": 1,
+        "schema_version": 2,
         "built_at": "2026-04-15T12:00:00Z",
         "vault_root": str(vault),
-        "enforce_by_project": {project: enforce_rules or []},
-        "enrich_by_project": {project: enrich_rules or []},
+        "rules": rules,
+        "by_project": {project: {"local_slugs": local_slugs, "topics": []}},
+        "universal": {"slugs": [], "topics": []},
         "malformed": [],
     }
     mnemo_dir = vault / ".mnemo"
@@ -576,11 +609,12 @@ def test_cmd_status_shows_malformed_count_when_index_has_malformed(tmp_path, mon
     mnemo_dir = vault / ".mnemo"
     mnemo_dir.mkdir()
     index = {
-        "schema_version": 1,
+        "schema_version": 2,
         "built_at": "2026-04-15T12:00:00Z",
         "vault_root": str(vault),
-        "enforce_by_project": {"myproject": []},
-        "enrich_by_project": {"myproject": []},
+        "rules": {},
+        "by_project": {"myproject": {"local_slugs": [], "topics": []}},
+        "universal": {"slugs": [], "topics": []},
         "malformed": [
             {"path": "shared/feedback/broken.md", "error": "deny_pattern failed re.compile: unbalanced parenthesis"},
             {"path": "shared/feedback/broken2.md", "error": "activates_on.path_globs is empty"},

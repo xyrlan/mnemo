@@ -368,9 +368,12 @@ def _print_activation_status(vault: Path) -> None:
         except Exception:
             project = ""
 
-        print(f"  Per-project rule counts (current={project}):")
-        n_enforce = len(index.get("enforce_by_project", {}).get(project, []))
-        n_enrich = len(index.get("enrich_by_project", {}).get(project, []))
+        from mnemo.core.rule_activation import (
+            iter_enforce_rules_for_project, iter_enrich_rules_for_project,
+        )
+        print(f"  Per-project rule counts (current={project}, includes universal):")
+        n_enforce = sum(1 for _ in iter_enforce_rules_for_project(index, project))
+        n_enrich = sum(1 for _ in iter_enrich_rules_for_project(index, project))
         print(f"    Enforce rules: {n_enforce}")
         print(f"    Enrich rules:  {n_enrich}")
 
@@ -441,6 +444,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     zero_hit_ok = _doctor_check_zero_hit(vault)
     activation_fidelity_ok = _doctor_check_activation_fidelity(vault)
     rule_integrity_ok = _doctor_check_rule_integrity(vault)
+    _doctor_check_universal_promotion(vault)
     _doctor_report_recall(vault)
 
     if not result.ok:
@@ -554,13 +558,10 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
     if index is None:
         return True  # no index yet; _doctor_check_activation surfaces staleness
 
-    indexed_slugs: set[str] = set()
-    for bucket in (index.get("enforce_by_project", {}), index.get("enrich_by_project", {})):
-        for rules in bucket.values():
-            for r in rules:
-                slug = r.get("slug")
-                if slug:
-                    indexed_slugs.add(slug)
+    indexed_slugs: set[str] = {
+        slug for slug, rule in index.get("rules", {}).items()
+        if rule.get("enforce") or rule.get("activates_on")
+    }
 
     ok = True
 
@@ -595,34 +596,37 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
                 print(f"       \u2192 run 'mnemo extract' to rebuild the index")
                 ok = False
 
-    for project, rules in index.get("enrich_by_project", {}).items():
-        for rule in rules:
-            slug = rule.get("slug")
-            if not slug:
+    for slug, rule_entry in index.get("rules", {}).items():
+        activates = rule_entry.get("activates_on")
+        if not activates:
+            continue
+        # Use first associated project for self-activation test; universal rules
+        # are reachable from any project so we just pick one from by_project.
+        rule_projects = rule_entry.get("projects", [])
+        project = rule_projects[0] if rule_projects else ""
+        globs = activates.get("path_globs", []) or []
+        tools = activates.get("tools", []) or []
+        if not globs or not tools:
+            continue
+        any_testable = False
+        mismatched = False
+        for glob in globs:
+            sample = _synthesize_path_for_glob(glob)
+            if sample is None:
                 continue
-            globs = rule.get("path_globs", []) or []
-            tools = rule.get("tools", []) or []
-            if not globs or not tools:
-                continue
-            any_testable = False
-            mismatched = False
-            for glob in globs:
-                sample = _synthesize_path_for_glob(glob)
-                if sample is None:
-                    continue
-                any_testable = True
-                for tool in tools:
-                    hits = match_path_enrich(index, project, sample, tool)
-                    if slug not in [h.slug for h in hits]:
-                        print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
-                        print(f"       \u2192 review the glob shape or the enrich build pipeline")
-                        ok = False
-                        mismatched = True
-                        break
-                if mismatched:
+            any_testable = True
+            for tool in tools:
+                hits = match_path_enrich(index, project, sample, tool)
+                if slug not in [h.slug for h in hits]:
+                    print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
+                    print(f"       \u2192 review the glob shape or the enrich build pipeline")
+                    ok = False
+                    mismatched = True
                     break
-            if not any_testable and not mismatched:
-                print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
+            if mismatched:
+                break
+        if not any_testable and not mismatched:
+            print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
 
     return ok
 
@@ -699,6 +703,41 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
 
 
 _MIN_BODY_CHARS = 50
+
+
+def _doctor_check_universal_promotion(vault: Path) -> bool:
+    """Report universal-promotion health: count + on-verge rules.
+
+    Returns True always — this is an informational check, not a pass/fail gate.
+    (If there is no index yet, we still print a placeholder line for consistency.)
+    """
+    from mnemo.core import rule_activation
+    from mnemo.core.config import load_config
+
+    idx = rule_activation.load_index(vault)
+    if idx is None or "rules" not in idx:
+        print("Universal promotion health: index unavailable (run a SessionStart).")
+        return True
+
+    threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
+    universal_slugs = idx.get("universal", {}).get("slugs", [])
+    universal_topics = idx.get("universal", {}).get("topics", [])
+
+    on_verge: list[str] = [
+        slug for slug, rule in idx["rules"].items()
+        if not rule.get("universal")
+        and len(rule.get("projects", [])) == threshold - 1
+    ]
+
+    print(f"Universal promotion health: {len(universal_slugs)} universal rule(s).")
+    if universal_topics:
+        print("  Top universal topics: " + ", ".join(universal_topics[:5]))
+    if on_verge:
+        print(
+            f"  {len(on_verge)} rule(s) one project away from promotion: "
+            + ", ".join(sorted(on_verge)[:5])
+        )
+    return True
 
 
 def _doctor_check_activation(vault: Path) -> bool:

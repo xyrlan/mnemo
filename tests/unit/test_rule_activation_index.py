@@ -126,7 +126,7 @@ def test_build_index_skips_needs_review_tagged_rules(tmp_vault: Path):
         enforce="enforce:\n  tool: Bash\n  deny_pattern: some.*pattern\n  reason: bad",
     )
     index = build_index(tmp_vault)
-    assert "mnemo" not in index["enforce_by_project"]
+    assert not any(rule.get("enforce") for rule in index["rules"].values())
     # Also verify it's not in malformed (it was silently skipped, not errored)
     assert not any("bad-rule.md" in e.get("path", "") for e in index["malformed"])
 
@@ -141,7 +141,7 @@ def test_build_index_skips_evolving_stability(tmp_vault: Path):
         enforce="enforce:\n  tool: Bash\n  deny_pattern: git push\n  reason: evolving",
     )
     index = build_index(tmp_vault)
-    assert not index["enforce_by_project"]
+    assert not any(rule.get("enforce") for rule in index["rules"].values())
     assert not any("evolving-rule.md" in e.get("path", "") for e in index["malformed"])
 
 
@@ -163,7 +163,7 @@ def test_build_index_skips_inbox_rules(tmp_vault: Path):
     # build_index only walks shared/feedback/, so this file won't even be seen.
     # But if it were walked, is_consumer_visible would reject it.
     index = build_index(tmp_vault)
-    assert not index["enforce_by_project"]
+    assert not any(rule.get("enforce") for rule in index["rules"].values())
 
 
 def test_build_index_reuses_is_consumer_visible(tmp_vault: Path):
@@ -176,7 +176,7 @@ def test_build_index_reuses_is_consumer_visible(tmp_vault: Path):
     )
     with patch("mnemo.core.rule_activation.is_consumer_visible", return_value=False):
         index = build_index(tmp_vault)
-    assert not index["enforce_by_project"]
+    assert not any(rule.get("enforce") for rule in index["rules"].values())
     assert not any("mocked-rule.md" in e.get("path", "") for e in index["malformed"])
 
 
@@ -244,10 +244,12 @@ def test_build_index_body_preview_truncated(tmp_vault: Path):
         ),
     )
     index = build_index(tmp_vault)
-    assert "mnemo" in index["enrich_by_project"]
-    rules = index["enrich_by_project"]["mnemo"]
-    assert len(rules) == 1
-    preview = rules[0]["rule_body_preview"]
+    enrich_rules = [
+        rule for rule in index["rules"].values()
+        if rule.get("activates_on") and "mnemo" in rule.get("projects", [])
+    ]
+    assert len(enrich_rules) == 1
+    preview = enrich_rules[0]["activates_on"]["rule_body_preview"]
     assert len(preview) <= 300
     assert len(preview) > 0
 
@@ -267,9 +269,13 @@ def test_build_index_filters_system_tags_from_topic_tags(tmp_vault: Path):
         ),
     )
     index = build_index(tmp_vault)
-    assert "mnemo" in index["enrich_by_project"]
-    rule = index["enrich_by_project"]["mnemo"][0]
-    # auto-promoted should be stripped
+    enrich_rules = [
+        rule for rule in index["rules"].values()
+        if rule.get("activates_on") and "mnemo" in rule.get("projects", [])
+    ]
+    assert len(enrich_rules) == 1
+    rule = enrich_rules[0]
+    # auto-promoted should be stripped from topic_tags
     assert "auto-promoted" not in rule["topic_tags"]
     assert "react" in rule["topic_tags"]
     assert "ui" in rule["topic_tags"]
@@ -294,7 +300,7 @@ def test_build_index_atomic_write_roundtrip(tmp_vault: Path):
 
     assert loaded is not None
     assert loaded["schema_version"] == INDEX_VERSION
-    assert loaded["enforce_by_project"].keys() == original["enforce_by_project"].keys()
+    assert loaded["rules"].keys() == original["rules"].keys()
     assert loaded["malformed"] == original["malformed"]
 
 
@@ -302,8 +308,8 @@ def test_build_index_empty_vault(tmp_vault: Path):
     """Vault with no feedback rules produces an empty but valid index."""
     index = build_index(tmp_vault)
     assert index["schema_version"] == INDEX_VERSION
-    assert index["enforce_by_project"] == {}
-    assert index["enrich_by_project"] == {}
+    assert index["rules"] == {}
+    assert index["by_project"] == {}
     assert index["malformed"] == []
 
 
@@ -326,8 +332,14 @@ def test_build_index_both_enforce_and_enrich(tmp_vault: Path):
         ),
     )
     index = build_index(tmp_vault)
-    assert "mnemo" in index["enforce_by_project"]
-    assert "mnemo" in index["enrich_by_project"]
+    assert any(
+        rule.get("enforce") and "mnemo" in rule.get("projects", [])
+        for rule in index["rules"].values()
+    )
+    assert any(
+        rule.get("activates_on") and "mnemo" in rule.get("projects", [])
+        for rule in index["rules"].values()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,8 +365,9 @@ def test_load_index_returns_none_on_version_mismatch(tmp_vault: Path):
         "schema_version": 99,
         "built_at": "2026-01-01T00:00:00",
         "vault_root": str(tmp_vault),
-        "enforce_by_project": {},
-        "enrich_by_project": {},
+        "rules": {},
+        "by_project": {},
+        "universal": {"slugs": [], "topics": []},
         "malformed": [],
     }
     (mnemo_dir / "rule-activation-index.json").write_text(
@@ -383,3 +396,186 @@ def test_load_index_valid(tmp_vault: Path):
     result = load_index(tmp_vault)
     assert result is not None
     assert result["schema_version"] == INDEX_VERSION
+
+
+def test_is_universal_below_threshold():
+    from mnemo.core.rule_activation import _is_universal
+    assert _is_universal(["a"], threshold=2) is False
+
+
+def test_is_universal_at_threshold():
+    from mnemo.core.rule_activation import _is_universal
+    assert _is_universal(["a", "b"], threshold=2) is True
+
+
+def test_is_universal_above_threshold():
+    from mnemo.core.rule_activation import _is_universal
+    assert _is_universal(["a", "b", "c"], threshold=2) is True
+
+
+def test_is_universal_empty_projects():
+    from mnemo.core.rule_activation import _is_universal
+    assert _is_universal([], threshold=2) is False
+
+
+def test_is_universal_higher_threshold():
+    from mnemo.core.rule_activation import _is_universal
+    assert _is_universal(["a", "b"], threshold=3) is False
+    assert _is_universal(["a", "b", "c"], threshold=3) is True
+
+
+def test_build_index_v2_rules_table_has_entry_per_feedback_rule(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_tabs.md",
+        name="use-tabs",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/tabs.md", "bots/beta/memory/tabs.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "rules" in idx
+    assert "use-tabs" in idx["rules"]
+    rule = idx["rules"]["use-tabs"]
+    assert rule["type"] == "feedback"
+    assert sorted(rule["projects"]) == ["alpha", "beta"]
+    assert rule["source_count"] == 2
+    assert rule["universal"] is True
+    assert "code-style" in rule["topic_tags"]
+    assert "auto-promoted" not in rule["topic_tags"]  # system tag stripped
+    assert rule["body_preview"]  # non-empty
+    assert rule["enforce"] is None
+    assert rule["activates_on"] is None
+
+
+def test_build_index_v2_local_rule_has_universal_false(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_local.md",
+        name="local-only",
+        sources=["bots/alpha/memory/x.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert idx["rules"]["local-only"]["universal"] is False
+    assert idx["rules"]["local-only"]["projects"] == ["alpha"]
+
+
+def test_build_index_v2_covers_user_and_reference_types(tmp_vault):
+    """Spec §7 promises the builder walks feedback+user+reference. Lock it down."""
+    _write_rule(
+        tmp_vault, "user_me.md", name="user-rule",
+        tags=["profile", "auto-promoted"],
+        sources=["bots/alpha/memory/u.md"],
+        subdir="user",
+    )
+    _write_rule(
+        tmp_vault, "ref_x.md", name="ref-rule",
+        tags=["external", "auto-promoted"],
+        sources=["bots/alpha/memory/r.md"],
+        subdir="reference",
+    )
+    idx = build_index(tmp_vault)
+    assert idx["rules"]["user-rule"]["type"] == "user"
+    assert idx["rules"]["ref-rule"]["type"] == "reference"
+
+
+def test_build_index_accepts_universal_threshold_kwarg(tmp_vault):
+    """Explicit threshold avoids load_config coupling in tests."""
+    _write_rule(
+        tmp_vault, "feedback_two.md", name="two-proj",
+        sources=["bots/a/memory/x.md", "bots/b/memory/x.md"],
+    )
+    idx_default = build_index(tmp_vault)  # threshold=2
+    assert idx_default["rules"]["two-proj"]["universal"] is True
+
+    idx_strict = build_index(tmp_vault, universal_threshold=3)
+    assert idx_strict["rules"]["two-proj"]["universal"] is False
+
+
+def test_build_index_v2_by_project_lookup(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_alpha_only.md",
+        name="alpha-rule",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/x.md"],
+    )
+    _write_rule(
+        tmp_vault,
+        "feedback_both.md",
+        name="shared-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/alpha/memory/s.md", "bots/beta/memory/s.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "by_project" in idx
+    assert "alpha-rule" in idx["by_project"]["alpha"]["local_slugs"]
+    assert "shared-rule" in idx["by_project"]["alpha"]["local_slugs"]
+    assert "shared-rule" in idx["by_project"]["beta"]["local_slugs"]
+    assert "alpha-rule" not in idx["by_project"].get("beta", {}).get("local_slugs", [])
+    assert "code-style" in idx["by_project"]["alpha"]["topics"]
+    assert "git" in idx["by_project"]["alpha"]["topics"]
+
+
+def test_build_index_v2_universal_lookup(tmp_vault):
+    _write_rule(
+        tmp_vault,
+        "feedback_universal.md",
+        name="universal-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"],
+    )
+    _write_rule(
+        tmp_vault,
+        "feedback_local.md",
+        name="local-rule",
+        tags=["code-style", "auto-promoted"],
+        sources=["bots/alpha/memory/l.md"],
+    )
+    idx = build_index(tmp_vault)
+    assert "universal" in idx
+    assert "universal-rule" in idx["universal"]["slugs"]
+    assert "local-rule" not in idx["universal"]["slugs"]
+    assert "git" in idx["universal"]["topics"]
+    assert "code-style" not in idx["universal"]["topics"]
+
+
+def test_iter_enforce_rules_for_project_includes_universal(tmp_vault):
+    from mnemo.core.rule_activation import (
+        build_index, iter_enforce_rules_for_project,
+    )
+    _write_rule(
+        tmp_vault, "local_enf.md", name="local-enf",
+        sources=["bots/alpha/memory/l.md"],
+        enforce="enforce:\n  tool: Bash\n  deny_pattern: rm -rf\n  reason: no rm -rf\n",
+    )
+    _write_rule(
+        tmp_vault, "uni_enf.md", name="uni-enf",
+        sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"],
+        enforce="enforce:\n  tool: Bash\n  deny_pattern: git push --force\n  reason: no push -f\n",
+    )
+    idx = build_index(tmp_vault)
+
+    slugs_beta = [r["slug"] for r in iter_enforce_rules_for_project(idx, "beta")]
+    assert "uni-enf" in slugs_beta
+    assert "local-enf" not in slugs_beta
+
+    slugs_alpha = [r["slug"] for r in iter_enforce_rules_for_project(idx, "alpha")]
+    assert set(slugs_alpha) == {"local-enf", "uni-enf"}
+
+
+def test_iter_enrich_rules_for_project_includes_universal(tmp_vault):
+    from mnemo.core.rule_activation import (
+        build_index, iter_enrich_rules_for_project,
+    )
+    _write_rule(
+        tmp_vault, "uni_enr.md", name="uni-enr",
+        sources=["bots/alpha/memory/u.md", "bots/beta/memory/u.md"],
+        activates_on=(
+            "activates_on:\n"
+            "  tools:\n    - Edit\n"
+            "  path_globs:\n    - \"**/*.py\"\n"
+        ),
+    )
+    idx = build_index(tmp_vault)
+    slugs = [r["slug"] for r in iter_enrich_rules_for_project(idx, "beta")]
+    assert "uni-enr" in slugs

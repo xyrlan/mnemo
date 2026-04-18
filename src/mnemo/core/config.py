@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "injection": {
         "enabled": True,
+        "maxTopicsPerScope": 15,
         "telemetry": {
             "enabled": True,
             "log": {"maxBytes": 1_048_576},
@@ -51,6 +52,9 @@ DEFAULTS: dict[str, Any] = {
         "maxRulesPerCall": 3,
         "bodyPreviewChars": 300,
         "log": {"maxBytes": 1_048_576},
+    },
+    "scoping": {
+        "universalThreshold": 2,
     },
 }
 

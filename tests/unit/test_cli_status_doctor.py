@@ -432,9 +432,11 @@ def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
         enforce={"tool": "Bash", "reason": "blocked", "deny_patterns": ["dangerous-command"]},
     )
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {},
-        "enrich_by_project": {},
+        "schema_version": 2,
+        "rules": {},
+        "by_project": {},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
@@ -474,11 +476,32 @@ def test_doctor_activation_fidelity_matches_index_slug_from_name_field(
     )
     # Index stores the display name as the slug — matching build_index
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {
-            "proj-x": [{"slug": "Display Name For Rule", "deny_patterns": ["rm -rf /"], "source_count": 1}],
+        "schema_version": 2,
+        "rules": {
+            "Display Name For Rule": {
+                "type": "feedback",
+                "name": "Display Name For Rule",
+                "topic_tags": [],
+                "source_files": ["bots/proj-x/memory/my-rule.md"],
+                "source_count": 1,
+                "projects": ["proj-x"],
+                "universal": False,
+                "body_preview": "",
+                "enforce": {
+                    "slug": "Display Name For Rule",
+                    "tool": "Bash",
+                    "deny_patterns": ["rm -rf /"],
+                    "deny_commands": [],
+                    "reason": "blocked",
+                    "source_files": [],
+                    "source_count": 1,
+                },
+                "activates_on": None,
+            },
         },
-        "enrich_by_project": {},
+        "by_project": {"proj-x": {"local_slugs": ["Display Name For Rule"], "topics": []}},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
@@ -494,17 +517,32 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
     vault = tmp_path / "vault"
     (vault / ".mnemo").mkdir(parents=True)
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {},
-        "enrich_by_project": {
-            "proj-x": [{
-                "slug": "char-class-rule",
-                "path_globs": ["src/[abc]*.py"],
-                "tools": ["Edit"],
-                "rule_body_preview": "",
+        "schema_version": 2,
+        "rules": {
+            "char-class-rule": {
+                "type": "feedback",
+                "name": "char-class-rule",
+                "topic_tags": [],
+                "source_files": [],
                 "source_count": 1,
-            }],
+                "projects": ["proj-x"],
+                "universal": False,
+                "body_preview": "",
+                "enforce": None,
+                "activates_on": {
+                    "slug": "char-class-rule",
+                    "path_globs": ["src/[abc]*.py"],
+                    "tools": ["Edit"],
+                    "topic_tags": [],
+                    "rule_body_preview": "",
+                    "source_files": [],
+                    "source_count": 1,
+                },
+            },
         },
+        "by_project": {"proj-x": {"local_slugs": ["char-class-rule"], "topics": []}},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
@@ -578,3 +616,59 @@ def test_doctor_rule_integrity_happy_path_silent(tmp_path, monkeypatch, capsys):
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "good-rule.md" not in out
+
+
+def test_doctor_reports_universal_promotion_health(
+    tmp_home: Path, capsys: pytest.CaptureFixture,
+):
+    """Doctor surfaces a 'Universal promotion health' line with a count."""
+    from tests.unit.test_rule_activation_index import _write_rule
+    from mnemo.core.rule_activation import build_index, write_index
+    from mnemo.core.paths import vault_root as _vault_root
+    from mnemo.core.config import load_config
+    from mnemo import cli
+
+    vault = _vault_root(load_config())
+    (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    _write_rule(
+        vault, "uni.md", name="uni-rule",
+        tags=["git", "auto-promoted"],
+        sources=["bots/a/memory/u.md", "bots/b/memory/u.md"],
+    )
+    _write_rule(
+        vault, "local.md", name="local-rule",
+        tags=["x", "auto-promoted"],
+        sources=["bots/a/memory/l.md"],
+    )
+    write_index(vault, build_index(vault))
+
+    rc = cli.main(["doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Universal promotion health" in out
+    assert "1 universal" in out.lower()
+
+
+def test_doctor_universal_promotion_on_verge_warning(
+    tmp_home: Path, capsys: pytest.CaptureFixture,
+):
+    """Rules one project short of the threshold surface as on-verge."""
+    from tests.unit.test_rule_activation_index import _write_rule
+    from mnemo.core.rule_activation import build_index, write_index
+    from mnemo.core.paths import vault_root as _vault_root
+    from mnemo.core.config import load_config
+    from mnemo import cli
+
+    vault = _vault_root(load_config())
+    (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    _write_rule(
+        vault, "onverge.md", name="on-verge",
+        tags=["git", "auto-promoted"],
+        sources=["bots/a/memory/v.md"],  # 1 project — 1 away from threshold=2
+    )
+    write_index(vault, build_index(vault))
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "one project away" in out
+    assert "on-verge" in out
