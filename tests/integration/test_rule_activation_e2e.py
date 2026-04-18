@@ -270,9 +270,16 @@ def test_per_project_segregation(tmp_vault: Path, monkeypatch):
     # Sanity — index must contain project-a but NOT project-b.
     index_path = tmp_vault / ".mnemo" / "rule-activation-index.json"
     index_data = json.loads(index_path.read_text(encoding="utf-8"))
-    enforce_by_project = index_data.get("enforce_by_project") or {}
-    assert project_a in enforce_by_project
-    assert project_b not in enforce_by_project
+    rules_with_enforce_for_a = [
+        slug for slug, rule in index_data.get("rules", {}).items()
+        if rule.get("enforce") and project_a in rule.get("projects", [])
+    ]
+    assert rules_with_enforce_for_a, f"{project_a} has no enforce rules in index"
+    rules_with_enforce_for_b = [
+        slug for slug, rule in index_data.get("rules", {}).items()
+        if rule.get("enforce") and project_b in rule.get("projects", [])
+    ]
+    assert not rules_with_enforce_for_b, f"{project_b} unexpectedly has enforce rules"
 
     matching_command = "git push --force origin main"
 

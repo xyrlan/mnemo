@@ -321,8 +321,6 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
     threshold = universal_threshold
 
     rules: dict[str, dict] = {}
-    enforce_by_project: dict[str, list[dict]] = {}
-    enrich_by_project: dict[str, list[dict]] = {}
     malformed: list[dict] = []
 
     retrieval_types = ("feedback", "user", "reference")
@@ -378,8 +376,6 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
                         "source_files": source_files,
                         "source_count": len(source_files),
                     }
-                    for proj in projects:
-                        enforce_by_project.setdefault(proj, []).append(enforce_entry)
 
             # --- activates_on block ---
             enrich_entry = None
@@ -398,8 +394,6 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
                         "source_files": source_files,
                         "source_count": len(source_files),
                     }
-                    for proj in projects:
-                        enrich_by_project.setdefault(proj, []).append(enrich_entry)
 
             rules[slug] = {
                 "type": page_type,
@@ -444,8 +438,6 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
             "slugs": sorted(set(universal_slugs)),
             "topics": sorted(universal_topics),
         },
-        "enforce_by_project": enforce_by_project,
-        "enrich_by_project": enrich_by_project,
         "malformed": malformed,
     }
 
@@ -764,6 +756,45 @@ def match_path_enrich(
         EnrichHit(slug=c["slug"], project=project, rule_body_preview=c["rule_body_preview"])
         for c in candidates[:3]
     ]
+
+
+def iter_enforce_rules_for_project(index: dict, project: str):
+    """Yield rule dicts that carry an enforce block and are visible from *project*.
+
+    Visibility = local to project OR universal. De-duplicated on slug.
+    Each yielded dict is the per-slug rule entry from ``index["rules"]``
+    with an additional ``slug`` key injected for convenience.
+    """
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    seen: set[str] = set()
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if rule and rule.get("enforce"):
+            yield {"slug": slug, **rule}
+
+
+def iter_enrich_rules_for_project(index: dict, project: str):
+    """Yield rule dicts with an activates_on block visible from *project*.
+
+    Each yielded dict is the per-slug rule entry from ``index["rules"]``
+    with an additional ``slug`` key injected for convenience.
+    """
+    rules_table = index.get("rules", {})
+    local_slugs = index.get("by_project", {}).get(project, {}).get("local_slugs", [])
+    universal_slugs = index.get("universal", {}).get("slugs", [])
+    seen: set[str] = set()
+    for slug in list(local_slugs) + list(universal_slugs):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        rule = rules_table.get(slug)
+        if rule and rule.get("activates_on"):
+            yield {"slug": slug, **rule}
 
 
 # ---------------------------------------------------------------------------

@@ -128,8 +128,11 @@ def test_session_start_rebuilds_index_when_enforcement_enabled(
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     assert index_path.exists(), "rule-activation-index.json must be written"
     idx = json.loads(index_path.read_text())
-    assert idx.get("schema_version") == 1
-    assert "project-a" in idx["enforce_by_project"]
+    assert idx.get("schema_version") == 2
+    assert "project-a" in idx["by_project"] and any(
+        idx["rules"][s].get("enforce")
+        for s in idx["by_project"]["project-a"]["local_slugs"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +162,10 @@ def test_session_start_rebuilds_index_when_enrichment_enabled(
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     assert index_path.exists(), "rule-activation-index.json must be written"
     idx = json.loads(index_path.read_text())
-    assert "project-a" in idx["enrich_by_project"]
+    assert "project-a" in idx["by_project"] and any(
+        idx["rules"][s].get("activates_on")
+        for s in idx["by_project"]["project-a"]["local_slugs"]
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -112,8 +112,11 @@ def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
         agent = resolve_agent(effective_cwd)
         project = agent.name
 
-        enforce_rules = index.get("enforce_by_project", {}).get(project, [])
-        enrich_rules = index.get("enrich_by_project", {}).get(project, [])
+        from mnemo.core.rule_activation import (
+            iter_enforce_rules_for_project, iter_enrich_rules_for_project,
+        )
+        enforce_rules = list(iter_enforce_rules_for_project(index, project))
+        enrich_rules = list(iter_enrich_rules_for_project(index, project))
 
         n_enforce = len(enforce_rules)
         n_enrich = len(enrich_rules)

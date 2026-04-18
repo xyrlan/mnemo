@@ -368,9 +368,12 @@ def _print_activation_status(vault: Path) -> None:
         except Exception:
             project = ""
 
-        print(f"  Per-project rule counts (current={project}):")
-        n_enforce = len(index.get("enforce_by_project", {}).get(project, []))
-        n_enrich = len(index.get("enrich_by_project", {}).get(project, []))
+        from mnemo.core.rule_activation import (
+            iter_enforce_rules_for_project, iter_enrich_rules_for_project,
+        )
+        print(f"  Per-project rule counts (current={project}, includes universal):")
+        n_enforce = sum(1 for _ in iter_enforce_rules_for_project(index, project))
+        n_enrich = sum(1 for _ in iter_enrich_rules_for_project(index, project))
         print(f"    Enforce rules: {n_enforce}")
         print(f"    Enrich rules:  {n_enrich}")
 
@@ -554,13 +557,10 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
     if index is None:
         return True  # no index yet; _doctor_check_activation surfaces staleness
 
-    indexed_slugs: set[str] = set()
-    for bucket in (index.get("enforce_by_project", {}), index.get("enrich_by_project", {})):
-        for rules in bucket.values():
-            for r in rules:
-                slug = r.get("slug")
-                if slug:
-                    indexed_slugs.add(slug)
+    indexed_slugs: set[str] = {
+        slug for slug, rule in index.get("rules", {}).items()
+        if rule.get("enforce") or rule.get("activates_on")
+    }
 
     ok = True
 
@@ -595,34 +595,37 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
                 print(f"       \u2192 run 'mnemo extract' to rebuild the index")
                 ok = False
 
-    for project, rules in index.get("enrich_by_project", {}).items():
-        for rule in rules:
-            slug = rule.get("slug")
-            if not slug:
+    for slug, rule_entry in index.get("rules", {}).items():
+        activates = rule_entry.get("activates_on")
+        if not activates:
+            continue
+        # Use first associated project for self-activation test; universal rules
+        # are reachable from any project so we just pick one from by_project.
+        rule_projects = rule_entry.get("projects", [])
+        project = rule_projects[0] if rule_projects else ""
+        globs = activates.get("path_globs", []) or []
+        tools = activates.get("tools", []) or []
+        if not globs or not tools:
+            continue
+        any_testable = False
+        mismatched = False
+        for glob in globs:
+            sample = _synthesize_path_for_glob(glob)
+            if sample is None:
                 continue
-            globs = rule.get("path_globs", []) or []
-            tools = rule.get("tools", []) or []
-            if not globs or not tools:
-                continue
-            any_testable = False
-            mismatched = False
-            for glob in globs:
-                sample = _synthesize_path_for_glob(glob)
-                if sample is None:
-                    continue
-                any_testable = True
-                for tool in tools:
-                    hits = match_path_enrich(index, project, sample, tool)
-                    if slug not in [h.slug for h in hits]:
-                        print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
-                        print(f"       \u2192 review the glob shape or the enrich build pipeline")
-                        ok = False
-                        mismatched = True
-                        break
-                if mismatched:
+            any_testable = True
+            for tool in tools:
+                hits = match_path_enrich(index, project, sample, tool)
+                if slug not in [h.slug for h in hits]:
+                    print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
+                    print(f"       \u2192 review the glob shape or the enrich build pipeline")
+                    ok = False
+                    mismatched = True
                     break
-            if not any_testable and not mismatched:
-                print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
+            if mismatched:
+                break
+        if not any_testable and not mismatched:
+            print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
 
     return ok
 

@@ -432,9 +432,11 @@ def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
         enforce={"tool": "Bash", "reason": "blocked", "deny_patterns": ["dangerous-command"]},
     )
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {},
-        "enrich_by_project": {},
+        "schema_version": 2,
+        "rules": {},
+        "by_project": {},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
@@ -474,11 +476,32 @@ def test_doctor_activation_fidelity_matches_index_slug_from_name_field(
     )
     # Index stores the display name as the slug — matching build_index
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {
-            "proj-x": [{"slug": "Display Name For Rule", "deny_patterns": ["rm -rf /"], "source_count": 1}],
+        "schema_version": 2,
+        "rules": {
+            "Display Name For Rule": {
+                "type": "feedback",
+                "name": "Display Name For Rule",
+                "topic_tags": [],
+                "source_files": ["bots/proj-x/memory/my-rule.md"],
+                "source_count": 1,
+                "projects": ["proj-x"],
+                "universal": False,
+                "body_preview": "",
+                "enforce": {
+                    "slug": "Display Name For Rule",
+                    "tool": "Bash",
+                    "deny_patterns": ["rm -rf /"],
+                    "deny_commands": [],
+                    "reason": "blocked",
+                    "source_files": [],
+                    "source_count": 1,
+                },
+                "activates_on": None,
+            },
         },
-        "enrich_by_project": {},
+        "by_project": {"proj-x": {"local_slugs": ["Display Name For Rule"], "topics": []}},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
@@ -494,17 +517,32 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
     vault = tmp_path / "vault"
     (vault / ".mnemo").mkdir(parents=True)
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 1,
-        "enforce_by_project": {},
-        "enrich_by_project": {
-            "proj-x": [{
-                "slug": "char-class-rule",
-                "path_globs": ["src/[abc]*.py"],
-                "tools": ["Edit"],
-                "rule_body_preview": "",
+        "schema_version": 2,
+        "rules": {
+            "char-class-rule": {
+                "type": "feedback",
+                "name": "char-class-rule",
+                "topic_tags": [],
+                "source_files": [],
                 "source_count": 1,
-            }],
+                "projects": ["proj-x"],
+                "universal": False,
+                "body_preview": "",
+                "enforce": None,
+                "activates_on": {
+                    "slug": "char-class-rule",
+                    "path_globs": ["src/[abc]*.py"],
+                    "tools": ["Edit"],
+                    "topic_tags": [],
+                    "rule_body_preview": "",
+                    "source_files": [],
+                    "source_count": 1,
+                },
+            },
         },
+        "by_project": {"proj-x": {"local_slugs": ["char-class-rule"], "topics": []}},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
     }))
     _preflight_noop(monkeypatch, vault)
 
