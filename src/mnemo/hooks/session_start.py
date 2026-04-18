@@ -137,13 +137,14 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.mirror", e)
 
-        # Rebuild rule-activation index — freshness guarantee in case the user
-        # manually edited a rule file between sessions. Only runs when at least
-        # one activation flag is on; disabled sessions pay zero cost (no import,
-        # no file I/O).
+        # Rebuild rule-activation index when any of the three consumers needs it:
+        # enforcement (PreToolUse deny), enrichment (PreToolUse context), or
+        # injection (SessionStart topic list). Disabled-everything sessions
+        # still pay zero cost.
+        inj_enabled = bool(cfg.get("injection", {}).get("enabled", False))
         enf_enabled = bool(cfg.get("enforcement", {}).get("enabled", False))
         enr_enabled = bool(cfg.get("enrichment", {}).get("enabled", False))
-        if enf_enabled or enr_enabled:
+        if enf_enabled or enr_enabled or inj_enabled:
             try:
                 from mnemo.core import rule_activation
                 rule_activation.write_index(vault, rule_activation.build_index(vault))

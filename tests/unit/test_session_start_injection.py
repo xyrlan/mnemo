@@ -83,3 +83,44 @@ def test_injection_envelope_respects_max_topics(tmp_vault, monkeypatch):
     local_line = next(l for l in payload.splitlines() if l.startswith("local:"))
     topics_in_local = [t.strip() for t in local_line.split("[", 1)[1].rstrip("]").split(",")]
     assert len(topics_in_local) == 5
+
+
+def test_session_start_rebuilds_index_when_only_injection_is_on(tmp_vault, monkeypatch, capsys):
+    """With enforcement=off, enrichment=off, injection=on — index MUST still rebuild."""
+    from mnemo.hooks import session_start as hook
+
+    # Write one rule so the vault is non-empty
+    _write_feedback(tmp_vault, "r", name="r-rule",
+                    tags=["git", "auto-promoted"],
+                    sources=["bots/alpha/memory/r.md"])
+
+    # Patch config to disable enforce/enrich but enable injection
+    from mnemo.core import config as cfg_mod
+    original = cfg_mod.load_config
+    def patched(*a, **kw):
+        c = original(*a, **kw)
+        c["enforcement"]["enabled"] = False
+        c["enrichment"]["enabled"] = False
+        c["injection"]["enabled"] = True
+        c["vaultRoot"] = str(tmp_vault)
+        return c
+    monkeypatch.setattr(cfg_mod, "load_config", patched)
+
+    # resolve_agent() raises without a git root — create one so the hook
+    # reaches its index-rebuild block. Pattern matches
+    # tests/unit/test_mcp_tools_project_filter.py:44.
+    (tmp_vault / ".git").mkdir()
+
+    idx_path = tmp_vault / ".mnemo" / "rule-activation-index.json"
+    assert not idx_path.exists()
+
+    # Simulate a SessionStart payload on stdin
+    import io, json, sys
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "session_id": "test",
+        "cwd": str(tmp_vault),
+        "source": "startup",
+    })))
+    hook.main()
+
+    assert idx_path.exists()
