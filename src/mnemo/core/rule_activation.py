@@ -248,6 +248,17 @@ def projects_for_rule(source_files: list[str]) -> list[str]:
     return sorted(projects)
 
 
+def _is_universal(projects: list[str], threshold: int) -> bool:
+    """Return True when the rule's distinct project count meets the universal threshold.
+
+    Always False for an empty project list, regardless of threshold (a rule with
+    no bots/ sources is not attributable to any project and cannot be universal).
+    """
+    if not projects:
+        return False
+    return len(projects) >= threshold
+
+
 # ---------------------------------------------------------------------------
 # Body preview helper
 # ---------------------------------------------------------------------------
