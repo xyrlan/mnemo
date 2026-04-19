@@ -565,7 +565,7 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
     Returns True iff no warnings were emitted. `ℹ` info lines (for rules whose
     globs are un-synthesizable) are NOT warnings.
     """
-    from mnemo.core.filters import parse_frontmatter
+    from mnemo.core.filters import derive_rule_slug, parse_frontmatter
     from mnemo.core.rule_activation import (
         load_index,
         match_path_enrich,
@@ -596,11 +596,7 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
             except Exception:
                 continue
 
-            # Match `build_index`'s slug derivation exactly
-            # (src/mnemo/core/rule_activation.py:323) — the index stores
-            # `fm.get("slug") or fm.get("name") or md_path.stem`, NOT just
-            # the filename stem. Getting this wrong silently misses hits.
-            slug = fm.get("slug") or fm.get("name") or md_path.stem
+            slug = derive_rule_slug(fm, md_path.stem)
             rel = md_path.name
 
             has_enforce = parse_enforce_block(fm) is not None

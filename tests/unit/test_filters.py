@@ -10,10 +10,37 @@ from pathlib import Path
 
 from mnemo.core.filters import (
     MANAGED_TAGS,
+    derive_rule_slug,
     is_consumer_visible,
     parse_frontmatter,
     topic_tags,
 )
+
+
+def test_derive_rule_slug_prefers_explicit_slug() -> None:
+    assert derive_rule_slug({"slug": "my-slug", "name": "Display"}, "stem") == "my-slug"
+
+
+def test_derive_rule_slug_falls_back_to_name_when_slug_absent() -> None:
+    assert derive_rule_slug({"name": "Display Name"}, "stem") == "Display Name"
+
+
+def test_derive_rule_slug_uses_stem_when_both_absent() -> None:
+    assert derive_rule_slug({}, "file-stem") == "file-stem"
+
+
+def test_derive_rule_slug_treats_empty_string_as_absent() -> None:
+    """Regression: ``slug: ""`` (migration artefact) must not hijack the
+    identifier and silently shadow the real name/stem."""
+    assert derive_rule_slug({"slug": "", "name": "Real Name"}, "stem") == "Real Name"
+    assert derive_rule_slug({"slug": "   ", "name": "Real Name"}, "stem") == "Real Name"
+    assert derive_rule_slug({"slug": "", "name": ""}, "stem") == "stem"
+
+
+def test_derive_rule_slug_ignores_non_string_values() -> None:
+    """A list/None in the field — e.g. YAML deserialization edge — must not raise."""
+    assert derive_rule_slug({"slug": None, "name": "Real"}, "stem") == "Real"
+    assert derive_rule_slug({"slug": ["wrong"], "name": None}, "stem") == "stem"
 
 
 def test_inbox_path_is_excluded(tmp_path: Path) -> None:
