@@ -27,7 +27,7 @@ from mnemo.core.mcp import tools as mcp_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "mnemo"
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "0.8.0-alpha"
 
 _TOOL_DEFS: list[dict[str, Any]] = [
     {
