@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Callable
@@ -224,7 +225,21 @@ def cmd_status(_args: argparse.Namespace) -> int:
         print(f"Error log: {log} ({log.stat().st_size} bytes)")
     _print_auto_brain_status(vault)
     _print_activation_status(vault)
+    _print_reflex_status(vault)
     return 0
+
+
+def _print_reflex_status(vault: Path) -> None:
+    """v0.8: one-liner reporting today's reflex emissions when enabled."""
+    from mnemo.core.config import load_config
+    from mnemo.core.mcp.session_state import read_today_emissions
+
+    cfg = load_config()
+    if not bool((cfg.get("reflex") or {}).get("enabled", False)):
+        return
+    emissions = read_today_emissions(vault)
+    suffix = "emission" if emissions == 1 else "emissions"
+    print(f"\nReflex: enabled ({emissions} {suffix} today)")
 
 
 def _print_auto_brain_status(vault: Path) -> None:
@@ -444,6 +459,9 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     zero_hit_ok = _doctor_check_zero_hit(vault)
     activation_fidelity_ok = _doctor_check_activation_fidelity(vault)
     rule_integrity_ok = _doctor_check_rule_integrity(vault)
+    reflex_index_ok = _doctor_check_reflex_index(vault)
+    reflex_cap_ok = _doctor_check_reflex_session_cap_hits(vault)
+    reflex_bilingual_ok = _doctor_check_reflex_bilingual_gap(vault)
     _doctor_check_universal_promotion(vault)
     _doctor_report_recall(vault)
 
@@ -451,7 +469,8 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         print("Issues found above.")
         return 1
     if not (auto_ok and legacy_ok and statusline_ok and activation_ok
-            and zero_hit_ok and activation_fidelity_ok and rule_integrity_ok):
+            and zero_hit_ok and activation_fidelity_ok and rule_integrity_ok
+            and reflex_index_ok and reflex_cap_ok and reflex_bilingual_ok):
         print("Warnings above.")
     else:
         print("OK")
@@ -891,6 +910,121 @@ def _doctor_check_statusline_drift(vault: Path) -> bool:
     print("       → if you edited statusLine manually after `mnemo init`, run")
     print("         `mnemo init` again to re-wrap, or `mnemo uninstall` to clean up state")
     return False
+
+
+def _doctor_check_reflex_index(vault: Path) -> bool:
+    """v0.8: flag missing reflex-index.json when reflex.enabled is true.
+
+    Returns True (silent) when reflex is disabled or when the index is
+    present. The index is rebuilt opportunistically on SessionStart; a
+    persistent absence means SessionStart never fired or that extraction
+    hasn't run — either way, the emission pipeline is dark and the user
+    deserves to know.
+    """
+    from mnemo.core.config import load_config
+
+    cfg = load_config()
+    if not bool((cfg.get("reflex") or {}).get("enabled", False)):
+        return True
+    idx_path = vault / ".mnemo" / "reflex-index.json"
+    if not idx_path.exists():
+        print("  \u2717 reflex-index missing \u2014 run `mnemo extract` to rebuild")
+        return False
+    return True
+
+
+def _doctor_check_reflex_session_cap_hits(vault: Path) -> bool:
+    """v0.8: flag when >20% of sessions in the last 7d hit the emission cap.
+
+    Silent when there is no reflex-log.jsonl yet, when the file is empty, or
+    when no session has fired in the last 7 days. Reading is capped at the
+    last 5_000 lines to keep doctor lightweight on large vaults.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    log_path = vault / ".mnemo" / "reflex-log.jsonl"
+    if not log_path.exists():
+        return True
+
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    lines = text.splitlines()
+    if len(lines) > 5000:
+        lines = lines[-5000:]
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    sessions: dict[str, dict] = {}
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            entry = json.loads(ln)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        ts = entry.get("ts") or ""
+        if not isinstance(ts, str) or ts < cutoff:
+            continue
+        sid = str(entry.get("session_id") or "")
+        if not sid:
+            continue
+        bucket = sessions.setdefault(sid, {"hit_cap": False})
+        if entry.get("silence_reason") == "session_cap_reached":
+            bucket["hit_cap"] = True
+
+    total = len(sessions)
+    if total == 0:
+        return True
+    hit = sum(1 for v in sessions.values() if v["hit_cap"])
+    if hit / total > 0.20:
+        print(
+            f"  \u26a0 reflex-session-cap-hit: {hit}/{total} sessions in last 7d hit cap "
+            f"(>{0.20:.0%} threshold). Tune reflex.maxEmissionsPerSession up or "
+            f"raise thresholds.absoluteFloor to reduce noise."
+        )
+        return False
+    return True
+
+
+def _doctor_check_reflex_bilingual_gap(vault: Path) -> bool:
+    """v0.8: flag >=3 rules with non-ASCII description but no aliases: field.
+
+    The bilingual (EN↔PT) extractor seeds aliases to bridge the
+    tokenizer's language-agnostic matching. When non-ASCII rules
+    accumulate without aliases, the reflex pipeline will silently miss
+    prompts phrased in the opposite language.
+    """
+    from mnemo.core.filters import parse_frontmatter
+
+    count_missing = 0
+    for type_dir in ("feedback", "user", "reference"):
+        d = vault / "shared" / type_dir
+        if not d.is_dir():
+            continue
+        for md in d.glob("*.md"):
+            try:
+                text = md.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                fm = parse_frontmatter(text)
+            except Exception:
+                continue
+            desc = fm.get("description") or ""
+            if not isinstance(desc, str):
+                continue
+            if any(ord(c) > 127 for c in desc) and not fm.get("aliases"):
+                count_missing += 1
+    if count_missing >= 3:
+        print(
+            f"  \u26a0 reflex-bilingual-gap: {count_missing} rules with non-ASCII description "
+            f"lack aliases: \u2014 run extraction to refresh."
+        )
+        return False
+    return True
 
 
 def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
