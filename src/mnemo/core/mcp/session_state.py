@@ -28,19 +28,33 @@ def _path(vault_root: Path) -> Path:
 
 
 def increment(vault_root: Path) -> None:
-    """Bump today's counter by 1. Auto-resets when the day rolls over."""
+    """Bump today's counter by 1, preserving unknown top-level keys.
+
+    v0.8: the file now stores additional runtime state (``injected_cache``,
+    ``session_emissions``) alongside ``count``. A naive rewrite of
+    ``{date, count}`` would silently wipe those keys on every MCP call.
+    """
     path = _path(vault_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return  # decorative — never block the caller
     today = date.today().isoformat()
+    data: dict = {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or data.get("date") != today:
-            data = {"date": today, "count": 0}
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data = loaded
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
-        data = {"date": today, "count": 0}
+        data = {}
+    if data.get("date") != today:
+        # Day rollover wipes count AND runtime state.
+        data = {
+            "date": today,
+            "count": 0,
+            "injected_cache": {},
+            "session_emissions": {},
+        }
     data["count"] = int(data.get("count", 0)) + 1
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
