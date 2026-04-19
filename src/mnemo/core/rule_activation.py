@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mnemo.core.errors import log_error
+from mnemo.core.errors import load_validated_json
 from mnemo.core.filters import derive_rule_slug, is_consumer_visible, parse_frontmatter
 from mnemo.core.log_utils import rotate_if_needed
 from mnemo.core.text_utils import body_preview as _body_preview  # re-exported for backwards compat
@@ -490,31 +490,13 @@ def write_index(vault_root: Path, index: dict) -> None:
 
 
 def load_index(vault_root: Path) -> dict | None:
-    """Load the index from disk. Returns None on ANY error. Never raises.
-
-    Missing file and schema-version skew are expected-silent (first run,
-    post-upgrade). Corruption (invalid JSON, unreadable bytes) is logged to
-    ``.errors.log`` so dogfood sessions don't silently drop into the slower
-    glob fallback without a trail.
-    """
-    target = vault_root / ".mnemo" / INDEX_FILENAME
-    try:
-        raw_bytes = target.read_bytes()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        log_error(vault_root, "rule_activation.load_index.read", exc)
-        return None
-    try:
-        raw = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        log_error(vault_root, "rule_activation.load_index.parse", exc)
-        return None
-    if not isinstance(raw, dict):
-        return None
-    if raw.get("schema_version") != INDEX_VERSION:
-        return None
-    return raw
+    """Load the index from disk. Returns None on any error. Never raises."""
+    return load_validated_json(
+        vault_root / ".mnemo" / INDEX_FILENAME,
+        INDEX_VERSION,
+        vault_root=vault_root,
+        error_namespace="rule_activation.load_index",
+    )
 
 
 # ---------------------------------------------------------------------------

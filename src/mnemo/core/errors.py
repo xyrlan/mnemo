@@ -5,6 +5,7 @@ import json
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 ERROR_LOG_NAME = ".errors.log"
 ROTATE_BYTES = 5 * 1024 * 1024
@@ -82,3 +83,44 @@ def reset(vault_root: Path) -> None:
         log_path.rename(log_path.with_name(f"{ERROR_LOG_NAME}.{stamp}"))
     except OSError:
         pass
+
+
+def load_validated_json(
+    path: Path,
+    expected_schema_version: Any,
+    *,
+    vault_root: Path,
+    error_namespace: str,
+) -> dict | None:
+    """Load a JSON dict from ``path`` with discriminating error handling.
+
+    Returns ``None`` for every failure path; never raises. Used by both
+    ``rule_activation.load_index`` and ``reflex.index.load_index`` — the
+    duplicated 25-line try/except dance is now here.
+
+    Error-logging policy:
+      - Missing file → silent (first run, expected).
+      - Read error (OSError other than FileNotFoundError) → logged under
+        ``<error_namespace>.read``.
+      - Decode / parse error → logged under ``<error_namespace>.parse``.
+      - Root is not a dict → silent (hand-authored malformed file; the
+        caller's ``rebuild`` path handles recovery).
+      - ``schema_version`` mismatch → silent (post-upgrade, expected).
+    """
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        log_error(vault_root, f"{error_namespace}.read", exc)
+        return None
+    try:
+        data = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log_error(vault_root, f"{error_namespace}.parse", exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("schema_version") != expected_schema_version:
+        return None
+    return data
