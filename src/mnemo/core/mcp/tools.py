@@ -170,10 +170,31 @@ def read_mnemo_rule(
             return None
         # Still need the full body — read the file once, the index only has a preview.
         page_type = rule.get("type", "feedback")
-        candidate = vault_root / "shared" / page_type / f"{slug}.md"
-        try:
-            text = candidate.read_text(encoding="utf-8")
-        except OSError:
+        # The index key (slug) can be the human-readable `name`, which does NOT
+        # match the file stem on disk. Prefer the stored `file_stem`; if missing
+        # (stale pre-fix index), fall back to scanning the type dir and matching
+        # the frontmatter `name`/`slug` against the requested slug.
+        stem = rule.get("file_stem")
+        text: str | None = None
+        if stem:
+            try:
+                text = (vault_root / "shared" / page_type / f"{stem}.md").read_text(encoding="utf-8")
+            except OSError:
+                text = None
+        if text is None:
+            type_dir = vault_root / "shared" / page_type
+            if type_dir.is_dir():
+                for candidate in type_dir.glob("*.md"):
+                    try:
+                        probe = candidate.read_text(encoding="utf-8")
+                    except OSError:
+                        continue
+                    fm = parse_frontmatter(probe)
+                    derived = fm.get("slug") or fm.get("name") or candidate.stem
+                    if derived == slug:
+                        text = probe
+                        break
+        if text is None:
             return None
         return {
             "slug": slug,

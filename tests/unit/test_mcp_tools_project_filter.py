@@ -207,6 +207,50 @@ def test_read_mnemo_rule_project_none_falls_back_to_vault(tmp_vault):
     assert result is not None
 
 
+def test_read_mnemo_rule_finds_rule_when_name_differs_from_filename(tmp_vault):
+    """Regression: real-vault rules have frontmatter `name` as a human sentence
+    while the file on disk uses a slugified stem. The index keys rules by
+    `name`, and `read_mnemo_rule` must still find the body — both in the
+    indexed path and in the glob fallback."""
+    from mnemo.core import rule_activation
+    import json
+
+    target_dir = tmp_vault / "shared" / "feedback"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    sentence_name = "Log raw queries to mcp-access-log, do not hash"
+    file_stem = "query-logging-raw-queries-no-hashing"
+    body = "log raw, do not hash\n"
+    text = (
+        "---\n"
+        f"name: '{sentence_name}'\n"
+        f"description: a description\n"
+        f"type: feedback\n"
+        f"stability: stable\n"
+        "sources:\n"
+        "  - bots/alpha/memory/m.md\n"
+        "tags:\n"
+        "  - auto-promoted\n"
+        "  - data-integrity\n"
+        "---\n\n"
+        f"{body}"
+    )
+    (target_dir / f"{file_stem}.md").write_text(text)
+
+    # Build and persist the index — this is the code path used in production.
+    index = rule_activation.build_index(tmp_vault)
+    (tmp_vault / ".mnemo").mkdir(exist_ok=True)
+    (tmp_vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps(index))
+
+    listed = list_rules_by_topic(tmp_vault, "data-integrity", scope="vault")
+    assert any(r["slug"] == sentence_name for r in listed), \
+        "list_rules_by_topic must surface the name-based slug"
+
+    result = read_mnemo_rule(tmp_vault, sentence_name, scope="vault")
+    assert result is not None, "read_mnemo_rule must resolve a name-based slug to its file"
+    assert result["slug"] == sentence_name
+    assert result["body"] == body
+
+
 # --- get_mnemo_topics project filter ---
 
 
