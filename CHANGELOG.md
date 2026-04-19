@@ -36,6 +36,44 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   deprecation window). `build_index` orchestrator decomposed via a new
   `_build_rule_entry` helper (138L → <30L).
   ([refactor roadmap PR G](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+- `mnemo.core.extract.inbox` monolith (717 LOC) split into an 8-module
+  package: `io.py`, `paths.py`, `types.py`, `state_io.py`, `rendering.py`,
+  `dedup.py`, `apply.py`, `branches/{auto_promoted,inbox_flow,upgrade}.py`,
+  plus a back-compat shim at `__init__.py`. The pre-v0.9 import surface is
+  preserved. Five duplication clusters consolidated:
+
+    - D1: `vault_root / "shared" / type / f"{slug}.md"` inlined at 5 sites
+      → all routed through `paths._inbox_path` / `paths._promoted_path`.
+    - D2: `.proposed.md` sibling construction at 3 sites → `paths._sibling_path`.
+    - D3: `"sha256:" + hashlib.sha256(...)` one-liners at 3 sites → new
+      public `content_hash(source)` in `inbox/io.py` (polymorphic over
+      `Path` / `str` / `bytes`).
+    - D4: 5 duplicate fresh-write `StateEntry` blocks → new
+      `StateEntry.mark_written(*, run_id, new_hash, source_files,
+      source_hash, status=None)` method in `extract/scanner.py`.
+    - D5: `SCHEMA_VERSION = 2` duplicated across `inbox.py:25` and
+      `scanner.py:39` (ExtractionState dataclass default) → scanner uses
+      a `field(default_factory=...)` that defers to
+      `inbox/state_io.py::SCHEMA_VERSION` (single source of truth;
+      function-level import side-steps the circular dependency).
+
+  New public helpers `atomic_write` and `content_hash` replace the
+  underscore aliases `_atomic_write` / `_file_hash`, which remain as
+  back-compat re-exports with `DeprecationWarning` (removal scheduled
+  for v0.10). `apply_pages` internal dispatch converted to a
+  table-driven `(status_predicate, handler)` map (OCP fix). The
+  96-line `_apply_inbox` body split into three handlers
+  (`_handle_no_entry`, `_handle_dismissed`, `_handle_promoted`,
+  `_handle_inbox_status`); the 77-line `_apply_auto_promoted` split
+  into smaller per-status helpers. `extract/promote.py` migrated to
+  the new `atomic_write` / `content_hash` names. `extract/promote.py`
+  mutation sites at lines 80-86 and 95-99 intentionally NOT migrated
+  to `mark_written` — they have a divergent shape (no `last_sync`
+  update), and forcing a unified API there would change v0.8
+  behavior for direct-promotion entries. Deferred:
+  `rule_activation.index._atomic_write_bytes` consolidation into a
+  shared `io_utils.py` module (follow-up nit-PR).
+  ([refactor roadmap PR I](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 

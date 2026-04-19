@@ -73,6 +73,11 @@ SURFACE: dict[str, tuple[str, ...]] = {
         "dedupe_by_slug",
         "atomic_write_state",
         "load_state",
+        # PR I (v0.9): new public consolidation names that replace
+        # _atomic_write / _file_hash. The underscore aliases stay
+        # listed below for back-compat (deprecated, removal in v0.10).
+        "atomic_write",
+        "content_hash",
         # private helpers imported by promote.py and tests
         "_atomic_write",
         "_file_hash",

@@ -31,12 +31,58 @@ class StateEntry:
     status: str  # "inbox" | "promoted" | "dismissed" | "direct" | "auto_promoted"
     last_sync: str = ""
 
+    def mark_written(
+        self,
+        *,
+        run_id: str,
+        new_hash: str,
+        source_files: list[str],
+        source_hash: str,
+        status: str | None = None,
+    ) -> None:
+        """Refresh a state entry to reflect a fresh write of its target page.
+
+        D4 consolidation (v0.9 PR I): replaces 5 duplicate "fresh write"
+        blocks in ``extract/inbox/branches/auto_promoted.py`` and
+        ``extract/inbox/branches/inbox_flow.py`` (originally inlined at
+        ``inbox.py:481-487``, ``494-500``, ``510-516``, ``588-593``, and
+        ``608-614``). Always advances ``written_at`` and ``last_sync`` to
+        ``run_id``; the optional ``status`` argument is applied only when
+        provided so blocks that don't change status (e.g. inbox→inbox
+        overwrite_safe) need not pass it.
+
+        ``extract/promote.py``'s mutation sites have a divergent shape
+        (``status="direct"`` + no ``last_sync`` update) and are
+        intentionally NOT migrated to this helper to preserve v0.8
+        behavior for direct-promotion entries.
+        """
+        self.source_files = list(source_files)
+        self.source_hash = source_hash
+        self.written_hash = new_hash
+        self.written_at = run_id
+        self.last_sync = run_id
+        if status is not None:
+            self.status = status
+
+
+def _default_schema_version() -> int:
+    """Return the canonical state-file schema version.
+
+    D5 consolidation (v0.9 PR I): defers to ``inbox.state_io.SCHEMA_VERSION``
+    so the on-disk schema version lives in exactly one place. A
+    function-level import side-steps the circular dependency that a
+    module-level import would create (state_io imports ExtractionState
+    from this module).
+    """
+    from mnemo.core.extract.inbox.state_io import SCHEMA_VERSION
+    return SCHEMA_VERSION
+
 
 @dataclass
 class ExtractionState:
     last_run: str | None
     entries: dict[str, StateEntry] = field(default_factory=dict)
-    schema_version: int = 2
+    schema_version: int = field(default_factory=_default_schema_version)
 
 
 @dataclass(frozen=True)
