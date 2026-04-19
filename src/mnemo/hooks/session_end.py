@@ -267,6 +267,11 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_end.clear", e)
         try:
+            from mnemo.core.mcp import session_state as _ss
+            _ss.evict_session(vault, sid)
+        except Exception as e:
+            errors.log_error(vault, "session_end.evict_reflex_state", e)
+        try:
             _maybe_schedule_extraction(cfg, vault, agent_name)
         except Exception as e:
             errors.log_error(vault, "session_end.schedule_wrap", e)
