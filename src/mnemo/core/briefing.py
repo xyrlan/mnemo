@@ -14,6 +14,7 @@ from typing import Any
 
 from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
+from mnemo.core.transcript import flatten_transcript_events
 
 
 MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
@@ -129,7 +130,8 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
     model = extraction_cfg.get("model") or "claude-haiku-4-5"
     timeout = int(extraction_cfg.get("subprocessTimeout") or 60)
 
-    prompt_text = prompts.build_briefing_prompt(events)
+    transcript = flatten_transcript_events(events)
+    prompt_text = prompts.build_briefing_prompt(transcript)
     response = llm.call(
         prompt_text,
         system=prompts.BRIEFING_SYSTEM_PROMPT,
