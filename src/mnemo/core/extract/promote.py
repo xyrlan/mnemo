@@ -1,16 +1,11 @@
 """Project-type 1:1 promotion (no LLM, no clustering, direct to shared/project/)."""
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime
 from pathlib import Path
 
-from mnemo.core.extract.inbox import (
-    ApplyResult,
-    ExtractionIOError,
-    _atomic_write,
-    _file_hash,
-)
+from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
+from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.scanner import ExtractionState, MemoryFile, StateEntry
 
 
@@ -60,10 +55,10 @@ def promote_projects(
             continue
 
         content = _render_project_page(file, run_id=run_id)
-        new_written_hash = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+        new_written_hash = content_hash(content)
 
         if entry is None:
-            _atomic_write(target, content)
+            atomic_write(target, content)
             state.entries[key] = StateEntry(
                 source_files=[str(file.path)],
                 source_hash=file.source_hash,
@@ -77,7 +72,7 @@ def promote_projects(
         # Entry exists; source changed
         if not target.exists():
             if force:
-                _atomic_write(target, content)
+                atomic_write(target, content)
                 entry.source_files = [str(file.path)]
                 entry.source_hash = file.source_hash
                 entry.written_hash = new_written_hash
@@ -89,9 +84,9 @@ def promote_projects(
                 result.dismissed_skipped.append(key)
             continue
 
-        disk_hash = _file_hash(target)
+        disk_hash = content_hash(target)
         if disk_hash == entry.written_hash:
-            _atomic_write(target, content)
+            atomic_write(target, content)
             entry.source_files = [str(file.path)]
             entry.source_hash = file.source_hash
             entry.written_hash = new_written_hash
@@ -99,7 +94,7 @@ def promote_projects(
             result.overwrite_safe.append(key)
         else:
             sibling = target.with_name(f"{_project_slug(file)}.proposed.md")
-            _atomic_write(sibling, content)
+            atomic_write(sibling, content)
             result.sibling_proposed.append((key, str(sibling)))
 
     return result

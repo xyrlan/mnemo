@@ -1,11 +1,12 @@
 """Path-shape helpers for the v0.2 extraction inbox.
 
-Extracted from ``inbox.py`` in the v0.9 refactor roadmap PR B so the
-755-line ``inbox.py`` shrinks toward its Wave 1 budget. These five
-helpers compute filesystem targets for extracted pages and their
-``.proposed.md`` siblings; they have no runtime dependencies beyond
-``pathlib.Path`` and the ``ExtractedPage`` dataclass (imported lazily
-via ``TYPE_CHECKING`` to avoid a circular import with ``inbox.py``).
+Originally extracted from the 755-line ``inbox.py`` in the v0.9 refactor
+roadmap PR B (as ``extract/inbox_paths.py``) and relocated inside the
+``inbox`` package in PR I. These five helpers compute filesystem targets
+for extracted pages and their ``.proposed.md`` siblings; they have no
+runtime dependencies beyond ``pathlib.Path`` and the ``ExtractedPage``
+dataclass (imported lazily via ``TYPE_CHECKING`` to avoid a circular
+import with ``inbox/types.py``).
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mnemo.core.extract.inbox import ExtractedPage
+    from mnemo.core.extract.inbox.types import ExtractedPage
 
 
 def _inbox_path(vault_root: Path, page: ExtractedPage) -> Path:
@@ -29,10 +30,14 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
 
     Single-source pages go directly to the sacred dir (auto-promote).
     Multi-source pages stage in _inbox/ for review.
+
+    Routes through ``_promoted_path`` / ``_inbox_path`` so the shared
+    ``shared/<type>/<slug>.md`` shape lives in exactly one place
+    (kills D1 inline target construction in PR I).
     """
     if len(page.source_files) == 1:
-        return vault_root / "shared" / page.type / f"{page.slug}.md"
-    return vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+        return _promoted_path(vault_root, page)
+    return _inbox_path(vault_root, page)
 
 
 def _is_auto_promoted_target(target: Path, vault_root: Path) -> bool:
