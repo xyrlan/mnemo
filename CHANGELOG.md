@@ -74,6 +74,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `rule_activation.index._atomic_write_bytes` consolidation into a
   shared `io_utils.py` module (follow-up nit-PR).
   ([refactor roadmap PR I](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+- `mnemo.core.extract.prompts` monolith (529 LOC) split into a `prompts/`
+  package with a `templates/` sub-package. Three near-identical
+  `build_{feedback,user,reference}_prompt` builders unified into a single
+  `build_consolidation_prompt(kind, files, *, vault_root=None)` dispatching
+  on a kind→(label, cluster_clause, few_shot) table; thin wrappers preserve
+  existing call-sites. `build_briefing_prompt` signature changed — now
+  accepts a pre-flattened `transcript: str` rather than `events: list[dict]`
+  (SRP fix: event-parsing moved to a new `mnemo.core.transcript` module).
+  In-tree callers updated. Pre-v0.9 import surface preserved via the
+  package's `__init__.py` shim, including the three underscore-private
+  `_FEW_SHOT_*` constants that PR F1's schema regression test accesses.
+  ([refactor roadmap PR F2](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 

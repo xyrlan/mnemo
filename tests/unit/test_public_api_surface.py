@@ -98,6 +98,9 @@ SURFACE: dict[str, tuple[str, ...]] = {
         "build_feedback_prompt",
         "build_user_prompt",
         "build_reference_prompt",
+        # PR F2 (v0.9): unified consolidation builder; the three legacy
+        # build_*_prompt names above stay for back-compat.
+        "build_consolidation_prompt",
         "chunks_for",
     ),
 }

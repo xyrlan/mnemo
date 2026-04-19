@@ -242,6 +242,7 @@ def test_briefing_system_prompt_lists_headers_bare_without_inline_descriptions()
 
 def test_build_briefing_prompt_includes_rendered_events():
     from mnemo.core.extract import prompts
+    from mnemo.core.transcript import flatten_transcript_events
 
     events = [
         {"type": "user", "message": {"role": "user", "content": "hello"}},
@@ -253,13 +254,14 @@ def test_build_briefing_prompt_includes_rendered_events():
             },
         },
     ]
-    prompt = prompts.build_briefing_prompt(events)
+    prompt = prompts.build_briefing_prompt(flatten_transcript_events(events))
     assert "hello" in prompt
     assert "world" in prompt
 
 
 def test_build_briefing_prompt_renders_tool_use_and_tool_result_blocks():
     from mnemo.core.extract import prompts
+    from mnemo.core.transcript import flatten_transcript_events
 
     events = [
         {
@@ -282,7 +284,7 @@ def test_build_briefing_prompt_renders_tool_use_and_tool_result_blocks():
             },
         },
     ]
-    prompt = prompts.build_briefing_prompt(events)
+    prompt = prompts.build_briefing_prompt(flatten_transcript_events(events))
     assert "[tool_use: Read]" in prompt
     assert "file contents here" in prompt
     assert "…" in prompt  # long tool_result truncated
@@ -290,6 +292,7 @@ def test_build_briefing_prompt_renders_tool_use_and_tool_result_blocks():
 
 def test_build_briefing_prompt_skips_non_dict_events_and_empty_content():
     from mnemo.core.extract import prompts
+    from mnemo.core.transcript import flatten_transcript_events
 
     events = [
         "not a dict",
@@ -297,7 +300,7 @@ def test_build_briefing_prompt_skips_non_dict_events_and_empty_content():
         {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "unknown"}]}},
         {"type": "user", "message": {"role": "user", "content": "kept"}},
     ]
-    prompt = prompts.build_briefing_prompt(events)
+    prompt = prompts.build_briefing_prompt(flatten_transcript_events(events))
     assert "kept" in prompt
     assert "not a dict" not in prompt
 
