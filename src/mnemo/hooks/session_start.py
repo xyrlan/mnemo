@@ -137,19 +137,27 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.mirror", e)
 
-        # Rebuild rule-activation index when any of the three consumers needs it:
-        # enforcement (PreToolUse deny), enrichment (PreToolUse context), or
-        # injection (SessionStart topic list). Disabled-everything sessions
-        # still pay zero cost.
+        # Rebuild rule-activation index when any of the four consumers needs it:
+        # enforcement (PreToolUse deny), enrichment (PreToolUse context),
+        # injection (SessionStart topic list), or reflex (UserPromptSubmit BM25F).
+        # Disabled-everything sessions still pay zero cost.
         inj_enabled = bool(cfg.get("injection", {}).get("enabled", False))
         enf_enabled = bool(cfg.get("enforcement", {}).get("enabled", False))
         enr_enabled = bool(cfg.get("enrichment", {}).get("enabled", False))
-        if enf_enabled or enr_enabled or inj_enabled:
+        reflex_enabled = bool(cfg.get("reflex", {}).get("enabled", False))
+        if enf_enabled or enr_enabled or inj_enabled or reflex_enabled:
             try:
                 from mnemo.core import rule_activation
                 rule_activation.write_index(vault, rule_activation.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.rule_activation_index", exc)
+
+        if reflex_enabled:
+            try:
+                from mnemo.core.reflex import index as reflex_index
+                reflex_index.write_index(vault, reflex_index.build_index(vault))
+            except Exception as exc:
+                errors.log_error(vault, "session_start.reflex_index", exc)
 
         if cfg.get("capture", {}).get("sessionStartEnd", True):
             source = payload.get("source", "startup")
