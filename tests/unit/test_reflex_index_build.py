@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mnemo.core.reflex.index import build_index
+from mnemo.core.reflex.index import build_index, load_index
 
 FRONTMATTER_TEMPLATE = (
     "---\n"
@@ -120,3 +120,33 @@ def test_build_index_tolerates_non_utf8_files(tmp_vault):
     slugs = set(idx["docs"].keys())
     assert "ok" in slugs
     assert "broken" in slugs  # errors="replace" preserves the rule
+
+
+def test_reflex_load_index_logs_corrupt_json(tmp_vault):
+    """Corruption leaves a trail. Missing / version-skew stay silent."""
+    errors_log = tmp_vault / ".errors.log"
+    mnemo_dir = tmp_vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "reflex-index.json").write_text("{ broken ", encoding="utf-8")
+
+    assert load_index(tmp_vault) is None
+    assert errors_log.exists()
+    assert "reflex.index.load.parse" in errors_log.read_text(encoding="utf-8")
+
+
+def test_reflex_load_index_silent_on_missing_file(tmp_vault):
+    errors_log = tmp_vault / ".errors.log"
+    assert load_index(tmp_vault) is None
+    assert not errors_log.exists()
+
+
+def test_reflex_load_index_silent_on_version_skew(tmp_vault):
+    errors_log = tmp_vault / ".errors.log"
+    mnemo_dir = tmp_vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "reflex-index.json").write_text(
+        json.dumps({"schema_version": 999, "docs": {}, "postings": {}}),
+        encoding="utf-8",
+    )
+    assert load_index(tmp_vault) is None
+    assert not errors_log.exists()

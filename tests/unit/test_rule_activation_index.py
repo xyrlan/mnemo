@@ -398,6 +398,43 @@ def test_load_index_valid(tmp_vault: Path):
     assert result["schema_version"] == INDEX_VERSION
 
 
+def test_load_index_logs_corrupt_json_to_errors_log(tmp_vault: Path):
+    """Corruption must leave a trail — otherwise dogfood silently falls to
+    the slow glob path with no signal. Missing file + version skew stay
+    silent because both are expected paths."""
+    errors_log = tmp_vault / ".errors.log"
+    mnemo_dir = tmp_vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "rule-activation-index.json").write_text(
+        "{ not valid json ", encoding="utf-8"
+    )
+
+    assert load_index(tmp_vault) is None
+    assert errors_log.exists(), "corruption must be logged to .errors.log"
+    line = errors_log.read_text(encoding="utf-8").splitlines()[-1]
+    assert "rule_activation.load_index.parse" in line
+
+
+def test_load_index_does_not_log_on_missing_file(tmp_vault: Path):
+    """First-run silence: a missing index file must NOT spam .errors.log."""
+    errors_log = tmp_vault / ".errors.log"
+    assert load_index(tmp_vault) is None
+    assert not errors_log.exists()
+
+
+def test_load_index_does_not_log_on_version_skew(tmp_vault: Path):
+    """Post-upgrade silence: a stale schema_version must NOT spam .errors.log."""
+    errors_log = tmp_vault / ".errors.log"
+    mnemo_dir = tmp_vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "rule-activation-index.json").write_text(
+        json.dumps({"schema_version": 999, "rules": {}}),
+        encoding="utf-8",
+    )
+    assert load_index(tmp_vault) is None
+    assert not errors_log.exists()
+
+
 def test_is_universal_below_threshold():
     from mnemo.core.rule_activation import _is_universal
     assert _is_universal(["a"], threshold=2) is False
