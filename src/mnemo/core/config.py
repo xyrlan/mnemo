@@ -58,7 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "universalThreshold": 2,
     },
     "reflex": {
-        "enabled": False,  # v0.8.0-alpha off-by-default; flip to True in v0.8.0 stable
+        "enabled": True,  # v0.8.0 stable — flip to False in mnemo.config.json to disable
         "maxEmissionsPerSession": 10,
         "thresholds": {
             "termOverlapMin": 2,
