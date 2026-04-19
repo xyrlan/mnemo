@@ -85,7 +85,7 @@ def _make_index(
     universal: dict | None = None,
 ) -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "rules": rules or {},
         "by_project": by_project or {},
         "universal": universal or {"slugs": [], "topics": []},
@@ -667,8 +667,8 @@ def test_match_path_enrich_reads_v2_layout(tmp_vault):
     assert hits[0].slug == "python-style"
 
 
-def test_index_version_is_2():
+def test_index_version_is_3():
     from mnemo.core.rule_activation import INDEX_VERSION
-    assert INDEX_VERSION == 2
+    assert INDEX_VERSION == 3
 
 

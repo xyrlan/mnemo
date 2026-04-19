@@ -5,6 +5,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `rule-activation-index` schema bumped from v2 to v3. The v0.8.x
+  `file_stem` field was added without a version bump, so existing
+  v2 indexes silently fall back to slow glob scanning. v3 forces
+  a transparent rebuild on first load (already-load-bearing
+  auto-rebuild path: `load_validated_json` returns `None` on
+  schema mismatch; SessionStart and extract hooks call
+  `build_index` whenever `load_index` returns `None`). First run
+  after upgrade takes a few seconds longer; nothing else visible.
+  ([refactor roadmap PR E](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+
 ### Removed
 
 - `mnemo.core.mcp.counter` v0.8 backwards-compat shim. Importers must use
