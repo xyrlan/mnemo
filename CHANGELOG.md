@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- `mnemo.core.mcp.counter` v0.8 backwards-compat shim. Importers must use
+  `mnemo.core.mcp.session_state` directly. The shim was scheduled for
+  v0.9 removal in the v0.8 CHANGELOG. ([refactor roadmap PR D](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 
 ### Added

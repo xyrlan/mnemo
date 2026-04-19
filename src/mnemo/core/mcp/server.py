@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from mnemo.core.mcp import access_log as mcp_access_log
-from mnemo.core.mcp import counter as mcp_counter
+from mnemo.core.mcp import session_state as mcp_session_state
 from mnemo.core.mcp import tools as mcp_tools
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -167,7 +167,7 @@ def _handle_tool_call(
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
-    mcp_counter.increment(vault_root)
+    mcp_session_state.increment(vault_root)
     try:
         mcp_access_log.record(vault_root, {
             "timestamp": _utc_now_iso(),

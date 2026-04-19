@@ -295,14 +295,14 @@ def test_serve_loop_drops_notification_responses(tmp_vault, monkeypatch):
 
 def test_tools_call_increments_counter(tmp_vault):
     """Each successful tools/call must bump the daily counter."""
-    from mnemo.core.mcp import counter as mcp_counter
+    from mnemo.core.mcp import session_state as mcp_session_state
 
     _write_page(
         tmp_vault, "feedback", "f1",
         tags=["auto-promoted", "git"],
         sources=["bots/a/m.md"],
     )
-    assert mcp_counter.read_today(tmp_vault) == 0
+    assert mcp_session_state.read_today(tmp_vault) == 0
 
     req = {
         "jsonrpc": "2.0",
@@ -311,16 +311,16 @@ def test_tools_call_increments_counter(tmp_vault):
         "params": {"name": "get_mnemo_topics", "arguments": {}},
     }
     handle_request(req, vault_root=tmp_vault)
-    assert mcp_counter.read_today(tmp_vault) == 1
+    assert mcp_session_state.read_today(tmp_vault) == 1
 
     handle_request(req, vault_root=tmp_vault)
     handle_request(req, vault_root=tmp_vault)
-    assert mcp_counter.read_today(tmp_vault) == 3
+    assert mcp_session_state.read_today(tmp_vault) == 3
 
 
 def test_tools_call_unknown_tool_does_not_increment(tmp_vault):
     """A failed tool call should not bump the counter."""
-    from mnemo.core.mcp import counter as mcp_counter
+    from mnemo.core.mcp import session_state as mcp_session_state
 
     req = {
         "jsonrpc": "2.0",
@@ -329,7 +329,7 @@ def test_tools_call_unknown_tool_does_not_increment(tmp_vault):
         "params": {"name": "no-such-tool", "arguments": {}},
     }
     handle_request(req, vault_root=tmp_vault)
-    assert mcp_counter.read_today(tmp_vault) == 0
+    assert mcp_session_state.read_today(tmp_vault) == 0
 
 
 def test_serve_loop_survives_load_config_failure(tmp_vault, monkeypatch):
