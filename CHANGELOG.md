@@ -86,6 +86,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   package's `__init__.py` shim, including the three underscore-private
   `_FEW_SHOT_*` constants that PR F1's schema regression test accesses.
   ([refactor roadmap PR F2](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+- `mnemo.cli` monolith (1294 LOC) split into a `cli/` package:
+  `parser.py` (argparse + COMMANDS registry + @command decorator),
+  `runtime.py` (main + _resolve_vault + _run_open), `commands/*.py`
+  (one module per command: init, status, doctor, extract, briefing,
+  recall, telemetry, statusline, misc), `commands/doctor_checks/*.py`
+  (one module per concern: activation, fidelity, rules, reflex, misc),
+  `_helpers/` (absorbs the PR-A `cli_helpers.py`). `cmd_doctor` converted
+  to an OCP-compliant `(name, check_fn)` registry — adding a new check
+  is now a new row, not an edit to `cmd_doctor`. Pre-v0.9 import
+  surface preserved via the package's `__init__.py` shim (re-exports
+  `main`, `COMMANDS`, `_resolve_vault` — the three names pinned by the
+  public API surface test plus the single symbol the 10 in-repo
+  monkeypatches target). ([refactor roadmap PR H](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 
