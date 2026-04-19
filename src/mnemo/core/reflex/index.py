@@ -74,7 +74,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
 
         for md_path in sorted(type_dir.glob("*.md")):
             try:
-                text = md_path.read_text(encoding="utf-8")
+                text = md_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
 

@@ -102,3 +102,21 @@ def test_build_index_schema_shape(tmp_vault):
     }
     assert isinstance(idx["postings"], dict)
     assert isinstance(idx["docs"], dict)
+
+
+def test_build_index_tolerates_non_utf8_files(tmp_vault):
+    """A .md with invalid UTF-8 must not abort the build."""
+    path = tmp_vault / "shared" / "feedback" / "broken.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Valid frontmatter + bogus high-byte sequence in the body
+    path.write_bytes(
+        b"---\nname: broken\ndescription: d\ntags:\n  - t\n"
+        b"sources:\n  - bots/mnemo/memory/x.md\nstability: stable\n---\n"
+        b"\xff\xfe garbled body \xc3\x28\n"
+    )
+    _write_rule(tmp_vault, "feedback", "ok.md", name="ok")
+
+    idx = build_index(tmp_vault, universal_threshold=2)
+    slugs = set(idx["docs"].keys())
+    assert "ok" in slugs
+    assert "broken" in slugs  # errors="replace" preserves the rule

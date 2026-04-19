@@ -59,9 +59,6 @@ DEFAULTS: dict[str, Any] = {
     },
     "reflex": {
         "enabled": False,  # v0.8.0-alpha off-by-default; flip to True in v0.8.0 stable
-        "maxHits": 2,
-        "previewChars": 300,
-        "dedupeTtlMinutes": 120,
         "maxEmissionsPerSession": 10,
         "thresholds": {
             "termOverlapMin": 2,
@@ -80,8 +77,6 @@ DEFAULTS: dict[str, Any] = {
                 "body": 1.0,
             },
         },
-        "log": {"maxBytes": 1_048_576},
-        "debug": {"logRawPrompt": False},
     },
 }
 

@@ -96,7 +96,7 @@ def main() -> int:
             _log_silence(vault, sid, project, prompt_raw, reason=result.silence_reason or "index_missing")
             return 0
 
-        # Dedupe against injected_cache (session-lifetime)
+        # Dedupe against injected_cache (day-lifetime)
         cache = session_state.read_injected_cache(vault)
         survivors = [s for s in result.accepted_slugs if s not in cache]
         if not survivors:
@@ -121,14 +121,11 @@ def main() -> int:
 
 
 def _candidates_for_project(index: dict, project: str) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for slug, doc in (index.get("docs") or {}).items():
-        if project in (doc.get("projects") or []) or doc.get("universal"):
-            if slug not in seen:
-                seen.add(slug)
-                out.append(slug)
-    return out
+    docs = index.get("docs") or {}
+    return [
+        slug for slug, doc in docs.items()
+        if project in (doc.get("projects") or []) or doc.get("universal")
+    ]
 
 
 def _doc_token_sets(index: dict, slugs: list[str]) -> dict[str, set[str]]:

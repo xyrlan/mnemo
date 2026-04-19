@@ -21,10 +21,6 @@ DEFAULT_THRESHOLDS: dict = {
     "absolute_floor": 2.0,
 }
 
-_REASONS = (
-    "index_missing", "absolute_floor_fail", "relative_gap_fail", "term_overlap_fail",
-)
-
 
 @dataclass
 class GateResult:

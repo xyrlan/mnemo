@@ -121,7 +121,16 @@ def _write(vault_root: Path, data: dict) -> None:
 
 
 def read_injected_cache(vault_root: Path) -> dict:
-    """Return the current injected_cache mapping (slug -> unix_ts). Never raises."""
+    """Return the injected_cache mapping (slug -> unix_ts).
+
+    Lifetime: day-scoped, vault-wide. The cache is reset on the next day
+    rollover via ``increment()`` (which also wipes ``session_emissions``).
+    It is NOT scoped per-session — two concurrent sessions of the same vault
+    share the cache, and ``SessionEnd`` evicts only the ``session_emissions``
+    entry for the sid, not the cache slugs that sid injected.
+
+    Never raises.
+    """
     return dict(_load(vault_root).get("injected_cache", {}))
 
 
