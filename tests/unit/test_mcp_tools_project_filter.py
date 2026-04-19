@@ -241,6 +241,13 @@ def test_read_mnemo_rule_finds_rule_when_name_differs_from_filename(tmp_vault):
     (tmp_vault / ".mnemo").mkdir(exist_ok=True)
     (tmp_vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps(index))
 
+    # NON-NEGOTIABLE: build_index must persist file_stem. Without it,
+    # read_mnemo_rule silently falls through to an O(N) glob on every call
+    # (the v0.8.x regression). Asserting the indexed fast-path attribute
+    # traps that regression at source rather than relying on the fallback
+    # masking it.
+    assert index["rules"][sentence_name]["file_stem"] == file_stem
+
     listed = list_rules_by_topic(tmp_vault, "data-integrity", scope="vault")
     assert any(r["slug"] == sentence_name for r in listed), \
         "list_rules_by_topic must surface the name-based slug"
