@@ -18,6 +18,7 @@ from typing import TypedDict
 
 from mnemo.core.agent import resolve_agent
 from mnemo.core.filters import (
+    derive_rule_slug,
     is_consumer_visible,
     parse_frontmatter,
     topic_tags,
@@ -141,7 +142,7 @@ def list_rules_by_topic(
             if filter_project and not _rule_belongs_to_project(fm, project):
                 continue
             sources = fm.get("sources") or []
-            slug = fm.get("slug") or fm.get("name") or md.stem
+            slug = derive_rule_slug(fm, md.stem)
             legacy.append({
                 "slug": slug,
                 "type": page_type,
@@ -190,7 +191,7 @@ def read_mnemo_rule(
                     except OSError:
                         continue
                     fm = parse_frontmatter(probe)
-                    derived = fm.get("slug") or fm.get("name") or candidate.stem
+                    derived = derive_rule_slug(fm, candidate.stem)
                     if derived == slug:
                         text = probe
                         break
@@ -218,7 +219,7 @@ def read_mnemo_rule(
             except OSError:
                 continue
             fm = parse_frontmatter(text)
-            derived_slug = fm.get("slug") or fm.get("name") or candidate.stem
+            derived_slug = derive_rule_slug(fm, candidate.stem)
             if derived_slug != slug:
                 continue
             if not is_consumer_visible(candidate, fm, vault_root):
