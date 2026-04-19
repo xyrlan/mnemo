@@ -64,6 +64,16 @@ FEEDBACK_SYSTEM_PROMPT = (
     "coding style with no natural file boundary (e.g. \"prefer clear names\"), "
     "omit `activates_on`.\n\n"
     "Both fields are optional. Most pages should have neither.\n\n"
+    "Aliases field (v0.8 — optional, strongly encouraged for bilingual/"
+    "synonymous rules): every emitted page MAY carry an `aliases` list of "
+    "short lowercase tokens that act as synonym bridges for lexical "
+    "retrieval. Emit aliases when the rule description or body contains "
+    "domain terms that a developer would naturally search in a different "
+    "language or abbreviation — e.g. `aliases: [\"banco\", \"database\", "
+    "\"db\"]` for a rule about database mocking. Keep aliases to 3-8 tokens "
+    "max; prefer concrete terms (framework names, file types, commands) "
+    "over vague ones. If the rule is generic and has no natural synonyms, "
+    "omit the field.\n\n"
     "Output MUST be valid JSON matching the requested schema. Do not add "
     "prose before or after the JSON."
 )
@@ -75,20 +85,30 @@ _TAGS_GUIDANCE_SHORT = (
     "Do not emit system markers like 'auto-promoted' or 'needs-review'."
 )
 
+_ALIASES_GUIDANCE_SHORT = (
+    " Each page MAY also carry an optional `aliases` list of 3-8 short "
+    "lowercase synonym tokens that act as bilingual/abbreviation bridges "
+    "for lexical retrieval (e.g. `[\"banco\", \"database\", \"db\"]`). "
+    "Emit aliases when the rule contains domain terms a developer would "
+    "naturally search in a different language or abbreviation; prefer "
+    "concrete terms (framework names, file types, commands). Omit the "
+    "field for generic rules without natural synonyms."
+)
+
 USER_SYSTEM_PROMPT = (
     "You are consolidating user-profile memories across multiple Claude Code "
     "agents into canonical pages. Group files that describe the SAME trait or "
     "role. Produce one page per trait cluster. Preserve the 'Why' / 'How to "
-    "apply' structure." + _TAGS_GUIDANCE_SHORT + " Output MUST be valid JSON "
-    "matching the requested schema."
+    "apply' structure." + _TAGS_GUIDANCE_SHORT + _ALIASES_GUIDANCE_SHORT +
+    " Output MUST be valid JSON matching the requested schema."
 )
 
 REFERENCE_SYSTEM_PROMPT = (
     "You are consolidating reference memories (pointers to external systems "
     "like Linear, Grafana, Notion) across agents into canonical pages. Group "
     "files that point to the SAME external resource. Produce one page per "
-    "resource cluster." + _TAGS_GUIDANCE_SHORT + " Output MUST be valid JSON "
-    "matching the requested schema."
+    "resource cluster." + _TAGS_GUIDANCE_SHORT + _ALIASES_GUIDANCE_SHORT +
+    " Output MUST be valid JSON matching the requested schema."
 )
 
 BRIEFING_SYSTEM_PROMPT = (
@@ -191,6 +211,7 @@ Required JSON output schema:
       "source_files": ["bots/<agent>/memory/<file>.md", ...],
       "stability": "stable",
       "tags": ["topic1", "topic2"],
+      "aliases": ["banco", "database"],
       "enforce": {"tool": "Bash", "deny_pattern": "...", "reason": "..."} | null,
       "activates_on": {"tools": ["Edit"], "path_globs": ["..."]} | null
     }
@@ -209,6 +230,13 @@ rule that doesn't cleanly fit the shapes documented in the system prompt.
 in the user message; only invent a new tag when none of the existing ones fit.
 Never emit "auto-promoted" or "needs-review" — those are system markers the
 plugin manages.
+
+`aliases` is an OPTIONAL list of 3-8 short lowercase synonym tokens that act
+as lexical bridges for the Reflex retrieval system (e.g. PT↔EN pairs or
+abbreviations like ["banco", "database", "db"]). Emit aliases when the rule
+contains domain terms a developer would naturally search in a different
+language or abbreviation; prefer concrete terms (framework names, file types,
+commands). Omit the field for generic rules without natural synonyms.
 """
 
 _FEW_SHOT_FEEDBACK = """\

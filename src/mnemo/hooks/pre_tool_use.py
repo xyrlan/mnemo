@@ -77,8 +77,36 @@ def main() -> int:
             if file_path:
                 hits = ra.match_path_enrich(index, project, file_path, tool_name)
                 if hits:
-                    _emit_enrich(hits)
-                    ra.log_enrichment(vault, hits, tool_name, tool_input)
+                    # Reflex integration (v0.8):
+                    #   1. Enforce enrichment.maxEmissionsPerSession cap.
+                    #   2. Filter hits against session-wide injected_cache.
+                    try:
+                        from mnemo.core.mcp import session_state
+                        sid = str(payload.get("session_id") or "unknown")
+                        max_enrich = int(enr_cfg.get("maxEmissionsPerSession", 15))
+                        counts = session_state.read_emission_counts(vault, sid)
+                        if counts["enrich_count"] >= max_enrich:
+                            return 0  # silent: cap reached
+                        cache = session_state.read_injected_cache(vault)
+                        hits = [h for h in hits if h.slug not in cache]
+                        if not hits:
+                            return 0
+                    except Exception:
+                        # fail-open — never block enrichment because session-state is broken
+                        pass
+
+                    if hits:
+                        _emit_enrich(hits)
+                        ra.log_enrichment(vault, hits, tool_name, tool_input)
+                        # Record emission + cache updates.
+                        try:
+                            import time as _time
+                            now_ts = int(_time.time())
+                            for h in hits:
+                                session_state.add_injection(vault, slug=h.slug, sid=sid, now_ts=now_ts)
+                                session_state.bump_emission(vault, sid=sid, kind="enrich", now_ts=now_ts)
+                        except Exception:
+                            pass
 
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:

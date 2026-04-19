@@ -13,11 +13,12 @@ def test_inject_into_empty_settings(tmp_home: Path):
     settings.inject_hooks(settings_path)
     data = json.loads(settings_path.read_text())
     hooks = data["hooks"]
-    # v0.3.1 removed UserPromptSubmit and PostToolUse — they were write-only
-    # log amplifiers feeding a consumer that no longer exists.
+    # v0.3.1 removed UserPromptSubmit (legacy write-only logger) and PostToolUse.
+    # v0.8.0 re-introduced UserPromptSubmit — now a *read* hook (Prompt Reflex
+    # BM25F rule injection). PostToolUse remains gone.
     assert "SessionStart" in hooks
     assert "SessionEnd" in hooks
-    assert "UserPromptSubmit" not in hooks
+    assert "UserPromptSubmit" in hooks
     assert "PostToolUse" not in hooks
 
 
@@ -55,10 +56,17 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
 
 
 def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
-    """v0.3.1 migration: an existing settings.json with legacy UserPromptSubmit
-    and PostToolUse entries (from v0.3.0) should have them pruned when the
-    user runs `mnemo init` again, because those hook modules no longer exist
-    and leaving the registration causes ImportError on every session start."""
+    """Migration regression: an existing settings.json with legacy mnemo
+    entries for modules that no longer exist must have those stale command
+    strings pruned on `mnemo init` — otherwise the hook loads a ghost module
+    and ImportErrors on every session.
+
+    - PostToolUse (v0.3.0 writer) was removed in v0.3.1 and never came back.
+    - UserPromptSubmit was removed in v0.3.1 (legacy `user_prompt` module) and
+      re-introduced in v0.8.0 pointing at the new `user_prompt_submit` module.
+      The legacy `/py -m mnemo.hooks.user_prompt` command must not survive
+      migration; the new module must be registered fresh in its place.
+    """
     settings_path = tmp_home / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     legacy = {
@@ -71,8 +79,24 @@ def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
     settings.inject_hooks(settings_path)
     data = json.loads(settings_path.read_text())
     hooks = data.get("hooks", {})
-    assert "UserPromptSubmit" not in hooks
+
+    # PostToolUse stays gone.
     assert "PostToolUse" not in hooks
+
+    # UserPromptSubmit now exists (v0.8.0) but must point at the NEW module,
+    # not the legacy one.
+    assert "UserPromptSubmit" in hooks
+    ups_cmds = [
+        h.get("command", "")
+        for entry in hooks["UserPromptSubmit"]
+        for h in entry.get("hooks", [])
+    ]
+    assert all("mnemo.hooks.user_prompt" not in c or "user_prompt_submit" in c for c in ups_cmds), (
+        f"legacy /py -m mnemo.hooks.user_prompt command survived migration: {ups_cmds}"
+    )
+    assert any("user_prompt_submit" in c for c in ups_cmds), (
+        f"new user_prompt_submit module not registered: {ups_cmds}"
+    )
 
 
 def test_inject_creates_backup(tmp_home: Path):

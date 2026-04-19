@@ -156,6 +156,14 @@ def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) 
 
     parts = [f"mnemo · {len(topics)} topics · {count}↓"]
 
+    try:
+        from mnemo.core.mcp.session_state import read_today_emissions
+        reflex_today = read_today_emissions(vault_root)
+    except Exception:
+        reflex_today = 0
+    if reflex_today > 0:
+        parts.append(f"{reflex_today}\u26a1")  # ⚡
+
     activation = _activation_segments(vault_root, cwd)
     parts.extend(activation)
 

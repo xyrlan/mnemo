@@ -5,6 +5,42 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## v0.8.0-alpha — 2026-04-19 — Prompt Reflex
+
+### Added
+
+- **UserPromptSubmit Reflex**: new hook that injects 0-2 rule body previews
+  inline via BM25F retrieval when a triple-gate confidence test passes.
+  Scope respects v0.7 semantics (local + universal per project).
+- **`aliases:` frontmatter field**: optional synonym bridge for bilingual
+  or domain-synonym matching. Extraction LLM emits it across all three
+  system prompts.
+- **`reflex` config block**: full tuning surface for thresholds, BM25F
+  parameters, field weights, and kill switches (`reflex.enabled`).
+- **`mnemo doctor` reflex checks**: `reflex-index-stale`,
+  `reflex-session-cap-hit`, `reflex-bilingual-gap`.
+- **Statusline**: new `N⚡` segment aggregating today's reflex emissions.
+
+### Changed
+
+- `mcp-call-counter.json` extended in place with `injected_cache` and
+  `session_emissions` top-level keys. File path preserved for
+  backwards-compatibility with v0.7 statusline + server readers.
+- `counter.py` Python module renamed to `session_state.py` with a thin
+  compat shim. The shim will be removed in v0.9.
+- `PreToolUse` enrichment now honours `enrichment.maxEmissionsPerSession`
+  (default 15) and filters against the shared `injected_cache` to avoid
+  cross-hook duplicate injections.
+
+### Defaults
+
+- `reflex.enabled = false` in v0.8.0-alpha (dogfood) → will flip to `true`
+  in v0.8.0 stable after a 1-week observation window.
+- `reflex` config block scoped to the knobs that are actually wired:
+  `enabled`, `maxEmissionsPerSession`, `thresholds`, and `bm25f`. Additional
+  knobs (maxHits, previewChars, dedupeTtlMinutes, log.maxBytes,
+  debug.logRawPrompt) are deferred until v0.9 when they'll be wired.
+
 ## v0.7.0 — 2026-04-18
 
 ### Breaking

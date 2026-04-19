@@ -51,10 +51,32 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "maxRulesPerCall": 3,
         "bodyPreviewChars": 300,
+        "maxEmissionsPerSession": 15,
         "log": {"maxBytes": 1_048_576},
     },
     "scoping": {
         "universalThreshold": 2,
+    },
+    "reflex": {
+        "enabled": False,  # v0.8.0-alpha off-by-default; flip to True in v0.8.0 stable
+        "maxEmissionsPerSession": 10,
+        "thresholds": {
+            "termOverlapMin": 2,
+            "relativeGap": 1.5,
+            "absoluteFloor": 2.0,
+            "minQueryTokens": 3,
+        },
+        "bm25f": {
+            "k1": 1.5,
+            "b": 0.75,
+            "fieldWeights": {
+                "name": 3.0,
+                "topic_tags": 3.0,
+                "aliases": 2.5,
+                "description": 2.0,
+                "body": 1.0,
+            },
+        },
     },
 }
 

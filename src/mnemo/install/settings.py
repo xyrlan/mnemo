@@ -47,6 +47,11 @@ HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
         "matcher": None,
         "async": False,
     },
+    "UserPromptSubmit": {
+        "module": "user_prompt_submit",
+        "matcher": None,
+        "async": False,
+    },
     "PreToolUse": {
         "module": "pre_tool_use",
         "matcher": "Bash|Edit|Write|MultiEdit",

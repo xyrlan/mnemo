@@ -1,0 +1,36 @@
+[
+  {"prompt": "how do I mock prisma in jest tests", "expected": ["prisma-mock"]},
+  {"prompt": "force react component to remount by changing key prop", "expected": ["react-state-key"]},
+  {"prompt": "should I store auth session token in httponly cookie or localstorage", "expected": ["auth-httponly"]},
+  {"prompt": "write a safe backward-compatible sql migration with alembic", "expected": ["sql-migrations-safe"]},
+  {"prompt": "retry redis with exponential backoff on transient failures", "expected": ["redis-retry"]},
+  {"prompt": "verify incoming webhook using hmac signature before parsing", "expected": ["webhook-signing"]},
+
+  {"prompt": "ok", "expected": "silence"},
+  {"prompt": "hello how are you", "expected": "silence"},
+  {"prompt": "what is the weather today", "expected": "silence"},
+  {"prompt": "thanks", "expected": "silence"},
+  {"prompt": "please continue", "expected": "silence"},
+  {"prompt": "can you help me", "expected": "silence"},
+
+  {"prompt": "como mockar o banco de dados com mocking no jest", "expected": ["prisma-mock"]},
+  {"prompt": "preciso de chave para forçar remount do componente", "expected": ["react-state-key"]},
+  {"prompt": "cookie de autenticacao sessao segura", "expected": ["auth-httponly"]},
+  {"prompt": "migracao de banco com alembic", "expected": ["sql-migrations-safe"]},
+  {"prompt": "cache normalizacao em graphql", "expected": ["graphql-cache"]},
+  {"prompt": "retry com backoff em falha de conexao", "expected": ["redis-retry"]},
+
+  {"prompt": "como faço para configurar o servidor", "expected": "silence"},
+  {"prompt": "preciso de ajuda com o projeto", "expected": "silence"},
+  {"prompt": "o que você recomenda para começar", "expected": "silence"},
+  {"prompt": "qual a melhor forma de fazer isso", "expected": "silence"},
+  {"prompt": "tem alguma sugestão", "expected": "silence"},
+  {"prompt": "pode me explicar melhor", "expected": "silence"},
+
+  {"prompt": "write tests for logging", "expected": "silence"},
+  {"prompt": "docker setup for the project", "expected": "silence"},
+  {"prompt": "retry something in the app", "expected": "silence"},
+  {"prompt": "use the cache wisely", "expected": "silence"},
+  {"prompt": "configure the build", "expected": "silence"},
+  {"prompt": "improve the code quality", "expected": "silence"}
+]
