@@ -140,7 +140,7 @@ def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) 
         return ""
     try:
         from mnemo.core.agent import resolve_agent
-        from mnemo.core.mcp.counter import read_today
+        from mnemo.core.mcp.session_state import read_today
         from mnemo.core.mcp.tools import get_mnemo_topics
 
         effective_cwd = cwd or str(Path.cwd())

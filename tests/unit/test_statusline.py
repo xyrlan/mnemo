@@ -82,7 +82,7 @@ def test_render_zero_topics_zero_calls(tmp_vault, tmp_path):
 
 
 def test_render_with_topics_and_calls(tmp_vault, tmp_path):
-    from mnemo.core.mcp import counter
+    from mnemo.core.mcp import session_state as counter
 
     _write_page(
         tmp_vault, "feedback", "f1",

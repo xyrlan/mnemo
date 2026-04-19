@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mnemo.core.mcp import counter
+from mnemo.core.mcp import session_state as counter
 
 
 def test_read_today_returns_zero_when_file_missing(tmp_vault: Path):
