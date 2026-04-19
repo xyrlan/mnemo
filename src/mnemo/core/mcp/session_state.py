@@ -182,3 +182,22 @@ def evict_session(vault_root: Path, sid: str) -> None:
     if sid in data["session_emissions"]:
         del data["session_emissions"][sid]
         _write(vault_root, data)
+
+
+def read_today_emissions(vault_root: Path) -> int:
+    """Return today's reflex emission count (sum across sessions). Never raises.
+
+    Used by the statusline ⚡ segment. Returns 0 when the stored date is not
+    today (mirroring :func:`read_today`'s behaviour) so the day rollover is
+    invisible to callers.
+    """
+    data = _load(vault_root)
+    if data.get("date") != date.today().isoformat():
+        return 0
+    total = 0
+    for entry in (data.get("session_emissions") or {}).values():
+        try:
+            total += int(entry.get("reflex_count", 0))
+        except (TypeError, ValueError):
+            continue
+    return total
