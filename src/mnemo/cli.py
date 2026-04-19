@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from mnemo.cli_helpers import (
+    _count_today_denial_entries,
+    _read_denial_log_tail,
+    _read_enrichment_log_tail,
+    _synthesize_path_for_glob,
+)
+
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {}
 
 
@@ -314,41 +321,6 @@ def _print_auto_brain_status(vault: Path) -> None:
         print(f"  upgrades:    {upgrades} proposed")
 
 
-def _read_denial_log_tail(vault: Path, max_lines: int = 1000) -> list[dict]:
-    """Read last *max_lines* from denial-log.jsonl. Returns [] on any error."""
-    import json as _json
-    try:
-        log_path = vault / ".mnemo" / "denial-log.jsonl"
-        if not log_path.exists():
-            return []
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines()
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        entries = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(_json.loads(line))
-            except _json.JSONDecodeError:
-                continue
-        return entries
-    except Exception:
-        return []
-
-
-def _count_today_denial_entries(entries: list[dict]) -> int:
-    """Count entries whose timestamp starts with today's date (UTC)."""
-    from datetime import datetime, timezone
-    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return sum(
-        1 for e in entries
-        if isinstance(e.get("timestamp"), str) and e["timestamp"].startswith(today_prefix)
-    )
-
-
 def _print_activation_status(vault: Path) -> None:
     """Print an Activation: section to stdout — only when enforcement or enrichment is on."""
     import json as _json
@@ -415,31 +387,6 @@ def _print_activation_status(vault: Path) -> None:
         print(f"  Last denial: {ts} — {cmd}")
     else:
         print("  Last denial: none")
-
-
-def _read_enrichment_log_tail(vault: Path, max_lines: int = 1000) -> list[dict]:
-    """Read last *max_lines* from enrichment-log.jsonl. Returns [] on any error."""
-    import json as _json
-    try:
-        log_path = vault / ".mnemo" / "enrichment-log.jsonl"
-        if not log_path.exists():
-            return []
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines()
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        entries = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(_json.loads(line))
-            except _json.JSONDecodeError:
-                continue
-        return entries
-    except Exception:
-        return []
 
 
 @command("doctor")
@@ -534,23 +481,6 @@ def _doctor_check_zero_hit(vault: Path) -> bool:
         print(f"       \u2192 {project}: {zh}/{calls} zero-hit")
     print("       \u2192 review the tag ontology or add rules for under-covered topics")
     return False
-
-
-def _synthesize_path_for_glob(glob: str) -> str | None:
-    """Produce a concrete file path that should match the glob, or None.
-
-    Deterministic replacements:
-      ``**/`` -> ``a/``   (match-zero-or-more-segments case)
-      ``**``  -> ``a``    (trailing double-star)
-      ``*``   -> ``sample`` (single segment)
-    Returns None when the glob contains character classes or ``?`` — those
-    cannot be safely synthesized without guessing which characters the author
-    intended to match.
-    """
-    if "?" in glob or "[" in glob:
-        return None
-    out = glob.replace("**/", "a/").replace("**", "a").replace("*", "sample")
-    return out or None
 
 
 def _doctor_check_activation_fidelity(vault: Path) -> bool:
