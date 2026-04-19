@@ -29,6 +29,7 @@ from pathlib import Path
 
 from mnemo.core.filters import is_consumer_visible, parse_frontmatter
 from mnemo.core.log_utils import rotate_if_needed
+from mnemo.core.text_utils import body_preview as _body_preview  # re-exported for backwards compat
 
 INDEX_VERSION = 2
 INDEX_FILENAME = "rule-activation-index.json"
@@ -257,25 +258,6 @@ def _is_universal(projects: list[str], threshold: int) -> bool:
     if not projects:
         return False
     return len(projects) >= threshold
-
-
-# ---------------------------------------------------------------------------
-# Body preview helper
-# ---------------------------------------------------------------------------
-
-
-def _body_preview(text: str, max_chars: int = 300) -> str:
-    """Extract first ~max_chars characters from text, truncating at whitespace."""
-    end = text.find("\n---\n", 4)
-    body = text[end + 5:].strip() if end != -1 else text.strip()
-    if len(body) <= max_chars:
-        return body
-    # Try to truncate on a whitespace boundary
-    truncated = body[:max_chars]
-    last_ws = max(truncated.rfind(" "), truncated.rfind("\n"), truncated.rfind("\t"))
-    if last_ws > max_chars // 2:
-        return truncated[:last_ws]
-    return truncated
 
 
 # ---------------------------------------------------------------------------
