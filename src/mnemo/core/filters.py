@@ -5,6 +5,12 @@ This module is the single source of truth for deciding which pages in
 MCP tools MUST call :func:`is_consumer_visible` so human-view and machine-view
 stay in lockstep.
 
+It also owns :func:`derive_rule_slug`, the single source of truth for how a
+rule page's identifier is chosen. Previously the fallback chain
+``fm.get("slug") or fm.get("name") or stem`` was duplicated in 6 modules —
+the root cause of the v0.8 ``read_mnemo_rule`` filename-drift bug was exactly
+this duplication letting callers diverge on what a "slug" means.
+
 See ``project_mnemo_v0.4_direction.md`` → "Shared filter specification".
 """
 from __future__ import annotations
@@ -15,6 +21,20 @@ from typing import Any
 MANAGED_TAGS: frozenset[str] = frozenset(
     {"needs-review", "auto-promoted", "home", "dashboard", "wiki", "index"}
 )
+
+
+def derive_rule_slug(frontmatter: dict[str, Any], stem: str) -> str:
+    """Pick the stable identifier for a rule page.
+
+    Priority: frontmatter ``slug`` → frontmatter ``name`` → filesystem stem.
+    Non-string or empty/whitespace-only values are treated as absent, so a
+    migration artefact like ``slug: ""`` won't silently hijack the identifier
+    (a real risk before this helper existed).
+    """
+    for candidate in (frontmatter.get("slug"), frontmatter.get("name")):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+    return stem
 
 
 def is_consumer_visible(
