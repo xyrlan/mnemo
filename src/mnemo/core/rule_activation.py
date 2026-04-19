@@ -381,6 +381,7 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
             rules[slug] = {
                 "type": page_type,
                 "name": fm.get("name", slug),
+                "file_stem": md_path.stem,
                 "topic_tags": topic_tags_list,
                 "source_files": source_files,
                 "source_count": len(source_files),
