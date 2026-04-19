@@ -142,3 +142,62 @@ def _fast_sleep(monkeypatch: pytest.MonkeyPatch):
     """Make time.sleep a no-op during tests so retry backoffs don't slow the suite."""
     import time as _time
     monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+
+@pytest.fixture
+def synthetic_index():
+    """Return a function that seeds a reflex-index.json with one high-signal rule.
+
+    The target rule's single source is under ``bots/mnemo/memory/`` so its only
+    project is ``mnemo``. ``universal_threshold=1`` makes it universal — the
+    hook test runs from ``tmp_vault`` whose directory name is ``vault`` (no
+    ``.git``), so project-name matching would otherwise miss.
+
+    Several low-signal noise rules are added so the vault-wide IDF is not
+    degenerate (N=1 collapses IDF to ~0.29, which would keep the top score
+    below the default absolute_floor of 2.0 — silencing the confident match).
+    """
+    def _apply(vault):
+        from mnemo.core.reflex.index import build_index, write_index
+        feedback = vault / "shared" / "feedback"
+        feedback.mkdir(parents=True, exist_ok=True)
+
+        # High-signal target rule.
+        (feedback / "use-prisma-mock.md").write_text(
+            "---\n"
+            "name: use-prisma-mock\n"
+            "description: Always use jest-mock-extended to mock Prisma in tests\n"
+            "tags:\n"
+            "  - prisma\n"
+            "  - testing\n"
+            "aliases:\n"
+            "  - banco\n"
+            "  - database\n"
+            "sources:\n"
+            "  - bots/mnemo/memory/mock.md\n"
+            "stability: stable\n"
+            "---\n"
+            "Mock the Prisma client in tests using jest-mock-extended.\n",
+            encoding="utf-8",
+        )
+
+        # Noise rules — keep IDF meaningful.
+        noise = [
+            ("use-yarn", "Prefer yarn over npm for installs", "yarn"),
+            ("commit-strategy", "Small atomic commits with clear messages", "git"),
+            ("review-etiquette", "Be kind and specific in code reviews", "review"),
+            ("python-style", "Follow PEP8 and black formatting", "python"),
+            ("docs-style", "Write clear, concise documentation", "docs"),
+        ]
+        for i, (name, desc, tag) in enumerate(noise):
+            (feedback / f"{name}.md").write_text(
+                f"---\nname: {name}\ndescription: {desc}\n"
+                f"tags:\n  - {tag}\n"
+                f"sources:\n  - bots/noise{i}/memory/x.md\n"
+                f"stability: stable\n---\nBody for {name}.\n",
+                encoding="utf-8",
+            )
+
+        idx = build_index(vault, universal_threshold=1)
+        write_index(vault, idx)
+    return _apply
