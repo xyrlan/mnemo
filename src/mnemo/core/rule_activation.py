@@ -32,7 +32,7 @@ from mnemo.core.filters import derive_rule_slug, is_consumer_visible, parse_fron
 from mnemo.core.log_utils import rotate_if_needed
 from mnemo.core.text_utils import body_preview as _body_preview  # re-exported for backwards compat
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 INDEX_FILENAME = "rule-activation-index.json"
 
 # System tags that should be stripped from topic_tags in the index.
