@@ -1,12 +1,11 @@
-"""Small CLI-local helpers extracted from :mod:`mnemo.cli`.
+"""Small CLI-local helpers used by the status / doctor commands.
 
-Flat module — no submodules — holding pure functions used by the status /
-doctor commands. Keeping these out of ``cli.py`` shrinks the 1300+ line
-entry point and makes the helpers unit-testable without importing the
-argparse wiring.
+Absorbs the v0.9 PR-A flat module ``mnemo.cli_helpers`` (81L) into the
+package layout introduced by PR H. Pure functions only — no argparse
+wiring — kept independently importable so the helpers stay
+unit-testable without booting the full CLI.
 
-Zero behavior change vs. the previous in-``cli.py`` definitions; PR H of
-the v0.9 refactor roadmap later folds this module into a ``cli/`` package.
+Zero behavior change vs. the previous ``mnemo.cli_helpers`` module.
 """
 from __future__ import annotations
 
