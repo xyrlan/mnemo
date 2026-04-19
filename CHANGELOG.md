@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## v0.8.0-alpha — 2026-04-19 — Prompt Reflex
+## v0.8.0 — 2026-04-19 — Prompt Reflex
 
 ### Added
 
@@ -34,8 +34,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Defaults
 
-- `reflex.enabled = false` in v0.8.0-alpha (dogfood) → will flip to `true`
-  in v0.8.0 stable after a 1-week observation window.
+- `reflex.enabled = true` by default in v0.8.0 stable. Kill switch: set
+  `"reflex": {"enabled": false}` in `mnemo.config.json`.
 - `reflex` config block scoped to the knobs that are actually wired:
   `enabled`, `maxEmissionsPerSession`, `thresholds`, and `bm25f`. Additional
   knobs (maxHits, previewChars, dedupeTtlMinutes, log.maxBytes,

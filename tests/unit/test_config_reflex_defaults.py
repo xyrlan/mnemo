@@ -8,7 +8,7 @@ def test_reflex_defaults_exist(tmp_path, monkeypatch):
     (tmp_path / "mnemo.config.json").write_text("{}")
     cfg = load_config()
     reflex = cfg["reflex"]
-    assert reflex["enabled"] is False  # v0.8.0-alpha ships off-by-default
+    assert reflex["enabled"] is True  # v0.8.0 stable — on-by-default
     assert reflex["maxEmissionsPerSession"] == 10
     assert reflex["thresholds"]["termOverlapMin"] == 2
     assert reflex["thresholds"]["relativeGap"] == 1.5

@@ -21,7 +21,9 @@ macOS, and Windows.
 `mnemo init` is idempotent and does four things:
 
 1. Scaffolds a vault at `~/mnemo/` (or wherever you point it)
-2. Injects two hooks (`SessionStart`, `SessionEnd`) into `~/.claude/settings.json`
+2. Injects four hooks into `~/.claude/settings.json`:
+   `SessionStart`, `SessionEnd`, `PreToolUse` (rule activation, v0.5),
+   and `UserPromptSubmit` (Prompt Reflex, v0.8)
 3. Registers a stdio MCP server in `~/.claude.json` so Claude Code can call mnemo's tools
 4. Wires an additive status line composer (preserves your existing one if you have it)
 
@@ -29,11 +31,11 @@ That's it. Use Claude Code normally — your vault populates itself, the
 HOME dashboard regenerates after every extraction, and Claude starts
 consulting captured rules on its own.
 
-## How it works — Capture → Present → Inject
+## How it works — Capture → Present → Inject → Reflex
 
 mnemo's tagline is one sentence: *"so your Claude never forgets."* That
-breaks into three stages, each shipped in a different release, all live
-together in v0.5.
+breaks into four stages, each shipped in a different release, all live
+together from v0.8 on.
 
 ### 1. Capture (v0.2 → v0.3.1)
 
@@ -100,6 +102,36 @@ The result: Claude consumes in real time the rules you taught it weeks
 earlier in a different session, without you having to remember to copy
 them in.
 
+### 4. Reflex (v0.8)
+
+SessionStart tells Claude *what topics exist*. PreToolUse fires *when Claude
+touches a file*. **Reflex** closes the gap in between: it reacts to the
+actual prompt you just typed and injects the single most relevant rule
+before Claude thinks about the question.
+
+- **BM25F retrieval** — the `UserPromptSubmit` hook tokenizes your prompt
+  (lowercase + fenced-code stripping + EN/PT stopwords), scores every
+  consumer-visible rule across five weighted fields (`name`, `topic_tags`,
+  `aliases`, `description`, `body`), and returns the top candidate. Pure
+  stdlib; p50 1.3 ms / p95 1.7 ms on a 500-rule vault.
+- **Triple-gate confidence test** — silence is the default. A rule is
+  injected only if it clears all three gates: term-overlap ≥ 2, relative
+  gap ≥ 1.5× over the runner-up, and absolute score ≥ 2.0. Low-confidence
+  matches stay silent; wrong context is worse than no context.
+- **`aliases:` bridges** — rules can declare a list of lowercase synonym
+  tokens (e.g. `aliases: [banco, database, db]`) so a prompt in Portuguese
+  activates an English-written rule. Extraction auto-emits aliases when
+  the rule body carries domain terms with bilingual synonyms.
+- **Session-lifetime dedupe** — a rule injected once is not re-injected
+  the same day (`injected_cache` in `.mnemo/mcp-call-counter.json`). The
+  `PreToolUse` enrichment path reads the same cache so Reflex and
+  enrichment never double-surface the same rule in one session.
+- **Cap** — each session emits at most `reflex.maxEmissionsPerSession`
+  (default 10). Hitting the cap logs `silence_reason: session_cap_reached`
+  for doctor to analyze.
+- **Fail-open absolute** — any exception anywhere in the pipeline returns
+  exit 0 with empty stdout. Reflex can never stall a prompt.
+
 ## Scope model (v0.7+)
 
 Rules in `shared/{feedback,user,reference}/` are **local by default**: a rule
@@ -125,13 +157,15 @@ on every SessionStart. To change the threshold, set
 After `mnemo init`, your Claude Code status line shows the brain's heartbeat:
 
 ```
-mnemo mcp · 9 topics · 7↓ today
+mnemo mcp · 9 topics · 7↓ today · 3⚡
 ```
 
 - `mnemo mcp` — MCP server is registered in `~/.claude.json`
 - `9 topics` — topic tags currently known in your vault (live count)
 - `7↓ today` — number of times Claude has called a mnemo MCP tool today
   (resets at midnight, atomic write)
+- `3⚡` — Reflex emissions today (v0.8). The bolt only appears when at
+  least one rule has been injected via `UserPromptSubmit` this day.
 
 The status line is **additive**: if you already had a custom statusLine
 in `~/.claude/settings.json`, mnemo wraps it instead of overwriting.
@@ -141,9 +175,9 @@ settings.json after `mnemo init`, `mnemo doctor` warns about the drift.
 
 ## Runtime flags
 
-The Capture → Present → Inject loop is **on by default** during the dogfood
-phase — `mnemo init` gives you the full product, not an inert scaffold. The
-four runtime flags can be flipped to `false` in `~/mnemo/mnemo.config.json`
+The Capture → Present → Inject → Reflex loop is **on by default** —
+`mnemo init` gives you the full product, not an inert scaffold. The
+five runtime flags can be flipped to `false` in `~/mnemo/mnemo.config.json`
 if you want to disable specific behaviors:
 
 ```json
@@ -162,6 +196,9 @@ if you want to disable specific behaviors:
     "enabled": true
   },
   "enrichment": {
+    "enabled": true
+  },
+  "reflex": {
     "enabled": true
   }
 }
@@ -184,6 +221,13 @@ if you want to disable specific behaviors:
   to `Edit`/`Write`/`MultiEdit` a file matching a rule's `path_globs`, the
   PreToolUse hook injects the rule body as additional context before the
   tool runs. See "Rule activation" below for details.
+- **`reflex.enabled`** *(default `true`, v0.8)* — on every user prompt,
+  the `UserPromptSubmit` hook runs BM25F retrieval over the vault-wide
+  reflex index and injects the single highest-confidence rule preview
+  inline (triple-gate: overlap ≥ 2, relative gap ≥ 1.5×, absolute floor
+  ≥ 2.0). Tune `reflex.thresholds.*`, `reflex.bm25f.fieldWeights`, and
+  `reflex.maxEmissionsPerSession` in `mnemo.config.json`. See "Prompt
+  Reflex" below.
 
 ## Rule activation *(v0.5)*
 
@@ -253,6 +297,10 @@ sources:
 tags:
   - git
   - workflow
+aliases:
+  - coauthor
+  - trailer
+  - commit-footer
 enforce:
   tool: Bash
   deny_pattern: git commit.*Co-Authored-By
@@ -264,6 +312,13 @@ activates_on:
     - '**/*modal*.tsx'
 ---
 ```
+
+- `aliases` *(v0.8, optional)* — a list of 3-8 lowercase synonym tokens
+  used by the Reflex BM25F index (`aliases` field weight 2.5). Emit when
+  the rule carries domain terms a developer would naturally type in a
+  different language or abbreviation (PT↔EN, `db`↔`database`↔`banco`).
+  Omit for generic rules without natural synonyms; extraction auto-emits
+  aliases for high-signal rules.
 
 - `enforce.tool` must be `"Bash"` in v0.5 (the only tool v1 supports
   for hard-blocking).
@@ -298,6 +353,24 @@ MCP retrieval use.
   written by `build_index` after every extraction and on session start. If
   you suspect drift, delete it; the next session rebuilds it.
 
+### Reflex observability *(v0.8)*
+
+- `mnemo status` — shows whether `reflex.enabled` and today's emission count.
+- `mnemo doctor` — three new checks:
+  - `reflex-index-stale` — flags when `reflex.enabled=true` but
+    `reflex-index.json` is missing (usually: never ran `mnemo extract`).
+  - `reflex-session-cap-hit` — scans the last 7 days of `reflex-log.jsonl`
+    and warns when >20% of sessions hit `session_cap_reached`. Tune
+    `reflex.maxEmissionsPerSession` up or raise `thresholds.absoluteFloor`.
+  - `reflex-bilingual-gap` — flags when 3+ rules have non-ASCII descriptions
+    but no `aliases:` field (probable recall loss on PT prompts).
+- `<vault>/.mnemo/reflex-index.json` — the vault-wide BM25F index, rebuilt
+  on every `SessionStart`. Schema v1; `load_index` returns `None` on
+  version mismatch so the hook silences cleanly if you downgrade.
+- `<vault>/.mnemo/reflex-log.jsonl` — per-prompt telemetry: session id,
+  project, SHA256-12 prompt hash, scores, emitted slugs, silence reason.
+  Never contains raw prompt text. Rotates at 1 MiB.
+
 ## Commands
 
 ```
@@ -329,8 +402,10 @@ mnemo help       list commands
 └── .mnemo/
     ├── extract.lock                  background extraction lock
     ├── last-auto-run.json            background extraction telemetry
-    ├── mcp-call-counter.json         daily MCP tool call counter (v0.5)
+    ├── mcp-call-counter.json         daily MCP tool call counter + reflex cache (v0.5/v0.8)
     ├── mcp-access-log.jsonl          per-call MCP telemetry (v0.5.3, local only)
+    ├── reflex-index.json             vault-wide BM25F index for Prompt Reflex (v0.8)
+    ├── reflex-log.jsonl              per-prompt Reflex telemetry (v0.8, local only)
     └── statusline-original.json      preserved user statusLine (v0.5)
 
 ~/.claude/settings.json               hooks + status line composer
