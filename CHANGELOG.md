@@ -23,6 +23,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `mnemo.core.mcp.session_state` directly. The shim was scheduled for
   v0.9 removal in the v0.8 CHANGELOG. ([refactor roadmap PR D](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
+### Internal
+
+- `mnemo.core.rule_activation` monolith (849 LOC) split into a package:
+  `parsing.py`, `globs.py`, `matching.py`, `index.py`, `activity_log.py`,
+  plus a back-compat shim at `__init__.py`. The pre-v0.9 import surface
+  is preserved. `parse_enforce_block` + `parse_activates_on_block` +
+  `_describe_*_error` collapsed into a single `parse_block(kind, fm)`
+  walker (the two thin wrappers stay for back-compat; the two describe
+  helpers are deleted). `_is_universal` promoted to public `is_universal`
+  (single in-tree consumer at `reflex/index.py` updated atomically; no
+  deprecation window). `build_index` orchestrator decomposed via a new
+  `_build_rule_entry` helper (138L → <30L).
+  ([refactor roadmap PR G](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 
 ### Added

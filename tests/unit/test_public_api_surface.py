@@ -16,6 +16,11 @@ When a Wave 3 PR legitimately removes a name (e.g. PR G unifies
 ``_describe_enforce_error`` / ``_describe_enrich_error`` into a single
 ``parse_block`` walker), delete it from the corresponding tuple here in the
 same PR and update the caller(s).
+
+PR G (v0.9, 2026-04-19) renamed ``_is_universal`` → ``is_universal``
+(promoted to public), deleted the two ``_describe_*_error`` helpers
+(folded into the new ``parse_block`` walker), and added ``parse_block``
+to the surface.
 """
 from __future__ import annotations
 
@@ -37,12 +42,11 @@ SURFACE: dict[str, tuple[str, ...]] = {
         "load_index",
         "write_index",
         "projects_for_rule",
-        "_is_universal",  # imported by reflex/index.py and tests
+        "is_universal",  # PR G: renamed from _is_universal (reflex/index.py + tests)
         # parsing
         "parse_enforce_block",
         "parse_activates_on_block",
-        "_describe_enforce_error",  # cli.py:771
-        "_describe_enrich_error",   # cli.py:771
+        "parse_block",  # PR G: unified walker replacing _describe_*_error
         # matching
         "EnforceHit",
         "EnrichHit",

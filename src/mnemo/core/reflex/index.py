@@ -34,7 +34,7 @@ from pathlib import Path
 from mnemo.core.errors import load_validated_json
 from mnemo.core.filters import derive_rule_slug, is_consumer_visible, parse_frontmatter
 from mnemo.core.reflex.tokenizer import tokenize
-from mnemo.core.rule_activation import _is_universal, projects_for_rule
+from mnemo.core.rule_activation import is_universal, projects_for_rule
 from mnemo.core.text_utils import body_preview
 
 SCHEMA_VERSION = 1
@@ -90,7 +90,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
                 sources_raw = [sources_raw]
             source_files = [s for s in sources_raw if isinstance(s, str)]
             projects = projects_for_rule(source_files)
-            universal = _is_universal(projects, universal_threshold)
+            universal = is_universal(projects, universal_threshold)
 
             field_toks = _field_tokens(fm, text, slug)
             field_length = {f: len(field_toks[f]) for f in _FIELD_NAMES}

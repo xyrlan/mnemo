@@ -698,12 +698,7 @@ def _doctor_check_activation(vault: Path) -> bool:
     """
     import re as _re
     from mnemo.core.filters import parse_frontmatter
-    from mnemo.core.rule_activation import (
-        parse_enforce_block,
-        parse_activates_on_block,
-        _describe_enforce_error,
-        _describe_enrich_error,
-    )
+    from mnemo.core.rule_activation import parse_block
 
     feedback_dir = vault / "shared" / "feedback"
     ok = True
@@ -742,9 +737,8 @@ def _doctor_check_activation(vault: Path) -> bool:
 
         # --- Check 1: enforce block present-but-invalid ---
         if fm.get("enforce") is not None:
-            parsed = parse_enforce_block(fm)
+            parsed, err = parse_block("enforce", fm)
             if parsed is None:
-                err = _describe_enforce_error(fm)
                 print(f"  \u26a0 Malformed enforce block in {rel}: {err}")
                 print(f"       \u2192 fix the frontmatter in shared/feedback/{rel}")
                 ok = False
@@ -766,9 +760,8 @@ def _doctor_check_activation(vault: Path) -> bool:
 
         # --- Check 1: activates_on block present-but-invalid ---
         if fm.get("activates_on") is not None:
-            parsed_enrich = parse_activates_on_block(fm)
+            parsed_enrich, err = parse_block("activates_on", fm)
             if parsed_enrich is None:
-                err = _describe_enrich_error(fm)
                 print(f"  \u26a0 Malformed activates_on block in {rel}: {err}")
                 print(f"       \u2192 fix the frontmatter in shared/feedback/{rel}")
                 ok = False

@@ -436,29 +436,29 @@ def test_load_index_does_not_log_on_version_skew(tmp_vault: Path):
 
 
 def test_is_universal_below_threshold():
-    from mnemo.core.rule_activation import _is_universal
-    assert _is_universal(["a"], threshold=2) is False
+    from mnemo.core.rule_activation import is_universal
+    assert is_universal(["a"], threshold=2) is False
 
 
 def test_is_universal_at_threshold():
-    from mnemo.core.rule_activation import _is_universal
-    assert _is_universal(["a", "b"], threshold=2) is True
+    from mnemo.core.rule_activation import is_universal
+    assert is_universal(["a", "b"], threshold=2) is True
 
 
 def test_is_universal_above_threshold():
-    from mnemo.core.rule_activation import _is_universal
-    assert _is_universal(["a", "b", "c"], threshold=2) is True
+    from mnemo.core.rule_activation import is_universal
+    assert is_universal(["a", "b", "c"], threshold=2) is True
 
 
 def test_is_universal_empty_projects():
-    from mnemo.core.rule_activation import _is_universal
-    assert _is_universal([], threshold=2) is False
+    from mnemo.core.rule_activation import is_universal
+    assert is_universal([], threshold=2) is False
 
 
 def test_is_universal_higher_threshold():
-    from mnemo.core.rule_activation import _is_universal
-    assert _is_universal(["a", "b"], threshold=3) is False
-    assert _is_universal(["a", "b", "c"], threshold=3) is True
+    from mnemo.core.rule_activation import is_universal
+    assert is_universal(["a", "b"], threshold=3) is False
+    assert is_universal(["a", "b", "c"], threshold=3) is True
 
 
 def test_build_index_v2_rules_table_has_entry_per_feedback_rule(tmp_vault):
