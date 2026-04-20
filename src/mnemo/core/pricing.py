@@ -1,14 +1,11 @@
 """Per-model token pricing — USD per million tokens.
 
-Keep this table in sync with Anthropic's published pricing
-(https://www.anthropic.com/pricing). mnemo is stdlib-only and does not
-fetch prices at runtime — bump the table when Anthropic changes prices.
+Keep this table in sync with Anthropic's published pricing at
+https://claude.com/pricing. mnemo is stdlib-only and does not fetch
+prices at runtime — bump the table when Anthropic changes prices.
 
-**Status: PLACEHOLDER VALUES.** The rates below are starting estimates
-ordered relative to each other (Haiku < Sonnet < Opus) but MUST be
-verified against https://www.anthropic.com/pricing before tagging a
-v0.10 release. Ship placeholder prices and `mnemo telemetry`'s USD
-column will be systematically wrong.
+Last verified: 2026-04-20 against https://claude.com/pricing (Standard
+tier, non-cached). Bump this date whenever the table changes.
 """
 from __future__ import annotations
 
@@ -17,7 +14,7 @@ _PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5":          (1.0, 5.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
     "claude-sonnet-4-6":         (3.0, 15.0),
-    "claude-opus-4-7":           (15.0, 75.0),
+    "claude-opus-4-7":           (5.0, 25.0),
 }
 
 

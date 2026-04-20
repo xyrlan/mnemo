@@ -9,7 +9,9 @@ from mnemo.core import pricing
 def test_known_model_prices() -> None:
     assert pricing.estimate_usd("claude-haiku-4-5", input_tokens=1_000_000, output_tokens=0) == pytest.approx(1.0)
     assert pricing.estimate_usd("claude-haiku-4-5", input_tokens=0, output_tokens=1_000_000) == pytest.approx(5.0)
-    assert pricing.estimate_usd("claude-opus-4-7", input_tokens=1_000_000, output_tokens=1_000_000) > 0
+    assert pricing.estimate_usd("claude-opus-4-7", input_tokens=1_000_000, output_tokens=0) == pytest.approx(5.0)
+    assert pricing.estimate_usd("claude-opus-4-7", input_tokens=0, output_tokens=1_000_000) == pytest.approx(25.0)
+    assert pricing.estimate_usd("claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=1_000_000) == pytest.approx(18.0)
 
 
 def test_unknown_model_returns_none() -> None:
