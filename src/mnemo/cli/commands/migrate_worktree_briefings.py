@@ -5,6 +5,13 @@ written under ``bots/<worktree-name>/briefings/sessions/`` are no longer
 discoverable by the new SessionStart injection (which reads the
 canonical agent dir). This one-shot command finds those orphan dirs and
 moves their contents into the canonical agent's dir.
+
+Heuristic caveat: orphan detection uses a name-prefix match
+(``bots/<canonical>-<suffix>/``). If you have an unrelated project
+whose name happens to start with the canonical prefix (e.g.,
+``myproj-experimental`` next to ``myproj``), it will be swept too.
+Always run with ``--dry-run`` first and audit the output before
+executing the real move.
 """
 from __future__ import annotations
 
@@ -64,11 +71,16 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
         print("nothing to migrate")
         return 0
 
+    # Hoisted: ensure each unique target parent exists once, not per file.
+    if moves and not dry_run:
+        unique_targets = {target.parent for _src, target in moves}
+        for t in unique_targets:
+            t.mkdir(parents=True, exist_ok=True)
+
     for src, target in moves:
         if dry_run:
             print(f"would move {src} -> {target}")
         else:
-            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(target))
             print(f"moved {src.name} -> {target.parent}")
 

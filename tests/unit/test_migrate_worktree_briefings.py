@@ -87,3 +87,31 @@ def test_migrate_noop_when_nothing_to_move(tmp_path: Path, capsys, monkeypatch) 
     assert rc == 0
     out = capsys.readouterr().out
     assert "nothing to migrate" in out.lower()
+
+
+def test_migrate_sweeps_name_prefix_siblings_known_limitation(tmp_path: Path, capsys, monkeypatch) -> None:
+    """KNOWN LIMITATION: the name-prefix heuristic cannot distinguish an
+    unrelated project ``myproj-experimental`` from a worktree ``myproj-feature-x``.
+    Both start with ``myproj-``, so both are targets. Document that behavior
+    here so any future fix that tightens the heuristic breaks this test
+    loudly — prompting a code owner to decide whether the fix is wanted.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    main = tmp_path / "myproj"
+    main.mkdir()
+    (main / ".git").mkdir()
+
+    # An UNRELATED project whose name shares a prefix with `myproj`.
+    # This is NOT a worktree — it has its own .git/ (or no .git, doesn't matter).
+    unrelated_dir = vault / "bots" / "myproj-experimental" / "briefings" / "sessions"
+    unrelated_dir.mkdir(parents=True)
+    (unrelated_dir / "unrelated-1.md").write_text("unrelated briefing", encoding="utf-8")
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    args = argparse.Namespace(dry_run=True, repos=[str(main)])
+    rc = cmd_mod.cmd_migrate_worktree_briefings(args)
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The heuristic would pick up the unrelated project's briefing.
+    assert "unrelated-1.md" in out
