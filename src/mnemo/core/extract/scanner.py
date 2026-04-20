@@ -118,6 +118,17 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Public alias for _parse_frontmatter.
+
+    Promoted in v0.10 so non-extraction modules (briefing picker, future
+    consumers) can reuse the same parser. The leading-underscore form is
+    retained as an alias for in-package callers and to avoid touching
+    every existing call site.
+    """
+    return _parse_frontmatter(text)
+
+
 def _read_memory_file(path: Path, agent: str) -> MemoryFile:
     raw = path.read_bytes()
     source_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
