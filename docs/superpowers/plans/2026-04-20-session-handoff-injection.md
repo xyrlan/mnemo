@@ -10,6 +10,14 @@
 
 ---
 
+## Conventions
+
+- **Tests prefer the `tmp_vault` fixture** (`tests/conftest.py:12`) over raw `tmp_path` whenever a test needs a vault root. `tmp_vault` already creates `bots/`, `shared/`, and `mnemo.config.json` pointing at itself. Where the test code below uses `tmp_path` as a vault, the implementer SHOULD swap to `tmp_vault`. Tests that only need a sandbox dir for fake repos / git pointers can keep `tmp_path`.
+- **Mock `llm.call` via `monkeypatch.setattr` on the importing module's attribute path** (e.g. `monkeypatch.setattr("mnemo.core.briefing.llm.call", fake_call)`). Avoid `unittest.mock.patch("module.attr.attr", ...)` — `briefing.py` does `from mnemo.core import llm` then `llm.call(...)`, where the patch path may not intercept depending on how Python resolves the attribute lookup. See existing `tests/unit/test_briefing.py:46` for the canonical pattern.
+- **Vault-resolving CLI tests monkeypatch `mnemo.cli._resolve_vault`** (the package-level alias, see `src/mnemo/cli/__init__.py:28`). Do NOT patch `mnemo.cli.runtime._resolve_vault` directly — the indirection exists specifically so tests can override the resolver from one place.
+
+---
+
 ## File Structure
 
 **Create:**
@@ -232,6 +240,99 @@ across worktrees."
 
 ---
 
+## Task 2a: Promote `parse_frontmatter` to public API (DRY prep)
+
+**Files:**
+- Modify: `src/mnemo/core/extract/scanner.py`
+- Modify: any in-package callers of `_parse_frontmatter`
+- Test: `tests/unit/test_scanner_parse_frontmatter.py` (new — pin the public contract)
+
+**Why this task exists:** Task 2's `pick_latest_briefing` needs to parse `---` YAML frontmatter from briefing files. `scanner._parse_frontmatter` (`src/mnemo/core/extract/scanner.py:107`) already does exactly that with the same regex — promoting it to public avoids a duplicate parser that would silently drift.
+
+- [ ] **Step 1: Write a public-contract test**
+
+```python
+# tests/unit/test_scanner_parse_frontmatter.py
+"""Public contract for parse_frontmatter — used by briefing picker + extractor."""
+from __future__ import annotations
+
+from mnemo.core.extract.scanner import parse_frontmatter
+
+
+def test_parses_simple_frontmatter() -> None:
+    text = "---\ntype: feedback\nname: foo\n---\n\nbody here\n"
+    fm, body = parse_frontmatter(text)
+    assert fm == {"type": "feedback", "name": "foo"}
+    assert body == "\nbody here\n"
+
+
+def test_returns_empty_when_no_frontmatter() -> None:
+    text = "no frontmatter at all\nbody\n"
+    fm, body = parse_frontmatter(text)
+    assert fm == {}
+    assert body == text
+
+
+def test_handles_crlf_line_endings() -> None:
+    text = "---\r\ntype: foo\r\n---\r\n\r\nbody\r\n"
+    fm, body = parse_frontmatter(text)
+    assert fm == {"type": "foo"}
+    assert body == "\r\nbody\r\n"
+
+
+def test_skips_lines_without_colon() -> None:
+    text = "---\ntype: feedback\ngarbage line no colon\nname: bar\n---\nbody\n"
+    fm, _ = parse_frontmatter(text)
+    assert fm == {"type": "feedback", "name": "bar"}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_scanner_parse_frontmatter.py -v
+```
+
+Expected: ImportError — `parse_frontmatter` is private.
+
+- [ ] **Step 3: Add a public alias in `scanner.py`**
+
+In `src/mnemo/core/extract/scanner.py`, after the existing `_parse_frontmatter` definition (line 118), add:
+
+```python
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Public alias for _parse_frontmatter.
+
+    Promoted in v0.10 so non-extraction modules (briefing picker, future
+    consumers) can reuse the same parser. The leading-underscore form is
+    retained as an alias for in-package callers and to avoid touching
+    every existing call site.
+    """
+    return _parse_frontmatter(text)
+```
+
+(Do NOT delete `_parse_frontmatter` or rename existing in-package call sites — keep both names. The leading-underscore form remains the canonical implementation; the public name is a thin alias. If you later prefer to invert the convention, do it in a separate refactor PR.)
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_scanner_parse_frontmatter.py -v
+```
+
+Expected: 4 PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mnemo/core/extract/scanner.py tests/unit/test_scanner_parse_frontmatter.py
+git commit -m "refactor(scanner): promote parse_frontmatter to public alias
+
+Public alias for _parse_frontmatter so the v0.10 briefing picker can
+reuse the same parser without duplicating the regex + dict-build logic.
+Private name retained for back-compat with all in-package callers."
+```
+
+---
+
 ## Task 2: `pick_latest_briefing` — most-recent briefing picker
 
 **Files:**
@@ -320,19 +421,28 @@ def test_picker_falls_back_to_mtime_when_date_missing(tmp_path: Path) -> None:
     assert result.path == newer
 
 
-def test_picker_skips_unreadable_briefings(tmp_path: Path) -> None:
-    """A briefing that raises on read does not crash the picker."""
+def test_picker_skips_unreadable_briefings(tmp_path: Path, monkeypatch) -> None:
+    """A briefing that raises OSError on read does not crash the picker.
+
+    Note: avoid `chmod(0o000)` — fails as root and on some filesystems.
+    Instead, monkeypatch Path.read_text to raise OSError for one specific file.
+    """
     sessions_dir = tmp_path / "bots" / "myagent" / "briefings" / "sessions"
     _write_briefing(sessions_dir, "good", date="2026-04-15")
     bad = sessions_dir / "bad.md"
     bad.write_text("---\ndate: 2026-04-19\n---\nbody\n", encoding="utf-8")
-    bad.chmod(0o000)
-    try:
-        result = briefing.pick_latest_briefing(tmp_path, agent_name="myagent")
-        assert result is not None
-        assert result.frontmatter["session_id"] == "good"
-    finally:
-        bad.chmod(0o644)
+
+    real_read_text = Path.read_text
+
+    def patched_read_text(self, *args, **kwargs):
+        if self == bad:
+            raise OSError("simulated permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", patched_read_text)
+    result = briefing.pick_latest_briefing(tmp_path, agent_name="myagent")
+    assert result is not None
+    assert result.frontmatter["session_id"] == "good"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -345,13 +455,12 @@ Expected: all 6 FAIL with `AttributeError: module 'mnemo.core.briefing' has no a
 
 - [ ] **Step 3: Implement `pick_latest_briefing`**
 
-Add to `src/mnemo/core/briefing.py` (at end of file, before any `if __name__` block):
+Add to `src/mnemo/core/briefing.py` (at end of file, before any `if __name__` block). Reuses `parse_frontmatter` from Task 2a — do NOT re-define a parser here.
 
 ```python
 from dataclasses import dataclass
-import re
 
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
 
 
 @dataclass(frozen=True)
@@ -362,21 +471,12 @@ class BriefingRecord:
 
 
 def _parse_briefing_file(path: Path) -> BriefingRecord | None:
-    """Read and parse a briefing markdown file. Returns None on any I/O or parse error."""
+    """Read and parse a briefing markdown file. Returns None on any I/O error."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    fm: dict = {}
-    body = text
-    m = _FRONTMATTER_RE.match(text)
-    if m:
-        for line in m.group(1).splitlines():
-            if ":" not in line:
-                continue
-            key, _, val = line.partition(":")
-            fm[key.strip()] = val.strip()
-        body = text[m.end():]
+    fm, body = _parse_fm(text)
     return BriefingRecord(path=path, frontmatter=fm, body=body)
 
 
@@ -678,9 +778,9 @@ PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_session_start_briefing_i
 
 Expected: 4 FAIL — `_build_injection_payload` does not accept `inject_briefing`.
 
-- [ ] **Step 3: Extend `_build_injection_payload` to accept `inject_briefing` and append the section**
+- [ ] **Step 3: Replace `_build_injection_payload` with the v0.10 version**
 
-In `src/mnemo/hooks/session_start.py`:
+In `src/mnemo/hooks/session_start.py`, **replace the entire existing `_build_injection_payload` function** (currently lines 25–95) with the version below. This is a complete drop-in — copy the whole body, do not try to merge by hand. The only behavioral changes are: (1) new optional `inject_briefing` parameter, (2) the early `return ""` on empty topic lists is moved to the end so a briefing-only envelope is still emitted, (3) appends `[last-briefing …]` block when `inject_briefing=True` and a briefing exists.
 
 ```python
 def _build_injection_payload(
@@ -690,22 +790,80 @@ def _build_injection_payload(
 ) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
-    [keep the existing docstring text]
+    Reads the rule-activation-index.json for per-scope topic lists; degrades to
+    ``get_mnemo_topics`` over glob+parse when the index is unavailable. Applies
+    ``injection.maxTopicsPerScope`` as a cap on each of the local and universal
+    topic lines. Topics are ordered by aggregated ``source_count`` descending,
+    with a stable secondary sort by name.
 
-    When ``inject_briefing`` is True, append a ``[last-briefing ...]`` section
-    with the body of the most recent briefing for ``current_project``. The
-    block is omitted entirely when no briefing exists or when reading fails.
+    When ``inject_briefing`` is True and ``current_project`` has at least one
+    briefing on disk, appends a ``[last-briefing session=… date=… duration_minutes=…]``
+    block (verbatim body) as the last section. The block is omitted on any
+    read/parse failure or when no briefing exists.
     """
-    # ... existing body up to the topic-list rendering, unchanged ...
+    from mnemo.core import config as cfg_mod
+    from mnemo.core import rule_activation
+    from mnemo.core.mcp.tools import get_mnemo_topics
 
-    if not local_topics and not universal_topics:
-        # Existing early return — but if a briefing is available, we still want
-        # to inject it. Build the rest of the lines and decide at the end.
-        topic_lines: list[str] = []
+    cfg = cfg_mod.load_config()
+    max_topics = int(cfg.get("injection", {}).get("maxTopicsPerScope", 15))
+
+    idx = rule_activation.load_index(vault_root)
+
+    def _aggregate_topic_counts(rules_subset: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for rule in rules_subset:
+            weight = rule.get("source_count", 0)
+            for t in rule.get("topic_tags", []):
+                counts[t] = counts.get(t, 0) + weight
+        return counts
+
+    local_topics: list[str] = []
+    universal_topics: list[str] = []
+
+    if idx is not None and "rules" in idx:
+        rules_table = idx["rules"]
+        if current_project:
+            local_slugs = idx.get("by_project", {}).get(current_project, {}).get("local_slugs", [])
+            local_rules = [
+                rules_table[s] for s in local_slugs
+                if s in rules_table and not rules_table[s].get("universal")
+            ]
+            local_counts = _aggregate_topic_counts(local_rules)
+            local_topics = [
+                t for t, _ in sorted(local_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ][:max_topics]
+        universal_slugs = idx.get("universal", {}).get("slugs", [])
+        universal_rules = [rules_table[s] for s in universal_slugs if s in rules_table]
+        universal_counts = _aggregate_topic_counts(universal_rules)
+        universal_topics = [
+            t for t, _ in sorted(universal_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ][:max_topics]
     else:
-        topic_lines = lines  # use the list built so far
+        vault_wide = get_mnemo_topics(vault_root, scope="vault")
+        universal_topics = vault_wide[:max_topics]
 
-    # NEW: append briefing section
+    # Topic block. Was an early `return ""` when both lists were empty; v0.10
+    # defers the empty check to the end so a briefing-only envelope can still
+    # be emitted.
+    topic_lines: list[str] = []
+    if local_topics or universal_topics:
+        header = "mnemo://v1"
+        if current_project and local_topics:
+            header += f" project={current_project}"
+        topic_lines.append(header)
+        if local_topics:
+            topic_lines.append(f"local: [{', '.join(local_topics)}]")
+        if universal_topics:
+            topic_lines.append(f"universal: [{', '.join(universal_topics)}]")
+        topic_lines.append(
+            "Call list_rules_by_topic(topic) then read_mnemo_rule(slug) BEFORE writing code."
+        )
+        topic_lines.append(
+            'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
+        )
+
+    # v0.10 NEW: append the most recent briefing for current_project, if any.
     briefing_block = ""
     if inject_briefing and current_project:
         try:
@@ -717,7 +875,7 @@ def _build_injection_payload(
                     f"[last-briefing session={fm.get('session_id', rec.path.stem)} "
                     f"date={fm.get('date', '')} "
                     f"duration_minutes={fm.get('duration_minutes', '0')}]"
-                ).replace("  ", " ")
+                )
                 briefing_block = (
                     "\n\n"
                     + framing
@@ -733,7 +891,13 @@ def _build_injection_payload(
     return "\n".join(topic_lines) + briefing_block
 ```
 
-(Refactor note: the existing function early-returns `""` when no topics exist. After this change, that early return is replaced by the conditional at the end — verify the line numbers carefully against the current file.)
+After replacing, run the existing SessionStart tests immediately:
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_session_start_injection.py -v
+```
+
+Expected: all 4 existing tests still PASS — the empty-vault, project-token, universal-line, and no-project-token assertions are unchanged because `inject_briefing` defaults to `False`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1057,8 +1221,11 @@ def test_briefing_writes_telemetry_entry(tmp_path: Path, monkeypatch) -> None:
         api_key_source=None,
         raw={},
     )
-    with patch("mnemo.core.briefing.llm.call", return_value=fake_response):
-        out = briefing.generate_session_briefing(jsonl, agent="myagent", cfg=cfg)
+    # Mock via monkeypatch on the imported module attribute (matches
+    # tests/unit/test_briefing.py:46 convention; works correctly because
+    # briefing.py does `from mnemo.core import llm` then `llm.call(...)`).
+    monkeypatch.setattr("mnemo.core.briefing.llm.call", lambda *a, **kw: fake_response)
+    out = briefing.generate_session_briefing(jsonl, agent="myagent", cfg=cfg)
     assert out is not None
 
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
@@ -1216,12 +1383,12 @@ def test_extract_logs_llm_call_per_chunk(tmp_path: Path, monkeypatch) -> None:
         api_key_source="none",
         raw={},
     )
-    with patch("mnemo.core.extract.llm.call", return_value=fake_response):
-        # Use whichever public entry point invokes the consolidation loop in
-        # extract/__init__.py. As of v0.9 this is `run_once(vault, cfg)`. If
-        # the API has shifted, swap accordingly — the assertion below is the
-        # contract being tested.
-        extract_mod.run_once(vault, cfg)
+    # The actual public entry point in extract/__init__.py is `run_extraction`
+    # (line 439). It takes cfg first; vault is derived internally via
+    # paths.vault_root(cfg). Mock llm.call via monkeypatch on the module
+    # attribute (not patch()) — see W2 in the engineering review.
+    monkeypatch.setattr("mnemo.core.extract.llm.call", lambda *a, **kw: fake_response)
+    extract_mod.run_extraction(cfg)
 
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
     entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
@@ -1234,7 +1401,7 @@ def test_extract_logs_llm_call_per_chunk(tmp_path: Path, monkeypatch) -> None:
     assert e["usage"]["output_tokens"] == 200
 ```
 
-Note: confirm `extract_mod.run_once` is the public entry — if not, search `src/mnemo/core/extract/__init__.py` for the function annotated with the "Phase 2+" cluster loop (around line 333) and call that directly.
+Implementation note: `run_extraction` acquires a process-wide lock (`extract.lock`) and writes `extraction-state.json` to `vault/.mnemo/`. The test's tmp vault must therefore have writable `.mnemo/` — the directory is created on demand by `run_extraction` itself, but the parent vault must exist (it does — we created it above).
 
 - [ ] **Step 7: Run full suite**
 
@@ -1305,17 +1472,26 @@ Expected: 3 FAIL — module does not exist.
 ```python
 """Per-model token pricing — USD per million tokens.
 
-Keep this table in sync with Anthropic's published pricing. mnemo is
-stdlib-only and does not fetch prices at runtime — bump the table when
-prices change."""
+Keep this table in sync with Anthropic's published pricing
+(https://www.anthropic.com/pricing). mnemo is stdlib-only and does not
+fetch prices at runtime — bump the table + the verification date below
+when Anthropic changes prices.
+
+Last verified: 2026-04-20 (https://www.anthropic.com/pricing — implementer
+must re-confirm on the day of merge and update this date).
+"""
 from __future__ import annotations
 
 # (input_per_mtok_usd, output_per_mtok_usd)
+# IMPORTANT: implementer must verify each row against the Anthropic pricing
+# page on the day of merge. Numbers below are placeholders pending that
+# verification — wrong values silently mis-report mnemo's cost in
+# `mnemo telemetry`.
 _PRICES: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5":      (1.0, 5.0),
+    "claude-haiku-4-5":          (1.0, 5.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
-    "claude-sonnet-4-6":     (3.0, 15.0),
-    "claude-opus-4-7":       (15.0, 75.0),
+    "claude-sonnet-4-6":         (3.0, 15.0),
+    "claude-opus-4-7":           (15.0, 75.0),
 }
 
 
@@ -1723,7 +1899,81 @@ In `src/mnemo/hooks/session_start.py:main`, replace the existing `_emit_injectio
                 errors.log_error(vault, "session_start.injection", e)
 ```
 
-- [ ] **Step 4: Run full suite**
+- [ ] **Step 4: Add an end-to-end integration test**
+
+The unit tests above only exercise the helper. Add an end-to-end test that runs `session_start.main()` with a stubbed stdin payload + tmp vault + briefing, and asserts both the stdout envelope and the access-log entry:
+
+```python
+# tests/unit/test_session_start_e2e_briefing.py
+"""End-to-end: SessionStart hook emits envelope + writes telemetry."""
+from __future__ import annotations
+
+import io
+import json
+import sys
+from pathlib import Path
+
+from mnemo.hooks import session_start
+
+
+def test_session_start_main_emits_briefing_and_logs_telemetry(
+    tmp_vault: Path, monkeypatch, capsys
+) -> None:
+    # 1. Seed: vault config (already present from tmp_vault fixture) +
+    #    briefing on disk + injection enabled.
+    cfg_path = tmp_vault / "mnemo.config.json"
+    cfg_path.write_text(json.dumps({
+        "vaultRoot": str(tmp_vault),
+        "injection": {"enabled": True, "telemetry": {"enabled": True}},
+        "briefings": {"enabled": True, "injectLastOnSessionStart": True},
+        "capture": {"sessionStartEnd": False},
+    }))
+
+    sessions_dir = tmp_vault / "bots" / "vault" / "briefings" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "abc123.md").write_text(
+        "---\n"
+        "type: briefing\n"
+        "session_id: abc123\n"
+        "date: 2026-04-19\n"
+        "duration_minutes: 17\n"
+        "---\n\n"
+        "# Briefing\n\nStopped at line 42 of auth.ts\n",
+        encoding="utf-8",
+    )
+
+    # 2. Stub stdin with a SessionStart payload pointing at the vault dir
+    #    so resolve_canonical_agent returns the vault dir's basename ("vault").
+    payload = {
+        "session_id": "new-session-id",
+        "cwd": str(tmp_vault),
+        "source": "startup",
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+    # 3. Run the hook.
+    rc = session_start.main()
+    assert rc == 0
+
+    # 4. Assert stdout envelope contains the briefing block.
+    out = capsys.readouterr().out
+    envelope = json.loads(out)
+    additional = envelope["hookSpecificOutput"]["additionalContext"]
+    assert "[last-briefing session=abc123 date=2026-04-19 duration_minutes=17]" in additional
+    assert "Stopped at line 42 of auth.ts" in additional
+
+    # 5. Assert telemetry entry was written.
+    log = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
+    entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    inj = [e for e in entries if e.get("tool") == "session_start.inject"]
+    assert len(inj) == 1
+    assert inj[0]["included_briefing"] is True
+    assert inj[0]["envelope_bytes"] > 0
+```
+
+This pins down the contract that the unit tests can't: that `main()` actually wires the helper, the briefing flag from config, AND the telemetry call together. A future refactor that drops one of those wires (e.g., forgets to call `record_session_start_inject`) breaks this test loudly.
+
+- [ ] **Step 5: Run full suite**
 
 ```bash
 PYTHONPATH=$(pwd)/src python3 -m pytest -q --ignore=tests/unit/test_plugin_manifest.py
@@ -1731,15 +1981,16 @@ PYTHONPATH=$(pwd)/src python3 -m pytest -q --ignore=tests/unit/test_plugin_manif
 
 Expected: all green.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/mnemo/hooks/session_start.py tests/unit/test_session_start_telemetry.py
+git add src/mnemo/hooks/session_start.py tests/unit/test_session_start_telemetry.py tests/unit/test_session_start_e2e_briefing.py
 git commit -m "feat(session_start): log envelope size + briefing inclusion
 
 After emitting the SessionStart additionalContext, persist a
 session_start.inject access-log entry so mnemo telemetry can report
-the always-on cost of injection vs the per-call cost of LLM work."
+the always-on cost of injection vs the per-call cost of LLM work.
+End-to-end test pins the wiring (config flag + helper + telemetry)."
 ```
 
 ---
@@ -2016,6 +2267,188 @@ reported and skipped."
 
 ---
 
+## Task 9b: Doctor check — orphan worktree briefings
+
+**Files:**
+- Create: `src/mnemo/cli/commands/doctor_checks/orphan_worktree_briefings.py`
+- Modify: `src/mnemo/cli/commands/doctor.py` (register the check)
+- Test: `tests/unit/test_doctor_orphan_worktree_briefings.py`
+
+**Why this task exists:** The migration command in Task 9 only runs when the user explicitly invokes it. A user upgrading to v0.10 has no way to discover that they need to run it unless `mnemo doctor` (the canonical post-upgrade health check) tells them. This adds that surfacing without expanding the migration command's scope.
+
+- [ ] **Step 1: Inspect the doctor-check registration mechanism**
+
+```bash
+ls src/mnemo/cli/commands/doctor_checks/
+```
+
+Read one existing check (e.g., `reflex.py`) to confirm the convention — likely each check is a function returning structured findings consumed by `doctor.py`.
+
+- [ ] **Step 2: Write a failing test**
+
+```python
+# tests/unit/test_doctor_orphan_worktree_briefings.py
+"""Doctor check surfaces orphan worktree briefings + suggests the migration."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from mnemo.cli.commands.doctor_checks import orphan_worktree_briefings as check_mod
+
+
+def _seed_orphan(vault: Path, canonical: str, worktree_name: str, session_id: str) -> None:
+    sessions = vault / "bots" / worktree_name / "briefings" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{session_id}.md").write_text("orphan", encoding="utf-8")
+    # Also seed at least one canonical briefing so the heuristic fires.
+    (vault / "bots" / canonical / "briefings" / "sessions").mkdir(parents=True, exist_ok=True)
+    (vault / "bots" / canonical / "briefings" / "sessions" / "canonical.md").write_text(
+        "main", encoding="utf-8",
+    )
+
+
+def test_check_finds_orphan_dirs(tmp_vault: Path) -> None:
+    _seed_orphan(tmp_vault, "myproj", "myproj-feature-x", "wt-session")
+    findings = check_mod.check_orphan_worktree_briefings(tmp_vault)
+    assert findings is not None
+    assert any("myproj-feature-x" in f for f in findings)
+    assert any("migrate-worktree-briefings" in f for f in findings)
+
+
+def test_check_silent_when_no_orphans(tmp_vault: Path) -> None:
+    findings = check_mod.check_orphan_worktree_briefings(tmp_vault)
+    assert findings is None or findings == []
+
+
+def test_check_silent_when_canonical_has_no_briefings(tmp_vault: Path) -> None:
+    """If the canonical agent has zero briefings, we can't be sure the
+    `<canonical>-<suffix>` dir is actually a worktree leftover (could be
+    a totally separate project that happens to share a name prefix)."""
+    sessions = tmp_vault / "bots" / "myproj-feature-x" / "briefings" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "wt.md").write_text("x", encoding="utf-8")
+    findings = check_mod.check_orphan_worktree_briefings(tmp_vault)
+    assert findings is None or findings == []
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_doctor_orphan_worktree_briefings.py -v
+```
+
+Expected: ImportError — module doesn't exist.
+
+- [ ] **Step 4: Implement the check**
+
+```python
+# src/mnemo/cli/commands/doctor_checks/orphan_worktree_briefings.py
+"""Doctor check — flag orphan worktree briefing dirs.
+
+A briefing dir under bots/<X>/briefings/sessions/ is "orphan" when X looks
+like `<canonical>-<suffix>` AND `bots/<canonical>/briefings/sessions/` also
+exists with at least one briefing. The combination is the signature of a
+pre-v0.10 worktree write that the new canonical-agent code can't see.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
+    """Return a list of human-readable findings, or None when there's nothing to flag."""
+    bots_root = vault_root / "bots"
+    if not bots_root.is_dir():
+        return None
+
+    # Build a set of canonical agents (those with >=1 briefing on disk).
+    canonicals_with_briefings: set[str] = set()
+    for agent_dir in bots_root.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        sessions = agent_dir / "briefings" / "sessions"
+        if sessions.is_dir() and any(sessions.glob("*.md")):
+            canonicals_with_briefings.add(agent_dir.name)
+
+    findings: list[str] = []
+    for agent_dir in sorted(bots_root.iterdir()):
+        if not agent_dir.is_dir():
+            continue
+        name = agent_dir.name
+        # Heuristic: name has a `-suffix` AND its prefix is a canonical with briefings.
+        if "-" not in name:
+            continue
+        prefix = name.split("-", 1)[0]
+        if prefix == name or prefix not in canonicals_with_briefings:
+            continue
+        sessions = agent_dir / "briefings" / "sessions"
+        if not sessions.is_dir():
+            continue
+        orphans = list(sessions.glob("*.md"))
+        if not orphans:
+            continue
+        findings.append(
+            f"orphan worktree briefings: bots/{name}/briefings/sessions/ has "
+            f"{len(orphans)} file(s); canonical agent {prefix!r} also has briefings. "
+            f"Run: mnemo migrate-worktree-briefings --repos <repo_path> --dry-run"
+        )
+
+    return findings or None
+```
+
+- [ ] **Step 5: Wire the check into `doctor.py`**
+
+Inspect `src/mnemo/cli/commands/doctor.py` for the registration pattern. If checks are listed in a tuple/list, append:
+
+```python
+from mnemo.cli.commands.doctor_checks import orphan_worktree_briefings as _orphan_wt_check
+# inside the main check loop:
+_findings = _orphan_wt_check.check_orphan_worktree_briefings(vault)
+if _findings:
+    for f in _findings:
+        print(f"  ⚠ {f}")
+```
+
+(Adjust to the exact convention used by neighbouring checks — they likely use a shared "log warning" helper rather than direct print. Match what you see.)
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest tests/unit/test_doctor_orphan_worktree_briefings.py -v
+```
+
+Expected: 3 PASS.
+
+- [ ] **Step 7: Smoke-test via CLI**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m mnemo doctor 2>&1 | grep -A1 "orphan"
+```
+
+Expected: silent if no orphans, warning printed if any exist.
+
+- [ ] **Step 8: Run full suite**
+
+```bash
+PYTHONPATH=$(pwd)/src python3 -m pytest -q --ignore=tests/unit/test_plugin_manifest.py
+```
+
+Expected: all green.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/mnemo/cli/commands/doctor_checks/orphan_worktree_briefings.py src/mnemo/cli/commands/doctor.py tests/unit/test_doctor_orphan_worktree_briefings.py
+git commit -m "feat(doctor): flag orphan worktree briefings
+
+Adds a doctor check that detects bots/<canonical>-<suffix>/briefings/
+dirs whose canonical agent also has briefings — the signature of a
+pre-v0.10 worktree write that the new canonical-agent code can't see.
+Suggests the mnemo migrate-worktree-briefings command as the fix."
+```
+
+---
+
 ## Task 10: Documentation update
 
 **Files:**
@@ -2083,11 +2516,13 @@ Before declaring this plan complete, the implementer should verify:
 
 1. **Spec coverage.** Walk through each section of `docs/superpowers/specs/2026-04-20-session-handoff-injection-design.md`. Every requirement maps to at least one task above:
    - Project resolution (canonical agent) → Tasks 1, 3
+   - Frontmatter parser DRY (review finding W1) → Task 2a
    - Briefing selection → Task 2
    - Injection envelope → Task 4
    - Race condition (best-effort) → covered by Task 4 (no special code, just absence of waiting)
    - Token instrumentation → Tasks 5, 6, 7
    - Migration → Task 9
+   - Migration discoverability (review finding S2) → Task 9b
    - Config → Task 4 (Step 6) + Task 8 (Step 3)
    - Testing → tests in every task
    - Documentation → Task 10
