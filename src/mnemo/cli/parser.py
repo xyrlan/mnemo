@@ -63,5 +63,17 @@ def _build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall.add_argument("--no-bootstrap", action="store_true", help="reuse existing cases.json instead of regenerating")
     recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")
+    migrate = sub.add_parser(
+        "migrate-worktree-briefings",
+        help="move orphan worktree briefings to the canonical agent dir",
+    )
+    migrate.add_argument(
+        "--repos", nargs="+", default=[],
+        help="canonical repo paths whose worktree briefings should be relocated",
+    )
+    migrate.add_argument(
+        "--dry-run", action="store_true",
+        help="list planned moves without performing them",
+    )
     sub.add_parser("help", help="list commands")
     return p
