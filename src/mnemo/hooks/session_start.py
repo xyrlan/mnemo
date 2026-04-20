@@ -215,6 +215,17 @@ def main() -> int:
                 )
                 if payload_text:
                     _emit_injection(payload_text)
+                    try:
+                        from mnemo.core.mcp import access_log as _al
+                        _al.record_session_start_inject(
+                            vault,
+                            envelope_bytes=len(payload_text.encode("utf-8")),
+                            included_briefing=("[last-briefing" in payload_text),
+                            project=canonical_name,
+                            agent=canonical_name,
+                        )
+                    except Exception as exc:
+                        errors.log_error(vault, "session_start.inject_telemetry", exc)
             except Exception as e:
                 errors.log_error(vault, "session_start.injection", e)
     except Exception as e:
