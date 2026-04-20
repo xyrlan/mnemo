@@ -15,6 +15,18 @@ _LOG_FILENAME = "mcp-access-log.jsonl"
 _NULL_PROJECT_BUCKET = "(unresolved)"
 _REQUIRED_FIELDS = ("tool", "result_count")
 
+# MCP tools registered in mnemo.core.mcp.server._TOOL_DEFS. The zero-hit
+# denominator (total_calls, zero_hit_calls, by_project) aggregates only these
+# entries — adding v0.10's llm.call / session_start.inject entries to the
+# denominator would silently dilute `mnemo doctor`'s ontology-gap signal
+# (both record result_count=1). If a new MCP tool is registered, extend
+# this set so telemetry reflects the full retrieval surface.
+_MCP_TOOL_NAMES: frozenset[str] = frozenset({
+    "list_rules_by_topic",
+    "read_mnemo_rule",
+    "get_mnemo_topics",
+})
+
 # Warn threshold for `mnemo doctor` zero-hit check. Derived from
 # docs/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md §5.3 Question B:
 # ">30% zero-hit rate indicates ontology gaps".
@@ -52,20 +64,25 @@ def summarize(entries: list[dict]) -> dict:
     for entry in entries:
         if not _is_well_formed(entry):
             continue
-        total += 1
 
         tool = entry["tool"]
         by_tool[tool] = by_tool.get(tool, 0) + 1
 
-        is_zero = int(entry["result_count"]) == 0
-        if is_zero:
-            zero_hits += 1
+        # Zero-hit aggregation is restricted to MCP retrieval tools. v0.10's
+        # llm.call + session_start.inject entries both carry result_count=1
+        # but describe cost/injection — not retrieval — and would dilute the
+        # signal consumed by `mnemo doctor` (see fidelity._doctor_check_zero_hit).
+        if tool in _MCP_TOOL_NAMES:
+            total += 1
+            is_zero = int(entry["result_count"]) == 0
+            if is_zero:
+                zero_hits += 1
 
-        project = entry.get("project") or _NULL_PROJECT_BUCKET
-        bucket = by_project.setdefault(project, {"calls": 0, "zero_hit": 0, "zero_hit_rate": 0.0})
-        bucket["calls"] = int(bucket["calls"]) + 1
-        if is_zero:
-            bucket["zero_hit"] = int(bucket["zero_hit"]) + 1
+            project = entry.get("project") or _NULL_PROJECT_BUCKET
+            bucket = by_project.setdefault(project, {"calls": 0, "zero_hit": 0, "zero_hit_rate": 0.0})
+            bucket["calls"] = int(bucket["calls"]) + 1
+            if is_zero:
+                bucket["zero_hit"] = int(bucket["zero_hit"]) + 1
 
         if tool == "llm.call":
             usage = entry.get("usage") or {}

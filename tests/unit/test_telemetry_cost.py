@@ -68,3 +68,33 @@ def test_summary_unknown_model_estimated_cost_excluded() -> None:
     assert cost["total_input_tokens"] == 1_000_000
     assert cost["estimated_usd"] == 0.0
     assert "future-model-z" in cost["unknown_models"]
+
+
+def test_summary_zero_hit_excludes_llm_and_inject_entries() -> None:
+    """After v0.10, zero_hit_rate reflects MCP tool calls only, not llm.call or session_start.inject."""
+    entries = [
+        # Two MCP entries, one is zero-hit.
+        {"tool": "list_rules_by_topic", "result_count": 5, "project": "p"},
+        {"tool": "list_rules_by_topic", "result_count": 0, "project": "p"},
+        # LLM + inject entries should NOT dilute the MCP-only denominator.
+        _llm_entry("briefing", "claude-haiku-4-5", 1000, 100),
+        {
+            "tool": "session_start.inject",
+            "envelope_bytes": 500,
+            "included_briefing": False,
+            "project": "p",
+            "agent": "p",
+            "result_count": 1,
+        },
+    ]
+    summary = access_log_summary.summarize(entries)
+    assert summary["total_calls"] == 2
+    assert summary["zero_hit_calls"] == 1
+    assert summary["zero_hit_rate"] == 0.5  # 1 / 2
+    # by_project reflects MCP-only denominator too.
+    assert summary["by_project"]["p"]["calls"] == 2
+    assert summary["by_project"]["p"]["zero_hit"] == 1
+    # But by_tool still shows everything.
+    assert summary["by_tool"]["list_rules_by_topic"] == 2
+    assert summary["by_tool"]["llm.call"] == 1
+    assert summary["by_tool"]["session_start.inject"] == 1

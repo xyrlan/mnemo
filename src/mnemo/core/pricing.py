@@ -2,19 +2,17 @@
 
 Keep this table in sync with Anthropic's published pricing
 (https://www.anthropic.com/pricing). mnemo is stdlib-only and does not
-fetch prices at runtime — bump the table + the verification date below
-when Anthropic changes prices.
+fetch prices at runtime — bump the table when Anthropic changes prices.
 
-Last verified: 2026-04-20 (https://www.anthropic.com/pricing — implementer
-must re-confirm on the day of merge and update this date).
+**Status: PLACEHOLDER VALUES.** The rates below are starting estimates
+ordered relative to each other (Haiku < Sonnet < Opus) but MUST be
+verified against https://www.anthropic.com/pricing before tagging a
+v0.10 release. Ship placeholder prices and `mnemo telemetry`'s USD
+column will be systematically wrong.
 """
 from __future__ import annotations
 
 # (input_per_mtok_usd, output_per_mtok_usd)
-# IMPORTANT: implementer must verify each row against the Anthropic pricing
-# page on the day of merge. Numbers below are placeholders pending that
-# verification — wrong values silently mis-report mnemo's cost in
-# `mnemo telemetry`.
 _PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5":          (1.0, 5.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
