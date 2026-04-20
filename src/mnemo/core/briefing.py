@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
+from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
 from mnemo.core.transcript import flatten_transcript_events
 
 
@@ -162,3 +164,55 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
     )
     _atomic_write(out_path, content)
     return out_path
+
+
+@dataclass(frozen=True)
+class BriefingRecord:
+    path: Path
+    frontmatter: dict
+    body: str
+
+
+def _parse_briefing_file(path: Path) -> BriefingRecord | None:
+    """Read and parse a briefing markdown file. Returns None on any I/O error."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    fm, body = _parse_fm(text)
+    return BriefingRecord(path=path, frontmatter=fm, body=body.lstrip("\n"))
+
+
+def pick_latest_briefing(vault_root: Path, agent_name: str) -> BriefingRecord | None:
+    """Return the most recent briefing for ``agent_name``, or None if there are none.
+
+    Ordering: frontmatter ``date`` (ISO YYYY-MM-DD) descending, tie-break by
+    ``session_id`` lexicographic descending. Files without a parseable date
+    fall back to file mtime — they sort below any dated briefing.
+    """
+    sessions_dir = vault_root / "bots" / agent_name / "briefings" / "sessions"
+    if not sessions_dir.is_dir():
+        return None
+
+    records: list[tuple[tuple, BriefingRecord]] = []
+    for md in sessions_dir.glob("*.md"):
+        rec = _parse_briefing_file(md)
+        if rec is None:
+            continue
+        date = rec.frontmatter.get("date", "")
+        session_id = rec.frontmatter.get("session_id", md.stem)
+        # Sort key: (has_date, date, session_id, mtime). has_date=1 outranks 0.
+        if date:
+            key = (1, date, session_id, 0.0)
+        else:
+            try:
+                mtime = md.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            key = (0, "", "", mtime)
+        records.append((key, rec))
+
+    if not records:
+        return None
+    records.sort(key=lambda kv: kv[0], reverse=True)
+    return records[0][1]
