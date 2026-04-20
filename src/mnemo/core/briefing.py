@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time as _time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -134,12 +135,27 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
 
     transcript = flatten_transcript_events(events)
     prompt_text = prompts.build_briefing_prompt(transcript)
+    t0 = _time.perf_counter()
     response = llm.call(
         prompt_text,
         system=prompts.BRIEFING_SYSTEM_PROMPT,
         model=model,
         timeout=timeout,
     )
+    elapsed_ms = (_time.perf_counter() - t0) * 1000
+    try:
+        from mnemo.core.mcp import access_log as _al
+        _al.record_llm_call(
+            vault_root=paths.vault_root(cfg),
+            response=response,
+            purpose="briefing",
+            model=model,
+            project=agent,  # briefing's project == its agent name
+            agent=agent,
+            elapsed_ms=elapsed_ms,
+        )
+    except Exception:
+        pass  # telemetry must never break the briefing
     body = (response.text or "").strip() or "*(empty briefing — LLM returned no content)*"
 
     session_id = jsonl_path.stem

@@ -346,6 +346,7 @@ def _run_extraction_body(
         processed_files: list[scanner.MemoryFile] = []
         for chunk in prompts.chunks_for(files, chunk_size):
             prompt_text = builder(chunk, vault_root=vault_root)
+            t0 = time.perf_counter()
             try:
                 response = llm.call(
                     prompt_text,
@@ -357,6 +358,20 @@ def _run_extraction_body(
                 errors.log_error(vault_root, "extract.chunk", exc)
                 summary.failed_chunks += 1
                 continue
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            try:
+                from mnemo.core.mcp import access_log as _al
+                _al.record_llm_call(
+                    vault_root=vault_root,
+                    response=response,
+                    purpose=f"consolidation:{type_name}",
+                    model=model,
+                    project=None,  # extraction is vault-wide, not per-project
+                    agent="(extraction)",
+                    elapsed_ms=elapsed_ms,
+                )
+            except Exception:
+                pass
 
             summary.llm_calls += 1
             summary.total_cost_usd += response.total_cost_usd or 0.0
