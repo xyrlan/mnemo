@@ -30,6 +30,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "briefings": {
         "enabled": True,
+        "injectLastOnSessionStart": True,
     },
     "injection": {
         "enabled": True,

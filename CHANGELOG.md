@@ -3,7 +3,22 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [Unreleased] — v0.10.0
+
+### Added
+
+- **Session handoff injection.** SessionStart now appends the most recent briefing's body (under `[last-briefing …]`) to the `mnemo://v1` envelope when `briefings.injectLastOnSessionStart` is true (default). Claude wakes up with the previous session's handoff context already in scope.
+- **Worktree-aware canonical agent.** New `agent.resolve_canonical_agent` follows `.git` worktree pointers to the main repo, so all worktrees of a repo share a single briefing pool. Briefing writer (SessionEnd) now uses canonical naming.
+- **`mnemo migrate-worktree-briefings`** — one-shot CLI to relocate orphan worktree briefings written before the canonical-agent change. Uses a name-prefix heuristic; always `--dry-run` first.
+- **`mnemo doctor`** now flags orphan worktree briefing dirs and suggests the migration command. (Silent for early upgraders who haven't written a canonical briefing yet.)
+- **Cost telemetry.** `llm.call()` invocations and SessionStart injections both write structured entries to `mcp-access-log.jsonl`. `mnemo telemetry` now reports per-purpose token totals + estimated USD via a hard-coded pricing table.
+
+### Changed
+
+- `_build_injection_payload` accepts `inject_briefing: bool` parameter (default `False` for backwards compat with direct callers; SessionStart hook passes `True` by default via config).
+- `access_log_summary.summarize` returns two new top-level keys: `llm_cost`, `injection_stats`. Existing keys unchanged.
+
+## [Unreleased] — v0.9.0
 
 ### Changed
 

@@ -169,10 +169,17 @@ def _maybe_schedule_briefing(
 ) -> None:
     """Spawn a detached per-session briefing when briefings.enabled=True.
 
+    The briefing's storage agent is the **canonical** agent for the cwd
+    (resolves through worktree .git pointers). This unifies briefings from
+    main + worktree sessions of the same repo into one pool. The
+    ``agent_name`` parameter is kept for signature compatibility and is no
+    longer used for briefing path resolution.
+
     Unlike extraction, briefings skip the count+time debounce — they are
     cheap and run on every session end so no handoff state is dropped.
     """
     try:
+        from mnemo.core import agent as agent_mod
         from mnemo.core import errors as err_mod
 
         briefings_cfg = cfg.get("briefings") or {}
@@ -183,8 +190,10 @@ def _maybe_schedule_briefing(
         if jsonl_path is None:
             return
 
+        canonical = agent_mod.resolve_canonical_agent(cwd).name
+
         try:
-            _spawn_detached_briefing(jsonl_path, agent_name)
+            _spawn_detached_briefing(jsonl_path, canonical)
         except OSError as exc:
             err_mod.log_error(vault_root, "session_end.briefing.popen", exc)
     except Exception as exc:

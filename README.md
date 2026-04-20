@@ -132,6 +132,34 @@ before Claude thinks about the question.
 - **Fail-open absolute** — any exception anywhere in the pipeline returns
   exit 0 with empty stdout. Reflex can never stall a prompt.
 
+### Last-briefing handoff (v0.10+)
+
+When `briefings.injectLastOnSessionStart` is true (default), every new Claude
+Code session in a project whose canonical agent has at least one briefing
+on disk gets a `[last-briefing session=… date=… duration_minutes=…] … [/last-briefing]`
+block appended to the SessionStart injection envelope. Worktrees of the same
+repo share one briefing pool, resolved via `.git` worktree pointers.
+
+If you have orphan worktree briefings from before this change, run
+`mnemo migrate-worktree-briefings --repos /path/to/repo --dry-run` to preview
+moves, then drop `--dry-run` to apply.
+
+**Known limitation (early upgraders):** If you upgraded to v0.10 before any
+canonical-repo session wrapped up, `mnemo doctor` cannot detect orphan
+worktree briefings (the check requires the canonical agent to have at least
+one briefing on disk). In that case, run the migration command manually and
+inspect `bots/` for `<repo>-<suffix>` subdirectories.
+
+### Cost telemetry (v0.10+)
+
+Every `llm.call()` (briefing + extraction consolidations) writes a
+`tool: "llm.call"` entry into `.mnemo/mcp-access-log.jsonl` with
+`usage.input_tokens` / `usage.output_tokens`. Every SessionStart writes a
+`tool: "session_start.inject"` entry with `envelope_bytes`. `mnemo telemetry`
+aggregates both into per-purpose token totals + estimated USD (using a
+hard-coded pricing table at `src/mnemo/core/pricing.py` — bump the table
+when Anthropic prices change).
+
 ## Scope model (v0.7+)
 
 Rules in `shared/{feedback,user,reference}/` are **local by default**: a rule

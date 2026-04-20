@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
+from mnemo.core.llm import LLMResponse
 from mnemo.core.log_utils import rotate_if_needed
 
 _LOG_FILENAME = "mcp-access-log.jsonl"
@@ -56,3 +58,56 @@ def record(vault_root: Path, entry: dict) -> None:
             f.flush()
     except Exception:
         pass
+
+
+def _utc_iso_z() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def record_llm_call(
+    vault_root: Path,
+    response: LLMResponse,
+    *,
+    purpose: str,
+    model: str,
+    project: str | None,
+    agent: str,
+    elapsed_ms: float,
+) -> None:
+    """Append an `llm.call` entry to mcp-access-log.jsonl. Never raises."""
+    entry = {
+        "timestamp": _utc_iso_z(),
+        "tool": "llm.call",
+        "purpose": purpose,
+        "model": model,
+        "project": project,
+        "agent": agent,
+        "usage": {
+            "input_tokens": int(response.input_tokens or 0),
+            "output_tokens": int(response.output_tokens or 0),
+        },
+        "elapsed_ms": float(elapsed_ms),
+        "result_count": 1,
+    }
+    record(vault_root, entry)
+
+
+def record_session_start_inject(
+    vault_root: Path,
+    *,
+    envelope_bytes: int,
+    included_briefing: bool,
+    project: str | None,
+    agent: str,
+) -> None:
+    """Append a `session_start.inject` entry. Never raises."""
+    entry = {
+        "timestamp": _utc_iso_z(),
+        "tool": "session_start.inject",
+        "envelope_bytes": int(envelope_bytes),
+        "included_briefing": bool(included_briefing),
+        "project": project,
+        "agent": agent,
+        "result_count": 1,
+    }
+    record(vault_root, entry)

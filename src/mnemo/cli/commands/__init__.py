@@ -13,6 +13,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     doctor,
     extract,
     init,
+    migrate_worktree_briefings,
     misc,
     recall,
     statusline,

@@ -332,7 +332,10 @@ def test_schedule_briefing_spawns_when_enabled_and_jsonl_exists(tmp_path, monkey
 
     session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="sidA", cwd="/tmp/cwd")
     assert len(called) == 1
-    assert called[0][1] == "agent_a"
+    # Briefing writer resolves the canonical agent from cwd (not from agent_name).
+    # `/tmp/cwd` has no .git, so resolve_canonical_agent falls back to resolve_agent,
+    # which derives the agent name from the cwd basename: "cwd".
+    assert called[0][1] == "cwd"
     assert called[0][0].name == "sidA.jsonl"
 
 

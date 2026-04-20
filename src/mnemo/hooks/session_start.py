@@ -22,7 +22,11 @@ from datetime import datetime
 from pathlib import Path
 
 
-def _build_injection_payload(vault_root: Path, current_project: str | None = None) -> str:
+def _build_injection_payload(
+    vault_root: Path,
+    current_project: str | None = None,
+    inject_briefing: bool = False,
+) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
     Reads the rule-activation-index.json for per-scope topic lists; degrades to
@@ -30,6 +34,11 @@ def _build_injection_payload(vault_root: Path, current_project: str | None = Non
     ``injection.maxTopicsPerScope`` as a cap on each of the local and universal
     topic lines. Topics are ordered by aggregated ``source_count`` descending,
     with a stable secondary sort by name.
+
+    When ``inject_briefing`` is True and ``current_project`` has at least one
+    briefing on disk, appends a ``[last-briefing session=… date=… duration_minutes=…]``
+    block (verbatim body) as the last section. The block is omitted on any
+    read/parse failure or when no briefing exists.
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core import rule_activation
@@ -53,16 +62,16 @@ def _build_injection_payload(vault_root: Path, current_project: str | None = Non
 
     if idx is not None and "rules" in idx:
         rules_table = idx["rules"]
-        # Local (excluding those that are also universal — avoid double listing
-        # across both lines).
         if current_project:
             local_slugs = idx.get("by_project", {}).get(current_project, {}).get("local_slugs", [])
-            local_rules = [rules_table[s] for s in local_slugs if s in rules_table and not rules_table[s].get("universal")]
+            local_rules = [
+                rules_table[s] for s in local_slugs
+                if s in rules_table and not rules_table[s].get("universal")
+            ]
             local_counts = _aggregate_topic_counts(local_rules)
             local_topics = [
                 t for t, _ in sorted(local_counts.items(), key=lambda kv: (-kv[1], kv[0]))
             ][:max_topics]
-        # Universal
         universal_slugs = idx.get("universal", {}).get("slugs", [])
         universal_rules = [rules_table[s] for s in universal_slugs if s in rules_table]
         universal_counts = _aggregate_topic_counts(universal_rules)
@@ -70,29 +79,55 @@ def _build_injection_payload(vault_root: Path, current_project: str | None = Non
             t for t, _ in sorted(universal_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         ][:max_topics]
     else:
-        # Fallback: use vault-wide topics, split cannot be derived.
         vault_wide = get_mnemo_topics(vault_root, scope="vault")
         universal_topics = vault_wide[:max_topics]
 
-    if not local_topics and not universal_topics:
-        return ""
+    # Topic block. Was an early `return ""` when both lists were empty; v0.10
+    # defers the empty check to the end so a briefing-only envelope can still
+    # be emitted.
+    topic_lines: list[str] = []
+    if local_topics or universal_topics:
+        header = "mnemo://v1"
+        if current_project and local_topics:
+            header += f" project={current_project}"
+        topic_lines.append(header)
+        if local_topics:
+            topic_lines.append(f"local: [{', '.join(local_topics)}]")
+        if universal_topics:
+            topic_lines.append(f"universal: [{', '.join(universal_topics)}]")
+        topic_lines.append(
+            "Call list_rules_by_topic(topic) then read_mnemo_rule(slug) BEFORE writing code."
+        )
+        topic_lines.append(
+            'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
+        )
 
-    lines: list[str] = []
-    header = "mnemo://v1"
-    if current_project and local_topics:
-        header += f" project={current_project}"
-    lines.append(header)
-    if local_topics:
-        lines.append(f"local: [{', '.join(local_topics)}]")
-    if universal_topics:
-        lines.append(f"universal: [{', '.join(universal_topics)}]")
-    lines.append(
-        "Call list_rules_by_topic(topic) then read_mnemo_rule(slug) BEFORE writing code."
-    )
-    lines.append(
-        'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
-    )
-    return "\n".join(lines)
+    # v0.10 NEW: append the most recent briefing for current_project, if any.
+    briefing_block = ""
+    if inject_briefing and current_project:
+        try:
+            from mnemo.core import briefing as briefing_mod
+            rec = briefing_mod.pick_latest_briefing(vault_root, current_project)
+            if rec is not None:
+                fm = rec.frontmatter
+                framing = (
+                    f"[last-briefing session={fm.get('session_id', rec.path.stem)} "
+                    f"date={fm.get('date', '')} "
+                    f"duration_minutes={fm.get('duration_minutes', '0')}]"
+                )
+                briefing_block = (
+                    "\n\n"
+                    + framing
+                    + "\n"
+                    + rec.body.rstrip()
+                    + "\n[/last-briefing]"
+                )
+        except Exception:
+            briefing_block = ""
+
+    if not topic_lines and not briefing_block:
+        return ""
+    return "\n".join(topic_lines) + briefing_block
 
 
 def _emit_injection(payload_text: str, out: object = None) -> None:
@@ -171,9 +206,26 @@ def main() -> int:
         # envelope is the only thing on stdout.
         if cfg.get("injection", {}).get("enabled", False):
             try:
-                payload_text = _build_injection_payload(vault, current_project=ainfo.name)
+                canonical_name = agent.resolve_canonical_agent(cwd).name
+                inject_briefing = bool(cfg.get("briefings", {}).get("injectLastOnSessionStart", True))
+                payload_text = _build_injection_payload(
+                    vault,
+                    current_project=canonical_name,
+                    inject_briefing=inject_briefing,
+                )
                 if payload_text:
                     _emit_injection(payload_text)
+                    try:
+                        from mnemo.core.mcp import access_log as _al
+                        _al.record_session_start_inject(
+                            vault,
+                            envelope_bytes=len(payload_text.encode("utf-8")),
+                            included_briefing=("[last-briefing" in payload_text),
+                            project=canonical_name,
+                            agent=canonical_name,
+                        )
+                    except Exception as exc:
+                        errors.log_error(vault, "session_start.inject_telemetry", exc)
             except Exception as e:
                 errors.log_error(vault, "session_start.injection", e)
     except Exception as e:

@@ -15,6 +15,7 @@ from mnemo.cli.commands.doctor_checks import (
     activation,
     fidelity,
     misc as doctor_misc,
+    orphan_worktree_briefings,
     reflex,
     rules,
 )
@@ -36,6 +37,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("reflex_index",          reflex._doctor_check_reflex_index),
     ("reflex_session_cap",    reflex._doctor_check_reflex_session_cap_hits),
     ("reflex_bilingual",      reflex._doctor_check_reflex_bilingual_gap),
+    ("orphan_worktree_briefings", orphan_worktree_briefings._doctor_check_orphan_worktree_briefings),
     ("universal_promotion",   rules._doctor_check_universal_promotion),
 ]
 
