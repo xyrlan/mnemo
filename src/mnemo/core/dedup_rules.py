@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mnemo.core.filters import parse_frontmatter as _parse_rule_fm
 from mnemo.core.rule_activation.index import projects_for_rule
 
 
@@ -25,59 +26,17 @@ def normalize_name(raw: str) -> str:
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
 
 
-def _strip_quotes(v: str) -> str:
-    v = v.strip()
-    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
-        return v[1:-1]
-    return v
-
-
 def _parse_fm(text: str) -> tuple[dict, str]:
-    """Minimal YAML parser for our rule-file frontmatter shape.
+    """Parse mnemo-shape frontmatter + return raw body.
 
-    Understands scalars (with optional quoting), inline `[]`, and simple
-    `key:\\n  - item` lists. Anything fancier is returned as a raw string.
+    Delegates parsing to :func:`mnemo.core.filters.parse_frontmatter` —
+    the canonical parser used by rule-activation. We only add body
+    extraction, which filters.parse_frontmatter doesn't return.
     """
     m = _FM_RE.match(text)
     if not m:
         return {}, text
-    fm_block, body = m.group(1), m.group(2)
-    fm: dict = {}
-    lines = fm_block.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip() or line.lstrip().startswith("#"):
-            i += 1
-            continue
-        if ":" not in line:
-            i += 1
-            continue
-        key, _, rest = line.partition(":")
-        key = key.strip()
-        val = rest.strip()
-        if val == "" or val == "[]":
-            # possibly a list on following indented lines
-            items: list[str] = [] if val == "[]" else []
-            j = i + 1
-            while j < len(lines) and lines[j].startswith((" ", "\t")) and lines[j].lstrip().startswith("- "):
-                items.append(_strip_quotes(lines[j].lstrip()[2:]))
-                j += 1
-            if j > i + 1 or val == "[]":
-                fm[key] = items
-                i = j
-                continue
-            fm[key] = ""
-            i += 1
-            continue
-        if val.startswith("[") and val.endswith("]"):
-            inner = val[1:-1].strip()
-            fm[key] = [_strip_quotes(s) for s in inner.split(",") if s.strip()] if inner else []
-            i += 1
-            continue
-        fm[key] = _strip_quotes(val)
-        i += 1
-    return fm, body
+    return _parse_rule_fm(text), m.group(2)
 
 
 @dataclass
