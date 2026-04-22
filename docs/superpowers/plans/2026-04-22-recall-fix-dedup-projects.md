@@ -14,6 +14,14 @@
 
 ---
 
+## Shipped status (2026-04-22)
+
+- **Tasks 1, 2, 3, 3.5b** — shipped (primacy@5 26.67% → 33.33%, MRR 0.1311 → 0.1966).
+- **Task 3.5a** (projects_for_rule honors `bots/<name>/` anywhere) — attempted, reverted: didn't move the gate and exposed an unrelated ranking regression.
+- **Tasks 4, 5** (dedupe_by_name at promotion + doctor duplicate_names warn) — NOT shipped. Checkpoint gate (≥3/5 named misses) hit 1/5 — remaining 4 are BM25F ranking or name-drift issues, not file duplication. Specs retained below for future follow-up plan.
+
+---
+
 ## File Structure
 
 **Created:**
