@@ -58,10 +58,8 @@ def projects_for_rule(
 ) -> list[str]:
     """From a list of source_files, return sorted unique project names.
 
-    Expects paths containing a ``bots/<project-name>/`` segment (relative or
-    absolute — any ``bots`` component followed by a name component counts).
-    Paths without a ``bots/<name>/`` segment are ignored. When no bots/ paths
-    are present and *frontmatter* supplies a
+    Expects paths like ``bots/<project-name>/...``. Paths not under ``bots/<name>/``
+    are ignored. When no bots/ paths are present and *frontmatter* supplies a
     ``project`` (str) or ``projects`` (list[str]) key, that is used as the
     fallback so LLM-generated cluster pages with explicit project attribution
     survive the index build even before they accumulate bots/ sources.
@@ -69,10 +67,8 @@ def projects_for_rule(
     projects: set[str] = set()
     for sf in source_files:
         parts = Path(sf).parts
-        for i, segment in enumerate(parts):
-            if segment == "bots" and i + 1 < len(parts):
-                projects.add(parts[i + 1])
-                break
+        if len(parts) >= 2 and parts[0] == "bots":
+            projects.add(parts[1])
     if projects:
         return sorted(projects)
     fm = frontmatter or {}

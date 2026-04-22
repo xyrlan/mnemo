@@ -47,19 +47,3 @@ def test_mixed_sources_bots_hit_still_wins_over_frontmatter():
         ["shared/x.md", "bots/mnemo/y.md"],
         frontmatter={"project": "wrong"},
     ) == ["mnemo"]
-
-
-def test_absolute_path_with_bots_segment_is_honored():
-    assert projects_for_rule(["/home/xyrlan/mnemo/bots/mnemo/memory/x.md"]) == ["mnemo"]
-
-
-def test_absolute_path_without_bots_segment_ignored():
-    # Guard: no bots component anywhere → falls back to frontmatter (empty here).
-    assert projects_for_rule(["/home/xyrlan/mnemo/shared/feedback/x.md"]) == []
-
-
-def test_mixed_relative_and_absolute_paths_both_counted():
-    assert sorted(projects_for_rule([
-        "/home/xyrlan/mnemo/bots/Meunu/x.md",
-        "bots/mnemo/y.md",
-    ])) == ["Meunu", "mnemo"]
