@@ -75,5 +75,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="list planned moves without performing them",
     )
+    dedup = sub.add_parser(
+        "dedup-rules",
+        help="merge shared rule files that share the same name (dry-run default)",
+    )
+    dedup.add_argument(
+        "--apply", action="store_true",
+        help="execute the plan (default: dry-run)",
+    )
     sub.add_parser("help", help="list commands")
     return p
