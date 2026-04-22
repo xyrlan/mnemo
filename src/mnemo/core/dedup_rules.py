@@ -78,7 +78,7 @@ def plan_dedup(vault_root: Path) -> DedupPlan:
         for md in sorted(type_dir.glob("*.md")):
             try:
                 fm, _ = _parse_fm(md.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 continue
             name = fm.get("name")
             if not isinstance(name, str) or not name.strip():
@@ -134,9 +134,16 @@ def plan_dedup(vault_root: Path) -> DedupPlan:
 def _rewrite_block(fm_text: str, key: str, lines: list[str]) -> str:
     """Replace an existing `key:` block (`key: [...]` or `key:\n  - a\n  - b`)
     with the given rendered lines. If the key is absent, append at the end
-    of the frontmatter. The new block is always emitted in list form."""
+    of the frontmatter. The new block is always emitted in list form.
+
+    Assumes mnemo-writer frontmatter shape: block lists contain only ``  - item``
+    lines (no comments, no blank lines interleaved). Hand-edited files with such
+    interior lines will not be rewritten cleanly — the orphan content stays past
+    the replaced block. Fine for the mnemo pipeline (it owns the writer); flagged
+    here so future callers know the constraint.
+    """
     block_re = re.compile(
-        rf"(?m)^{re.escape(key)}:[ \t]*(?:\[\])?[ \t]*(?:\n(?:[ \t]+-[^\n]*(?:\n|$))+)?",
+        rf"(?m)^{re.escape(key)}:[ \t]*(?:\[\])?[ \t]*\n(?:[ \t]+-[^\n]*\n?)*",
     )
     new_block = f"{key}: []" if not lines else f"{key}:\n" + "\n".join(f"  - {v}" for v in lines)
     if block_re.search(fm_text):

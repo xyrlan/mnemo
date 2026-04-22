@@ -113,4 +113,43 @@ def test_apply_unions_frontmatter_project_across_group(tmp_path):
 
     plan_dedup(tmp_path).apply()
     canonical = (shared / "b.md").read_text(encoding="utf-8")
-    assert "project: mnemo" in canonical or "projects:" in canonical
+    assert "projects:" in canonical and "- mnemo" in canonical
+
+
+def test_apply_replaces_inline_empty_block_without_blank_line(tmp_path):
+    """Regression: when canonical frontmatter has an inline `key: []` that gets
+    rewritten to a multi-line list, no spurious blank line must appear before
+    the next key. Exercised via `projects: []` inline on canonical, unioning
+    a duplicate's `project: mnemo` attribution."""
+    shared = tmp_path / "shared" / "feedback"
+    # Canonical wins on source count (2 vs 0) and carries `projects: []` inline
+    # immediately before `tags:` — this is the shape that tripped the regex.
+    canonical = shared / "canonical.md"
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text(
+        "---\n"
+        "name: 'Dup'\n"
+        "description: 'd'\n"
+        "type: feedback\n"
+        "extracted_at: 2026-04-20T10:00:00\n"
+        "stability: stable\n"
+        "sources:\n"
+        "  - bots/x/a.md\n"
+        "  - bots/x/b.md\n"
+        "projects: []\n"
+        "tags:\n"
+        "  - git\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    # Duplicate contributes `project: mnemo` so the rewrite of `projects:` runs.
+    _write(shared / "dup.md", "Dup", sources=[], extracted_at="2026-04-19T10:00:00",
+           frontmatter_project="mnemo")
+
+    plan_dedup(tmp_path).apply()
+    text = canonical.read_text(encoding="utf-8")
+    # New projects block must be directly adjacent to the next key (tags:), not
+    # separated by a blank line.
+    assert "\n\ntags:" not in text, f"spurious blank line before tags:\n{text!r}"
+    assert "projects:" in text and "- mnemo" in text
