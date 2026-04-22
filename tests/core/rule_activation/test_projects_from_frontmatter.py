@@ -34,3 +34,16 @@ def test_non_bots_sources_fall_back_to_frontmatter():
 def test_empty_everything_returns_empty():
     assert projects_for_rule([], frontmatter={}) == []
     assert projects_for_rule([], frontmatter=None) == []
+
+
+def test_frontmatter_projects_list_filters_non_strings_and_empties():
+    assert projects_for_rule(
+        [], frontmatter={"projects": ["mnemo", "", None, 42, "Meunu"]}
+    ) == ["Meunu", "mnemo"]
+
+
+def test_mixed_sources_bots_hit_still_wins_over_frontmatter():
+    assert projects_for_rule(
+        ["shared/x.md", "bots/mnemo/y.md"],
+        frontmatter={"project": "wrong"},
+    ) == ["mnemo"]
