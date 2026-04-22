@@ -51,18 +51,34 @@ _SYSTEM_TAGS: frozenset[str] = frozenset({"auto-promoted", "needs-review"})
 # ---------------------------------------------------------------------------
 
 
-def projects_for_rule(source_files: list[str]) -> list[str]:
+def projects_for_rule(
+    source_files: list[str],
+    *,
+    frontmatter: dict | None = None,
+) -> list[str]:
     """From a list of source_files, return sorted unique project names.
 
-    Expects paths like ``bots/<project-name>/...``. Paths not under bots/<name>/
-    are ignored.
+    Expects paths like ``bots/<project-name>/...``. Paths not under ``bots/<name>/``
+    are ignored. When no bots/ paths are present and *frontmatter* supplies a
+    ``project`` (str) or ``projects`` (list[str]) key, that is used as the
+    fallback so LLM-generated cluster pages with explicit project attribution
+    survive the index build even before they accumulate bots/ sources.
     """
     projects: set[str] = set()
     for sf in source_files:
         parts = Path(sf).parts
         if len(parts) >= 2 and parts[0] == "bots":
             projects.add(parts[1])
-    return sorted(projects)
+    if projects:
+        return sorted(projects)
+    fm = frontmatter or {}
+    raw = fm.get("projects")
+    if isinstance(raw, list):
+        return sorted({p for p in raw if isinstance(p, str) and p})
+    single = fm.get("project")
+    if isinstance(single, str) and single:
+        return [single]
+    return []
 
 
 def is_universal(projects: list[str], threshold: int) -> bool:
@@ -143,7 +159,7 @@ def _build_rule_entry(
     topic_tags_list = [t for t in tags_raw if isinstance(t, str) and t not in _SYSTEM_TAGS]
 
     preview = _body_preview(text)
-    projects = projects_for_rule(source_files)
+    projects = projects_for_rule(source_files, frontmatter=fm)
     universal = is_universal(projects, threshold)
 
     # --- enforce block ---

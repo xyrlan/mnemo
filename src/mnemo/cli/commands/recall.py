@@ -30,11 +30,17 @@ def cmd_recall(args: argparse.Namespace) -> int:
     log_path = mnemo_dir / "mcp-access-log.jsonl"
     use_json = bool(getattr(args, "json", False))
 
+    orphan_dropped = 0
     if not args.no_bootstrap:
         if not log_path.is_file():
             print(f"error: access log missing: {log_path}", file=sys.stderr)
             return 1
-        cases = bootstrap_cases(log_path, pair_window_s=args.window_s)
+        cases, orphan_dropped = bootstrap_cases(
+            log_path,
+            pair_window_s=args.window_s,
+            vault_root=vault,
+            return_orphan_count=True,
+        )
         mnemo_dir.mkdir(parents=True, exist_ok=True)
         cases_path.write_text(_json.dumps(cases, indent=2) + "\n", encoding="utf-8")
     else:
@@ -56,7 +62,7 @@ def cmd_recall(args: argparse.Namespace) -> int:
 
     results = [run_case(vault, c) for c in cases]
     log_entries = count_log_entries(log_path)
-    report = aggregate(results, log_entries=log_entries)
+    report = aggregate(results, log_entries=log_entries, orphan_dropped=orphan_dropped)
     mnemo_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
