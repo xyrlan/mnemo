@@ -55,6 +55,39 @@ def test_orphan_case_is_dropped(tmp_path):
     assert "Ghost Rule That No Longer Exists" not in expect_slugs
 
 
+def _seed_for_orphan_case(tmp_path: Path) -> Path:
+    """Shared fixture: vault with one real rule + log containing one valid + one orphan pair."""
+    log = tmp_path / ".mnemo" / "mcp-access-log.jsonl"
+    _seed_rule(tmp_path, "Existing Rule", topic="workflow")
+    _build_and_write_index(tmp_path)
+    _write_log(log, [
+        {"timestamp": "2026-04-20T10:00:00Z", "tool": "list_rules_by_topic",
+         "args": {"topic": "workflow", "scope": "project"}, "project": "mnemo",
+         "result_count": 1, "hit_slugs": ["Existing Rule"]},
+        {"timestamp": "2026-04-20T10:00:05Z", "tool": "read_mnemo_rule",
+         "args": {"slug": "Existing Rule"}, "project": "mnemo"},
+        {"timestamp": "2026-04-20T10:01:00Z", "tool": "list_rules_by_topic",
+         "args": {"topic": "workflow", "scope": "project"}, "project": "mnemo",
+         "result_count": 1, "hit_slugs": ["Ghost Rule That No Longer Exists"]},
+        {"timestamp": "2026-04-20T10:01:05Z", "tool": "read_mnemo_rule",
+         "args": {"slug": "Ghost Rule That No Longer Exists"}, "project": "mnemo"},
+    ])
+    return log
+
+
+def test_bootstrap_returns_orphan_count_when_requested(tmp_path):
+    """return_orphan_count=True yields (cases, dropped) tuple."""
+    log = _seed_for_orphan_case(tmp_path)
+    result = bootstrap_cases(
+        log, pair_window_s=120.0,
+        vault_root=tmp_path, return_orphan_count=True,
+    )
+    assert isinstance(result, tuple) and len(result) == 2
+    cases, dropped = result
+    assert dropped == 1
+    assert all(c["expect_slug"] != "Ghost Rule That No Longer Exists" for c in cases)
+
+
 def test_backward_compat_without_vault_root_keeps_all_cases(tmp_path):
     """Existing callers that don't pass vault_root must continue to get every pair."""
     log = tmp_path / "log.jsonl"

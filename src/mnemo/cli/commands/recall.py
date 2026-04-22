@@ -35,11 +35,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
         if not log_path.is_file():
             print(f"error: access log missing: {log_path}", file=sys.stderr)
             return 1
-        raw_cases = bootstrap_cases(log_path, pair_window_s=args.window_s)
-        cases = bootstrap_cases(
-            log_path, pair_window_s=args.window_s, vault_root=vault
+        cases, orphan_dropped = bootstrap_cases(
+            log_path,
+            pair_window_s=args.window_s,
+            vault_root=vault,
+            return_orphan_count=True,
         )
-        orphan_dropped = len(raw_cases) - len(cases)
         mnemo_dir.mkdir(parents=True, exist_ok=True)
         cases_path.write_text(_json.dumps(cases, indent=2) + "\n", encoding="utf-8")
     else:

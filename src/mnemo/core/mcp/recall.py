@@ -142,7 +142,8 @@ def bootstrap_cases(
     pair_window_s: float = _DEFAULT_PAIR_WINDOW_S,
     *,
     vault_root: Path | None = None,
-) -> list[Case]:
+    return_orphan_count: bool = False,
+) -> list[Case] | tuple[list[Case], int]:
     """Scan access log; emit one case per list→read pair within ``pair_window_s``.
 
     Dedup rule: a (project, topic, expect_slug) triple appears at most once — if
@@ -155,6 +156,10 @@ def bootstrap_cases(
     extraction-run churn that would otherwise pollute the miss list without
     pointing to a real recall defect. Backward-compatible: callers that omit
     the kwarg get every paired case (pre-filter behaviour).
+
+    When ``return_orphan_count=True``, returns ``(cases, dropped)`` where
+    *dropped* is the number of pairs filtered as orphans in this single pass.
+    Default False preserves the prior list-only shape for existing callers.
     """
     entries = _read_log(log_path)
     # Index list-calls by project for fast lookup.
@@ -210,6 +215,7 @@ def bootstrap_cases(
             "rank_at_bootstrap": rank,
         })
     cases.sort(key=lambda c: c["id"])
+    dropped_count: int = 0
     if vault_root is not None:
         # Cache current-vault slug sets per (project, topic) to avoid rebuilding
         # the set for each case when the same topic recurs.
@@ -226,7 +232,11 @@ def bootstrap_cases(
             # expect_slug not in it is orphan.
             if slugs is None or c["expect_slug"] in slugs:
                 filtered.append(c)
+            else:
+                dropped_count += 1
         cases = filtered
+    if return_orphan_count:
+        return cases, dropped_count
     return cases
 
 
