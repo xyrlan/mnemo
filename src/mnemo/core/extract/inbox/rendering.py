@@ -79,12 +79,29 @@ def _render_nested_block(key: str, data: dict) -> str:
 
 def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
+
+    # --- enforce block ---
+    # Safety rail (C3, 2026-04-23): auto-promoted pages are LLM-authored
+    # and unreviewed. Stripping the enforce block prevents a single briefing
+    # line from becoming a session-wide hard-block. Manual promotion paths
+    # (auto_promoted=False) still honor the enforce block.
+    enforce_block = ""
+    enforce_stripped = False
+    if isinstance(page.enforce, dict) and page.enforce:
+        if auto_promoted:
+            enforce_stripped = True
+        else:
+            enforce_block = _render_nested_block("enforce", page.enforce)
+
     if auto_promoted:
         extras = f"last_sync: {run_id}\n"
+        if enforce_stripped:
+            extras += "promoted_without_enforce: true\n"
         system_marker = "auto-promoted"
     else:
         extras = ""
         system_marker = "needs-review"
+
     stability = getattr(page, "stability", None) or "stable"
     # Unified tags list: system marker first, then LLM-emitted topic tags.
     # The shared filter (core/filters.py) reads this same list; topic_tags()
@@ -98,12 +115,18 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     # Optional activation blocks — only written when non-empty. Both flow
     # through _render_nested_block so indentation is guaranteed to match
     # what parse_frontmatter (Task 1 extension) expects.
-    enforce_block = ""
-    if isinstance(page.enforce, dict) and page.enforce:
-        enforce_block = _render_nested_block("enforce", page.enforce)
     activates_on_block = ""
     if isinstance(page.activates_on, dict) and page.activates_on:
         activates_on_block = _render_nested_block("activates_on", page.activates_on)
+
+    body_prefix = ""
+    if enforce_stripped:
+        body_prefix = (
+            "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+            "> _Review the pattern and re-add manually if safe. "
+            "See docs/superpowers/plans/2026-04-23-enforce-safety-rails.md._\n\n"
+        )
+
     return (
         "---\n"
         f"name: {_yaml_scalar(page.name)}\n"
@@ -120,7 +143,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{enforce_block}"
         f"{activates_on_block}"
         "---\n\n"
-        f"{page.body}\n"
+        f"{body_prefix}{page.body}\n"
     )
 
 

@@ -112,6 +112,38 @@ def _doctor_check_bare_deny_command(vault: Path) -> bool:
     return True
 
 
+def _doctor_check_stripped_enforce(vault: Path, idx: object = None) -> bool:
+    """Warn when auto-promoted rules had their enforce block stripped.
+
+    These files carry ``promoted_without_enforce: true`` in their frontmatter.
+    A human must review the rule and re-add the enforce block manually if the
+    pattern is safe. Always returns True — advisory check, not a pass/fail gate.
+    """
+    shared = vault / "shared"
+    if not shared.is_dir():
+        return True
+
+    stripped_paths = []
+    for md in (vault / "shared").rglob("*.md"):
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")
+            if "promoted_without_enforce: true" in text.split("---", 2)[1]:
+                stripped_paths.append(md)
+        except (IndexError, OSError):
+            continue
+
+    if stripped_paths:
+        print(
+            f"  ⚠ {len(stripped_paths)} auto-promoted rule(s) had enforce block stripped — "
+            f"review and re-add manually if the pattern is safe:"
+        )
+        for p in stripped_paths[:5]:
+            print(f"    • {p.relative_to(vault)}")
+        if len(stripped_paths) > 5:
+            print(f"    … {len(stripped_paths) - 5} more")
+    return True
+
+
 def _doctor_check_universal_promotion(vault: Path) -> bool:
     """Report universal-promotion health: count + on-verge rules.
 

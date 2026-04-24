@@ -40,6 +40,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("orphan_worktree_briefings", orphan_worktree_briefings._doctor_check_orphan_worktree_briefings),
     ("universal_promotion",   rules._doctor_check_universal_promotion),
     ("bare_deny_command",     rules._doctor_check_bare_deny_command),
+    ("stripped_enforce",      rules._doctor_check_stripped_enforce),
 ]
 
 
