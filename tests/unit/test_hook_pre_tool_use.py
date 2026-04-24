@@ -148,7 +148,8 @@ def test_hook_denies_matching_bash_command_emits_deny_envelope(
     hook_out = data["hookSpecificOutput"]
     assert hook_out["hookEventName"] == "PreToolUse"
     assert hook_out["permissionDecision"] == "deny"
-    assert hook_out["permissionDecisionReason"] == "No co-authored-by in commits"
+    # reason starts with the rule's reason text; may include path + fix hint suffix
+    assert hook_out["permissionDecisionReason"].startswith("No co-authored-by in commits")
 
 
 # ---------------------------------------------------------------------------
