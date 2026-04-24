@@ -152,6 +152,18 @@ def _parse_enforce(fm: dict) -> tuple[dict | None, str | None]:
     if not validated_patterns and not validated_commands:
         return None, "enforce: must have at least one deny_pattern or deny_command"
 
+    # --- qualifier requirement (C2 safety rail, 2026-04-23) ---
+    # Bare `deny_command` is a coarse prefix match — `git push` blocks all
+    # pushes regardless of context. Force every enforce block that uses
+    # deny_command to also supply a deny_pattern qualifier. deny_pattern
+    # alone is fine (regex is already specific).
+    if validated_commands and not validated_patterns:
+        return None, (
+            "enforce: deny_command requires a qualifier — "
+            "add a deny_pattern regex that narrows the match, "
+            "or drop the enforce block entirely"
+        )
+
     # --- reason (required, truncate at 300) ---
     reason = block.get("reason", "")
     if not isinstance(reason, str) or not reason:
@@ -231,14 +243,14 @@ def parse_block(
     raise ValueError(f"parse_block: unknown kind {kind!r}")
 
 
-def parse_enforce_block(fm: dict) -> dict | None:
-    """Return a normalised dict {tool, deny_patterns, deny_commands, reason} or None.
+def parse_enforce_block(fm: dict) -> tuple[dict | None, str | None]:
+    """Return ``(parsed, error)`` where ``parsed`` is a normalised dict
+    ``{tool, deny_patterns, deny_commands, reason}`` or None.
 
-    Thin back-compat wrapper around :func:`parse_block`. Returns None if the
-    block is missing, invalid, or fails validation.
+    Thin wrapper around :func:`parse_block` that surfaces the error message
+    to callers. Returns ``(None, None)`` when the enforce key is absent.
     """
-    parsed, _err = parse_block("enforce", fm)
-    return parsed
+    return parse_block("enforce", fm)
 
 
 def parse_activates_on_block(fm: dict) -> dict | None:

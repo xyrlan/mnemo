@@ -25,6 +25,7 @@ class EnforceHit:
     slug: str
     project: str
     reason: str
+    path: str = ""   # filled by match_bash_enforce when available
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ def match_bash_enforce(index: dict, project: str, command: str) -> EnforceHit | 
                         slug=slug,
                         project=project,
                         reason=enforce.get("reason", slug),
+                        path=rule.get("path", ""),
                     )
             except re.error:
                 continue
@@ -130,6 +132,7 @@ def match_bash_enforce(index: dict, project: str, command: str) -> EnforceHit | 
                     slug=slug,
                     project=project,
                     reason=enforce.get("reason", slug),
+                    path=rule.get("path", ""),
                 )
 
     return None

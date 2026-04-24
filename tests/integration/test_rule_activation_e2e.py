@@ -172,7 +172,8 @@ def test_enforce_full_loop(tmp_vault: Path, monkeypatch):
     hook_out = envelope["hookSpecificOutput"]
     assert hook_out["hookEventName"] == "PreToolUse"
     assert hook_out["permissionDecision"] == "deny"
-    assert hook_out["permissionDecisionReason"] == "No Co-Authored-By trailers in commits"
+    # reason starts with the rule's reason text; may include path + fix hint suffix
+    assert hook_out["permissionDecisionReason"].startswith("No Co-Authored-By trailers in commits")
 
     # Denial log written end-to-end
     denial_log = tmp_vault / ".mnemo" / "denial-log.jsonl"
@@ -316,7 +317,8 @@ def test_per_project_segregation(tmp_vault: Path, monkeypatch):
     )
     envelope = json.loads(out_a)
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert envelope["hookSpecificOutput"]["permissionDecisionReason"] == (
+    # reason starts with the rule's reason text; may include path + fix hint suffix
+    assert envelope["hookSpecificOutput"]["permissionDecisionReason"].startswith(
         "No force pushes in project-a"
     )
 

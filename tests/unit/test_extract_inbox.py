@@ -333,11 +333,17 @@ def test_extracted_page_roundtrip_preserves_activation_fields(tmp_vault: Path):
     text = target.read_text()
     fm = parse_frontmatter(text)
 
-    assert isinstance(fm.get("enforce"), dict), fm
-    assert fm["enforce"]["tool"] == "Bash"
-    assert fm["enforce"]["deny_pattern"] == "git commit.*Co-Authored-By"
-    assert fm["enforce"]["reason"] == "No Co-Authored-By trailers in commits"
+    # C3 safety rail (2026-04-23): auto-promoted pages have enforce stripped.
+    # The block must NOT be present; instead the page is flagged for review.
+    assert fm.get("enforce") is None, (
+        "auto-promoted page must not carry enforce block (C3 safety rail)"
+    )
+    assert fm.get("promoted_without_enforce") in (True, "true"), (
+        "auto-promoted page must be flagged with promoted_without_enforce: true"
+    )
+    assert "review" in text.lower(), "body prefix must contain a review callout"
 
+    # activates_on is not execution-capable alone, so it is preserved.
     assert isinstance(fm.get("activates_on"), dict)
     assert fm["activates_on"]["tools"] == ["Edit", "Write", "MultiEdit"]
     assert fm["activates_on"]["path_globs"] == [
@@ -379,11 +385,16 @@ def test_extracted_page_enforce_with_multiple_patterns_uses_block_list(tmp_vault
     )
     inbox.apply_pages([page], state, tmp_vault)
     target = tmp_vault / "shared" / "feedback" / "multi-deny.md"
-    fm = parse_frontmatter(target.read_text())
-    assert isinstance(fm.get("enforce"), dict)
-    assert fm["enforce"]["tool"] == "Bash"
-    assert fm["enforce"]["deny_patterns"] == ["git push.*--force", "rm -rf /"]
-    assert fm["enforce"]["reason"] == "dangerous ops"
+    text = target.read_text()
+    fm = parse_frontmatter(text)
+    # C3 safety rail (2026-04-23): auto-promoted pages have enforce stripped.
+    assert fm.get("enforce") is None, (
+        "auto-promoted page must not carry enforce block (C3 safety rail)"
+    )
+    assert fm.get("promoted_without_enforce") in (True, "true"), (
+        "auto-promoted page must be flagged with promoted_without_enforce: true"
+    )
+    assert "review" in text.lower(), "body prefix must contain a review callout"
 
 
 def test_load_state_unknown_schema_version_raises(tmp_vault: Path):

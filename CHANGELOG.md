@@ -3,6 +3,58 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-04-23
+
+### Breaking
+
+- **Rule schema:** `enforce.deny_command` now requires a paired `deny_pattern` regex.
+  Bare `deny_command: "git push"` is rejected at index load. Run `mnemo doctor`
+  to surface affected rules; fix by adding a `deny_pattern` that narrows the match,
+  or remove the enforce block entirely.
+- **Rule-activation index schema:** bumped from v3 to v4 to force a transparent
+  rebuild that populates the new `path` field on every entry. No user action required.
+
+### Added
+
+- `mnemo list-enforced` — audit every rule with an `enforce:` block (path + tool +
+  trigger + reason). One-shot way to see what can hard-block your tool calls.
+- `mnemo disable-rule <slug>` — flip `runtime: false` on a rule's frontmatter
+  without touching its body. Suggested by the PreToolUse block message.
+- PreToolUse deny envelope now includes the offending rule's path and a
+  disable-hint, so users can fix the block without grepping the vault.
+
+### Changed
+
+- Auto-promoted pages have their `enforce:` block stripped (flagged with
+  `promoted_without_enforce: true` in frontmatter + review note in the body).
+  Manual promotion and hand-authored rules are unaffected. `mnemo doctor`
+  surfaces stripped rules so you can review and re-add manually if safe.
+- Extractor prompt tightened: the LLM now emits `enforce:` only when the
+  source briefing contains explicit blocking intent ("never allow",
+  "always refuse", "the hook should block"). A command in backticks is
+  no longer sufficient justification.
+
+### Migration
+
+Existing rules with bare `deny_command` will fail to load after upgrade. After
+pulling:
+
+1. Run `mnemo fix` — rebuilds the rule-activation index at v4 (adds `path` field).
+2. Run `mnemo doctor` — the `rules` check lists every rule rejected by the new
+   validator, by absolute path.
+3. Fix each offender one of three ways:
+   - Add a `deny_pattern` regex that narrows the block (preferred).
+   - Remove the `enforce:` block — the rule stays advisory.
+   - Run `mnemo disable-rule <slug>` — sets `runtime: false` without edits.
+
+### Skipped versions
+
+v0.9.x and v0.10.x shipped in master but were never reflected in
+`pyproject.toml` (both remained at 0.8.0). This release jumps 0.8 → 0.11
+to align the package version with the already-shipped feature set. The
+v0.10 and v0.9 changelog sections below document the shipped content and
+remain `[Unreleased]` from the perspective of PyPI tagging.
+
 ## [Unreleased] — v0.10.0
 
 ### Added

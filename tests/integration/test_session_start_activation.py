@@ -128,7 +128,7 @@ def test_session_start_rebuilds_index_when_enforcement_enabled(
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     assert index_path.exists(), "rule-activation-index.json must be written"
     idx = json.loads(index_path.read_text())
-    assert idx.get("schema_version") == 3
+    assert idx.get("schema_version") == 4
     assert "project-a" in idx["by_project"] and any(
         idx["rules"][s].get("enforce")
         for s in idx["by_project"]["project-a"]["local_slugs"]

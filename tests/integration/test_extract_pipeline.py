@@ -190,18 +190,28 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
     assert index is not None, "index must load cleanly"
     assert index.get("malformed") == []
 
-    rules_with_enforce = {
-        slug: rule for slug, rule in index.get("rules", {}).items()
-        if rule.get("enforce") and "agent-a" in rule.get("projects", [])
-    }
-    assert rules_with_enforce, f"no enforce rules for agent-a: {index.get('rules')}"
-    enforce_entries = [rule["enforce"] for rule in rules_with_enforce.values()]
-    assert any(
-        e.get("tool") == "Bash"
-        and "git commit.*Co-Authored-By" in (e.get("deny_patterns") or [])
-        and "Co-Authored-By" in e.get("reason", "")
-        for e in enforce_entries
-    ), enforce_entries
+    # C3 safety rail (2026-04-23): auto-promoted pages have enforce stripped.
+    # The rule lands in the index with enforce=None; the file on disk carries
+    # promoted_without_enforce: true so a human can re-add the block manually.
+    no_coauthored = next(
+        (rule for rule in index.get("rules", {}).values()
+         if "agent-a" in rule.get("projects", [])),
+        None,
+    )
+    assert no_coauthored is not None, f"no agent-a rule in index: {index.get('rules')}"
+    assert no_coauthored.get("enforce") is None, (
+        "auto-promoted rule must have enforce=None in index (C3 safety rail)"
+    )
+    # Confirm the disk file is flagged for review.
+    target_path = next(
+        (populated_vault / "shared" / "feedback" / f"{slug}.md"
+         for slug in ["no-coauthored"]),
+        None,
+    )
+    assert target_path.exists(), "promoted rule file must exist on disk"
+    assert "promoted_without_enforce: true" in target_path.read_text(), (
+        "promoted file must carry promoted_without_enforce: true frontmatter key"
+    )
 
     rules_with_enrich = {
         slug: rule for slug, rule in index.get("rules", {}).items()
