@@ -83,6 +83,35 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
     return ok
 
 
+def _doctor_check_bare_deny_command(vault: Path) -> bool:
+    """Warn when the activation index contains rules rejected for bare deny_command.
+
+    These rules authored a ``deny_command`` without a ``deny_pattern`` qualifier
+    and were silently dropped from the index when the C2 safety rail landed in
+    v0.11. The author needs to either add a ``deny_pattern`` regex or remove the
+    enforce block entirely.
+
+    Returns True always — this is an advisory check; the index-build step already
+    records the rejection.
+    """
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault)
+    if idx is None:
+        return True
+
+    malformed = idx.get("malformed") or []
+    bare_deny = [m for m in malformed if "deny_command requires a qualifier" in m.get("error", "")]
+    if bare_deny:
+        print(f"  ⚠ {len(bare_deny)} rule(s) have bare `deny_command` without `deny_pattern` — "
+              f"add a regex qualifier or remove the enforce block. Paths:")
+        for m in bare_deny[:5]:
+            print(f"    • {m['path']}")
+        if len(bare_deny) > 5:
+            print(f"    … {len(bare_deny) - 5} more")
+    return True
+
+
 def _doctor_check_universal_promotion(vault: Path) -> bool:
     """Report universal-promotion health: count + on-verge rules.
 

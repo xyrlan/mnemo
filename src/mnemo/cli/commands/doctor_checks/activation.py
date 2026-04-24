@@ -58,7 +58,8 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
             slug = derive_rule_slug(fm, md_path.stem)
             rel = md_path.name
 
-            has_enforce = parse_enforce_block(fm) is not None
+            _parsed_enforce, _enforce_err = parse_enforce_block(fm)
+            has_enforce = _parsed_enforce is not None
             has_enrich = parse_activates_on_block(fm) is not None
 
             if has_enforce and slug not in indexed_slugs:

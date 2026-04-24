@@ -5,7 +5,7 @@ from mnemo.core.rule_activation import parse_enforce_block, parse_activates_on_b
 
 
 # ---------------------------------------------------------------------------
-# parse_enforce_block
+# parse_enforce_block — returns (parsed, error) tuple
 # ---------------------------------------------------------------------------
 
 
@@ -21,7 +21,8 @@ def test_parse_enforce_valid_deny_pattern():
         deny_pattern="git commit.*Co-Authored-By",
         reason="No Co-Authored-By trailers",
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
+    assert err is None
     assert result is not None
     assert result["tool"] == "Bash"
     assert result["deny_patterns"] == ["git commit.*Co-Authored-By"]
@@ -29,17 +30,17 @@ def test_parse_enforce_valid_deny_pattern():
     assert result["reason"] == "No Co-Authored-By trailers"
 
 
-def test_parse_enforce_valid_deny_command_list():
-    """Only deny_command present returns a valid dict."""
+def test_parse_enforce_bare_deny_command_rejected():
+    """Bare deny_command without deny_pattern is rejected (C2 safety rail)."""
     fm = _enforce_fm(
         tool="Bash",
         deny_command=["bun drizzle-kit generate", "bun drizzle-kit push"],
         reason="Do not run drizzle migrations directly",
     )
-    result = parse_enforce_block(fm)
-    assert result is not None
-    assert result["deny_patterns"] == []
-    assert result["deny_commands"] == ["bun drizzle-kit generate", "bun drizzle-kit push"]
+    result, err = parse_enforce_block(fm)
+    assert result is None
+    assert err is not None
+    assert "qualifier" in err.lower() or "deny_pattern" in err
 
 
 def test_parse_enforce_valid_both():
@@ -50,38 +51,42 @@ def test_parse_enforce_valid_both():
         deny_command=["git push --force"],
         reason="No force operations",
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
+    assert err is None
     assert result is not None
     assert len(result["deny_patterns"]) == 1
     assert len(result["deny_commands"]) == 1
 
 
 def test_parse_enforce_requires_pattern_or_command():
-    """Neither deny_pattern nor deny_command present → None."""
+    """Neither deny_pattern nor deny_command present → (None, err)."""
     fm = _enforce_fm(tool="Bash", reason="something")
-    assert parse_enforce_block(fm) is None
+    result, err = parse_enforce_block(fm)
+    assert result is None
+    assert err is not None
 
 
 def test_parse_enforce_rejects_uncompilable_regex():
-    """Invalid regex pattern → None, no exception raised."""
+    """Invalid regex pattern → (None, err), no exception raised."""
     fm = _enforce_fm(
         tool="Bash",
         deny_pattern="[unclosed",
         reason="bad pattern",
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
     assert result is None
 
 
 def test_parse_enforce_caps_pattern_length():
-    """Pattern longer than 500 chars → None."""
+    """Pattern longer than 500 chars → (None, err)."""
     long_pattern = "x" * 501
     fm = _enforce_fm(tool="Bash", deny_pattern=long_pattern, reason="too long")
-    assert parse_enforce_block(fm) is None
+    result, err = parse_enforce_block(fm)
+    assert result is None
 
 
 def test_parse_enforce_rejects_catastrophic_regex_heuristic():
-    """Patterns matching catastrophic backtracking heuristics → None."""
+    """Patterns matching catastrophic backtracking heuristics → (None, err)."""
     catastrophic_patterns = [
         "(.*)+" ,
         "(.+)+",
@@ -91,13 +96,15 @@ def test_parse_enforce_rejects_catastrophic_regex_heuristic():
     ]
     for pat in catastrophic_patterns:
         fm = _enforce_fm(tool="Bash", deny_pattern=pat, reason="catastrophic")
-        assert parse_enforce_block(fm) is None, f"Should have rejected: {pat!r}"
+        result, err = parse_enforce_block(fm)
+        assert result is None, f"Should have rejected: {pat!r}"
 
 
 def test_parse_enforce_rejects_non_bash_tool():
-    """tool: Edit → None (only Bash is valid in v1)."""
+    """tool: Edit → (None, err) (only Bash is valid in v1)."""
     fm = _enforce_fm(tool="Edit", deny_pattern="some.*pattern", reason="wrong tool")
-    assert parse_enforce_block(fm) is None
+    result, err = parse_enforce_block(fm)
+    assert result is None
 
 
 def test_parse_enforce_truncates_long_reason():
@@ -108,21 +115,27 @@ def test_parse_enforce_truncates_long_reason():
         deny_pattern="git commit",
         reason=long_reason,
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
+    assert err is None
     assert result is not None
     assert len(result["reason"]) == 300
 
 
 def test_parse_enforce_missing_tool_field():
-    """tool field absent → None."""
+    """tool field absent → (None, err)."""
     fm = {"enforce": {"deny_pattern": "git commit", "reason": "no tool"}}
-    assert parse_enforce_block(fm) is None
+    result, err = parse_enforce_block(fm)
+    assert result is None
 
 
 def test_parse_enforce_missing_enforce_block():
-    """No enforce key in frontmatter → None."""
-    assert parse_enforce_block({}) is None
-    assert parse_enforce_block({"name": "foo"}) is None
+    """No enforce key in frontmatter → (None, None)."""
+    result, err = parse_enforce_block({})
+    assert result is None
+    assert err is None
+    result, err = parse_enforce_block({"name": "foo"})
+    assert result is None
+    assert err is None
 
 
 def test_parse_enforce_rejects_redos_pattern_via_timing_probe():
@@ -133,7 +146,8 @@ def test_parse_enforce_rejects_redos_pattern_via_timing_probe():
         deny_pattern="(a+)+b",
         reason="bypasses substring heuristic",
     )
-    assert parse_enforce_block(fm) is None
+    result, err = parse_enforce_block(fm)
+    assert result is None
 
 
 def test_parse_enforce_accepts_benign_pattern_under_probe():
@@ -143,7 +157,8 @@ def test_parse_enforce_accepts_benign_pattern_under_probe():
         deny_pattern="git commit.*Co-Authored-By",
         reason="no co-authored trailers",
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
+    assert err is None
     assert result is not None
     assert result["deny_patterns"] == ["git commit.*Co-Authored-By"]
 
@@ -155,7 +170,8 @@ def test_parse_enforce_list_of_patterns():
         deny_pattern=["git commit.*Co-Authored-By", "git push --force"],
         reason="Two patterns",
     )
-    result = parse_enforce_block(fm)
+    result, err = parse_enforce_block(fm)
+    assert err is None
     assert result is not None
     assert len(result["deny_patterns"]) == 2
 
@@ -241,9 +257,10 @@ def test_parse_both_blocks_coexist_independently():
             "path_globs": ["**/*.tsx"],
         },
     }
-    enforce_result = parse_enforce_block(fm)
+    enforce_result, enforce_err = parse_enforce_block(fm)
     enrich_result = parse_activates_on_block(fm)
 
+    assert enforce_err is None
     assert enforce_result is not None
     assert enrich_result is not None
     assert enforce_result["tool"] == "Bash"
