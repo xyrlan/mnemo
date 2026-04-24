@@ -67,7 +67,7 @@ def main() -> int:
             command = tool_input.get("command") or ""
             hit = ra.match_bash_enforce(index, project, command)
             if hit is not None:
-                _emit_deny(hit.reason)
+                _emit_deny(hit)
                 ra.log_denial(vault, hit, tool_input)
                 return 0
 
@@ -117,8 +117,16 @@ def main() -> int:
     return 0
 
 
-def _emit_deny(reason: str) -> None:
+def _emit_deny(hit) -> None:
     try:
+        lines = [hit.reason]
+        if getattr(hit, "path", ""):
+            lines.append(f"Rule: {hit.path}")
+            lines.append(
+                f"Fix: edit the file to remove or narrow the enforce block, "
+                f"or run `mnemo disable-rule {hit.slug}`."
+            )
+        reason = "\n".join(lines)
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
