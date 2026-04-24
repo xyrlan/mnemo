@@ -83,5 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--apply", action="store_true",
         help="execute the plan (default: dry-run)",
     )
+    disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
+    disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
     sub.add_parser("help", help="list commands")
     return p

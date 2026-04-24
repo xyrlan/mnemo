@@ -11,6 +11,7 @@ from __future__ import annotations
 from mnemo.cli.commands import (  # noqa: F401  — trigger @command registration
     briefing,
     dedup_rules,
+    disable_rule,
     doctor,
     extract,
     init,
