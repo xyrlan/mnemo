@@ -50,7 +50,7 @@ def _write_index(vault: Path, *, enforce_rules: list | None = None, enrich_rules
         }
         local_slugs.append(slug)
     index = {
-        "schema_version": 3,
+        "schema_version": 4,
         "built_at": "2026-04-15T12:00:00Z",
         "vault_root": str(vault),
         "rules": rules,
@@ -609,7 +609,7 @@ def test_cmd_status_shows_malformed_count_when_index_has_malformed(tmp_path, mon
     mnemo_dir = vault / ".mnemo"
     mnemo_dir.mkdir()
     index = {
-        "schema_version": 3,
+        "schema_version": 4,
         "built_at": "2026-04-15T12:00:00Z",
         "vault_root": str(vault),
         "rules": {},

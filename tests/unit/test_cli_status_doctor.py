@@ -432,7 +432,7 @@ def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
         enforce={"tool": "Bash", "reason": "blocked", "deny_patterns": ["dangerous-command"]},
     )
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 3,
+        "schema_version": 4,
         "rules": {},
         "by_project": {},
         "universal": {"slugs": [], "topics": []},
@@ -476,7 +476,7 @@ def test_doctor_activation_fidelity_matches_index_slug_from_name_field(
     )
     # Index stores the display name as the slug — matching build_index
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 3,
+        "schema_version": 4,
         "rules": {
             "Display Name For Rule": {
                 "type": "feedback",
@@ -517,7 +517,7 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
     vault = tmp_path / "vault"
     (vault / ".mnemo").mkdir(parents=True)
     (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
-        "schema_version": 3,
+        "schema_version": 4,
         "rules": {
             "char-class-rule": {
                 "type": "feedback",

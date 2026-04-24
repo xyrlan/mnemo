@@ -39,7 +39,7 @@ def _is_consumer_visible(md_path: Path, fm: dict, vault_root: Path) -> bool:
         from mnemo.core.filters import is_consumer_visible
         return is_consumer_visible(md_path, fm, vault_root)
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 INDEX_FILENAME = "rule-activation-index.json"
 
 # System tags that should be stripped from topic_tags in the index.
@@ -203,6 +203,7 @@ def _build_rule_entry(
         "type": page_type,
         "name": fm.get("name", slug),
         "file_stem": md_path.stem,
+        "path": str(md_path),           # C4 uses this in block messages
         "topic_tags": topic_tags_list,
         "source_files": source_files,
         "source_count": len(source_files),
