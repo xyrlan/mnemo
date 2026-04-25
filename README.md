@@ -12,42 +12,26 @@ macOS, and Windows.
 
 ## Install
 
-mnemo has two install steps — a Python package on your machine and a thin Claude Code plugin that exposes slash commands.
-
-**1. Install the Python package (required).** Run this in your shell:
+One command:
 
 ```bash
-pip install git+https://github.com/xyrlan/mnemo.git
-# or, with pipx (recommended for global tooling):
-# pipx install git+https://github.com/xyrlan/mnemo.git
+npx @xyrlan/mnemo install
 ```
 
-This puts the `mnemo` binary on your PATH. Without this step the slash commands below have nothing to call.
+That installs the Python package (via `uv` / `pipx` / `pip --user`, whichever is available), prompts you to choose **global** (every Claude Code session) or **project** (this directory only), wires the hooks + MCP server + slash commands, and you're done.
 
-**2. Install the Claude Code plugin (optional, slash-command sugar).** Inside Claude Code:
-
-```
-/plugin marketplace add xyrlan/mnemo
-/plugin install mnemo@mnemo-marketplace
-```
-
-**3. Run setup.** Either path works:
+Non-interactive variants:
 
 ```bash
-# from the shell — full flag support
-mnemo init                 # global: every Claude Code session
-mnemo init --project       # project-only: <cwd> only (v0.12+)
+npx @xyrlan/mnemo install --yes              # global, no prompts
+npx @xyrlan/mnemo install --project --yes    # project-scoped, no prompts
 ```
 
-```
-# or from inside Claude Code (slash commands wrap the binary)
-/mnemo init                # global
-/mnemo init-project        # project-only (v0.12+)
-```
+`npx @xyrlan/mnemo uninstall [--scope global|project|both]` reverses everything; the vault is preserved.
 
-For project-scoped installs, run `mnemo init --project` from the directory you want mnemo to attach to, then launch Claude Code (`claude`) **in that same directory** — the local hooks load automatically.
+**Prerequisites:** Python 3.8+ on your machine. Node is already there if you run `npx`. mnemo's npm wrapper is zero-dep and ~150 LOC — it's a thin bootstrap, not the runtime.
 
-`mnemo init` is idempotent and does four things:
+`mnemo init` (run automatically by `npx … install`) is idempotent and does four things:
 
 1. Scaffolds a vault at `~/mnemo/` (or wherever you point it)
 2. Injects four hooks into `~/.claude/settings.json`:
@@ -55,10 +39,30 @@ For project-scoped installs, run `mnemo init --project` from the directory you w
    and `UserPromptSubmit` (Prompt Reflex, v0.8)
 3. Registers a stdio MCP server in `~/.claude.json` so Claude Code can call mnemo's tools
 4. Wires an additive status line composer (preserves your existing one if you have it)
+5. Writes `~/.claude/commands/<name>.md` slash command files so `/init`, `/status`, `/doctor`, etc. work inside Claude Code without a separate plugin install
 
 That's it. Use Claude Code normally — your vault populates itself, the
 HOME dashboard regenerates after every extraction, and Claude starts
 consulting captured rules on its own.
+
+### Alternative install paths
+
+If you'd rather skip npm entirely:
+
+```bash
+pipx install mnemo                                      # or: uv tool install mnemo
+mnemo init                                              # global
+mnemo init --project                                    # project-only
+```
+
+If you'd rather wire the slash commands via Claude Code's marketplace:
+
+```
+/plugin marketplace add xyrlan/mnemo
+/plugin install mnemo@mnemo-marketplace
+```
+
+(The marketplace path requires `pipx install mnemo` first — `/plugin install` registers slash commands but does not install the Python runtime.)
 
 ### Installation scope: global vs project (v0.12+)
 
@@ -466,7 +470,9 @@ MCP retrieval use.
 ## Commands
 
 ```
-mnemo init                  first-run setup (idempotent)
+npx @xyrlan/mnemo install   one-command setup (recommended)
+npx @xyrlan/mnemo uninstall remove mnemo (vault preserved)
+mnemo init                  first-run setup if installed via pip directly
 mnemo init --project        scope the install to <cwd> only (v0.12+)
 mnemo status [--scope ...]  vault state + hook health + auto-brain state
                             (--scope project|global|all, default all)

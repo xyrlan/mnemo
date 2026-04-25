@@ -77,6 +77,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     try:
         vault = cli._resolve_vault()
         inj.uninject_statusline(settings_path, vault)
+        inj.uninject_slash_commands(settings_path.parent / "commands")
         inj.uninject_hooks(settings_path)
         inj.uninject_mcp_servers(mcp_path)
     except inj.SettingsError as e:

@@ -172,7 +172,16 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # 5d. Project scope — ignore install artifacts in version control
+    # 5d. Register slash commands (replaces the /plugin install dance)
+    target_commands = target_settings.parent / "commands"
+    say(f"Registering slash commands in {target_commands}…")
+    try:
+        inj.inject_slash_commands(target_commands)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # 5e. Project scope — ignore install artifacts in version control
     if project:
         _ensure_gitignore(cwd)
 
