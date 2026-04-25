@@ -12,13 +12,40 @@ macOS, and Windows.
 
 ## Install
 
+mnemo has two install steps — a Python package on your machine and a thin Claude Code plugin that exposes slash commands.
+
+**1. Install the Python package (required).** Run this in your shell:
+
+```bash
+pip install git+https://github.com/xyrlan/mnemo.git
+# or, with pipx (recommended for global tooling):
+# pipx install git+https://github.com/xyrlan/mnemo.git
+```
+
+This puts the `mnemo` binary on your PATH. Without this step the slash commands below have nothing to call.
+
+**2. Install the Claude Code plugin (optional, slash-command sugar).** Inside Claude Code:
+
 ```
 /plugin marketplace add xyrlan/mnemo
 /plugin install mnemo@mnemo-marketplace
-/mnemo init                # global: every Claude Code session
-# or
-/mnemo init --project      # project-only: this directory only (v0.12+)
 ```
+
+**3. Run setup.** Either path works:
+
+```bash
+# from the shell — full flag support
+mnemo init                 # global: every Claude Code session
+mnemo init --project       # project-only: <cwd> only (v0.12+)
+```
+
+```
+# or from inside Claude Code (slash commands wrap the binary)
+/mnemo init                # global
+/mnemo init-project        # project-only (v0.12+)
+```
+
+For project-scoped installs, run `mnemo init --project` from the directory you want mnemo to attach to, then launch Claude Code (`claude`) **in that same directory** — the local hooks load automatically.
 
 `mnemo init` is idempotent and does four things:
 

@@ -186,7 +186,10 @@ def cmd_init(args: argparse.Namespace) -> int:
             say(f"  (mirror skipped: {e})")
 
     if project:
-        say("mnemo is ready (project scope). Open the vault with: mnemo open")
+        say("mnemo is ready (project scope).")
+        say(f"  Launch Claude Code in this directory ({cwd}) to activate the local hooks:")
+        say("      claude")
+        say("  Open the vault with: mnemo open")
     else:
         say("mnemo is ready. Open the vault with: mnemo open")
     return 0
