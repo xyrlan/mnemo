@@ -19,9 +19,14 @@ from pathlib import Path
 def _doctor_check_statusline_drift(vault: Path) -> bool:
     """v0.5: warn when settings.json statusLine drifted away from our composer.
 
+    Detects the install scope (project-local <cwd>/.claude/settings.json first,
+    then the legacy global ~/.claude/settings.json) and only reports drift when
+    the *active* scope no longer wires the mnemo composer. This avoids false
+    positives for project-only installs where the global file is empty by design.
+
     Three states:
     - composer present + state file present → healthy (return True)
-    - state file present but settings.json statusLine is something else → drift
+    - state file present but no scope wires the composer → drift
     - no state file at all → mnemo init never ran or already uninstalled (skip)
     """
     import os
@@ -31,25 +36,37 @@ def _doctor_check_statusline_drift(vault: Path) -> bool:
     if not state_path.exists():
         return True  # never installed or already uninstalled — nothing to drift from
 
-    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
-    if not settings_path.exists():
-        print("  ⚠ statusLine state file present but ~/.claude/settings.json is missing")
+    candidates = [
+        ("project", Path.cwd() / ".claude" / "settings.json"),
+        ("global", Path(os.path.expanduser("~/.claude/settings.json"))),
+    ]
+
+    composer_seen = False
+    settings_seen = False
+    for _label, settings_path in candidates:
+        if not settings_path.exists():
+            continue
+        settings_seen = True
+        try:
+            data = _json.loads(settings_path.read_text())
+        except (OSError, _json.JSONDecodeError):
+            return True  # other doctor checks will report the malformed file
+        current = data.get("statusLine")
+        if (
+            isinstance(current, dict)
+            and isinstance(current.get("command"), str)
+            and current["command"].strip().endswith("statusline-compose")
+        ):
+            composer_seen = True
+            break
+
+    if composer_seen:
+        return True
+
+    if not settings_seen:
+        print("  ⚠ statusLine state file present but no settings.json was found (project or global)")
         print("       → run `mnemo init` to reinstall, or `mnemo uninstall` to clean up state")
         return False
-
-    try:
-        data = _json.loads(settings_path.read_text())
-    except (OSError, _json.JSONDecodeError):
-        return True  # other doctor checks will report the malformed file
-
-    current = data.get("statusLine")
-    is_ours = (
-        isinstance(current, dict)
-        and isinstance(current.get("command"), str)
-        and current["command"].strip().endswith("statusline-compose")
-    )
-    if is_ours:
-        return True
 
     print("  ⚠ statusLine drift: settings.json no longer points at the mnemo composer")
     print("       → if you edited statusLine manually after `mnemo init`, run")

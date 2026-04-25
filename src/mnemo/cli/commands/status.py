@@ -12,9 +12,37 @@ from mnemo.cli._helpers import (
 from mnemo.cli.parser import command
 
 
+def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) -> int | None:
+    """Return mnemo-hook count or ``None`` when the settings file is malformed."""
+    import json
+    if not settings_path.exists():
+        return 0
+    try:
+        data = json.loads(settings_path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return sum(
+        1
+        for ev in expected_events
+        for entry in data.get("hooks", {}).get(ev, [])
+        for h in entry.get("hooks", [])
+        if "mnemo" in h.get("command", "")
+    )
+
+
+def _print_scope_line(label: str, settings_path: Path, expected_events: tuple[str, ...]) -> None:
+    n = _count_mnemo_hooks(settings_path, expected_events)
+    if not settings_path.exists():
+        print(f"Hooks ({label}): settings.json missing — {settings_path}")
+    elif n is None:
+        print(f"Hooks ({label}): settings.json malformed — {settings_path} (see mnemo doctor)")
+    else:
+        print(f"Hooks ({label}): {n}/{len(expected_events)} — {settings_path}")
+
+
 @command("status")
-def cmd_status(_args: argparse.Namespace) -> int:
-    import os, json
+def cmd_status(args: argparse.Namespace) -> int:
+    import os
     from mnemo import cli  # late binding for monkeypatched _resolve_vault
     from mnemo.core import errors as err_mod
 
@@ -22,23 +50,16 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"Vault: {vault}  ({'exists' if vault.exists() else 'MISSING'})")
     from mnemo.install.settings import HOOK_DEFINITIONS
 
-    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
     expected_events = tuple(HOOK_DEFINITIONS.keys())
-    if settings_path.exists():
-        try:
-            data = json.loads(settings_path.read_text())
-            installed = sum(
-                1
-                for ev in expected_events
-                for entry in data.get("hooks", {}).get(ev, [])
-                for h in entry.get("hooks", [])
-                if "mnemo" in h.get("command", "")
-            )
-            print(f"Hooks installed: {installed}/{len(expected_events)}")
-        except json.JSONDecodeError:
-            print("Hooks: settings.json malformed (see mnemo doctor)")
-    else:
-        print("Hooks: settings.json missing")
+    scope = getattr(args, "scope", "all") or "all"
+    cwd = Path.cwd()
+    project_settings = cwd / ".claude" / "settings.json"
+    global_settings = Path(os.path.expanduser("~/.claude/settings.json"))
+
+    if scope in ("project", "all"):
+        _print_scope_line("project", project_settings, expected_events)
+    if scope in ("global", "all"):
+        _print_scope_line("global", global_settings, expected_events)
     breaker = "closed (ok)" if err_mod.should_run(vault) else "OPEN — recent errors detected"
     print(f"Circuit breaker: {breaker}")
     log = vault / ".errors.log"

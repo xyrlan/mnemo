@@ -41,13 +41,13 @@ def _vault_writable(vault_root: Path) -> bool:
         return False
 
 
-def _settings_writable() -> bool:
-    settings = Path(os.path.expanduser("~/.claude/settings.json"))
+def _settings_writable(settings: Path | None = None) -> bool:
+    target = Path(settings) if settings is not None else Path(os.path.expanduser("~/.claude/settings.json"))
     try:
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        if settings.exists():
-            return os.access(settings, os.W_OK)
-        return os.access(settings.parent, os.W_OK)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            return os.access(target, os.W_OK)
+        return os.access(target.parent, os.W_OK)
     except OSError:
         return False
 
@@ -61,7 +61,11 @@ def _disk_space_ok(vault_root: Path, min_bytes: int = 10 * 1024 * 1024) -> bool:
         return True  # don't block on probe failure
 
 
-def run_preflight(vault_root: Path | None = None) -> PreflightResult:
+def run_preflight(
+    vault_root: Path | None = None,
+    *,
+    settings_target: Path | None = None,
+) -> PreflightResult:
     vault_root = Path(vault_root) if vault_root else Path(os.path.expanduser("~/mnemo"))
     issues: list[Issue] = []
 
@@ -77,11 +81,12 @@ def run_preflight(vault_root: Path | None = None) -> PreflightResult:
             f"Cannot write to {vault_root.parent}",
             f"Pick a different vault location with --vault-root, or run: chmod u+w {vault_root.parent}",
         ))
-    if not _settings_writable():
+    if not _settings_writable(settings_target):
+        target_label = str(settings_target) if settings_target is not None else "~/.claude/settings.json"
         issues.append(Issue(
             "settings_unwritable", "error",
-            "Cannot write to ~/.claude/settings.json",
-            "Run: chmod u+w ~/.claude/settings.json",
+            f"Cannot write to {target_label}",
+            f"Run: chmod u+w {target_label}",
         ))
     if not _disk_space_ok(vault_root):
         issues.append(Issue(

@@ -22,7 +22,8 @@ def cmd_statusline(_args: argparse.Namespace) -> int:
     except Exception:
         return 0
     claude_json = Path(os.path.expanduser("~/.claude.json"))
-    sys.stdout.write(sl.render(vault, claude_json))
+    # Pass cwd so project-scoped <cwd>/.mcp.json is considered alongside global.
+    sys.stdout.write(sl.render(vault, claude_json, cwd=str(Path.cwd())))
     return 0
 
 

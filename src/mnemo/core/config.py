@@ -92,10 +92,25 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _find_local_config(cwd: Path | None = None) -> Path | None:
+    """Return ``<cwd>/.mnemo/mnemo.config.json`` if present, else None.
+
+    Project-local installs (``mnemo init --project``) place the vault under
+    ``<cwd>/.mnemo``; the config resolver prefers it so per-project sessions
+    are isolated from the global config singleton.
+    """
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    candidate = base / ".mnemo" / "mnemo.config.json"
+    return candidate if candidate.exists() else None
+
+
 def default_config_path() -> Path:
     env = os.environ.get("MNEMO_CONFIG_PATH")
     if env:
         return Path(env)
+    local = _find_local_config()
+    if local is not None:
+        return local
     return Path(os.path.expanduser("~/mnemo/mnemo.config.json"))
 
 

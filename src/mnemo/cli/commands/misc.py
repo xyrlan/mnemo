@@ -52,23 +52,35 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     import os
     from mnemo import cli  # late binding for monkeypatched _resolve_vault
     from mnemo.install import settings as inj
+
+    project = bool(getattr(args, "project", False))
+    cwd = Path.cwd()
+    if project:
+        settings_path = cwd / ".claude" / "settings.json"
+        mcp_path = cwd / ".mcp.json"
+        scope_label = "project-local"
+    else:
+        settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
+        mcp_path = Path(os.path.expanduser("~/.claude.json"))
+        scope_label = "global"
+
     if not args.yes:
         try:
-            answer = input("Remove mnemo hooks from settings.json? Vault data is preserved. [y/N]: ").strip().lower()
+            answer = input(
+                f"Remove {scope_label} mnemo hooks ({settings_path})? Vault data is preserved. [y/N]: "
+            ).strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
             print("Aborted.", file=sys.stderr)
             return 2
-    settings_path = Path(os.path.expanduser("~/.claude/settings.json"))
-    claude_json_path = Path(os.path.expanduser("~/.claude.json"))
     try:
         vault = cli._resolve_vault()
         inj.uninject_statusline(settings_path, vault)
         inj.uninject_hooks(settings_path)
-        inj.uninject_mcp_servers(claude_json_path)
+        inj.uninject_mcp_servers(mcp_path)
     except inj.SettingsError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    print("Hooks, MCP server, and statusLine removed. Vault preserved.")
+    print(f"Hooks, MCP server, and statusLine removed ({scope_label}). Vault preserved.")
     return 0
