@@ -24,9 +24,26 @@ The plugin manifest at `.claude-plugin/plugin.json` keeps working as an alternat
 | Slash command registration | npm wrapper writes `~/.claude/settings.json` direct (via `mnemo init`) | Eliminates the `/plugin marketplace` dance. Plugin manifest stays as compat. |
 | Default install scope | global | Matches existing default. Project install via `--project`. |
 | Interactive scope choice | prompt unless `--global` / `--project` / `--yes` | One-line install must still let users opt into project scope without learning a flag. |
-| Python bootstrap cascade | `uv` → `pipx` → `pip --user` (first available wins) | Best-in-class isolation when `uv` exists; pipx as the broad standard; pip --user as last resort for stripped-down environments. PEP 668 (Debian/Ubuntu) — fail with a hint, never `--break-system-packages`. |
+| Python bootstrap cascade | `uv` → `pipx` → `pip --user` (first available wins) | Best-in-class isolation when `uv` exists; pipx as the broad standard; pip --user as last resort for stripped-down environments. PEP 668 (Debian/Ubuntu) — fail with platform-specific hint pointing at the package-manager-installed pipx (`apt install python3-pipx` / `brew install pipx`), never `--break-system-packages`. |
 | npm package version sync | minor-pinned: npm `0.X.*` installs `mnemo>=0.X,<0.X+1` | Wrapper bug fixes ship without coordinating PyPI; mnemo minor bumps require a paired npm release. |
 | npm package name | `mnemo` if free, else `@xyrlan/mnemo` | Verified at implementation time via `npm view mnemo`. |
+| PyPI publish dependency | **Hard prerequisite** of this work | Bootstrap calls `pipx install mnemo` — only works if mnemo is on PyPI. v1 does not bootstrap from `git+https://...`. |
+| Re-run idempotency | Detect-and-skip default; `--upgrade` to force | `pipx install mnemo` errors if already present. Default behavior detects via `pipx list` (or installer-equivalent), skips Python install, runs only `mnemo init`. `--upgrade` forces `pipx upgrade` / `uv tool upgrade` / `pip install -U`. |
+| Uninstall scope when both present | `--scope global\|project\|both` (mirrors install); auto-detect when unambiguous | Cwd-only auto-detect can leave global hooks active and silently surprise the user. Explicit flag covers full cleanup; ambiguous case (both scopes present, no flag) prompts with `[1] project [2] global [3] both`, default `1` (project — matches the cwd context). |
+
+## Pre-implementation tasks
+
+These must complete **before** any npm-wrapper code is written. They unblock the bootstrap path:
+
+1. **Bump `pyproject.toml` version** to `0.12.0` (master shipped v0.12 work via PRs #54-56 without bumping; current value is `0.11.0`).
+2. **Cut `v0.12.0` git tag** + GitHub release.
+3. **First PyPI publish** of `mnemo==0.12.0`. This is net-new infrastructure (no `release.yml` exists today, only `ci.yml`). Requires:
+   - `PYPI_API_TOKEN` repo secret
+   - New workflow `.github/workflows/release.yml` with a `publish-pypi` job triggered by `v*` tags (build wheel + sdist via `python -m build`, upload via `pypa/gh-action-pypi-publish@release/v1`)
+4. **Verify `pipx install mnemo` works end-to-end** in a clean Linux VM. This is the contract the npm wrapper depends on.
+5. **Bump `.claude-plugin/plugin.json` version** from `0.6.0` to `0.12.0` (long-standing drift; spec uses it as source of truth in step 4).
+
+Only after step 4 confirms green does the npm wrapper implementation begin.
 
 ## User experience
 
@@ -38,6 +55,10 @@ $ npx mnemo install
 ✓ pipx detected
 ↻ Installing mnemo via pipx…
 ✓ mnemo 0.12.0 installed (PATH: /home/user/.local/bin/mnemo)
+
+# (re-run on an existing install — idempotent)
+$ npx mnemo install
+✓ mnemo already installed (0.12.0). Skipping pipx step. (use --upgrade to force)
 
 Where should mnemo install hooks?
   [1] Global  — every Claude Code session (recommended)
@@ -71,40 +92,53 @@ Vault preserved at ~/mnemo. Delete manually if you want it gone.
 
 ```
 npm/
-├── package.json          name, version, bin, license, repository
+├── package.json          name, version, bin, engines:{node:>=18}, license, repository
 ├── README.md             one-pager, links to main README
 ├── bin/
 │   └── mnemo.js          #!/usr/bin/env node — argv parse + dispatch
 ├── lib/
-│   ├── detect.js         Python version detection, installer cascade
-│   ├── bootstrap.js      uv|pipx|pip install + verify-on-PATH
+│   ├── detect.js         Python version detection, installer cascade, PEP 668 detection
+│   ├── bootstrap.js      uv|pipx|pip install + idempotency check + verify-on-PATH
 │   ├── prompt.js         readline-based scope prompt (no `inquirer`)
 │   ├── runMnemo.js       spawn `mnemo init` / `mnemo uninstall` with flags
 │   └── messages.js       ANSI raw escapes (no `chalk`)
 └── test/
     ├── detect.test.js    mocked execSync per platform
-    ├── bootstrap.test.js cascade order, fallback path
+    ├── bootstrap.test.js cascade order, fallback path, idempotency-skip
     └── prompt.test.js    interactive defaults
 ```
 
-Zero runtime deps. `node:test` for unit tests.
+Zero runtime deps. `node:test` for unit tests (requires Node ≥18, pinned via `engines.node`). Windows compatibility: npm auto-generates a `.cmd` shim from the `bin` field — no extra wrapper code needed, but verify in smoke test.
 
 ### Install flow (`npx mnemo install`)
 
 1. **Parse flags:** `--global` / `--project` (mutex) · `--yes` / `-y` (default scope = global, no prompts) · `--vault-root <path>` (forwarded to `mnemo init`) · `--upgrade` (force `pipx upgrade` / `uv tool upgrade` even when installed) · `--quiet`.
 2. **Detect Python 3.8+:** `python3 --version` → parse. <3.8 or absent → fail with platform-specific install hint, exit 1.
 3. **Detect installer (cascade):** `uv --version` → `pipx --version` → `python3 -m pip --version`. First success wins. No pip → fail with `apt install python3-pip` / `brew install python` hint.
-4. **Install or upgrade mnemo:** `uv tool install mnemo` / `pipx install mnemo` / `python3 -m pip install --user --upgrade mnemo`. Verify `mnemo --version` reachable on PATH; if not, print PATH-fix hint per platform (`pipx ensurepath`, etc.) and exit 2.
+4. **Install or upgrade mnemo (idempotent):** First detect existing install (`pipx list | grep mnemo` or `uv tool list | grep mnemo` or `python3 -m pip show mnemo`).
+   - **Already installed + no `--upgrade`:** print `✓ mnemo already installed (X.Y.Z). Skipping pipx step.` and skip to step 5.
+   - **Already installed + `--upgrade`:** run installer-specific upgrade (`pipx upgrade mnemo` / `uv tool upgrade mnemo` / `pip install --user --upgrade mnemo`).
+   - **Not installed:** run `uv tool install mnemo` / `pipx install mnemo` / `python3 -m pip install --user mnemo`.
+   Verify `mnemo --version` reachable on PATH after install/upgrade; if not, print PATH-fix hint per platform (`pipx ensurepath`, etc.) and exit 2.
 5. **Resolve scope:** `--global` or `--yes` (no scope flag) → global; `--project` → project; else readline prompt with default `[1]` (global).
 6. **Run setup:** `mnemo init --yes` (global) or `mnemo init --project --yes` (project). Forward `--vault-root` if present. Exit code mirrors `mnemo init`.
 7. **Final message:** scope-appropriate next-step instruction.
 
 ### Uninstall flow (`npx mnemo uninstall`)
 
-1. Detect scope from cwd (`<cwd>/.claude/settings.json` mnemo-tagged → project, else global).
-2. Run `mnemo uninstall --yes` (with `--project` if applicable) — strips hooks, MCP, statusLine, slash commands. Vault preserved.
-3. Detect installer (uv/pipx/pip in same cascade).
-4. Run `uv tool uninstall mnemo` / `pipx uninstall mnemo` / `python3 -m pip uninstall --user mnemo`. Vault path printed.
+Flags: `--scope global|project|both` (mirrors install) · `--yes` / `-y` · `--quiet`.
+
+1. **Resolve scope:**
+   - `--scope` flag set → use it.
+   - No flag, only one scope present (project hooks in cwd OR global hooks in `~/.claude/`) → use that one.
+   - No flag, **both** scopes present + interactive → prompt `[1] project [2] global [3] both` (default `1`).
+   - No flag, both scopes present + `--yes` → fail with `error: both project and global installs detected; pass --scope explicitly` (exit 2). Auto-defaulting to one in non-interactive mode would silently leave the other behind.
+2. **Run `mnemo uninstall --yes`** with the right flag(s):
+   - `project` → `mnemo uninstall --project --yes`
+   - `global` → `mnemo uninstall --yes`
+   - `both` → both calls in sequence (project first; vault path of each preserved).
+3. **Detect installer** (uv/pipx/pip in same cascade as install).
+4. **Remove the Python package:** `uv tool uninstall mnemo` / `pipx uninstall mnemo` / `python3 -m pip uninstall --user mnemo`. Vault paths printed (one per scope removed).
 
 ### Python-side changes (`src/mnemo/install/settings.py`)
 
@@ -115,20 +149,24 @@ Zero runtime deps. `node:test` for unit tests.
 
 ### Slash command registration (channel to confirm at implementation)
 
-The exact mechanism Claude Code uses to discover user-defined slash commands is not yet confirmed. Three candidates to investigate during implementation:
+The exact mechanism Claude Code uses to discover user-defined slash commands is not yet confirmed. **Two acceptable candidates** to investigate during implementation:
 
-1. `~/.claude/settings.json > customCommands` (or similar key)
-2. `~/.claude/commands/<name>.json` (per-command files)
-3. Symlink/copy of plugin manifest into `~/.claude/plugins/<name>/`
+1. `~/.claude/settings.json > customCommands` (or similar key) — preferred; fits the existing `inject_*` pattern exactly (lock + backup + idempotency on a single JSON file).
+2. `~/.claude/commands/<name>.json` (per-command files) — acceptable; requires per-file write but still inside `~/.claude/`.
 
-Implementation does a quick spike (read Claude Code docs via WebFetch + inspect a directory after `/plugin install`) to pick the channel. **Fallback contract:** if no stable channel is found, `mnemo init` prints a one-line instruction to run `/plugin marketplace add xyrlan/mnemo && /plugin install mnemo`. The npm install does not block on this — slash commands degrade to manual registration, hooks + MCP install regardless.
+A previously-considered third option (symlink/copy of the plugin manifest into `~/.claude/plugins/<name>/`) is **dropped from scope** — the structural contract Claude Code expects there is unclear, and a wrong guess would silently fail. If the spike rules out both candidates above, implementation falls back directly (below) without inventing a third channel.
+
+Implementation does a quick spike (read Claude Code docs via WebFetch + inspect `~/.claude/` after a fresh `/plugin install` in a clean home) to confirm one of the two channels works. **Fallback contract:** if neither channel is confirmed, `mnemo init` prints a one-line instruction to run `/plugin marketplace add xyrlan/mnemo && /plugin install mnemo`. The npm install does not block on this — slash commands degrade to manual registration, hooks + MCP install regardless.
 
 ## Versioning + release
 
 - npm package version stays at `0.X.*` while mnemo PyPI is at `0.X.*`. Wrapper minor bump only when `mnemo init` CLI signature changes.
 - npm `package.json` pins peer Python version range: `mnemoPythonRange: ">=0.12,<0.13"` — embedded in `bootstrap.js` as the install spec (`mnemo>=0.12,<0.13`).
-- Release workflow: tag `vX.Y.Z` triggers two parallel jobs in CI — `publish-pypi` (existing) and `publish-npm` (new). NPM publish gated on PyPI publish success.
-- Single source of truth for version: `pyproject.toml`. `npm/package.json` version is regenerated from it by a release script (`tools/sync_npm_version.py`).
+- **Release workflow is net-new.** No `release.yml` exists today (only `ci.yml`). This spec creates `.github/workflows/release.yml` with two parallel jobs triggered by `v*` tags:
+  - `publish-pypi` — builds wheel + sdist, uploads via `pypa/gh-action-pypi-publish@release/v1`. Requires `PYPI_API_TOKEN` repo secret.
+  - `publish-npm` — runs after `publish-pypi` succeeds (job-level `needs:`), uses `npm publish` with `--access public`. Requires `NPM_TOKEN` repo secret.
+- Single source of truth for version: `pyproject.toml`. `npm/package.json` version + `bootstrap.js` install spec are regenerated from it by a release script (`tools/sync_npm_version.py`).
+- The `tools/` directory is **net-new** — created by this spec to host release helpers. Convention: each script is a standalone Python file invoked by name from CI; no implicit `__init__.py`. Two scripts in this spec: `tools/sync_npm_version.py` (run by `publish-npm` job before `npm publish`) and `tools/sync_plugin_manifest.py` (run as a manual pre-release step or pre-commit hook — not enforced in CI initially).
 
 ## Risks + mitigations
 
@@ -136,10 +174,12 @@ Implementation does a quick spike (read Claude Code docs via WebFetch + inspect 
 |---|---|
 | Slash command channel undocumented | Fallback to "/plugin install" manual instruction (above). Spec accepts this degradation. |
 | `mnemo` not on PATH after pipx install | `bootstrap.js` validates via `mnemo --version` post-install; emits platform-specific PATH-fix hint and exits 2 if missing. |
-| PEP 668 strict environments (Debian/Ubuntu newer) | Cascade tries uv/pipx first; if both absent, fails clearly with "install pipx via apt/brew first" hint. Never invokes `--break-system-packages`. |
+| PEP 668 strict environments (Debian/Ubuntu newer) | Cascade tries uv/pipx first. `bootstrap.js` detects PEP 668 (parses `pip install --dry-run` for `externally-managed-environment`) and emits the **package-manager-specific pipx install command** for the platform (`apt install python3-pipx` on Debian/Ubuntu 23.04+, `brew install pipx` on macOS, `dnf install pipx` on Fedora). Never invokes `--break-system-packages`. |
 | `mnemo` name taken on npm | Implementation checks `npm view mnemo` first; falls back to `@xyrlan/mnemo`. README updated accordingly. |
 | Wrapper-PyPI version skew | Minor pinning: npm 0.X.* requires mnemo 0.X.* on PyPI. Major bump = paired release. |
 | Install telemetry missing | Out of v1 scope. Add only if real users complain about silent failures. |
+| Re-running `npx mnemo install` on existing install | Detect-and-skip default (see install flow step 4). `--upgrade` forces installer-specific upgrade. Idempotent without `--force` thrashing. |
+| Coexistence after re-run with different scope | `mnemo init` (v0.12+) already detects global+project coexistence and warns. With `npx mnemo install --project --yes`, the warn is auto-confirmed and the install proceeds — documented as supported. User who wants single-scope re-runs `npx mnemo uninstall --scope <other>` first. |
 
 ## Testing
 
