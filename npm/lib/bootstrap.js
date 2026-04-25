@@ -4,7 +4,7 @@ const { execSync, spawnSync } = require("node:child_process");
 const { probe } = require("./detect");
 
 
-const PIN_SPEC = "mnemo>=0.12,<0.13";
+const PIN_SPEC = "mnemo-claude>=0.12,<0.13";
 
 
 function buildInstallCmd(installer, spec = PIN_SPEC) {
@@ -19,9 +19,9 @@ function buildInstallCmd(installer, spec = PIN_SPEC) {
 
 function buildUpgradeCmd(installer) {
   switch (installer) {
-    case "uv":       return "uv tool upgrade mnemo";
-    case "pipx":     return "pipx upgrade mnemo";
-    case "pip-user": return "python3 -m pip install --user --upgrade mnemo";
+    case "uv":       return "uv tool upgrade mnemo-claude";
+    case "pipx":     return "pipx upgrade mnemo-claude";
+    case "pip-user": return "python3 -m pip install --user --upgrade mnemo-claude";
     default: throw new Error(`unknown installer: ${installer}`);
   }
 }
