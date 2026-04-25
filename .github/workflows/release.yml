@@ -39,3 +39,29 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
+
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync npm package version from pyproject.toml
+        run: python3 tools/sync_npm_version.py
+
+      - name: Install (no-op for zero-dep package, runs npm test)
+        working-directory: npm
+        run: npm test
+
+      - name: Publish to npm
+        working-directory: npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
