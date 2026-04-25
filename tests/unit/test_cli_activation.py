@@ -590,8 +590,10 @@ def test_cmd_status_hooks_installed_count_derives_from_hook_definitions(tmp_path
     out = capsys.readouterr().out
 
     expected_total = len(HOOK_DEFINITIONS)
-    assert f"Hooks installed: {expected_total}/{expected_total}" in out, (
-        f"Expected 'Hooks installed: {expected_total}/{expected_total}' but got:\n{out}"
+    # v0.12: status prints scoped lines (`Hooks (global): N/M`) so the global
+    # scope must report the full count when every hook event is present.
+    assert f"Hooks (global): {expected_total}/{expected_total}" in out, (
+        f"Expected 'Hooks (global): {expected_total}/{expected_total}' but got:\n{out}"
     )
 
 

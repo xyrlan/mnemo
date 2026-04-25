@@ -31,6 +31,41 @@ That's it. Use Claude Code normally — your vault populates itself, the
 HOME dashboard regenerates after every extraction, and Claude starts
 consulting captured rules on its own.
 
+### Installation scope: global vs project (v0.12+)
+
+By default `mnemo init` installs **globally** — every Claude Code session,
+in any directory, fires mnemo. Pass `--project` (alias `--local`) to scope
+the install to the current directory only:
+
+```
+mnemo init --project
+```
+
+This writes to `<cwd>/.claude/settings.json` + `<cwd>/.mcp.json`, scaffolds
+a self-contained vault at `<cwd>/.mnemo/`, and appends `.claude/` and
+`.mnemo/` to your project's `.gitignore`. `~/.claude/settings.json`,
+`~/.claude.json`, and `~/mnemo/` stay untouched. Claude Code only loads
+mnemo when launched in that directory; sessions in any other path get the
+unmodified global behavior (or no mnemo at all).
+
+Use this when you want to:
+
+- evaluate mnemo on a single project before committing to it globally,
+- isolate per-project memory so different repos don't share a vault,
+- ship a repo where mnemo is part of the dev environment without forcing
+  collaborators to install it globally — they get it automatically when
+  they `cd` into the project.
+
+`mnemo uninstall --project` removes only the local install (the vault is
+preserved, same as global uninstall). `mnemo status --scope project|global|all`
+reports both scopes independently — Claude Code itself decides which is
+"active" for any given session based on cwd.
+
+> Note on portability: hook commands embed an absolute Python path
+> (`sys.executable`), so `<cwd>/.claude/settings.json` is gitignored by
+> default. Each developer runs their own `mnemo init --project` to wire
+> their interpreter.
+
 ## How it works — Capture → Present → Inject → Reflex
 
 mnemo's tagline is one sentence: *"so your Claude never forgets."* That

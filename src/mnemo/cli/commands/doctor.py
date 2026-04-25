@@ -44,12 +44,35 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
 ]
 
 
+def _detect_install_scope() -> str:
+    """Return 'project', 'global', 'both', or 'none' based on settings files present."""
+    import os
+    project = (Path.cwd() / ".claude" / "settings.json").exists()
+    global_ = Path(os.path.expanduser("~/.claude/settings.json")).exists()
+    if project and global_:
+        return "both"
+    if project:
+        return "project"
+    if global_:
+        return "global"
+    return "none"
+
+
 @command("doctor")
 def cmd_doctor(_args: argparse.Namespace) -> int:
     from mnemo import cli  # late binding for monkeypatched _resolve_vault
     from mnemo.install import preflight
 
     vault = cli._resolve_vault()
+    scope = _detect_install_scope()
+    if scope == "project":
+        print(f"Install scope: project (local) — {Path.cwd()}")
+    elif scope == "global":
+        print("Install scope: global — ~/.claude/settings.json")
+    elif scope == "both":
+        print(f"Install scope: project (local) + global — {Path.cwd()} and ~/.claude/")
+    else:
+        print("Install scope: not installed")
     print("Running diagnostic / preflight checks…")
     result = preflight.run_preflight(vault_root=vault)
     for issue in result.issues:

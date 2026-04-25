@@ -31,8 +31,16 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--vault-root", type=str, default=None, help="override vault location")
     init.add_argument("--no-mirror", action="store_true", help="skip initial Claude memory mirror")
     init.add_argument("--quiet", action="store_true", help="suppress informational output")
+    init.add_argument(
+        "--project", "--local", dest="project", action="store_true",
+        help="install only in the current project (writes <cwd>/.claude/settings.json + <cwd>/.mcp.json + <cwd>/.mnemo/ instead of $HOME)",
+    )
 
-    sub.add_parser("status", help="vault state + hook health + recent activity")
+    status = sub.add_parser("status", help="vault state + hook health + recent activity")
+    status.add_argument(
+        "--scope", choices=["project", "global", "all"], default="all",
+        help="which install scope to report (default: all)",
+    )
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
@@ -57,6 +65,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("statusline-compose", help=argparse.SUPPRESS)
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
+    uninstall.add_argument(
+        "--project", "--local", dest="project", action="store_true",
+        help="remove only the project-local install (<cwd>/.claude/settings.json + <cwd>/.mcp.json)",
+    )
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")

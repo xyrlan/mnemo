@@ -125,3 +125,98 @@ def test_init_interactive_aborts_on_no(tmp_home: Path, monkeypatch: pytest.Monke
     assert rc != 0
     captured = capsys.readouterr()
     assert "abort" in (captured.out + captured.err).lower()
+
+
+# --- v0.12: project-scoped install (`--project` / `--local`) ---
+
+
+def _project_workspace(tmp_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create a clean cwd inside tmp_home and chdir into it."""
+    proj = tmp_home / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    return proj
+
+
+def test_init_project_writes_local_only(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = _project_workspace(tmp_home, monkeypatch)
+    rc = cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
+    assert rc == 0
+    assert (proj / ".claude" / "settings.json").exists()
+    assert (proj / ".mcp.json").exists()
+    assert (proj / ".mnemo").is_dir()
+    assert (proj / ".mnemo" / "mnemo.config.json").exists()
+    settings = json.loads((proj / ".claude" / "settings.json").read_text())
+    assert "SessionStart" in settings["hooks"]
+    mcp = json.loads((proj / ".mcp.json").read_text())
+    assert "mnemo" in mcp["mcpServers"]
+
+
+def test_init_project_does_not_touch_home(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    _project_workspace(tmp_home, monkeypatch)
+    assert cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"]) == 0
+    assert not (tmp_home / ".claude" / "settings.json").exists()
+    assert not (tmp_home / ".claude.json").exists()
+    assert not (tmp_home / "mnemo" / "mnemo.config.json").exists()
+
+
+def test_init_project_idempotent(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = _project_workspace(tmp_home, monkeypatch)
+    args = ["init", "--project", "--yes", "--no-mirror", "--quiet"]
+    assert cli.main(args) == 0
+    assert cli.main(args) == 0
+    mcp = json.loads((proj / ".mcp.json").read_text())
+    assert list(mcp["mcpServers"].keys()).count("mnemo") == 1
+
+
+def test_init_project_warns_on_global_coexistence(
+    tmp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "global-vault"), "--no-mirror", "--quiet"])
+    capsys.readouterr()
+
+    proj = _project_workspace(tmp_home, monkeypatch)
+    rc = cli.main(["init", "--project", "--yes", "--no-mirror"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "WARNING" in captured.out and "global mnemo install" in captured.out
+    assert (proj / ".claude" / "settings.json").exists()
+
+
+def test_init_project_appends_gitignore(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = _project_workspace(tmp_home, monkeypatch)
+    (proj / ".gitignore").write_text("# pre-existing\nnode_modules/\n")
+    cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
+    text = (proj / ".gitignore").read_text()
+    assert "node_modules/" in text
+    assert ".claude/" in text
+    assert ".mnemo/" in text
+    cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
+    text2 = (proj / ".gitignore").read_text()
+    assert text2.count(".claude/") == 1
+    assert text2.count(".mnemo/") == 1
+
+
+def test_uninstall_project_cleans_local_only(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = _project_workspace(tmp_home, monkeypatch)
+    cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
+    rc = cli.main(["uninstall", "--project", "--yes"])
+    assert rc == 0
+    settings = json.loads((proj / ".claude" / "settings.json").read_text())
+    for entries in settings.get("hooks", {}).values():
+        for entry in entries:
+            for h in entry.get("hooks", []):
+                assert "mnemo.hooks." not in h.get("command", "")
+    mcp = json.loads((proj / ".mcp.json").read_text())
+    assert "mnemo" not in mcp.get("mcpServers", {})
+    assert (proj / ".mnemo").is_dir()
+
+
+def test_resolve_vault_prefers_local_config(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "global-vault"), "--no-mirror", "--quiet"])
+    proj = _project_workspace(tmp_home, monkeypatch)
+    cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
+
+    from mnemo.core import config as cfg_mod
+    cfg = cfg_mod.load_config()
+    assert Path(cfg["vaultRoot"]) == proj / ".mnemo"

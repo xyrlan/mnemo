@@ -47,6 +47,12 @@ def _mcp_registered(claude_json_path: Path) -> bool:
     return isinstance(servers, dict) and "mnemo" in servers
 
 
+def _project_mcp_path(cwd: str | None) -> Path:
+    """Return the project-scoped MCP path for the given cwd (or Path.cwd())."""
+    base = Path(cwd) if cwd else Path.cwd()
+    return base / ".mcp.json"
+
+
 def _count_today_denials(vault_root: Path) -> int:
     """Count denial-log entries from today UTC. Reads at most the last 1000 lines.
 
@@ -135,8 +141,14 @@ def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
 
 
 def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) -> str:
-    """Return the mnemo statusline segment, or '' when nothing should show."""
-    if not _mcp_registered(claude_json_path):
+    """Return the mnemo statusline segment, or '' when nothing should show.
+
+    MCP registration is checked against both the project-scoped ``.mcp.json``
+    (under ``cwd``, if any) and the legacy global ``~/.claude.json``. Either
+    one being present is enough — supports both install scopes.
+    """
+    project_mcp = _project_mcp_path(cwd)
+    if not (_mcp_registered(project_mcp) or _mcp_registered(claude_json_path)):
         return ""
     try:
         from mnemo.core.agent import resolve_agent
