@@ -220,3 +220,22 @@ def test_resolve_vault_prefers_local_config(tmp_home: Path, monkeypatch: pytest.
     from mnemo.core import config as cfg_mod
     cfg = cfg_mod.load_config()
     assert Path(cfg["vaultRoot"]) == proj / ".mnemo"
+
+
+def test_init_registers_slash_commands(tmp_home: Path):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    commands_dir = tmp_home / ".claude" / "commands"
+    files = {p.stem for p in commands_dir.glob("*.md")}
+    assert "init-project" in files
+    assert "init" in files
+    init_project = (commands_dir / "init-project.md").read_text()
+    assert "!`python3 -m mnemo init --project`" in init_project
+
+
+def test_uninstall_strips_slash_commands(tmp_home: Path):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    cli.main(["uninstall", "--yes"])
+    commands_dir = tmp_home / ".claude" / "commands"
+    files = {p.stem for p in commands_dir.glob("*.md")} if commands_dir.exists() else set()
+    assert "init-project" not in files
+    assert "init" not in files
