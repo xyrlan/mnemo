@@ -15,7 +15,9 @@ macOS, and Windows.
 ```
 /plugin marketplace add xyrlan/mnemo
 /plugin install mnemo@mnemo-marketplace
-/mnemo init
+/mnemo init                # global: every Claude Code session
+# or
+/mnemo init --project      # project-only: this directory only (v0.12+)
 ```
 
 `mnemo init` is idempotent and does four things:
@@ -437,14 +439,16 @@ MCP retrieval use.
 ## Commands
 
 ```
-mnemo init       first-run setup (idempotent)
-mnemo status     vault state + hook health + auto-brain state
-mnemo doctor     full diagnostic with actionable fixes
-mnemo extract    manually run the extraction pipeline (also rebuilds the dashboard)
-mnemo open       open vault in Obsidian / file manager
-mnemo fix        reset circuit breaker
-mnemo uninstall  remove hooks, MCP server, status line (vault preserved)
-mnemo help       list commands
+mnemo init                  first-run setup (idempotent)
+mnemo init --project        scope the install to <cwd> only (v0.12+)
+mnemo status [--scope ...]  vault state + hook health + auto-brain state
+                            (--scope project|global|all, default all)
+mnemo doctor                full diagnostic with actionable fixes
+mnemo extract               manually run the extraction pipeline (also rebuilds the dashboard)
+mnemo open                  open vault in Obsidian / file manager
+mnemo fix                   reset circuit breaker
+mnemo uninstall [--project] remove hooks, MCP server, status line (vault preserved)
+mnemo help                  list commands
 ```
 
 ## Where things live
