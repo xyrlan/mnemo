@@ -113,9 +113,9 @@ async function runUninstall(argv) {
 
   const installer = pickInstaller();
   if (installer) {
-    const cmd = installer === "uv" ? "uv tool uninstall mnemo"
-              : installer === "pipx" ? "pipx uninstall mnemo"
-              : "python3 -m pip uninstall -y --user mnemo";
+    const cmd = installer === "uv" ? "uv tool uninstall mnemo-claude"
+              : installer === "pipx" ? "pipx uninstall mnemo-claude"
+              : "python3 -m pip uninstall -y --user mnemo-claude";
     if (!flags.quiet) m.info(`Running: ${cmd}`);
     runShell(cmd, { quiet: flags.quiet });
   }

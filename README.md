@@ -50,10 +50,12 @@ consulting captured rules on its own.
 If you'd rather skip npm entirely:
 
 ```bash
-pipx install mnemo                                      # or: uv tool install mnemo
+pipx install mnemo-claude                               # or: uv tool install mnemo-claude
 mnemo init                                              # global
 mnemo init --project                                    # project-only
 ```
+
+The PyPI distribution is named **`mnemo-claude`** (the bare `mnemo` slot was already taken on PyPI by an unrelated package). The CLI binary, import name, and project repository are still `mnemo` — only `pipx install` / `pip install` see the dashed name.
 
 If you'd rather wire the slash commands via Claude Code's marketplace:
 
@@ -62,7 +64,7 @@ If you'd rather wire the slash commands via Claude Code's marketplace:
 /plugin install mnemo@mnemo-marketplace
 ```
 
-(The marketplace path requires `pipx install mnemo` first — `/plugin install` registers slash commands but does not install the Python runtime.)
+(The marketplace path requires `pipx install mnemo-claude` first — `/plugin install` registers slash commands but does not install the Python runtime.)
 
 ### Installation scope: global vs project (v0.12+)
 
