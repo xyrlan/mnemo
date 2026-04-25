@@ -147,16 +147,31 @@ Flags: `--scope global|project|both` (mirrors install) · `--yes` / `-y` · `--q
 - `cmd_init` calls `inj.inject_slash_commands(target_settings)` after `inj.inject_statusline(...)`. `cmd_uninstall` mirrors with `uninject_slash_commands`.
 - `tools/sync_plugin_manifest.py` (new) regenerates `.claude-plugin/plugin.json` from `SLASH_COMMANDS` to keep marketplace path consistent. Pre-commit hook or manual run — not enforced in CI initially.
 
-### Slash command registration (channel to confirm at implementation)
+### Slash command registration (channel confirmed by 2026-04-25 spike)
 
-The exact mechanism Claude Code uses to discover user-defined slash commands is not yet confirmed. **Two acceptable candidates** to investigate during implementation:
+**Channel: `~/.claude/commands/<name>.md`** — markdown files with YAML frontmatter, one per command, in the user's `commands` directory (or `<cwd>/.claude/commands/` for project scope). Confirmed by Claude Code docs (https://code.claude.com/docs/en/slash-commands): "A file at `.claude/commands/deploy.md` and a skill at `.claude/skills/deploy/SKILL.md` both create `/deploy` and work the same way. Your existing `.claude/commands/` files keep working."
 
-1. `~/.claude/settings.json > customCommands` (or similar key) — preferred; fits the existing `inject_*` pattern exactly (lock + backup + idempotency on a single JSON file).
-2. `~/.claude/commands/<name>.json` (per-command files) — acceptable; requires per-file write but still inside `~/.claude/`.
+Spike rejected the originally-preferred channel #1 (`~/.claude/settings.json > customCommands`): no such key exists in Claude Code. Adopted channel #2 with the actual documented format (`.md` not `.json`).
 
-A previously-considered third option (symlink/copy of the plugin manifest into `~/.claude/plugins/<name>/`) is **dropped from scope** — the structural contract Claude Code expects there is unclear, and a wrong guess would silently fail. If the spike rules out both candidates above, implementation falls back directly (below) without inventing a third channel.
+**File format:**
 
-Implementation does a quick spike (read Claude Code docs via WebFetch + inspect `~/.claude/` after a fresh `/plugin install` in a clean home) to confirm one of the two channels works. **Fallback contract:** if neither channel is confirmed, `mnemo init` prints a one-line instruction to run `/plugin marketplace add xyrlan/mnemo && /plugin install mnemo`. The npm install does not block on this — slash commands degrade to manual registration, hooks + MCP install regardless.
+```markdown
+---
+description: first-run setup (global)
+allowed-tools: Bash
+disable-model-invocation: true
+---
+
+!`python3 -m mnemo init`
+```
+
+The body uses Claude Code's bash-injection syntax (`` !`<cmd>` ``) so typing `/init` runs `python3 -m mnemo init` in a subshell, captures output, and surfaces it to the user via Claude. `disable-model-invocation: true` keeps Claude from auto-loading these slash entries — they're explicit user actions only.
+
+**`SLASH_COMMAND_TAG`:** files mnemo writes carry an HTML comment marker `<!-- mnemo:slash-command -->` near the top so `uninject_slash_commands` can identify and remove them without touching third-party command files. (Filename alone isn't a reliable tag — third parties may install commands with the same names.)
+
+**`inject_slash_commands(commands_dir: Path)` signature:** takes the `commands/` directory (`~/.claude/commands` or `<cwd>/.claude/commands`), creates it if missing, writes one `.md` per `SLASH_COMMANDS` entry. Idempotent: existing mnemo-tagged files are overwritten; non-mnemo files are left alone.
+
+**Fallback contract:** preserved. If during implementation the bash-injection format proves unreliable (e.g. if Claude Code rejects `disable-model-invocation` for `commands/*.md`), `mnemo init` falls back to printing the `/plugin marketplace` instruction. The npm install does not block on this — slash commands degrade to manual registration, hooks + MCP install regardless.
 
 ## Versioning + release
 
