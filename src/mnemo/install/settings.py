@@ -360,3 +360,92 @@ def _do_uninject_statusline(settings_path: Path, vault_root: Path) -> None:
 
     sl_mod.clear_state(vault_root)
     settings_path.write_text(json.dumps(data, indent=2))
+
+
+# --- v0.13: slash command registration (replaces /plugin install dance) ---
+#
+# Slash commands in Claude Code are filesystem-based: each command is a
+# markdown file at ``~/.claude/commands/<name>.md`` (global) or
+# ``<cwd>/.claude/commands/<name>.md`` (project), with optional YAML
+# frontmatter and a body that uses Claude Code's bash-injection syntax
+# ``!`<cmd>``` to actually run shell commands. We write one .md per
+# slash command and tag each file with ``SLASH_COMMAND_TAG`` so uninject
+# can identify mnemo-owned files without touching third-party commands
+# that happen to share a filename.
+
+SLASH_COMMAND_TAG = "<!-- mnemo:slash-command -->"
+
+
+SLASH_COMMANDS: dict[str, dict[str, str]] = {
+    "init":              {"description": "first-run setup (global)",
+                          "command": "python3 -m mnemo init"},
+    "init-project":      {"description": "first-run setup scoped to <cwd> (v0.12+)",
+                          "command": "python3 -m mnemo init --project"},
+    "status":            {"description": "vault state + hook health",
+                          "command": "python3 -m mnemo status"},
+    "doctor":            {"description": "full diagnostic",
+                          "command": "python3 -m mnemo doctor"},
+    "open":              {"description": "open vault in Obsidian",
+                          "command": "python3 -m mnemo open"},
+    "fix":               {"description": "reset circuit breaker",
+                          "command": "python3 -m mnemo fix"},
+    "uninstall":         {"description": "remove hooks (global; keeps vault)",
+                          "command": "python3 -m mnemo uninstall"},
+    "uninstall-project": {"description": "remove hooks (project-scoped; keeps vault)",
+                          "command": "python3 -m mnemo uninstall --project"},
+    "help":              {"description": "list commands",
+                          "command": "python3 -m mnemo help"},
+}
+
+
+def _render_slash_command(name: str, spec: dict[str, str]) -> str:
+    desc = spec["description"].replace('"', '\\"')
+    body = (
+        f"{SLASH_COMMAND_TAG}\n"
+        "---\n"
+        f"description: {desc}\n"
+        "allowed-tools: Bash\n"
+        "disable-model-invocation: true\n"
+        "---\n"
+        "\n"
+        f"!`{spec['command']}`\n"
+    )
+    return body
+
+
+def inject_slash_commands(commands_dir: Path) -> None:
+    """Write mnemo slash command files into ``commands_dir``. Idempotent.
+
+    Existing mnemo-tagged files are overwritten. Third-party files (without
+    the SLASH_COMMAND_TAG marker) are left alone, even when they share a
+    filename with one of mnemo's commands.
+    """
+    commands_dir = Path(commands_dir)
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    for name, spec in SLASH_COMMANDS.items():
+        target = commands_dir / f"{name}.md"
+        # If a non-mnemo file is already at this path, leave it alone.
+        if target.exists():
+            try:
+                if SLASH_COMMAND_TAG not in target.read_text():
+                    continue
+            except OSError:
+                continue
+        target.write_text(_render_slash_command(name, spec))
+
+
+def uninject_slash_commands(commands_dir: Path) -> None:
+    """Remove mnemo-tagged slash command files; preserve third-party files."""
+    commands_dir = Path(commands_dir)
+    if not commands_dir.exists():
+        return
+    for path in commands_dir.glob("*.md"):
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        if SLASH_COMMAND_TAG in text:
+            try:
+                path.unlink()
+            except OSError:
+                pass
