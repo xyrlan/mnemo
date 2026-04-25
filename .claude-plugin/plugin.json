@@ -6,12 +6,14 @@
   "license": "MIT",
   "homepage": "https://github.com/xyrlan/mnemo",
   "commands": [
-    { "name": "init",      "description": "first-run setup", "command": "python3 -m mnemo init" },
-    { "name": "status",    "description": "vault state + hook health", "command": "python3 -m mnemo status" },
-    { "name": "doctor",    "description": "full diagnostic", "command": "python3 -m mnemo doctor" },
-    { "name": "open",      "description": "open vault in Obsidian", "command": "python3 -m mnemo open" },
-    { "name": "fix",       "description": "reset circuit breaker", "command": "python3 -m mnemo fix" },
-    { "name": "uninstall", "description": "remove hooks (keeps vault)", "command": "python3 -m mnemo uninstall" },
-    { "name": "help",      "description": "list commands", "command": "python3 -m mnemo help" }
+    { "name": "init",              "description": "first-run setup (global)", "command": "python3 -m mnemo init" },
+    { "name": "init-project",      "description": "first-run setup scoped to <cwd> (v0.12+)", "command": "python3 -m mnemo init --project" },
+    { "name": "status",            "description": "vault state + hook health", "command": "python3 -m mnemo status" },
+    { "name": "doctor",            "description": "full diagnostic", "command": "python3 -m mnemo doctor" },
+    { "name": "open",              "description": "open vault in Obsidian", "command": "python3 -m mnemo open" },
+    { "name": "fix",               "description": "reset circuit breaker", "command": "python3 -m mnemo fix" },
+    { "name": "uninstall",         "description": "remove hooks (global; keeps vault)", "command": "python3 -m mnemo uninstall" },
+    { "name": "uninstall-project", "description": "remove hooks (project-scoped; keeps vault)", "command": "python3 -m mnemo uninstall --project" },
+    { "name": "help",              "description": "list commands", "command": "python3 -m mnemo help" }
   ]
 }
