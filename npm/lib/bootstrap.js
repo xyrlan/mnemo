@@ -1,7 +1,7 @@
 "use strict";
 
 const { execSync, spawnSync } = require("node:child_process");
-const { probe } = require("./detect");
+const { probeOnPath } = require("./detect");
 
 
 const PIN_SPEC = "mnemo-claude>=0.13,<0.14";
@@ -27,7 +27,7 @@ function buildUpgradeCmd(installer) {
 }
 
 
-function isAlreadyInstalled(probeFn = probe) {
+function isAlreadyInstalled(probeFn = probeOnPath) {
   return probeFn("mnemo");
 }
 
