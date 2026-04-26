@@ -27,3 +27,10 @@ def test_no_args_shows_help(capsys: pytest.CaptureFixture):
     captured = capsys.readouterr()
     assert rc == 0
     assert "init" in captured.out
+
+
+def test_version_flag_prints_version(capsys: pytest.CaptureFixture):
+    rc = cli.main(["--version"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "mnemo" in captured.out

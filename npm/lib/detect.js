@@ -24,6 +24,17 @@ function probe(cmd) {
 }
 
 
+function probeOnPath(cmd) {
+  const lookup = process.platform === "win32" ? `where ${cmd}` : `command -v ${cmd}`;
+  try {
+    execSync(lookup, { stdio: "ignore", shell: true });
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+
 function pickInstaller(probeFn = probe) {
   if (probeFn("uv")) return "uv";
   if (probeFn("pipx")) return "pipx";
@@ -64,4 +75,4 @@ function pep668InstallHint() {
 }
 
 
-module.exports = { parsePythonVersion, probe, pickInstaller, detectPython, isPep668, pep668InstallHint };
+module.exports = { parsePythonVersion, probe, probeOnPath, pickInstaller, detectPython, isPep668, pep668InstallHint };
