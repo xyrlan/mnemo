@@ -2,13 +2,28 @@
 
 > The Obsidian that populates itself so your Claude never forgets.
 
-**mnemo** is a Claude Code plugin that turns every coding session into a
-self-organizing knowledge base — and then feeds that knowledge back into
-Claude so it stops forgetting what you taught it last week.
+**mnemo** turns every Claude Code session into a self-organizing knowledge
+base, then feeds that knowledge back into Claude so it stops forgetting
+what you taught it last week.
 
-It runs as a hooks-only, stdlib-only Python package. Zero third-party
-dependencies, zero network calls. Identical on Linux,
-macOS, and Windows.
+It runs locally as a hooks-only Python plugin — zero third-party
+dependencies, zero network calls, identical on Linux, macOS, and Windows.
+
+## What it does
+
+- **Captures** every session's lifecycle into a Markdown vault at `~/mnemo/`
+  (logs, memory mirrors, end-of-session briefings).
+- **Extracts** that raw trail into curated rules under
+  `shared/{feedback,user,reference,project}/` — your project's brain.
+- **Surfaces** the brain back into Claude:
+  - a HOME dashboard that regenerates after every extraction
+  - an MCP server Claude can query for topics and rules
+  - a status line showing the brain's heartbeat
+  - automatic injection of the most relevant rule on every prompt
+  - hard guardrails on `Bash` and contextual hints on `Edit`/`Write`
+
+The result: Claude consumes in real time the rules you taught it weeks
+earlier in a different session, without you having to copy them in.
 
 ## Install
 
@@ -18,510 +33,101 @@ One command:
 npx @xyrlan/mnemo install
 ```
 
-That installs the Python package (via `uv` / `pipx` / `pip --user`, whichever is available), prompts you to choose **global** (every Claude Code session) or **project** (this directory only), wires the hooks + MCP server + slash commands, and you're done.
+That installs the Python package (via `uv` / `pipx` / `pip --user`,
+whichever is available), prompts you to choose **global** (every Claude
+Code session) or **project** (this directory only), and wires the hooks,
+MCP server, and slash commands.
 
-Non-interactive variants:
-
-```bash
-npx @xyrlan/mnemo install --yes              # global, no prompts
-npx @xyrlan/mnemo install --project --yes    # project-scoped, no prompts
-```
-
-`npx @xyrlan/mnemo uninstall [--scope global|project|both]` reverses everything; the vault is preserved.
-
-**Prerequisites:** Python 3.8+ on your machine. Node is already there if you run `npx`. mnemo's npm wrapper is zero-dep and ~150 LOC — it's a thin bootstrap, not the runtime.
-
-`mnemo init` (run automatically by `npx … install`) is idempotent and does four things:
-
-1. Scaffolds a vault at `~/mnemo/` (or wherever you point it)
-2. Injects four hooks into `~/.claude/settings.json`:
-   `SessionStart`, `SessionEnd`, `PreToolUse` (rule activation, v0.5),
-   and `UserPromptSubmit` (Prompt Reflex, v0.8)
-3. Registers a stdio MCP server in `~/.claude.json` so Claude Code can call mnemo's tools
-4. Wires an additive status line composer (preserves your existing one if you have it)
-5. Writes `~/.claude/commands/<name>.md` slash command files so `/init`, `/status`, `/doctor`, etc. work inside Claude Code without a separate plugin install
-
-That's it. Use Claude Code normally — your vault populates itself, the
-HOME dashboard regenerates after every extraction, and Claude starts
-consulting captured rules on its own.
-
-### Alternative install paths
-
-If you'd rather skip npm entirely:
+Non-interactive:
 
 ```bash
-pipx install mnemo-claude                               # or: uv tool install mnemo-claude
-mnemo init                                              # global
-mnemo init --project                                    # project-only
+npx @xyrlan/mnemo install --yes              # global
+npx @xyrlan/mnemo install --project --yes    # this directory only
 ```
 
-The PyPI distribution is named **`mnemo-claude`** (the bare `mnemo` slot was already taken on PyPI by an unrelated package). The CLI binary, import name, and project repository are still `mnemo` — only `pipx install` / `pip install` see the dashed name.
+To remove:
 
-If you'd rather wire the slash commands via Claude Code's marketplace:
-
-```
-/plugin marketplace add xyrlan/mnemo
-/plugin install mnemo@mnemo-marketplace
+```bash
+npx @xyrlan/mnemo uninstall
 ```
 
-(The marketplace path requires `pipx install mnemo-claude` first — `/plugin install` registers slash commands but does not install the Python runtime.)
+The vault is always preserved on uninstall.
 
-### Installation scope: global vs project (v0.12+)
+**Prerequisite:** Python 3.8+ on PATH. Node is already there if you can
+run `npx`.
 
-By default `mnemo init` installs **globally** — every Claude Code session,
-in any directory, fires mnemo. Pass `--project` (alias `--local`) to scope
-the install to the current directory only:
+### Without npm
 
-```
-mnemo init --project
-```
-
-This writes to `<cwd>/.claude/settings.json` + `<cwd>/.mcp.json`, scaffolds
-a self-contained vault at `<cwd>/.mnemo/`, and appends `.claude/` and
-`.mnemo/` to your project's `.gitignore`. `~/.claude/settings.json`,
-`~/.claude.json`, and `~/mnemo/` stay untouched. Claude Code only loads
-mnemo when launched in that directory; sessions in any other path get the
-unmodified global behavior (or no mnemo at all).
-
-Use this when you want to:
-
-- evaluate mnemo on a single project before committing to it globally,
-- isolate per-project memory so different repos don't share a vault,
-- ship a repo where mnemo is part of the dev environment without forcing
-  collaborators to install it globally — they get it automatically when
-  they `cd` into the project.
-
-`mnemo uninstall --project` removes only the local install (the vault is
-preserved, same as global uninstall). `mnemo status --scope project|global|all`
-reports both scopes independently — Claude Code itself decides which is
-"active" for any given session based on cwd.
-
-> Note on portability: hook commands embed an absolute Python path
-> (`sys.executable`), so `<cwd>/.claude/settings.json` is gitignored by
-> default. Each developer runs their own `mnemo init --project` to wire
-> their interpreter.
-
-## How it works — Capture → Present → Inject → Reflex
-
-mnemo's tagline is one sentence: *"so your Claude never forgets."* That
-breaks into four stages, each shipped in a different release, all live
-together from v0.8 on.
-
-### 1. Capture (v0.2 → v0.3.1)
-
-mnemo watches Claude Code's lifecycle hooks and writes a structured trail
-into your vault as you work:
-
-- **Session start / end markers** — `🟢` and `🔴` in `bots/<repo>/logs/YYYY-MM-DD.md`
-- **Claude memory mirror** — anything Claude saves to `~/.claude/projects/*/memory/`
-  is mirrored into `bots/<repo>/memory/` so it lives next to the rest of the trail
-- **Per-session briefings** *(opt-in, v0.3.1)* — at session end, an LLM pass
-  summarizes the full transcript into a structured handoff document under
-  `bots/<repo>/briefings/sessions/`. Briefings are the dense input that
-  feeds extraction; they're the difference between mnemo capturing
-  ~1 file/day vs. capturing every meaningful decision.
-
-The extraction pipeline (`mnemo extract`, also auto-run after sessions
-when enabled) consolidates everything in `bots/` into canonical Tier 2
-pages under `shared/{feedback,user,reference,project}/`. Single-source
-pages auto-promote into the canonical layer; multi-source clusters
-(cross-agent merges) stage in `shared/_inbox/<type>/` for review. Your
-manual edits to auto-promoted files are protected by content-addressing —
-a conflict produces a `.proposed.md` sibling instead of overwriting your
-work.
-
-### 2. Present (v0.4)
-
-Capture without surfacing is just a dump. v0.4 added two consumer
-surfaces over the same data:
-
-- **HOME.md dashboard** — a managed block at the top of `HOME.md`
-  regenerates after every extraction. Pages are grouped by trust tier
-  (cross-agent synthesized first, single-source auto-promoted second) and
-  by topic tag, so you can scan the project brain in seconds inside
-  Obsidian. Everything below the managed block is yours to edit; mnemo
-  never touches it.
-- **Dimensional tags** — extraction asks the LLM to tag each page with
-  topic kebab-case identifiers (`auth`, `react`, `package-management`),
-  using a controlled-vocabulary hint built from your existing vault tags
-  to prevent sprawl. Tags become the ontology Claude navigates in v0.5.
-
-### 3. Inject (v0.5)
-
-The loop closes. Claude Code itself reaches into mnemo at the start of
-every session, no manual command needed.
-
-- **MCP stdio server** — `mnemo init` registers a long-running JSON-RPC
-  server in `~/.claude.json` exposing three read-only tools. All three
-  default to `scope="project"` (only rules owned by the current repo);
-  pass `scope="vault"` for cross-project lookups:
-  - `list_rules_by_topic(topic, scope?)` — slugs sorted by source count desc
-    (multi-agent synthesized rules surface first)
-  - `read_mnemo_rule(slug, scope?)` — full body + frontmatter
-  - `get_mnemo_topics(scope?)` — sorted union of topic tags
-- **SessionStart topic injection** *(opt-in)* — the SessionStart hook
-  emits a ~120-token instruction listing the topics in your vault and
-  telling Claude to call the MCP tools BEFORE writing code when the task
-  matches a known topic. ~120 tokens regardless of vault size: the topic
-  list is the only thing pre-loaded; rule bodies are fetched on demand.
-- **Filter parity** — both the dashboard and the MCP tools call the same
-  `is_consumer_visible` predicate, so evolving and needs-review pages
-  never reach Claude.
-
-The result: Claude consumes in real time the rules you taught it weeks
-earlier in a different session, without you having to remember to copy
-them in.
-
-### 4. Reflex (v0.8)
-
-SessionStart tells Claude *what topics exist*. PreToolUse fires *when Claude
-touches a file*. **Reflex** closes the gap in between: it reacts to the
-actual prompt you just typed and injects the single most relevant rule
-before Claude thinks about the question.
-
-- **BM25F retrieval** — the `UserPromptSubmit` hook tokenizes your prompt
-  (lowercase + fenced-code stripping + EN/PT stopwords), scores every
-  consumer-visible rule across five weighted fields (`name`, `topic_tags`,
-  `aliases`, `description`, `body`), and returns the top candidate. Pure
-  stdlib; p50 1.3 ms / p95 1.7 ms on a 500-rule vault.
-- **Triple-gate confidence test** — silence is the default. A rule is
-  injected only if it clears all three gates: term-overlap ≥ 2, relative
-  gap ≥ 1.5× over the runner-up, and absolute score ≥ 2.0. Low-confidence
-  matches stay silent; wrong context is worse than no context.
-- **`aliases:` bridges** — rules can declare a list of lowercase synonym
-  tokens (e.g. `aliases: [banco, database, db]`) so a prompt in Portuguese
-  activates an English-written rule. Extraction auto-emits aliases when
-  the rule body carries domain terms with bilingual synonyms.
-- **Session-lifetime dedupe** — a rule injected once is not re-injected
-  the same day (`injected_cache` in `.mnemo/mcp-call-counter.json`). The
-  `PreToolUse` enrichment path reads the same cache so Reflex and
-  enrichment never double-surface the same rule in one session.
-- **Cap** — each session emits at most `reflex.maxEmissionsPerSession`
-  (default 10). Hitting the cap logs `silence_reason: session_cap_reached`
-  for doctor to analyze.
-- **Fail-open absolute** — any exception anywhere in the pipeline returns
-  exit 0 with empty stdout. Reflex can never stall a prompt.
-
-### Last-briefing handoff (v0.10+)
-
-When `briefings.injectLastOnSessionStart` is true (default), every new Claude
-Code session in a project whose canonical agent has at least one briefing
-on disk gets a `[last-briefing session=… date=… duration_minutes=…] … [/last-briefing]`
-block appended to the SessionStart injection envelope. Worktrees of the same
-repo share one briefing pool, resolved via `.git` worktree pointers.
-
-If you have orphan worktree briefings from before this change, run
-`mnemo migrate-worktree-briefings --repos /path/to/repo --dry-run` to preview
-moves, then drop `--dry-run` to apply.
-
-**Known limitation (early upgraders):** If you upgraded to v0.10 before any
-canonical-repo session wrapped up, `mnemo doctor` cannot detect orphan
-worktree briefings (the check requires the canonical agent to have at least
-one briefing on disk). In that case, run the migration command manually and
-inspect `bots/` for `<repo>-<suffix>` subdirectories.
-
-### Cost telemetry (v0.10+)
-
-Every `llm.call()` (briefing + extraction consolidations) writes a
-`tool: "llm.call"` entry into `.mnemo/mcp-access-log.jsonl` with
-`usage.input_tokens` / `usage.output_tokens`. Every SessionStart writes a
-`tool: "session_start.inject"` entry with `envelope_bytes`. `mnemo telemetry`
-aggregates both into per-purpose token totals + estimated USD (using a
-hard-coded pricing table at `src/mnemo/core/pricing.py` — bump the table
-when Anthropic prices change).
-
-## Scope model (v0.7+)
-
-Rules in `shared/{feedback,user,reference}/` are **local by default**: a rule
-is visible only from projects that appear in its `sources[]` frontmatter. A
-rule is automatically promoted to **universal** when it has been seen in at
-least `scoping.universalThreshold` distinct projects (default: 2). Universal
-rules are visible from every project.
-
-MCP retrieval accepts three `scope` values:
-
-| `scope`       | Returns                                              |
-|---------------|------------------------------------------------------|
-| `"project"`   | local rules + universal rules (default)              |
-| `"local-only"`| local rules only (legacy v0.6.2 behaviour)           |
-| `"vault"`     | every consumer-visible rule                          |
-
-Promotion and demotion are automatic: the index is re-derived from `sources[]`
-on every SessionStart. To change the threshold, set
-`scoping.universalThreshold` in `mnemo.config.json`.
-
-## Status line
-
-After `mnemo init`, your Claude Code status line shows the brain's heartbeat:
-
-```
-mnemo mcp · 9 topics · 7↓ today · 3⚡
+```bash
+pipx install mnemo-claude        # or: uv tool install mnemo-claude
+mnemo init                        # global, or:
+mnemo init --project              # current directory only
 ```
 
-- `mnemo mcp` — MCP server is registered in `~/.claude.json`
-- `9 topics` — topic tags currently known in your vault (live count)
-- `7↓ today` — number of times Claude has called a mnemo MCP tool today
-  (resets at midnight, atomic write)
-- `3⚡` — Reflex emissions today (v0.8). The bolt only appears when at
-  least one rule has been injected via `UserPromptSubmit` this day.
+## Use it
 
-The status line is **additive**: if you already had a custom statusLine
-in `~/.claude/settings.json`, mnemo wraps it instead of overwriting.
-Your original output appears first, then ` · `, then mnemo's segment.
-`mnemo uninstall` restores your original cleanly. If you manually edit
-settings.json after `mnemo init`, `mnemo doctor` warns about the drift.
+Once installed, just use Claude Code normally. mnemo runs in the
+background:
 
-## Runtime flags
+- session start/end markers, memory mirroring, and briefings happen
+  automatically
+- extraction runs after sessions end (when there's enough new material)
+- on every prompt, mnemo retrieves the single most relevant rule and
+  injects it before Claude responds
+- when Claude is about to edit a file or run a command that matches one
+  of your rules, the rule body is surfaced as context (or hard-blocked,
+  if you marked it as a guardrail)
 
-The Capture → Present → Inject → Reflex loop is **on by default** —
-`mnemo init` gives you the full product, not an inert scaffold. The
-five runtime flags can be flipped to `false` in `~/mnemo/mnemo.config.json`
-if you want to disable specific behaviors:
+Open the vault any time:
 
-```json
-{
-  "extraction": {
-    "auto": {
-      "enabled": true,
-      "minNewMemories": 1,
-      "minIntervalMinutes": 60
-    }
-  },
-  "briefings": {
-    "enabled": true
-  },
-  "injection": {
-    "enabled": true
-  },
-  "enrichment": {
-    "enabled": true
-  },
-  "reflex": {
-    "enabled": true
-  }
-}
+```bash
+mnemo open
 ```
 
-- **`extraction.auto.enabled`** *(default `true`)* — at every session end,
-  if there are at least `minNewMemories` new files (default 1) and at
-  least `minIntervalMinutes` since the last run (default 60), spawn a
-  detached background extraction. The hook returns in <100ms; extraction
-  runs asynchronously. Check progress via `mnemo status`, diagnose with
-  `mnemo doctor`.
-- **`briefings.enabled`** *(default `true`)* — at every session end,
-  generate a per-session briefing into `bots/<repo>/briefings/sessions/`.
-  Briefings feed the next extraction run as dense input.
-- **`injection.enabled`** *(default `true`, v0.5)* — at every session
-  start, emit the MCP topic list into Claude's `additionalContext`. The
-  MCP tools are always available once `mnemo init` has run; this flag
-  controls only whether Claude is *told about* the topics at session start.
-- **`enrichment.enabled`** *(default `true`, v0.5)* — when Claude is about
-  to `Edit`/`Write`/`MultiEdit` a file matching a rule's `path_globs`, the
-  PreToolUse hook injects the rule body as additional context before the
-  tool runs. See "Rule activation" below for details.
-- **`reflex.enabled`** *(default `true`, v0.8)* — on every user prompt,
-  the `UserPromptSubmit` hook runs BM25F retrieval over the vault-wide
-  reflex index and injects the single highest-confidence rule preview
-  inline (triple-gate: overlap ≥ 2, relative gap ≥ 1.5×, absolute floor
-  ≥ 2.0). Tune `reflex.thresholds.*`, `reflex.bm25f.fieldWeights`, and
-  `reflex.maxEmissionsPerSession` in `mnemo.config.json`. See "Prompt
-  Reflex" below.
-
-## Rule activation *(v0.5)*
-
-The three flags above tell Claude *that rules exist* at session start. **Rule
-activation** makes mnemo push a rule directly into Claude's turn at the exact
-moment it's about to run a tool — not just once per session. Two modes share
-the same per-project index and the same `PreToolUse` hook:
-
-- **Enforcement** — when Claude is about to run a `Bash` command that
-  matches a `deny_pattern` regex or a `deny_command` prefix from any rule
-  owned by the current project, the hook emits `permissionDecision: deny`
-  and Claude Code blocks the call with the rule's `reason` string visible to
-  the model. Use for hard guardrails: "never commit with Co-Authored-By",
-  "never run `drizzle-kit push`".
-- **Enrichment** — when Claude is about to run `Edit`, `Write`, or
-  `MultiEdit` on a file path that matches one of a rule's `path_globs`, the
-  hook emits `additionalContext` containing the rule body preview (up to 3
-  matching rules, ordered by source count). Claude sees the text as a
-  `<system-reminder>` *before* performing the edit. Use for advisory rules
-  with file-level scope: "HeroUI v3 modals use the Drawer slot pattern",
-  "React key remount is required for these components".
-
-Both modes are **strictly per-project** — a rule captured while working on
-project A never fires while working on project B. Project ownership is
-derived from the `sources:` frontmatter field (e.g. `bots/sg-imports/...`
-belongs to `sg-imports`). Cross-project rules self-heal via repeated
-capture.
-
-### Defaults and kill switch
-
-- **`enforcement.enabled`** defaults to **`true`**. This is safe because
-  enforcement is *inert until you own a rule with an `enforce:` block* — a
-  fresh vault has zero such rules, so the hook fires but matches nothing.
-  Rules gain activation metadata either by hand-editing the frontmatter or
-  when the extraction LLM emits it for a high-confidence rule (see "Rule
-  frontmatter shape" below).
-- **`enrichment.enabled`** defaults to **`true`** during the dogfood
-  phase. Enrichment surfaces context every time you edit a file matching a
-  rule's `path_globs`. If you want to silence it temporarily while iterating
-  on rules, set to `false` in `mnemo.config.json`.
-
-To disable enforcement (kill switch), add to `~/mnemo/mnemo.config.json`:
-
-```json
-{
-  "enforcement": { "enabled": false }
-}
-```
-
-The `PreToolUse` hook is **absolutely fail-open**: any error at any stage
-(missing index, corrupt JSON, exception in match logic) returns exit code 0
-with empty stdout. The hook can never block Claude Code from running. You
-can trust it not to brick your session even if mnemo itself is broken.
-
-### Rule frontmatter shape
-
-Both blocks are optional and live in a feedback page's YAML frontmatter:
-
-```yaml
----
-name: no-co-authored-by-in-commits
-description: Never add Co-Authored-By trailers in git commits
-type: feedback
-stability: stable
-sources:
-  - bots/mnemo/memory/feedback_no_coauthored.md
-tags:
-  - git
-  - workflow
-aliases:
-  - coauthor
-  - trailer
-  - commit-footer
-enforce:
-  tool: Bash
-  deny_pattern: git commit.*Co-Authored-By
-  reason: No Co-Authored-By trailers in commits
-activates_on:
-  tools: [Edit, Write, MultiEdit]
-  path_globs:
-    - '**/components/modals/**'
-    - '**/*modal*.tsx'
----
-```
-
-- `aliases` *(v0.8, optional)* — a list of 3-8 lowercase synonym tokens
-  used by the Reflex BM25F index (`aliases` field weight 2.5). Emit when
-  the rule carries domain terms a developer would naturally type in a
-  different language or abbreviation (PT↔EN, `db`↔`database`↔`banco`).
-  Omit for generic rules without natural synonyms; extraction auto-emits
-  aliases for high-signal rules.
-
-- `enforce.tool` must be `"Bash"` in v0.5 (the only tool v1 supports
-  for hard-blocking).
-- `enforce.deny_pattern` is a regex compiled with `re.IGNORECASE | re.DOTALL`
-  and pre-validated against ReDoS at index build time (a time-budget probe
-  rejects pathological patterns like `(a+)+b`).
-- `enforce.deny_command` is an alternative to the regex: a list of command
-  prefixes; the hook normalizes the command (strips `sudo`, `env FOO=bar`,
-  shell inline env) before the match.
-- `activates_on.tools` must be a subset of `{Edit, Write, MultiEdit}`.
-- `activates_on.path_globs` supports `**` (match any number of path
-  segments), single `*` (no slash crossing), and bracket classes with
-  `[!...]` negation.
-
-Rules tagged `needs-review` or with `stability: evolving`, and rules still
-in `shared/_inbox/`, **never** become activation rules — they're gated
-through the same `is_consumer_visible` predicate that the dashboard and
-MCP retrieval use.
-
-### Observability
-
-- `mnemo status` — shows per-project rule counts, recent denials, recent
-  enrichments, and the last denied command.
-- `mnemo doctor` — checks for malformed `enforce:`/`activates_on:` blocks,
-  stale activation index, suspicious `deny_pattern` regex, and overly
-  broad `path_globs` (`**/*`, `*`).
-- `<vault>/.mnemo/denial-log.jsonl` — JSONL stream of every deny, with
-  slug, reason, tool, full command (truncated to 500 chars), timestamp.
-- `<vault>/.mnemo/enrichment-log.jsonl` — JSONL stream of every enrichment,
-  with hit slugs, tool name, file path, timestamp.
-- `<vault>/.mnemo/rule-activation-index.json` — the per-project index
-  written by `build_index` after every extraction and on session start. If
-  you suspect drift, delete it; the next session rebuilds it.
-
-### Reflex observability *(v0.8)*
-
-- `mnemo status` — shows whether `reflex.enabled` and today's emission count.
-- `mnemo doctor` — three new checks:
-  - `reflex-index-stale` — flags when `reflex.enabled=true` but
-    `reflex-index.json` is missing (usually: never ran `mnemo extract`).
-  - `reflex-session-cap-hit` — scans the last 7 days of `reflex-log.jsonl`
-    and warns when >20% of sessions hit `session_cap_reached`. Tune
-    `reflex.maxEmissionsPerSession` up or raise `thresholds.absoluteFloor`.
-  - `reflex-bilingual-gap` — flags when 3+ rules have non-ASCII descriptions
-    but no `aliases:` field (probable recall loss on PT prompts).
-- `<vault>/.mnemo/reflex-index.json` — the vault-wide BM25F index, rebuilt
-  on every `SessionStart`. Schema v1; `load_index` returns `None` on
-  version mismatch so the hook silences cleanly if you downgrade.
-- `<vault>/.mnemo/reflex-log.jsonl` — per-prompt telemetry: session id,
-  project, SHA256-12 prompt hash, scores, emitted slugs, silence reason.
-  Never contains raw prompt text. Rotates at 1 MiB.
+Edit `HOME.md`'s notes section freely — mnemo only manages the dashboard
+block at the top.
 
 ## Commands
 
 ```
-npx @xyrlan/mnemo install   one-command setup (recommended)
-npx @xyrlan/mnemo uninstall remove mnemo (vault preserved)
-mnemo init                  first-run setup if installed via pip directly
-mnemo init --project        scope the install to <cwd> only (v0.12+)
-mnemo status [--scope ...]  vault state + hook health + auto-brain state
-                            (--scope project|global|all, default all)
-mnemo doctor                full diagnostic with actionable fixes
-mnemo extract               manually run the extraction pipeline (also rebuilds the dashboard)
-mnemo open                  open vault in Obsidian / file manager
-mnemo fix                   reset circuit breaker
-mnemo uninstall [--project] remove hooks, MCP server, status line (vault preserved)
-mnemo help                  list commands
+mnemo init [--project]   first-run setup (global or scoped to <cwd>)
+mnemo status             vault state + hook health
+mnemo doctor             full diagnostic with actionable fixes
+mnemo extract            run the extraction pipeline manually
+mnemo open               open the vault
+mnemo uninstall          remove hooks, MCP server, status line
+mnemo help               list commands
 ```
+
+The same commands are available as slash commands inside Claude Code
+(`/init`, `/status`, `/doctor`, `/open`, …).
 
 ## Where things live
 
 ```
-~/mnemo/                              your vault
-├── HOME.md                           dashboard at the top, your notes below
-├── bots/<repo-name>/
-│   ├── logs/YYYY-MM-DD.md            session start/end markers
-│   ├── memory/                       mirror of Claude memories for this repo
-│   └── briefings/sessions/           per-session shift handoffs (opt-in)
-├── shared/
-│   ├── feedback/                     auto-promoted preference rules
-│   ├── user/                         user-profile facts
-│   ├── reference/                    pointers to external systems
-│   ├── project/                      per-repo project context
-│   └── _inbox/<type>/                drafts awaiting review
-└── .mnemo/
-    ├── extract.lock                  background extraction lock
-    ├── last-auto-run.json            background extraction telemetry
-    ├── mcp-call-counter.json         daily MCP tool call counter + reflex cache (v0.5/v0.8)
-    ├── mcp-access-log.jsonl          per-call MCP telemetry (v0.5.3, local only)
-    ├── reflex-index.json             vault-wide BM25F index for Prompt Reflex (v0.8)
-    ├── reflex-log.jsonl              per-prompt Reflex telemetry (v0.8, local only)
-    └── statusline-original.json      preserved user statusLine (v0.5)
+~/mnemo/                  your vault
+├── HOME.md               dashboard at the top, your notes below
+├── bots/<repo>/          per-project capture (logs, memory, briefings)
+├── shared/               curated rules — the project brain
+│   ├── feedback/         preferences and corrections
+│   ├── user/             user-profile facts
+│   ├── reference/        pointers to external systems
+│   └── project/          per-repo project context
+└── .mnemo/               internal state (indices, telemetry)
 
-~/.claude/settings.json               hooks + status line composer
-~/.claude.json                        MCP server registration
+~/.claude/settings.json   hooks + status line composer
+~/.claude.json            MCP server registration
+~/.claude/commands/       slash commands
 ```
 
-See [docs/getting-started.md](docs/getting-started.md) for a deeper tour.
+In `--project` mode, everything lives under `<cwd>/.claude/`,
+`<cwd>/.mcp.json`, and `<cwd>/.mnemo/` instead.
 
 ## Privacy
 
-100% local. Zero network. No third-party Python packages
-(`pyproject.toml` declares `dependencies = []` as a load-bearing
-architectural choice). MCP access telemetry (`.mnemo/mcp-access-log.jsonl`)
-stays on disk — nothing leaves your machine. Read the [source](src/mnemo).
+100% local. Zero network. No third-party Python dependencies. Every
+piece of telemetry (`.mnemo/*.jsonl`) stays on disk — nothing leaves
+your machine. Read the [source](src/mnemo).
 
 ## License
 
