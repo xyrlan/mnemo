@@ -4,7 +4,7 @@ const { execSync, spawnSync } = require("node:child_process");
 const { probe } = require("./detect");
 
 
-const PIN_SPEC = "mnemo-claude>=0.12,<0.13";
+const PIN_SPEC = "mnemo-claude>=0.13,<0.14";
 
 
 function buildInstallCmd(installer, spec = PIN_SPEC) {
@@ -28,7 +28,7 @@ function buildUpgradeCmd(installer) {
 
 
 function isAlreadyInstalled(probeFn = probe) {
-  return probeFn("mnemo --version");
+  return probeFn("mnemo");
 }
 
 
