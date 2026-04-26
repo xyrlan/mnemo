@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 
 const { buildInstallCmd, buildUpgradeCmd, isAlreadyInstalled } = require("../lib/bootstrap");
 
-const SPEC = "mnemo-claude>=0.12,<0.13";
+const SPEC = "mnemo-claude>=0.13,<0.14";
 
 test("buildInstallCmd uses uv tool install for uv", () => {
   assert.equal(buildInstallCmd("uv", SPEC), `uv tool install '${SPEC}'`);
@@ -32,7 +32,7 @@ test("buildUpgradeCmd uses pip install --user --upgrade for pip-user", () => {
 });
 
 test("isAlreadyInstalled returns true when probe finds mnemo on path", () => {
-  const probeFn = (cmd) => cmd === "mnemo --version";
+  const probeFn = (cmd) => cmd === "mnemo";
   assert.equal(isAlreadyInstalled(probeFn), true);
 });
 
