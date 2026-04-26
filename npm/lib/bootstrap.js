@@ -39,12 +39,10 @@ function runShell(cmd, { quiet = false } = {}) {
 
 
 function verifyOnPath() {
-  try {
-    execSync("mnemo --version", { stdio: "ignore" });
-    return true;
-  } catch (_e) {
-    return false;
-  }
+  const { resolveMnemoBinary } = require("./runMnemo");
+  const path = require("node:path");
+  const selfBinDir = process.argv[1] ? path.dirname(process.argv[1]) : null;
+  return Boolean(resolveMnemoBinary({ selfBinDir }));
 }
 
 
