@@ -35,7 +35,7 @@ from mnemo.core.errors import load_validated_json
 from mnemo.core.filters import derive_rule_slug, is_consumer_visible, parse_frontmatter
 from mnemo.core.reflex.tokenizer import tokenize
 from mnemo.core.rule_activation import is_universal, projects_for_rule
-from mnemo.core.text_utils import body_preview
+from mnemo.core.text_utils import body_preview, strip_graph_section
 
 SCHEMA_VERSION = 1
 INDEX_FILENAME = "reflex-index.json"
@@ -92,7 +92,12 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             projects = projects_for_rule(source_files)
             universal = is_universal(projects, universal_threshold)
 
-            field_toks = _field_tokens(fm, text, slug)
+            # Strip the optional graph-edges section (Obsidian wikilinks
+            # appended to the body) before tokenization — those wikilinks
+            # exist for human navigation, not retrieval, and would inflate
+            # body token counts with file-path noise.
+            indexed_text = strip_graph_section(text)
+            field_toks = _field_tokens(fm, indexed_text, slug)
             field_length = {f: len(field_toks[f]) for f in _FIELD_NAMES}
 
             # Merge all field tokens into postings with per-field tf.

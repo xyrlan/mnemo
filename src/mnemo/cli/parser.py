@@ -104,5 +104,9 @@ def _build_parser() -> argparse.ArgumentParser:
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
     sub.add_parser("list-enforced", help="audit rules with enforce blocks (can block tool calls)")
+    sub.add_parser(
+        "regen-graph-edges",
+        help="refresh `## Sources` wikilink section on shared rules (idempotent, Obsidian graph)",
+    )
     sub.add_parser("help", help="list commands")
     return p
