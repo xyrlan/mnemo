@@ -166,7 +166,11 @@ def _read_briefing_file(path: Path, agent: str) -> MemoryFile:
     from mnemo.core.text_utils import strip_graph_section
 
     raw = path.read_bytes()
-    text = raw.decode("utf-8", errors="replace")
+    # Normalize line endings BEFORE strip+hash: ``rstrip()+"\n"`` inside
+    # ``strip_graph_section`` collapses any trailing CRLF to LF, so without
+    # this normalization a Windows-written briefing hashes differently
+    # before vs. after a graph-section refresh and triggers re-extraction.
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
     text = strip_graph_section(text)
     source_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
     fm, body = _parse_frontmatter(text)
