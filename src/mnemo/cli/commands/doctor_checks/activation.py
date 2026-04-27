@@ -26,8 +26,8 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
     """
     from mnemo.core.filters import derive_rule_slug, parse_frontmatter
     from mnemo.core.rule_activation import (
+        _glob_matches,
         load_index,
-        match_path_enrich,
         parse_activates_on_block,
         parse_enforce_block,
     )
@@ -75,33 +75,36 @@ def _doctor_check_activation_fidelity(vault: Path) -> bool:
         activates = rule_entry.get("activates_on")
         if not activates:
             continue
-        # Use first associated project for self-activation test; universal rules
-        # are reachable from any project so we just pick one from by_project.
-        rule_projects = rule_entry.get("projects", [])
-        project = rule_projects[0] if rule_projects else ""
         globs = activates.get("path_globs", []) or []
         tools = activates.get("tools", []) or []
         if not globs or not tools:
             continue
+        # Self-activation is a per-rule property: does *this rule's* glob match
+        # the synthesized path? Use _glob_matches directly rather than
+        # match_path_enrich \u2014 the production retrieval function caps at top 3
+        # by (-source_count, slug), so any rule beyond rank 3 in a popular path
+        # would falsely look like it "doesn't self-activate" even though its
+        # glob is correct (regression observed 2026-04-27 \u2014 ~30 rules in
+        # crowded src/components/** paths flagged spuriously).
         any_testable = False
-        mismatched = False
         for glob in globs:
             sample = _synthesize_path_for_glob(glob)
             if sample is None:
                 continue
             any_testable = True
-            for tool in tools:
-                hits = match_path_enrich(index, project, sample, tool)
-                if slug not in [h.slug for h in hits]:
-                    print(f"  \u26a0 Rule {slug!r} does not self-activate: glob {glob!r} -> synthesized {sample!r}, tool {tool!r} returned no hit")
-                    print(f"       \u2192 review the glob shape or the enrich build pipeline")
-                    ok = False
-                    mismatched = True
-                    break
-            if mismatched:
+            if not _glob_matches(glob, sample):
+                print(
+                    f"  \u26a0 Rule {slug!r} does not self-activate: "
+                    f"glob {glob!r} -> synthesized {sample!r} did not match"
+                )
+                print(f"       \u2192 review the glob shape or the synthesizer")
+                ok = False
                 break
-        if not any_testable and not mismatched:
-            print(f"  \u2139 Rule {slug!r} has no auto-testable path_globs (contains '?' or '[abc]' \u2014 manual verification required)")
+        if not any_testable:
+            print(
+                f"  \u2139 Rule {slug!r} has no auto-testable path_globs "
+                f"(contains '?' or '[abc]' \u2014 manual verification required)"
+            )
 
     return ok
 
