@@ -70,6 +70,35 @@ def test_render_page_inbox_has_needs_review_tag():
     assert "last_sync:" not in content
 
 
+def test_render_page_appends_graph_section_with_wikilinks():
+    """Each rendered rule must end with an Obsidian-friendly Sources section
+    (wikilinks) bookended by the GRAPH_SECTION_MARKER. Purely additive
+    rendering for graph navigation; retrieval paths strip it via
+    ``strip_graph_section``."""
+    from mnemo.core.text_utils import GRAPH_SECTION_MARKER
+    page = _page("use-yarn", sources=[
+        "bots/a/briefings/sessions/abc-def.md",
+        "bots/b/briefings/sessions/xyz.md",
+    ])
+    content = inbox._render_page(page, run_id="run", auto_promoted=True)
+    assert GRAPH_SECTION_MARKER in content
+    # ".md" stripped so wikilinks resolve cleanly in Obsidian's "shortest path" mode.
+    assert "[[bots/a/briefings/sessions/abc-def]]" in content
+    assert "[[bots/b/briefings/sessions/xyz]]" in content
+    # Marker comes after body, before the section header.
+    marker_idx = content.index(GRAPH_SECTION_MARKER)
+    assert content.index("## Sources") > marker_idx
+
+
+def test_render_page_omits_graph_section_when_no_sources():
+    """A rule with no sources must not produce an empty Sources section."""
+    from mnemo.core.text_utils import GRAPH_SECTION_MARKER
+    page = _page("orphan", sources=[])
+    content = inbox._render_page(page, run_id="run", auto_promoted=False)
+    assert GRAPH_SECTION_MARKER not in content
+    assert "## Sources" not in content
+
+
 def test_render_page_auto_promoted_has_auto_tag_and_last_sync():
     page = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
     content = inbox._render_page(page, run_id="2026-04-13T12:00:00-abc123", auto_promoted=True)

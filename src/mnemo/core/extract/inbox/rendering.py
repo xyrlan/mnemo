@@ -8,6 +8,7 @@ plus a few tests that exercise rendering directly.
 from __future__ import annotations
 
 from mnemo.core.extract.inbox.types import ExtractedPage
+from mnemo.core.text_utils import GRAPH_SECTION_MARKER
 
 _YAML_SPECIALS = (":", "#", '"', "'", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "%", "@", "`")
 
@@ -127,6 +128,25 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
             "See docs/superpowers/plans/2026-04-23-enforce-safety-rails.md._\n\n"
         )
 
+    # Append a Sources section with Obsidian wikilinks so any markdown viewer
+    # (Obsidian graph view in particular) can render rule↔briefing edges. The
+    # section is bookended by GRAPH_SECTION_MARKER so retrieval paths strip it
+    # before scoring; see mnemo.core.text_utils.strip_graph_section.
+    sources_section = ""
+    if page.source_files:
+        # Strip the trailing ".md" so Obsidian's wikilink resolver picks the
+        # file by basename when the user uses "shortest path" link mode, while
+        # still working with full-path resolution.
+        wikilinks = "\n".join(
+            f"- [[{s[:-3] if s.endswith('.md') else s}]]"
+            for s in page.source_files
+        )
+        sources_section = (
+            f"\n{GRAPH_SECTION_MARKER}\n"
+            f"## Sources\n"
+            f"{wikilinks}\n"
+        )
+
     return (
         "---\n"
         f"name: {_yaml_scalar(page.name)}\n"
@@ -144,6 +164,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{activates_on_block}"
         "---\n\n"
         f"{body_prefix}{page.body}\n"
+        f"{sources_section}"
     )
 
 
