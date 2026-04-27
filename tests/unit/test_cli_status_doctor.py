@@ -552,6 +552,66 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
     assert "Warnings above." not in out
 
 
+def test_doctor_activation_fidelity_does_not_use_capped_retrieval(
+    tmp_path, monkeypatch, capsys,
+):
+    """Regression: self-activation must be a per-rule glob check, not a top-3
+    retrieval check. ``match_path_enrich`` returns at most 3 hits ordered by
+    (-source_count, slug); a rule whose glob is correct but loses the
+    source_count tiebreaker would falsely look like it "does not self-activate"
+    even though its glob matches.
+
+    Pre-fix behaviour (2026-04-27): ~30 rules in the real vault flagged
+    spuriously because they shared crowded glob roots like
+    ``src/components/**/*.tsx``. With the fix, all such rules pass.
+    """
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+
+    rules_table: dict[str, dict] = {}
+    for i in range(5):
+        slug = f"crowded-rule-{i}"
+        rules_table[slug] = {
+            "type": "feedback",
+            "name": slug,
+            "topic_tags": [],
+            "source_files": [f"bots/proj-x/memory/{slug}.md"],
+            # Higher source_count for the first 3 so the focal rule loses the
+            # top-3 cap on the synthesized path.
+            "source_count": 5 if i < 3 else 1,
+            "projects": ["proj-x"],
+            "universal": False,
+            "body_preview": "",
+            "enforce": None,
+            "activates_on": {
+                "slug": slug,
+                "path_globs": ["src/components/**/*.tsx"],
+                "tools": ["Edit"],
+                "topic_tags": [],
+                "rule_body_preview": "",
+                "source_files": [f"bots/proj-x/memory/{slug}.md"],
+                "source_count": 5 if i < 3 else 1,
+            },
+        }
+
+    (vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps({
+        "schema_version": 4,
+        "rules": rules_table,
+        "by_project": {"proj-x": {
+            "local_slugs": list(rules_table.keys()), "topics": [],
+        }},
+        "universal": {"slugs": [], "topics": []},
+        "malformed": [],
+    }))
+    _preflight_noop(monkeypatch, vault)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    # All 5 rules' globs match the synthesized path; none must be flagged,
+    # even the two outside the top-3 retrieval cap.
+    assert "does not self-activate" not in out
+
+
 # --- Rule-integrity doctor check -------------------------------------------
 
 def _seed_canonical_rule(
