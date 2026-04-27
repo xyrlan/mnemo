@@ -90,17 +90,50 @@ block at the top.
 ## Commands
 
 ```
-mnemo init [--project]   first-run setup (global or scoped to <cwd>)
-mnemo status             vault state + hook health
-mnemo doctor             full diagnostic with actionable fixes
-mnemo extract            run the extraction pipeline manually
-mnemo open               open the vault
-mnemo uninstall          remove hooks, MCP server, status line
-mnemo help               list commands
+mnemo init [--project]    first-run setup (global or scoped to <cwd>)
+mnemo status              vault state + hook health
+mnemo doctor              full diagnostic with actionable fixes
+mnemo extract             run the extraction pipeline manually
+mnemo regen-graph-edges   refresh wikilinks for graph viewers (idempotent)
+mnemo open                open the vault
+mnemo uninstall           remove hooks, MCP server, status line
+mnemo help                list commands
 ```
 
 The same commands are available as slash commands inside Claude Code
 (`/init`, `/status`, `/doctor`, `/open`, …).
+
+## Optional: browse the vault in Obsidian
+
+The vault is plain Markdown — any editor with graph support reads it as
+is. If you point [Obsidian](https://obsidian.md/) at `~/mnemo/`:
+
+- rules link to the briefings they were extracted from,
+- briefings link back to the rules they spawned,
+- the **Graph view** renders the rule↔briefing network out of the box.
+
+Run `mnemo regen-graph-edges` once to refresh the wikilink sections on
+existing rules and briefings (the extractor emits them automatically for
+new ones). The section is bookended by an HTML comment marker so it stays
+invisible to mnemo's retrieval — zero impact on Claude's context, zero
+impact on BM25F scoring.
+
+For a more readable graph, open Graph view → settings → **Groups** and
+add (in order — first match wins):
+
+| Query                              | Suggested color |
+|------------------------------------|-----------------|
+| `path:shared/feedback`             | green           |
+| `path:shared/user`                 | yellow          |
+| `path:shared/reference`            | purple          |
+| `path:shared/_inbox`               | orange          |
+| `path:briefings/sessions`          | blue (hubs)     |
+| `path:memory`                      | cyan            |
+| `file:HOME`                        | red (dashboards)|
+| `path:bots`                        | light gray      |
+
+These groups stay in your local `.obsidian/` folder — Obsidian is **not**
+a mnemo dependency, and the vault works identically without it.
 
 ## Where things live
 
