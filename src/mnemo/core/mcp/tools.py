@@ -127,12 +127,16 @@ def list_rules_by_topic(
     the index is missing. In fallback mode, every rule is treated as local
     (universality is only available when the index is built).
 
-    Sorted by source_count desc, then slug asc.
+    Sorted by ``source_count`` desc, then by recent ``read_mnemo_rule``
+    popularity desc (soft tiebreak — see :mod:`mnemo.core.mcp.popularity`),
+    then slug asc.
     """
     from mnemo.core import rule_activation
+    from mnemo.core.mcp.popularity import load_recent_read_counts
 
     idx = rule_activation.load_index(vault_root)
     if idx is not None and "rules" in idx:
+        pop = load_recent_read_counts(vault_root)
         matches: list[RuleRef] = []
         for slug, rule in idx["rules"].items():
             if topic not in rule.get("topic_tags", []):
@@ -144,11 +148,14 @@ def list_rules_by_topic(
                 "type": rule.get("type", "feedback"),
                 "source_count": rule.get("source_count", 0),
             })
-        matches.sort(key=lambda r: (-r["source_count"], r["slug"]))
+        matches.sort(
+            key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
+        )
         return matches
 
     # Fallback: legacy glob+parse. Universality unavailable; treat all as local.
     filter_project = scope in ("project", "local-only") and project is not None
+    pop = load_recent_read_counts(vault_root)
     legacy: list[RuleRef] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
@@ -173,7 +180,9 @@ def list_rules_by_topic(
                 "type": page_type,
                 "source_count": len(sources),
             })
-    legacy.sort(key=lambda r: (-r["source_count"], r["slug"]))
+    legacy.sort(
+        key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
+    )
     return legacy
 
 
