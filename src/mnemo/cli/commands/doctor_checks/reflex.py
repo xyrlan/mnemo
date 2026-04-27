@@ -152,12 +152,17 @@ def _doctor_check_reflex_session_cap_hits(vault: Path) -> bool:
 
 
 def _doctor_check_reflex_bilingual_gap(vault: Path) -> bool:
-    """v0.8: flag >=3 rules with non-ASCII description but no aliases: field.
+    """v0.8: flag >=3 rules with a non-English-language description but no
+    aliases: field.
 
     The bilingual (EN↔PT) extractor seeds aliases to bridge the
-    tokenizer's language-agnostic matching. When non-ASCII rules
-    accumulate without aliases, the reflex pipeline will silently miss
-    prompts phrased in the opposite language.
+    tokenizer's language-agnostic matching. When descriptions in a
+    non-English language accumulate without aliases, the reflex pipeline
+    will silently miss prompts phrased in the opposite language.
+
+    Pure-ASCII descriptions, and descriptions whose only non-ASCII chars
+    are punctuation (em dash, curly quotes, ellipsis, en dash) are not
+    flagged: those signal English typography, not a missing translation.
     """
     from mnemo.core.filters import parse_frontmatter
 
@@ -178,12 +183,22 @@ def _doctor_check_reflex_bilingual_gap(vault: Path) -> bool:
             desc = fm.get("description") or ""
             if not isinstance(desc, str):
                 continue
-            if any(ord(c) > 127 for c in desc) and not fm.get("aliases"):
+            if _has_non_english_letter(desc) and not fm.get("aliases"):
                 count_missing += 1
     if count_missing >= 3:
         print(
-            f"  \u26a0 reflex-bilingual-gap: {count_missing} rules with non-ASCII description "
+            f"  \u26a0 reflex-bilingual-gap: {count_missing} rules with non-English description "
             f"lack aliases: \u2014 run extraction to refresh."
         )
         return False
     return True
+
+
+def _has_non_english_letter(text: str) -> bool:
+    """True iff *text* has a letter outside the ASCII A\u2013Z range \u2014
+    i.e. an accented Latin letter (\u00e0, \u00e3, \u00e9, \u00e7, \u00fc, \u2026) or non-Latin
+    script. Pure punctuation above U+007F (em dash U+2014, curly quotes,
+    ellipsis, en dash) does not count: those are English typography, not
+    a different natural language.
+    """
+    return any(ord(c) > 127 and c.isalpha() for c in text)

@@ -24,7 +24,7 @@ def main() -> int:
     try:
         from mnemo.core import config as cfg_mod
         from mnemo.core import errors, paths
-        from mnemo.core.agent import resolve_agent
+        from mnemo.core.agent import resolve_canonical_agent
         from mnemo.core.mcp import session_state
         from mnemo.core.reflex import bm25, gates
         from mnemo.core.reflex.index import load_index
@@ -40,7 +40,7 @@ def main() -> int:
             return 0
 
         cwd = payload.get("cwd") or str(Path.cwd())
-        project = resolve_agent(cwd).name
+        project = resolve_canonical_agent(cwd).name
         sid = str(payload.get("session_id") or "unknown")
         prompt_raw = str(payload.get("prompt") or payload.get("user_message") or "")
 
