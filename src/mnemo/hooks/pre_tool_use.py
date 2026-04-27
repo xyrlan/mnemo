@@ -46,7 +46,7 @@ def main() -> int:
             return 0
 
         from mnemo.core import rule_activation as ra
-        from mnemo.core.agent import resolve_agent
+        from mnemo.core.agent import resolve_canonical_agent
 
         tool_name = payload.get("tool_name") or ""
         tool_input = payload.get("tool_input")
@@ -60,7 +60,7 @@ def main() -> int:
         if index is None:
             return 0
 
-        project = resolve_agent(cwd).name
+        project = resolve_canonical_agent(cwd).name
 
         # Enforcement first — if a deny fires, never continue to enrichment
         if enf_enabled and tool_name == _ENFORCE_TOOL:

@@ -136,6 +136,29 @@ def test_doctor_check_reflex_bilingual_gap_ok_when_aliases_present(tmp_vault):
     assert cli._doctor_check_reflex_bilingual_gap(tmp_vault) is True
 
 
+def test_doctor_check_reflex_bilingual_gap_ignores_english_typography(tmp_vault):
+    """English descriptions with em dash, curly quotes, or ellipsis must NOT
+    be flagged. Non-ASCII *punctuation* is English typography, not a
+    different natural language. Regression for noisy doctor warnings observed
+    on 2026-04-27 (13 false positives — most were EN with U+2014 em dash)."""
+    feedback = tmp_vault / "shared" / "feedback"
+    feedback.mkdir(parents=True, exist_ok=True)
+    english_with_typography = [
+        "Sequence SEO work as: schema → alternate pages → long-form",
+        "Hardcoded pricing data — update the table when models change",
+        "Don't ship without tests… retries belong at the boundary",
+        "Use “curly quotes” for the headline",
+    ]
+    for i, desc in enumerate(english_with_typography):
+        (feedback / f"rule-{i}.md").write_text(
+            f"---\nname: rule-{i}\ndescription: {desc}\ntype: feedback\n"
+            f"tags:\n  - x\n"
+            f"sources:\n  - bots/x/memory/y.md\n---\nBody.\n",
+            encoding="utf-8",
+        )
+    assert cli._doctor_check_reflex_bilingual_gap(tmp_vault) is True
+
+
 def test_doctor_check_reflex_bilingual_gap_ok_when_below_threshold(tmp_vault):
     feedback = tmp_vault / "shared" / "feedback"
     feedback.mkdir(parents=True, exist_ok=True)
