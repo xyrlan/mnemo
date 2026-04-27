@@ -85,6 +85,94 @@ def test_refresh_one_preserves_body(tmp_vault):
     assert refreshed_body == original_body
 
 
+def _seed_briefing(vault: Path, project: str, session_id: str, body: str) -> Path:
+    d = vault / "bots" / project / "briefings" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{session_id}.md"
+    p.write_text(
+        "---\nproject: " + project + "\ntype: briefing\n---\n\n" + body + "\n",
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_briefings_get_spawned_rules_back_edges(tmp_vault, monkeypatch, capsys):
+    """Briefings referenced by rules' ``sources:`` should gain a
+    ``## Spawned rules`` section listing wikilinks back to those rules."""
+    proj = "demo-project"
+    b1 = _seed_briefing(tmp_vault, proj, "session-aaa", "First session log.")
+    b2 = _seed_briefing(tmp_vault, proj, "session-bbb", "Second session log.")
+    rel_b1 = b1.relative_to(tmp_vault).as_posix()
+    rel_b2 = b2.relative_to(tmp_vault).as_posix()
+    _seed_rule(tmp_vault, "rule-x", sources=[rel_b1, rel_b2])
+    _seed_rule(tmp_vault, "rule-y", sources=[rel_b2])
+    _seed_rule(tmp_vault, "rule-z", sources=[])  # orphan; should not appear
+
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    rc = cli.main(["regen-graph-edges"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 briefing" in out
+
+    # Briefing 1 → only rule-x references it
+    text_b1 = b1.read_text()
+    assert GRAPH_SECTION_MARKER in text_b1
+    assert "## Spawned rules" in text_b1
+    assert "[[rule-x]]" in text_b1
+    assert "[[rule-y]]" not in text_b1
+
+    # Briefing 2 → both rule-x and rule-y reference it (sorted, dedup'd)
+    text_b2 = b2.read_text()
+    assert "[[rule-x]]" in text_b2
+    assert "[[rule-y]]" in text_b2
+    assert text_b2.index("[[rule-x]]") < text_b2.index("[[rule-y]]")
+
+
+def test_briefing_with_no_referencing_rules_has_no_section(tmp_vault, monkeypatch):
+    """A briefing referenced by zero rules should not get a Sources section
+    (an empty list collapses to no section, idempotent)."""
+    b = _seed_briefing(tmp_vault, "demo", "lonely", "Lonely briefing.")
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    cli.main(["regen-graph-edges"])
+    text = b.read_text()
+    assert GRAPH_SECTION_MARKER not in text
+    assert "Spawned rules" not in text
+
+
+def test_briefing_section_is_idempotent(tmp_vault, monkeypatch):
+    """Running regen twice in a row leaves briefings byte-identical."""
+    proj = "demo"
+    b = _seed_briefing(tmp_vault, proj, "abc", "Body.")
+    rel = b.relative_to(tmp_vault).as_posix()
+    _seed_rule(tmp_vault, "rule-x", sources=[rel])
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    cli.main(["regen-graph-edges"])
+    snapshot = b.read_text()
+    cli.main(["regen-graph-edges"])
+    assert b.read_text() == snapshot
+
+
+def test_briefing_reader_strips_graph_section_before_hash(tmp_vault):
+    """Hash must be computed AFTER stripping the graph section so refreshing
+    back-edges does not invalidate extractor state and trigger an LLM re-run."""
+    from mnemo.core.extract.scanner import _read_briefing_file
+
+    b = _seed_briefing(tmp_vault, "demo", "s1", "Body content.")
+    before = _read_briefing_file(b, agent="demo")
+
+    # Append a fake graph section (simulating a regen-graph-edges run).
+    b.write_text(
+        b.read_text()
+        + f"\n{GRAPH_SECTION_MARKER}\n## Spawned rules\n- [[rule-x]]\n",
+        encoding="utf-8",
+    )
+    after = _read_briefing_file(b, agent="demo")
+
+    assert before.source_hash == after.source_hash
+    assert "Spawned rules" not in after.body
+    assert "[[rule-x]]" not in after.body
+
+
 def test_cli_regen_graph_edges_command(tmp_vault, monkeypatch, capsys):
     _seed_rule(tmp_vault, "rule-a", sources=["bots/p/m/a.md"])
     _seed_rule(tmp_vault, "rule-b", sources=["bots/p/m/b.md"])

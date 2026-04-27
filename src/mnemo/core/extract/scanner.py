@@ -156,10 +156,19 @@ def _read_briefing_file(path: Path, agent: str) -> MemoryFile:
     them through the existing feedback extraction path so their Decisions
     made / Dead ends sections get mined into Tier 2 pages. The slug is the
     session id (the filename stem) so multiple briefings do not collide.
+
+    Strips the optional ``<!-- mnemo:graph-section -->`` block (back-links to
+    spawned rules added by ``mnemo regen-graph-edges``) BEFORE hashing so
+    refreshing the graph metadata does not invalidate extractor state, and
+    BEFORE returning the body so the LLM does not re-extract its own
+    back-links as new rules.
     """
+    from mnemo.core.text_utils import strip_graph_section
+
     raw = path.read_bytes()
-    source_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
     text = raw.decode("utf-8", errors="replace")
+    text = strip_graph_section(text)
+    source_hash = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
     fm, body = _parse_frontmatter(text)
     slug = _normalize_slug(f"briefing-{path.stem}")
     return MemoryFile(
