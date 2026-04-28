@@ -26,8 +26,6 @@ function buildUninstallArgs({ scope, quiet, yes = true }) {
 
 // Resolve the real Python `mnemo` entry point, skipping the npx-injected
 // wrapper bin so spawnSync doesn't recurse into us.
-// `selfBinDir` defaults to the directory of the currently executing
-// wrapper (process.argv[1]); override for testing.
 function resolveMnemoBinary({ env = process.env, platform = process.platform, selfBinDir } = {}) {
   const exeName = platform === "win32" ? "mnemo.exe" : "mnemo";
   const sep = platform === "win32" ? ";" : ":";
@@ -44,12 +42,21 @@ function resolveMnemoBinary({ env = process.env, platform = process.platform, se
 }
 
 
+// Decide what to spawn. If we have a resolved real binary, run it directly.
+// Otherwise fall back to `python3 -m mnemo` so we never recurse into the
+// npx-injected wrapper that may still be on PATH.
+function buildSpawnPlan(bin, args) {
+  if (bin) return { cmd: bin, args };
+  return { cmd: "python3", args: ["-m", "mnemo", ...args] };
+}
+
+
 function runMnemo(args, { quiet = false, selfBinDir } = {}) {
   const bin = resolveMnemoBinary({ selfBinDir: selfBinDir || (process.argv[1] && path.dirname(process.argv[1])) });
-  const target = bin || "mnemo";
-  const result = spawnSync(target, args, { stdio: quiet ? "ignore" : "inherit" });
+  const plan = buildSpawnPlan(bin, args);
+  const result = spawnSync(plan.cmd, plan.args, { stdio: quiet ? "ignore" : "inherit" });
   return result.status === null ? 1 : result.status;
 }
 
 
-module.exports = { buildInitArgs, buildUninstallArgs, runMnemo, resolveMnemoBinary };
+module.exports = { buildInitArgs, buildUninstallArgs, runMnemo, resolveMnemoBinary, buildSpawnPlan };

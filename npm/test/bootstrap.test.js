@@ -31,12 +31,12 @@ test("buildUpgradeCmd uses pip install --user --upgrade for pip-user", () => {
   assert.equal(buildUpgradeCmd("pip-user"), "python3 -m pip install --user --upgrade mnemo-claude");
 });
 
-test("isAlreadyInstalled returns true when probe finds mnemo on path", () => {
-  const probeFn = (cmd) => cmd === "mnemo";
-  assert.equal(isAlreadyInstalled(probeFn), true);
+test("isAlreadyInstalled returns true when resolver finds a real binary", () => {
+  const resolverFn = () => "/usr/local/bin/mnemo";
+  assert.equal(isAlreadyInstalled(resolverFn), true);
 });
 
-test("isAlreadyInstalled returns false when probe misses", () => {
-  const probeFn = () => false;
-  assert.equal(isAlreadyInstalled(probeFn), false);
+test("isAlreadyInstalled returns false when resolver returns null", () => {
+  const resolverFn = () => null;
+  assert.equal(isAlreadyInstalled(resolverFn), false);
 });

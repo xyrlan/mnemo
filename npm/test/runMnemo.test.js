@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { resolveMnemoBinary, buildInitArgs, buildUninstallArgs } = require("../lib/runMnemo");
+const { resolveMnemoBinary, buildInitArgs, buildUninstallArgs, buildSpawnPlan } = require("../lib/runMnemo");
 
 
 function _mktmpBin(name) {
@@ -56,4 +56,16 @@ test("buildInitArgs forms init command with project scope", () => {
 test("buildUninstallArgs forms uninstall command", () => {
   const args = buildUninstallArgs({ scope: "global", quiet: true, yes: true });
   assert.deepEqual(args, ["uninstall", "--yes", "--quiet"]);
+});
+
+
+test("buildSpawnPlan uses the resolved binary directly when available", () => {
+  const plan = buildSpawnPlan("/usr/local/bin/mnemo", ["init", "--yes"]);
+  assert.deepEqual(plan, { cmd: "/usr/local/bin/mnemo", args: ["init", "--yes"] });
+});
+
+
+test("buildSpawnPlan falls back to python3 -m mnemo when binary not found", () => {
+  const plan = buildSpawnPlan(null, ["init", "--project", "--yes"]);
+  assert.deepEqual(plan, { cmd: "python3", args: ["-m", "mnemo", "init", "--project", "--yes"] });
 });

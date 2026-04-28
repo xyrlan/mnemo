@@ -56,6 +56,21 @@ The vault is always preserved on uninstall.
 **Prerequisite:** Python 3.8+ on PATH. Node is already there if you can
 run `npx`.
 
+### Via Claude Code (just ask)
+
+If you already have Claude Code open in the repo you want mnemo on, paste
+this prompt — Claude will pick `pipx` / `uv` / `pip --user` based on what
+you have, install `mnemo-claude`, and run `mnemo init --project`:
+
+> Install mnemo for this project. Use `pipx install mnemo-claude` if
+> `pipx` is available, otherwise `uv tool install mnemo-claude`, otherwise
+> `python3 -m pip install --user mnemo-claude`. Then run
+> `mnemo init --project --yes`. If `mnemo` isn't on PATH after install,
+> tell me which directory to add to my shell profile.
+
+For a global install (every Claude Code session, not just this repo),
+swap `--project` for nothing and drop the directive.
+
 ### Without npm
 
 ```bash

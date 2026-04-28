@@ -2,6 +2,7 @@
 
 const { execSync, spawnSync } = require("node:child_process");
 const { probeOnPath } = require("./detect");
+const { resolveMnemoBinary } = require("./runMnemo");
 
 
 const PIN_SPEC = "mnemo-claude>=0.13,<0.14";
@@ -27,8 +28,13 @@ function buildUpgradeCmd(installer) {
 }
 
 
-function isAlreadyInstalled(probeFn = probeOnPath) {
-  return probeFn("mnemo");
+// Detect a real mnemo install. We can NOT trust `command -v mnemo` here:
+// when running under `npx @xyrlan/mnemo`, npm injects the wrapper itself
+// onto PATH, so `command -v mnemo` resolves to us. resolveMnemoBinary
+// filters npx temp dirs so it only matches a real Python install.
+function isAlreadyInstalled(resolverFn = resolveMnemoBinary) {
+  const selfBinDir = process.argv[1] ? require("node:path").dirname(process.argv[1]) : null;
+  return Boolean(resolverFn({ selfBinDir }));
 }
 
 
