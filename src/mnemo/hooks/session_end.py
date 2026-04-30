@@ -240,6 +240,55 @@ def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
             pass
 
 
+def _maybe_schedule_propose(
+    cfg: dict,
+    vault_root,
+    agent_name: str,
+    *,
+    session_id: str,
+    cwd: str,
+) -> None:
+    """Run the end-of-session rule proposer when autopilot is active.
+
+    This is intentionally synchronous for simplicity — the analysis is fast
+    (git calls + file reads) and runs after the session ends so latency
+    doesn't affect the user. Wrapped in a broad try/except so any failure
+    is logged and swallowed.
+    """
+    try:
+        from mnemo.core import errors as err_mod
+
+        autopilot_cfg = (cfg.get("autopilot") or {})
+        propose_cfg = (autopilot_cfg.get("propose") or {})
+        if not bool(propose_cfg.get("enabled", False)):
+            return
+
+        from mnemo.autopilot.proposer.eos_extractor import analyze_session
+        from mnemo.core import agent as agent_mod
+
+        cwd_path = __import__("pathlib").Path(cwd)
+        try:
+            project = agent_mod.resolve_canonical_agent(cwd).name
+        except Exception:
+            project = agent_name
+
+        try:
+            analyze_session(
+                session_id=session_id,
+                project=project,
+                vault_root=vault_root,
+                cwd=cwd_path,
+            )
+        except Exception as exc:
+            err_mod.log_error(vault_root, "session_end.propose.analyze", exc)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_end.propose", exc)
+        except Exception:
+            pass
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -291,6 +340,13 @@ def main() -> int:
             )
         except Exception as e:
             errors.log_error(vault, "session_end.briefing_wrap", e)
+        try:
+            cwd = str(payload.get("cwd") or os.getcwd())
+            _maybe_schedule_propose(
+                cfg, vault, agent_name, session_id=sid, cwd=cwd,
+            )
+        except Exception as e:
+            errors.log_error(vault, "session_end.propose_wrap", e)
     except Exception as e:
         try:
             from mnemo.core import config as _c, errors as _e, paths as _p
