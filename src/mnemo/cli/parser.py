@@ -67,6 +67,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="time window for telemetry (e.g. 7d, 30d — default 7d)",
     )
     autosub.add_parser("collect-misses", help="write rule_candidate proposals from recall misses")
+    # self-fix sub-subparser
+    selffix_p = autosub.add_parser("self-fix", help="detect and fix doctor warnings, dead rules, telemetry bugs")
+    selffix_p.add_argument("--dry-run", action="store_true", help="list fixable items without opening a PR")
+    selffix_sub = selffix_p.add_subparsers(dest="selffix_action")
+    selffix_sub.required = False
+    selffix_doctor = selffix_sub.add_parser("doctor", help="fix auto-fixable doctor warnings")
+    selffix_doctor.add_argument("--dry-run", action="store_true", help="list fixable warnings without opening a PR")
+    selffix_sweep = selffix_sub.add_parser("sweep", help="archive dead rules (0 hits in 90d)")
+    selffix_sweep.add_argument("--dry-run", action="store_true", help="list dead rules without archiving")
+    selffix_telemetry = selffix_sub.add_parser("telemetry", help="open draft PR for telemetry anomalies")
+    selffix_telemetry.add_argument("--dry-run", action="store_true", help="list anomalies without opening a PR")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
