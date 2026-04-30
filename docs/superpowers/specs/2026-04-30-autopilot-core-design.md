@@ -256,11 +256,11 @@ Coverage target: ≥95% on `autopilot/core/*`. No integration test with real Git
 - ~800 LOC tests
 - 0 changes to existing files except: `cli/commands/__init__.py` (1 import line), `cli/parser.py` (subparser block for `autopilot`), `pyproject.toml` (no version bump in this PR)
 
-## Open questions for reviewer
+## Decisions made (with rationale)
 
-1. **CronCreate availability assumption.** The dispatcher relies on the harness-level scheduler. Tiers running in CI/headless will use record-only mode. Acceptable?
-2. **Proposal expiry: 30 days hardcoded or configurable?** Default 30, configurable via `.mnemo/autopilot.json`?
-3. **Should `mnemo autopilot status` include a brief health summary (recall delta, denials count)?** Or strictly state-of-autopilot? I lean strictly state-of-autopilot — Tier 0's digest covers health.
+1. **CronCreate availability:** dispatcher operates in record-only mode when scheduler is unavailable (CI, plain CLI). Tests assert recorded intent. Real cron only kicks in inside the harness.
+2. **Proposal expiry:** 30 days, configurable via `.mnemo/autopilot.json` `proposal_expiry_days` field (default 30). Keeps the door open for tuning without re-shipping.
+3. **`mnemo autopilot status` scope:** strictly autopilot state (on/off/paused, budget counters, active jobs, recent outcomes). Health metrics live in Tier 0's digest — keep separation of concerns.
 
 ## Next step after this spec is merged
 
