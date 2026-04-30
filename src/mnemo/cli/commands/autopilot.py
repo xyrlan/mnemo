@@ -23,9 +23,10 @@ def cmd_autopilot(args: argparse.Namespace) -> int:
         "status": _do_status,
         "digest": _do_digest,
         "collect-misses": _do_collect_misses,
+        "self-fix": _do_selffix,
     }.get(action)
     if handler is None:
-        print("usage: mnemo autopilot {on,off,pause,status,digest,collect-misses}")
+        print("usage: mnemo autopilot {on,off,pause,status,digest,collect-misses,self-fix}")
         return 2
     return handler(args)
 
@@ -58,6 +59,31 @@ def _do_on(args: argparse.Namespace) -> int:
         cron="0 8 * * *",
         command="mnemo autopilot collect-misses",
     )
+    # Register Tier 1 self-fix scheduled jobs
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier1.doctor",
+        cron="0 10 * * 1",
+        command="mnemo autopilot self-fix doctor",
+    )
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier1.sweep",
+        cron="0 11 1 * *",
+        command="mnemo autopilot self-fix sweep",
+    )
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier1.telemetry",
+        cron="0 12 * * 0",
+        command="mnemo autopilot self-fix telemetry",
+    )
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier1.poll-outcomes",
+        cron="0 9 * * *",
+        command="mnemo autopilot self-fix poll-outcomes",
+    )
 
     print("autopilot: on")
     return 0
@@ -89,6 +115,11 @@ def _do_pause(args: argparse.Namespace) -> int:
     set_state(vault_root=vault, state="paused", paused_until=until, source="cli")
     print(f"autopilot: paused for {hours}h (until {until})")
     return 0
+
+
+def _do_selffix(args: argparse.Namespace) -> int:
+    from mnemo.cli.commands.selffix import cmd_selffix
+    return cmd_selffix(args)
 
 
 def _do_status(args: argparse.Namespace) -> int:
