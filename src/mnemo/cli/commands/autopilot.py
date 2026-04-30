@@ -44,8 +44,6 @@ def _do_on(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import set_state
     from mnemo.autopilot.core.frozen_recall import freeze_current
     from mnemo.autopilot.core.labels import ensure_label_exists
-    from mnemo.autopilot.core.dispatcher import schedule_autopilot_job
-    from mnemo.autopilot.proposer._hooks import register_eos_sweep_job
 
     vault = _vault()
     set_state(vault_root=vault, state="on", source="cli")
@@ -55,74 +53,15 @@ def _do_on(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         pass
     ensure_label_exists()
-
-    # Register Tier 0 scheduled jobs
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier0.digest",
-        cron="0 9 * * 1",
-        command="mnemo autopilot digest --post",
-    )
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier0.collect-misses",
-        cron="0 8 * * *",
-        command="mnemo autopilot collect-misses",
-    )
-    # Register Tier 1 self-fix scheduled jobs
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier1.doctor",
-        cron="0 10 * * 1",
-        command="mnemo autopilot self-fix doctor",
-    )
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier1.sweep",
-        cron="0 11 1 * *",
-        command="mnemo autopilot self-fix sweep",
-    )
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier1.telemetry",
-        cron="0 12 * * 0",
-        command="mnemo autopilot self-fix telemetry",
-    )
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier1.poll-outcomes",
-        cron="0 9 * * *",
-        command="mnemo autopilot self-fix poll-outcomes",
-    )
-    # Register Tier 2 self-tuner scheduled jobs
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier2.bm25",
-        cron="0 13 * * 0",
-        command="mnemo autopilot tune bm25",
-    )
-    schedule_autopilot_job(
-        vault_root=vault,
-        name="autopilot.tier2.reflex",
-        cron="0 14 * * 0",
-        command="mnemo autopilot tune reflex",
-    )
-
-    register_eos_sweep_job(vault)
     print("autopilot: on")
+    print("(operations fire on Claude Code SessionStart/SessionEnd hooks)")
     return 0
 
 
 def _do_off(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import set_state
-    from mnemo.autopilot.core.dispatcher import (
-        list_autopilot_jobs,
-        cancel_autopilot_job,
-    )
 
     vault = _vault()
-    for job in list_autopilot_jobs(vault_root=vault):
-        cancel_autopilot_job(vault_root=vault, name=job.name)
     set_state(vault_root=vault, state="off", source="cli")
     print("autopilot: off")
     return 0
@@ -239,7 +178,7 @@ def _tune_reflex(vault: Path, dry_run: bool, project: str | None) -> None:
 
 def _do_status(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import get_state, is_active
-    from mnemo.autopilot.core.dispatcher import list_autopilot_jobs
+    from mnemo.autopilot.core.scheduler import status_summary
     from mnemo.autopilot.core._dirs import autopilot_budget_path
     import json
 
@@ -267,13 +206,11 @@ def _do_status(args: argparse.Namespace) -> int:
     else:
         print("Budget: (no activity yet)")
 
-    jobs = list_autopilot_jobs(vault_root=vault)
-    if jobs:
-        print("Scheduled jobs:")
-        for j in jobs:
-            print(f"  {j.name}  cron={j.cron}  cmd={j.command}")
-    else:
-        print("Scheduled jobs: (none)")
+    print("Hook-driven operations:")
+    for op in status_summary(vault_root=vault):
+        last = op["last_run_at"] or "never"
+        due = "DUE" if op["due"] else "ok"
+        print(f"  {op['name']:30s}  every {op['interval_days']}d  last={last}  [{due}]")
     return 0
 
 

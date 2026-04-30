@@ -257,10 +257,9 @@ def _maybe_schedule_propose(
     """
     try:
         from mnemo.core import errors as err_mod
+        from mnemo.autopilot.core.kill_switch import is_active
 
-        autopilot_cfg = (cfg.get("autopilot") or {})
-        propose_cfg = (autopilot_cfg.get("propose") or {})
-        if not bool(propose_cfg.get("enabled", False)):
+        if not is_active(vault_root=vault_root):
             return
 
         from mnemo.autopilot.proposer.eos_extractor import analyze_session

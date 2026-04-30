@@ -106,10 +106,9 @@ def test_collect_misses_with_misses(monkeypatch, tmp_path, capsys):
     assert "2" in out
 
 
-# ── autopilot on registers cron jobs ─────────────────────────────────────────
+# ── autopilot on activates state for hook-driven scheduling ──────────────────
 
-def test_autopilot_on_registers_tier0_jobs(monkeypatch, tmp_path, capsys):
-    # 'on' uses ensure_label_exists which calls gh; mock it
+def test_autopilot_on_activates_state(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         "mnemo.autopilot.core.labels.ensure_label_exists",
         lambda: None,
@@ -118,12 +117,7 @@ def test_autopilot_on_registers_tier0_jobs(monkeypatch, tmp_path, capsys):
     rc, _, _ = _run(monkeypatch, tmp_path, "autopilot", "on", capsys=capsys)
     assert rc == 0
 
-    jobs_path = tmp_path / ".mnemo" / "autopilot-jobs.json"
-    assert jobs_path.exists()
-    data = json.loads(jobs_path.read_text())
-    jobs = data.get("jobs", {})
-    assert "autopilot.tier0.digest" in jobs
-    assert "autopilot.tier0.collect-misses" in jobs
-    assert jobs["autopilot.tier0.digest"]["cron"] == "0 9 * * 1"
-    assert jobs["autopilot.tier0.collect-misses"]["cron"] == "0 8 * * *"
-    assert "--post" in jobs["autopilot.tier0.digest"]["command"]
+    state_path = tmp_path / ".mnemo" / "autopilot.json"
+    assert state_path.exists()
+    data = json.loads(state_path.read_text())
+    assert data["state"] == "on"
