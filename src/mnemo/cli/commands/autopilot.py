@@ -94,6 +94,19 @@ def _do_on(args: argparse.Namespace) -> int:
         cron="0 9 * * *",
         command="mnemo autopilot self-fix poll-outcomes",
     )
+    # Register Tier 2 self-tuner scheduled jobs
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier2.bm25",
+        cron="0 13 * * 0",
+        command="mnemo autopilot tune bm25",
+    )
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier2.reflex",
+        cron="0 14 * * 0",
+        command="mnemo autopilot tune reflex",
+    )
 
     register_eos_sweep_job(vault)
     print("autopilot: on")
