@@ -24,6 +24,7 @@ def cmd_autopilot(args: argparse.Namespace) -> int:
         "digest": _do_digest,
         "collect-misses": _do_collect_misses,
         "self-fix": _do_selffix,
+        "tune": _do_tune,
     }.get(action)
     if handler is None:
         print("usage: mnemo autopilot {on,off,pause,status,digest,collect-misses,self-fix}")
@@ -120,6 +121,97 @@ def _do_pause(args: argparse.Namespace) -> int:
 def _do_selffix(args: argparse.Namespace) -> int:
     from mnemo.cli.commands.selffix import cmd_selffix
     return cmd_selffix(args)
+
+
+def _do_tune(args: argparse.Namespace) -> int:
+    target = getattr(args, "tune_target", None)
+    if target is None:
+        print("usage: mnemo autopilot tune {bm25,reflex,all} [--dry-run]")
+        return 2
+    dry_run = getattr(args, "dry_run", False)
+    project = getattr(args, "project", None)
+
+    if target in ("bm25", "all"):
+        _tune_bm25(vault=_vault(), dry_run=dry_run)
+    if target in ("reflex", "all"):
+        _tune_reflex(vault=_vault(), dry_run=dry_run, project=project)
+    return 0
+
+
+def _tune_bm25(vault: Path, dry_run: bool) -> None:
+    from mnemo.autopilot.tuner.bm25_tuner import (
+        grid_search,
+        open_bm25_tune_pr,
+        meets_acceptance,
+        DEFAULT_BM25_CONFIG,
+    )
+    from mnemo.autopilot.tuner._scorer import score_config, Case
+    from mnemo.autopilot.core.frozen_recall import FrozenSetMissing
+    import json as _json
+
+    try:
+        from mnemo.autopilot.core.frozen_recall import load_frozen
+        fh = load_frozen(vault_root=vault)
+        with fh:
+            raw = _json.load(fh)
+        cases_data = raw if isinstance(raw, list) else raw.get("cases", [])
+        cases = [
+            Case(id=c.get("id", ""), project=c.get("project", ""),
+                 topic=c.get("topic", ""), expect_slug=c.get("expect_slug", ""))
+            for c in cases_data if isinstance(c, dict) and c.get("expect_slug")
+        ]
+    except FrozenSetMissing:
+        print("[bm25-tuner] no frozen recall set — skipping (run `mnemo autopilot on` first)")
+        return
+
+    if not cases:
+        print("[bm25-tuner] frozen set is empty — skipping")
+        return
+
+    def _factory(project: str, query_tokens: list) -> dict:
+        try:
+            from mnemo.core.reflex.index import load_index
+            idx = load_index(vault)
+            if idx is None:
+                return {"doc_count": 0, "docs": {}, "postings": {}, "avg_field_length": {}}
+            return idx
+        except Exception:
+            return {"doc_count": 0, "docs": {}, "postings": {}, "avg_field_length": {}}
+
+    print("[bm25-tuner] Running grid search (this may take a moment)…")
+    best = grid_search(vault_root=vault, index_factory=_factory)
+
+    if best is None:
+        print("[bm25-tuner] No config improved on baseline — no proposal.")
+        return
+
+    # Score before/after for the PR call
+    before = score_config(DEFAULT_BM25_CONFIG, cases=cases, index_factory=_factory)
+    after = score_config(best, cases=cases, index_factory=_factory)
+
+    open_bm25_tune_pr(best, before, after, vault_root=vault, dry_run=dry_run)
+
+
+def _tune_reflex(vault: Path, dry_run: bool, project: str | None) -> None:
+    from mnemo.autopilot.tuner.reflex_calibrator import (
+        analyze_reflex_log,
+        calibrate_thresholds,
+        open_reflex_calibration_pr,
+    )
+
+    stats_map = analyze_reflex_log(vault_root=vault, project=project)
+    if not stats_map:
+        print("[reflex-calibrator] no reflex log data — skipping")
+        return
+
+    per_project = {}
+    for proj, stats in stats_map.items():
+        cfg = calibrate_thresholds(stats)
+        if cfg is None:
+            print(f"[reflex-calibrator] {proj}: insufficient data (< 100 prompts) — skipping")
+        per_project[proj] = cfg
+
+    open_reflex_calibration_pr(per_project, vault_root=vault, dry_run=dry_run)
 
 
 def _do_status(args: argparse.Namespace) -> int:

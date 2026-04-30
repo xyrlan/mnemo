@@ -78,6 +78,15 @@ def _build_parser() -> argparse.ArgumentParser:
     selffix_sweep.add_argument("--dry-run", action="store_true", help="list dead rules without archiving")
     selffix_telemetry = selffix_sub.add_parser("telemetry", help="open draft PR for telemetry anomalies")
     selffix_telemetry.add_argument("--dry-run", action="store_true", help="list anomalies without opening a PR")
+    tune = autosub.add_parser("tune", help="run self-tuner (BM25F grid search + reflex calibration)")
+    tunesub = tune.add_subparsers(dest="tune_target")
+    tunesub.required = False
+    for _tune_name in ("bm25", "reflex", "all"):
+        _tp = tunesub.add_parser(_tune_name, help=f"run {_tune_name} tuner")
+        _tp.add_argument("--dry-run", action="store_true", help="print proposal without writing files")
+        if _tune_name in ("reflex", "all"):
+            _tp.add_argument("--project", type=str, default=None,
+                             help="limit reflex calibration to this project")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
