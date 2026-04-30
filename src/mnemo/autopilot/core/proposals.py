@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
