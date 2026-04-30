@@ -21,9 +21,11 @@ def cmd_autopilot(args: argparse.Namespace) -> int:
         "off": _do_off,
         "pause": _do_pause,
         "status": _do_status,
+        "digest": _do_digest,
+        "collect-misses": _do_collect_misses,
     }.get(action)
     if handler is None:
-        print("usage: mnemo autopilot {on,off,pause,status}")
+        print("usage: mnemo autopilot {on,off,pause,status,digest,collect-misses}")
         return 2
     return handler(args)
 
@@ -32,6 +34,7 @@ def _do_on(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import set_state
     from mnemo.autopilot.core.frozen_recall import freeze_current
     from mnemo.autopilot.core.labels import ensure_label_exists
+    from mnemo.autopilot.core.dispatcher import schedule_autopilot_job
 
     vault = _vault()
     set_state(vault_root=vault, state="on", source="cli")
@@ -41,6 +44,21 @@ def _do_on(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         pass
     ensure_label_exists()
+
+    # Register Tier 0 scheduled jobs
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier0.digest",
+        cron="0 9 * * 1",
+        command="mnemo autopilot digest --post",
+    )
+    schedule_autopilot_job(
+        vault_root=vault,
+        name="autopilot.tier0.collect-misses",
+        cron="0 8 * * *",
+        command="mnemo autopilot collect-misses",
+    )
+
     print("autopilot: on")
     return 0
 
@@ -110,4 +128,50 @@ def _do_status(args: argparse.Namespace) -> int:
             print(f"  {j.name}  cron={j.cron}  cmd={j.command}")
     else:
         print("Scheduled jobs: (none)")
+    return 0
+
+
+def _parse_since_days(since_str: str) -> int:
+    """Parse a ``<N>d`` string into an integer number of days (default 7)."""
+    since_str = (since_str or "7d").strip().lower()
+    if since_str.endswith("d"):
+        try:
+            return max(1, int(since_str[:-1]))
+        except ValueError:
+            pass
+    try:
+        return max(1, int(since_str))
+    except ValueError:
+        return 7
+
+
+def _do_digest(args: argparse.Namespace) -> int:
+    from mnemo.autopilot.insights.digest import (
+        generate_digest,
+        write_digest,
+        post_digest_issue,
+    )
+
+    vault = _vault()
+    since_days = _parse_since_days(getattr(args, "since", "7d") or "7d")
+    digest = generate_digest(vault_root=vault, since_days=since_days)
+    path = write_digest(vault_root=vault, digest=digest)
+    print(str(path))
+
+    if getattr(args, "post", False):
+        issue_num = post_digest_issue(digest=digest)
+        if issue_num is not None:
+            print(f"issue created: #{issue_num}")
+        else:
+            print("issue: (not created — gh unavailable or error)")
+
+    return 0
+
+
+def _do_collect_misses(args: argparse.Namespace) -> int:
+    from mnemo.autopilot.insights.miss_collector import collect_recall_misses
+
+    vault = _vault()
+    count = collect_recall_misses(vault_root=vault)
+    print(f"{count} new proposal(s) written")
     return 0
