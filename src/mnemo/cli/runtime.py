@@ -15,6 +15,9 @@ from mnemo.cli.parser import COMMANDS, _build_parser
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
+    # strip leading prog name so callers may pass sys.argv-style lists
+    if argv and argv[0] == parser.prog:
+        argv = argv[1:]
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:
