@@ -125,9 +125,32 @@ def _build_injection_payload(
         except Exception:
             briefing_block = ""
 
-    if not topic_lines and not briefing_block:
+    # v0.11 NEW: append predicted rules from preempt-cache, if fresh.
+    preempt_block = ""
+    if current_project:
+        try:
+            from mnemo.autopilot.proposer.preempt import read_preempt_cache
+
+            cache = read_preempt_cache(vault_root=vault_root)
+            if (
+                cache is not None
+                and cache.get("project") == current_project
+                and cache.get("slugs")
+            ):
+                slugs = cache["slugs"]
+                preempt_block = (
+                    "\n\n[predicted-rules session=preempt "
+                    f"slugs={','.join(slugs)}]\n"
+                    "These rules are predicted relevant based on current git context. "
+                    "You may call read_mnemo_rule(slug) to load any of them.\n"
+                    "[/predicted-rules]"
+                )
+        except Exception:
+            preempt_block = ""
+
+    if not topic_lines and not briefing_block and not preempt_block:
         return ""
-    return "\n".join(topic_lines) + briefing_block
+    return "\n".join(topic_lines) + briefing_block + preempt_block
 
 
 def _emit_injection(payload_text: str, out: object = None) -> None:

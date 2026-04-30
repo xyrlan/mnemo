@@ -87,6 +87,22 @@ def _build_parser() -> argparse.ArgumentParser:
         if _tune_name in ("reflex", "all"):
             _tp.add_argument("--project", type=str, default=None,
                              help="limit reflex calibration to this project")
+    # Tier 3: propose + preempt + proposals queue
+    propose_p = autosub.add_parser("propose", help="run end-of-session rule analysis")
+    propose_p.add_argument("--session-id", dest="session_id", required=True,
+                           help="session ID to analyze")
+    autosub.add_parser("preempt", help="predict next-action rules and write preempt-cache.json")
+    proposals_p = autosub.add_parser("proposals", help="manage the proposals queue")
+    propsub = proposals_p.add_subparsers(dest="proposals_action")
+    propsub.required = True
+    list_p = propsub.add_parser("list", help="list proposals")
+    list_p.add_argument("--status", default=None, help="filter by status")
+    list_p.add_argument("--kind", default=None, help="filter by kind")
+    list_p.add_argument("--project", default=None, help="filter by project")
+    review_p = propsub.add_parser("review", help="review a proposal interactively")
+    review_p.add_argument("--id", default=None, dest="id", help="proposal ID to review")
+    review_p.add_argument("--accept", action="store_true", help="accept without prompt")
+    review_p.add_argument("--reject", action="store_true", help="reject without prompt")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
