@@ -57,6 +57,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pause_p.add_argument("--hours", type=int, default=24,
                          help="pause duration in hours (default 24)")
     autosub.add_parser("status", help="show autopilot state + jobs + budget")
+    digest_p = autosub.add_parser("digest", help="generate weekly health digest")
+    digest_p.add_argument(
+        "--post", action="store_true",
+        help="also create a GitHub issue (label: mnemo:digest)",
+    )
+    digest_p.add_argument(
+        "--since", type=str, default="7d",
+        help="time window for telemetry (e.g. 7d, 30d — default 7d)",
+    )
+    autosub.add_parser("collect-misses", help="write rule_candidate proposals from recall misses")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
