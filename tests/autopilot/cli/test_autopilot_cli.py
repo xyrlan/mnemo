@@ -12,7 +12,7 @@ def _run(monkeypatch, tmp_path: Path, *args: str, capsys) -> tuple[int, str]:
     monkeypatch.setattr(
         "mnemo.cli._resolve_vault", lambda: tmp_path, raising=False
     )
-    rc = main(["mnemo", *args])
+    rc = main([*args])
     out, _err = capsys.readouterr()
     return rc, out
 
