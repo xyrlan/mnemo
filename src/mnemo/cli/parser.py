@@ -48,6 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="which install scope to report (default: all)",
     )
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
+    autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
+    autosub = autopilot.add_subparsers(dest="autopilot_action")
+    autosub.required = True
+    autosub.add_parser("on", help="enable autopilot")
+    autosub.add_parser("off", help="disable autopilot + revoke jobs")
+    pause_p = autosub.add_parser("pause", help="temporarily stop autopilot")
+    pause_p.add_argument("--hours", type=int, default=24,
+                         help="pause duration in hours (default 24)")
+    autosub.add_parser("status", help="show autopilot state + jobs + budget")
     sub.add_parser("open", help="open vault in Obsidian or file manager")
     sub.add_parser("fix", help="reset circuit breaker")
     extract = sub.add_parser("extract", help="LLM-powered extraction of memory files into shared/_inbox")
