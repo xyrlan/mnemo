@@ -104,6 +104,14 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         )
         fired.append(("tier0.collect-misses", "inline", ok))
 
+    if should_run(vault_root=vault_root, name="tier3.eos-catchup", interval_days=1):
+        ok = run_inline(
+            vault_root=vault_root,
+            name="tier3.eos-catchup",
+            fn=lambda: _eos_catchup_inline(vault_root),
+        )
+        fired.append(("tier3.eos-catchup", "inline", ok))
+
     # Detached (slow, may open PRs, may call gh): spawn subprocess
     if should_run(vault_root=vault_root, name="tier1.doctor", interval_days=7):
         run_detached(
@@ -160,6 +168,7 @@ def status_summary(*, vault_root: Path) -> list:
         ("tier1.telemetry", 7),
         ("tier2.bm25", 7),
         ("tier2.reflex", 7),
+        ("tier3.eos-catchup", 1),
     ]
     out = []
     for name, interval in operations:
