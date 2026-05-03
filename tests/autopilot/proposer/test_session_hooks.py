@@ -168,7 +168,9 @@ def test_session_start_empty_slugs_no_block(tmp_path: Path):
 # ------------------------------------------------------------------ #
 
 def test_maybe_schedule_propose_called_when_enabled(tmp_path: Path):
-    cfg = {"autopilot": {"propose": {"enabled": True}}}
+    from mnemo.autopilot.core.kill_switch import set_state
+    set_state(vault_root=tmp_path, state="on")
+    cfg = {}
     with patch(
         "mnemo.autopilot.proposer.eos_extractor.analyze_session",
         return_value=[],
@@ -232,13 +234,17 @@ def test_maybe_schedule_propose_swallows_exception(tmp_path: Path):
 # Tier 3: autopilot on → registers eos-sweep job                      #
 # ------------------------------------------------------------------ #
 
-def test_autopilot_on_registers_eos_sweep_job(tmp_path: Path, monkeypatch, capsys):
+def test_autopilot_on_activates_kill_switch(tmp_path: Path, monkeypatch, capsys):
     from mnemo.cli.runtime import main as cli_main
+    from mnemo.autopilot.core.kill_switch import is_active
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path, raising=False)
+    monkeypatch.setattr(
+        "mnemo.autopilot.core.labels.ensure_label_exists",
+        lambda: None, raising=False,
+    )
     cli_main(["autopilot", "on"])
-    jobs_path = tmp_path / ".mnemo" / "autopilot-jobs.json"
-    assert jobs_path.exists()
-    data = json.loads(jobs_path.read_text())
-    assert "autopilot.tier3.eos-sweep" in data["jobs"]
+    # Hook-driven scheduling: presence of an active kill switch is what
+    # gates SessionStart/SessionEnd autopilot triggers — no fake cron file.
+    assert is_active(vault_root=tmp_path) is True

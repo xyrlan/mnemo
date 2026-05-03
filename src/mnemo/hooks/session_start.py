@@ -251,6 +251,14 @@ def main() -> int:
                         errors.log_error(vault, "session_start.inject_telemetry", exc)
             except Exception as e:
                 errors.log_error(vault, "session_start.injection", e)
+
+        # autopilot — fire any due hook-driven operations. Always best-effort:
+        # any failure here is logged + swallowed, must never block the session.
+        try:
+            from mnemo.autopilot.core.scheduler import run_due_jobs
+            run_due_jobs(vault_root=vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.autopilot", e)
     except Exception as e:
         try:
             from mnemo.core import config as _c, errors as _e, paths as _p
