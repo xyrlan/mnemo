@@ -25,10 +25,6 @@ def autopilot_budget_path(vault_root: Path) -> Path:
     return autopilot_dir(vault_root) / "autopilot-budget.json"
 
 
-def autopilot_jobs_path(vault_root: Path) -> Path:
-    return autopilot_dir(vault_root) / "autopilot-jobs.json"
-
-
 def frozen_recall_path(vault_root: Path) -> Path:
     return autopilot_dir(vault_root) / "recall-cases.frozen.json"
 

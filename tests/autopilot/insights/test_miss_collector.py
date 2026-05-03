@@ -114,3 +114,60 @@ def test_collect_same_slug_different_projects(tmp_path: Path):
     ])
     count = collect_recall_misses(vault_root=tmp_path)
     assert count == 2
+
+
+# ── Staleness: stale report triggers refresh ─────────────────────────────────
+
+def test_collect_refreshes_stale_recall_report(tmp_path: Path, monkeypatch):
+    """When recall-report.json is >7d old, miss_collector calls refresh."""
+    from mnemo.autopilot.insights import miss_collector
+
+    # Write a stale report (Jan 2025, well >7d old).
+    stale = {
+        "generated_at": "2025-01-01T00:00:00Z",
+        "report": {"cases": 0, "misses": []},
+        "results": [],
+    }
+    path = tmp_path / _MNemo / "recall-report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stale))
+
+    refresh_calls: list[Path] = []
+
+    def fake_refresh(vault_root: Path):
+        refresh_calls.append(vault_root)
+        return {
+            "generated_at": "2026-05-03T00:00:00Z",
+            "report": {"cases": 1, "misses": []},
+            "results": [_make_result("fresh-miss", hit=False)],
+        }
+
+    monkeypatch.setattr(miss_collector, "_refresh_recall_report", fake_refresh)
+    count = collect_recall_misses(vault_root=tmp_path)
+    assert refresh_calls == [tmp_path]
+    assert count == 1
+    proposals = list_proposals(vault_root=tmp_path)
+    assert proposals[0].payload["expected_slug"] == "fresh-miss"
+
+
+def test_collect_does_not_refresh_when_report_is_fresh(tmp_path: Path, monkeypatch):
+    from mnemo.autopilot.insights import miss_collector
+    from datetime import datetime, timezone
+
+    fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh = {
+        "generated_at": fresh_ts,
+        "report": {"cases": 0, "misses": []},
+        "results": [_make_result("slug-z", hit=False)],
+    }
+    path = tmp_path / _MNemo / "recall-report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(fresh))
+
+    called = {"n": 0}
+    def fake_refresh(vault_root: Path):
+        called["n"] += 1
+        return None
+    monkeypatch.setattr(miss_collector, "_refresh_recall_report", fake_refresh)
+    collect_recall_misses(vault_root=tmp_path)
+    assert called["n"] == 0

@@ -95,3 +95,24 @@ def test_allowed_paths_constant_has_expected_entries() -> None:
     assert ".mnemo/" in ALLOWED_PATHS
     assert "docs/" in ALLOWED_PATHS
     assert "briefings/" in ALLOWED_PATHS
+
+
+def test_vault_path_outside_repo_root_is_allowed_via_vault_root(tmp_path: Path) -> None:
+    """Paths under vault_root/shared/_archive are allowed even when vault != repo."""
+    repo = tmp_path / "repo"
+    vault = tmp_path / "vault"
+    repo.mkdir()
+    vault.mkdir()
+    diff = [vault / "shared" / "_archive" / "old.md"]
+    assert_perimeter(diff, repo_root=repo, vault_root=vault)
+    assert is_within_perimeter(diff[0], repo_root=repo, vault_root=vault) is True
+
+
+def test_vault_path_forbidden_subdir_still_raises(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    vault = tmp_path / "vault"
+    repo.mkdir()
+    vault.mkdir()
+    diff = [vault / "secrets" / "leak.md"]
+    with pytest.raises(PerimeterViolation):
+        assert_perimeter(diff, repo_root=repo, vault_root=vault)

@@ -6,7 +6,6 @@ from typing import List
 
 # Module-level imports so patch() targets are reachable
 from mnemo.autopilot.proposer.preempt import predict_next_action, write_preempt_cache
-from mnemo.autopilot.core.dispatcher import schedule_autopilot_job
 
 
 def run_preempt_sync(
@@ -37,18 +36,3 @@ def run_preempt_sync(
         return []
 
 
-def register_eos_sweep_job(vault_root: Path) -> None:
-    """Register the eos-sweep cron job in autopilot-jobs.json.
-
-    Called from ``mnemo autopilot on`` so the sweep is recorded even when
-    the hook hasn't fired yet.
-    """
-    try:
-        schedule_autopilot_job(
-            vault_root=vault_root,
-            name="autopilot.tier3.eos-sweep",
-            cron="*/30 * * * *",
-            command="mnemo autopilot propose --session-id sweep",
-        )
-    except Exception:
-        pass
