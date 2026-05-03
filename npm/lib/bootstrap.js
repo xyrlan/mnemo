@@ -38,8 +38,14 @@ function isAlreadyInstalled(resolverFn = resolveMnemoBinary) {
 }
 
 
-function runShell(cmd, { quiet = false } = {}) {
-  const result = spawnSync("sh", ["-c", cmd], { stdio: quiet ? "ignore" : "inherit" });
+function runShell(cmd, { quiet = false, platform = process.platform } = {}) {
+  const isWin = platform === "win32";
+  const shellCmd = isWin ? "cmd.exe" : "sh";
+  const shellArgs = isWin ? ["/d", "/s", "/c", cmd] : ["-c", cmd];
+  const result = spawnSync(shellCmd, shellArgs, {
+    stdio: quiet ? "ignore" : "inherit",
+    windowsHide: true,
+  });
   return result.status === null ? 1 : result.status;
 }
 

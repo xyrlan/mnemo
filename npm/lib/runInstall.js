@@ -15,7 +15,7 @@ const { buildInitArgs, runMnemo } = require("./runMnemo");
 const m = require("./messages");
 
 
-function parseFlags(argv) {
+function parseFlags(argv, { warn = (msg) => process.stderr.write(`warning: ${msg}\n`) } = {}) {
   const flags = { scope: null, vaultRoot: null, upgrade: false, yes: false, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -24,7 +24,18 @@ function parseFlags(argv) {
     else if (a === "--upgrade")        flags.upgrade = true;
     else if (a === "--yes" || a === "-y") flags.yes = true;
     else if (a === "--quiet")          flags.quiet = true;
-    else if (a === "--vault-root")     { flags.vaultRoot = argv[++i]; }
+    else if (a === "--vault-root") {
+      const next = argv[i + 1];
+      if (!next || next.startsWith("--")) {
+        warn(`--vault-root requires a path argument; ignoring.`);
+      } else {
+        flags.vaultRoot = next;
+        i++;
+      }
+    }
+    else if (a && a.startsWith("-")) {
+      warn(`unknown flag: ${a}`);
+    }
   }
   return flags;
 }
