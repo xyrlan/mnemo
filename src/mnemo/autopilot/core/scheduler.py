@@ -37,6 +37,43 @@ def _collect_misses_inline(vault_root: Path) -> None:
     collect_recall_misses(vault_root=vault_root)
 
 
+def _eos_catchup_inline(vault_root: Path) -> None:
+    """Tier 3 fallback: re-run analyze_session for sessions that crashed.
+
+    Iterates session-cache entries lacking ``analyzed_at`` (≤26h old),
+    groups by cwd, calls ``analyze_session`` once per cwd using the earliest
+    ``started_at`` in that group as the git window start. On success, stamps
+    ``analyzed_at`` on every entry in the group. Per-cwd error-isolated.
+    """
+    from mnemo.core import agent as agent_mod
+    from mnemo.core import errors as err_mod
+    from mnemo.core import session as session_mod
+    from mnemo.autopilot.proposer.eos_extractor import analyze_session
+
+    by_cwd: dict[str, list[dict]] = {}
+    for entry in session_mod.iter_unanalyzed(max_age_seconds=26 * 3600):
+        cwd = entry.get("cwd_at_start")
+        if not cwd or not Path(cwd).exists():
+            continue
+        by_cwd.setdefault(cwd, []).append(entry)
+
+    for cwd, entries in by_cwd.items():
+        earliest_iso = min(e["started_at"] for e in entries)
+        try:
+            project = agent_mod.resolve_canonical_agent(cwd).name
+            analyze_session(
+                session_id=f"catchup-{entries[0]['session_id']}",
+                project=project,
+                vault_root=vault_root,
+                cwd=Path(cwd),
+                session_start_iso=earliest_iso,
+            )
+            for e in entries:
+                session_mod.mark_analyzed(e["session_id"])
+        except Exception as exc:
+            err_mod.log_error(vault_root, "autopilot.tier3.catchup", exc)
+
+
 def run_due_jobs(*, vault_root: Path) -> dict:
     """Run any autopilot operation that is due.
 
