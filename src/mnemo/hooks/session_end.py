@@ -250,40 +250,48 @@ def _maybe_schedule_propose(
 ) -> None:
     """Run the end-of-session rule proposer when autopilot is active.
 
-    This is intentionally synchronous for simplicity — the analysis is fast
-    (git calls + file reads) and runs after the session ends so latency
-    doesn't affect the user. Wrapped in a broad try/except so any failure
-    is logged and swallowed.
+    Always stamps ``analyzed_at`` on the session cache after this returns —
+    reaching SessionEnd is the user's intent to close the session, and the
+    Tier 3 catchup (autopilot.core.scheduler) must respect that even when
+    autopilot is currently disabled.
     """
+    from mnemo.core import errors as err_mod
+    from mnemo.core import session as session_mod
+
     try:
-        from mnemo.core import errors as err_mod
         from mnemo.autopilot.core.kill_switch import is_active
 
-        if not is_active(vault_root=vault_root):
-            return
+        if is_active(vault_root=vault_root):
+            from mnemo.autopilot.proposer.eos_extractor import analyze_session
+            from mnemo.core import agent as agent_mod
 
-        from mnemo.autopilot.proposer.eos_extractor import analyze_session
-        from mnemo.core import agent as agent_mod
+            cwd_path = __import__("pathlib").Path(cwd)
+            try:
+                project = agent_mod.resolve_canonical_agent(cwd).name
+            except Exception:
+                project = agent_name
 
-        cwd_path = __import__("pathlib").Path(cwd)
-        try:
-            project = agent_mod.resolve_canonical_agent(cwd).name
-        except Exception:
-            project = agent_name
-
-        try:
-            analyze_session(
-                session_id=session_id,
-                project=project,
-                vault_root=vault_root,
-                cwd=cwd_path,
-            )
-        except Exception as exc:
-            err_mod.log_error(vault_root, "session_end.propose.analyze", exc)
+            try:
+                analyze_session(
+                    session_id=session_id,
+                    project=project,
+                    vault_root=vault_root,
+                    cwd=cwd_path,
+                )
+            except Exception as exc:
+                err_mod.log_error(vault_root, "session_end.propose.analyze", exc)
     except Exception as exc:
         try:
-            from mnemo.core import errors as _e
-            _e.log_error(vault_root, "session_end.propose", exc)
+            err_mod.log_error(vault_root, "session_end.propose", exc)
+        except Exception:
+            pass
+
+    # Always mark — kill-switch off should still close the session for catchup.
+    try:
+        session_mod.mark_analyzed(session_id)
+    except Exception as exc:
+        try:
+            err_mod.log_error(vault_root, "session_end.mark_analyzed", exc)
         except Exception:
             pass
 

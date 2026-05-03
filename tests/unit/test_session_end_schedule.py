@@ -411,3 +411,46 @@ def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
     errors_log = vault / ".errors.log"
     assert errors_log.exists()
     assert "session_end.schedule" in errors_log.read_text()
+
+
+from unittest.mock import patch
+
+from mnemo.hooks import session_end as se_mod
+
+
+def test_maybe_schedule_propose_marks_analyzed_on_success(tmp_path):
+    with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=True), \
+         patch("mnemo.autopilot.proposer.eos_extractor.analyze_session") as analyze, \
+         patch("mnemo.core.agent.resolve_canonical_agent") as resolve, \
+         patch("mnemo.core.session.mark_analyzed") as mark:
+        resolve.return_value.name = "proj-x"
+        se_mod._maybe_schedule_propose(
+            cfg={}, vault_root=tmp_path, agent_name="proj-x",
+            session_id="sid-success", cwd=str(tmp_path),
+        )
+    analyze.assert_called_once()
+    mark.assert_called_once_with("sid-success")
+
+
+def test_maybe_schedule_propose_marks_analyzed_when_kill_switch_off(tmp_path):
+    """Reaching SessionEnd is the user's intent — respect it even if autopilot off."""
+    with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=False), \
+         patch("mnemo.core.session.mark_analyzed") as mark:
+        se_mod._maybe_schedule_propose(
+            cfg={}, vault_root=tmp_path, agent_name="proj-x",
+            session_id="sid-off", cwd=str(tmp_path),
+        )
+    mark.assert_called_once_with("sid-off")
+
+
+def test_maybe_schedule_propose_swallows_mark_analyzed_failure(tmp_path):
+    with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=True), \
+         patch("mnemo.autopilot.proposer.eos_extractor.analyze_session"), \
+         patch("mnemo.core.agent.resolve_canonical_agent") as resolve, \
+         patch("mnemo.core.session.mark_analyzed", side_effect=OSError("boom")):
+        resolve.return_value.name = "proj-x"
+        # Must not raise
+        se_mod._maybe_schedule_propose(
+            cfg={}, vault_root=tmp_path, agent_name="proj-x",
+            session_id="sid-mark-fail", cwd=str(tmp_path),
+        )
