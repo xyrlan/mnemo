@@ -187,7 +187,7 @@ def main() -> int:
         }
         try:
             session.save(sid, info)
-            session.cleanup_stale()
+            session.cleanup_stale(max_age_seconds=48 * 3600)
         except Exception as e:
             errors.log_error(vault, "session_start.cache", e)
         try:
