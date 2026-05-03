@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from mnemo.autopilot.selffix.dead_rule_sweep import (
+    DEFAULT_DEAD_WINDOW_DAYS,
+    MAX_RULES_PER_SWEEP_PR,
     DeadRule,
     archive_rule,
     detect_dead_rules,
@@ -218,3 +220,43 @@ def test_open_dead_rule_pr_opens_pr_on_success(tmp_path: Path) -> None:
         result = open_dead_rule_pr(dead, vault_root=tmp_path, repo_root=tmp_path)
     assert result == 55
     mock_rec.assert_called_once()
+
+
+def test_default_dead_window_is_180_days() -> None:
+    assert DEFAULT_DEAD_WINDOW_DAYS == 180
+
+
+def test_max_rules_per_sweep_pr_is_50() -> None:
+    assert MAX_RULES_PER_SWEEP_PR == 50
+
+
+def test_detect_dead_rules_default_window_180_skips_120d_old(tmp_path: Path) -> None:
+    """A rule active 120d ago is NOT dead under the new 180d default."""
+    _make_rule(tmp_path, "old-but-active", created_days_ago=300)
+    _write_access_log(tmp_path, [
+        {"ts": _ts(120), "rules": [{"slug": "old-but-active"}]},
+    ])
+    rules = detect_dead_rules(vault_root=tmp_path)  # uses default
+    assert rules == []
+
+
+def test_open_dead_rule_pr_caps_at_max(tmp_path: Path) -> None:
+    """When >MAX rules dead, the PR archives only MAX, leaves the rest."""
+    dead = []
+    for i in range(MAX_RULES_PER_SWEEP_PR + 5):
+        rule = _make_rule(tmp_path, f"r{i}")
+        dead.append(DeadRule(rule_path=rule, slug=f"r{i}", last_seen_days=200))
+    (tmp_path / ".mnemo").mkdir(exist_ok=True)
+    (tmp_path / ".mnemo" / "autopilot.json").write_text(
+        json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
+                    "last_changed_at": None, "last_changed_by": None})
+    )
+    with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_branch", return_value="b"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.push_branch", return_value=True), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.open_pr", return_value=99), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep.pr_budget.record_opened"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._run_pytest", return_value=True):
+        open_dead_rule_pr(dead, vault_root=tmp_path, repo_root=tmp_path)
+    archive_dir = tmp_path / "shared" / "_archive"
+    archived = list(archive_dir.glob("*.md"))
+    assert len(archived) == MAX_RULES_PER_SWEEP_PR

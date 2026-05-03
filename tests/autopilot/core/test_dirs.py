@@ -5,7 +5,6 @@ from mnemo.autopilot.core._dirs import (
     proposals_dir,
     autopilot_state_path,
     autopilot_budget_path,
-    autopilot_jobs_path,
     frozen_recall_path,
 )
 
@@ -18,7 +17,6 @@ def test_paths_are_namespaced(tmp_path: Path):
     assert proposals_dir(tmp_path) == tmp_path / ".mnemo" / "proposals"
     assert autopilot_state_path(tmp_path) == tmp_path / ".mnemo" / "autopilot.json"
     assert autopilot_budget_path(tmp_path) == tmp_path / ".mnemo" / "autopilot-budget.json"
-    assert autopilot_jobs_path(tmp_path) == tmp_path / ".mnemo" / "autopilot-jobs.json"
     assert frozen_recall_path(tmp_path) == tmp_path / ".mnemo" / "recall-cases.frozen.json"
 
 

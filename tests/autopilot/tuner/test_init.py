@@ -1,10 +1,5 @@
-"""Tests for tuner __init__ exports — T13."""
+"""Tests for tuner __init__ exports."""
 from __future__ import annotations
-
-
-def test_register_tune_jobs_importable():
-    from mnemo.autopilot.tuner import register_tune_jobs
-    assert callable(register_tune_jobs)
 
 
 def test_tuner_package_clean_import():
@@ -12,6 +7,8 @@ def test_tuner_package_clean_import():
     import mnemo.autopilot.tuner  # noqa: F401
 
 
-def test_all_exports():
+def test_tuner_no_dispatcher_export():
+    """Tier 2 cadence is hook-driven; the dead ``register_tune_jobs`` shim
+    must not be re-introduced."""
     import mnemo.autopilot.tuner as tuner
-    assert hasattr(tuner, "register_tune_jobs")
+    assert not hasattr(tuner, "register_tune_jobs")

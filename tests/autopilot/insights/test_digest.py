@@ -99,7 +99,7 @@ def test_generate_digest_reflex_counts(tmp_path: Path):
          "silence_reason": "relative_gap_fail"},
     ]
     _write_reflex_log(tmp_path, entries)
-    d = generate_digest(vault_root=tmp_path, since_days=7)
+    d = generate_digest(vault_root=tmp_path, since_days=365)
     assert d.reflex_prompt_count == 4
     # 1 emitted → 1/4 = 25%
     assert abs(d.reflex_emit_rate - 0.25) < 0.001
@@ -118,7 +118,7 @@ def test_generate_digest_reflex_index_missing_count(tmp_path: Path):
          "silence_reason": None, "session_id": "s3"},
     ]
     _write_reflex_log(tmp_path, entries)
-    d = generate_digest(vault_root=tmp_path, since_days=7)
+    d = generate_digest(vault_root=tmp_path, since_days=365)
     assert d.reflex_index_missing_count == 2
 
 
@@ -134,7 +134,7 @@ def test_generate_digest_denials(tmp_path: Path):
          "project": "p", "reason": "enforce block"},
     ]
     _write_denial_log(tmp_path, entries)
-    d = generate_digest(vault_root=tmp_path, since_days=7)
+    d = generate_digest(vault_root=tmp_path, since_days=365)
     assert d.denial_count == 3
     assert d.top_denial_slug == "supabase-single-db"
     assert d.top_denial_count == 2
@@ -165,7 +165,7 @@ def test_generate_digest_top_emitted(tmp_path: Path):
          "args": {"topic": "workflow"}, "project": "p"},
     ]
     _write_mcp_log(tmp_path, entries)
-    d = generate_digest(vault_root=tmp_path, since_days=7)
+    d = generate_digest(vault_root=tmp_path, since_days=365)
     assert len(d.top_emitted_rules) >= 1
     assert d.top_emitted_rules[0][0] == "canonical-workflow"
     assert d.top_emitted_rules[0][1] == 2

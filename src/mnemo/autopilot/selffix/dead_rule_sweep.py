@@ -24,6 +24,15 @@ from mnemo.autopilot.selffix._perimeter import assert_perimeter
 
 _SHARED_SUBTYPES = ("feedback", "user", "reference")
 
+#: Default window (days) before a rule is considered dead. Bumped from 90 →
+#: 180 so prior schema bumps that broke ``mcp-access-log`` slug continuity
+#: don't sweep otherwise-active rules.
+DEFAULT_DEAD_WINDOW_DAYS = 180
+
+#: Maximum rules archived in a single sweep PR. Caps blast radius if the
+#: detector ever over-fires (e.g., after a schema bump invalidates logs).
+MAX_RULES_PER_SWEEP_PR = 50
+
 
 @dataclass
 class DeadRule:
@@ -122,7 +131,7 @@ def _rule_created_at(text: str) -> Optional[datetime]:
 def detect_dead_rules(
     *,
     vault_root: Path,
-    days: int = 90,
+    days: int = DEFAULT_DEAD_WINDOW_DAYS,
 ) -> List[DeadRule]:
     """Return rules in ``shared/`` that have had no usage signal in *days* days."""
     shared = vault_root / "shared"
@@ -205,6 +214,13 @@ def open_dead_rule_pr(
     if not rules:
         return None
 
+    if len(rules) > MAX_RULES_PER_SWEEP_PR:
+        print(
+            f"[autopilot] sweep capped: {len(rules)} dead rules detected, "
+            f"archiving first {MAX_RULES_PER_SWEEP_PR} (cap={MAX_RULES_PER_SWEEP_PR})"
+        )
+        rules = rules[:MAX_RULES_PER_SWEEP_PR]
+
     ok, reason = pr_budget.can_open(vault_root=vault_root, category="dead_rule_sweep")
     if not ok:
         print(f"[autopilot] dead-rule sweep skipped: {reason}")
@@ -226,7 +242,7 @@ def open_dead_rule_pr(
 
     # Perimeter guard
     try:
-        assert_perimeter(archived, repo_root=repo_root)
+        assert_perimeter(archived, repo_root=repo_root, vault_root=vault_root)
     except Exception as exc:
         print(f"[autopilot] perimeter violation, aborting sweep PR: {exc}")
         return None
@@ -248,7 +264,10 @@ def open_dead_rule_pr(
         return None
 
     _gh.push_branch(branch, repo_root=repo_root)
-    body_lines = [f"Archiving {len(rules)} rule(s) with no usage signal in 90 days:\n"]
+    body_lines = [
+        f"Archiving {len(rules)} rule(s) with no usage signal in "
+        f"{DEFAULT_DEAD_WINDOW_DAYS} days:\n"
+    ]
     for r in rules:
         body_lines.append(f"- `{r.slug}` (last seen: >{r.last_seen_days}d ago)")
     body = "\n".join(body_lines)

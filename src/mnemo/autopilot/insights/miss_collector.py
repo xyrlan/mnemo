@@ -8,10 +8,76 @@ Public API:
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mnemo.autopilot.insights._log_readers import read_recall_report
 from mnemo.autopilot.core.proposals import write_proposal, list_proposals
+
+#: Recall reports older than this are considered stale; the collector will
+#: refresh them before running so proposals reflect current ranking.
+RECALL_REPORT_STALE_DAYS = 7
+
+
+def _parse_iso_z(ts: str) -> datetime | None:
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_report_stale(report: dict, *, now: datetime | None = None) -> bool:
+    """True iff the report's ``generated_at`` is missing or older than the threshold."""
+    ts = (report or {}).get("generated_at") or ""
+    parsed = _parse_iso_z(ts)
+    if parsed is None:
+        return True
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=RECALL_REPORT_STALE_DAYS)
+    return parsed < cutoff
+
+
+def _refresh_recall_report(vault_root: Path) -> dict | None:
+    """Re-run the recall pipeline against ``vault_root`` and persist a fresh report.
+
+    Returns the freshly-loaded report, or ``None`` if recall could not run
+    (e.g., access log missing or no cases yet).
+    """
+    import json
+
+    from mnemo.core.mcp.recall import (
+        aggregate, bootstrap_cases, count_log_entries, run_case,
+    )
+
+    log_path = vault_root / ".mnemo" / "mcp-access-log.jsonl"
+    if not log_path.is_file():
+        return None
+    try:
+        cases, orphan_dropped = bootstrap_cases(
+            log_path, pair_window_s=60, vault_root=vault_root, return_orphan_count=True,
+        )
+    except Exception:
+        return None
+    if not cases:
+        return None
+    try:
+        results = [run_case(vault_root, c) for c in cases]
+        log_entries = count_log_entries(log_path)
+        report = aggregate(results, log_entries=log_entries, orphan_dropped=orphan_dropped)
+    except Exception:
+        return None
+    payload = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "report": report,
+        "results": results,
+    }
+    mnemo_dir = vault_root / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    (mnemo_dir / "recall-report.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+    return payload
 
 
 def collect_recall_misses(*, vault_root: Path) -> int:
@@ -23,6 +89,10 @@ def collect_recall_misses(*, vault_root: Path) -> int:
     Returns the number of newly-written proposals.
     """
     report = read_recall_report(vault_root)
+    if report is None or _is_report_stale(report):
+        refreshed = _refresh_recall_report(vault_root)
+        if refreshed is not None:
+            report = refreshed
     if report is None:
         return 0
 

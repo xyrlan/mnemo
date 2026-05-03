@@ -182,7 +182,7 @@ def open_doctor_fix_pr(
 
     # Perimeter guard — abort if any modified file is outside the safe set
     try:
-        assert_perimeter(modified, repo_root=repo_root)
+        assert_perimeter(modified, repo_root=repo_root, vault_root=vault_root)
     except Exception as exc:
         print(f"[autopilot] perimeter violation, aborting PR: {exc}")
         return None

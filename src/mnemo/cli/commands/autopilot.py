@@ -52,6 +52,15 @@ def _do_on(args: argparse.Namespace) -> int:
         freeze_current(vault_root=vault)
     except FileNotFoundError:
         pass
+    # Remove legacy fake-cron registry from the hook-driven refactor; it is
+    # no longer read and would otherwise sit forever in users' vaults.
+    legacy_jobs = vault / ".mnemo" / "autopilot-jobs.json"
+    try:
+        legacy_jobs.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
     ensure_label_exists()
     print("autopilot: on")
     print("(operations fire on Claude Code SessionStart/SessionEnd hooks)")
