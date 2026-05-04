@@ -11,14 +11,48 @@ import argparse
 import sys
 from pathlib import Path
 
-from mnemo.cli.parser import _build_parser, command
+from mnemo.cli.parser import (
+    ADVANCED_COMMANDS,
+    INTERNAL_COMMANDS,
+    _build_parser,
+    command,
+)
 
 
 @command("help")
-def cmd_help(_args: argparse.Namespace) -> int:
+def cmd_help(args: argparse.Namespace) -> int:
     parser = _build_parser()
+    show_all = bool(getattr(args, "all", False))
+    _filter_subparsers(parser, show_all=show_all)
     parser.print_help()
+    if not show_all and ADVANCED_COMMANDS:
+        print()
+        print(
+            f"({len(ADVANCED_COMMANDS)} advanced commands hidden — "
+            "`mnemo help --all` to see them.)"
+        )
     return 0
+
+
+def _filter_subparsers(parser: argparse.ArgumentParser, *, show_all: bool) -> None:
+    """Strip internal (and optionally advanced) subparsers from help output.
+
+    Both the `{a,b,c}` choices header and the per-command listing are derived
+    from the subparsers action. We mutate that action in-place so the only
+    visible commands are the curated user-facing set.
+    """
+    sub = next(
+        (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)),
+        None,
+    )
+    if sub is None:
+        return
+    hidden = set(INTERNAL_COMMANDS)
+    if not show_all:
+        hidden |= ADVANCED_COMMANDS
+    sub._choices_actions = [ca for ca in sub._choices_actions if ca.dest not in hidden]
+    visible = [n for n in sub.choices.keys() if n not in hidden]
+    sub.metavar = "{" + ",".join(visible) + "}"
 
 
 @command("fix")

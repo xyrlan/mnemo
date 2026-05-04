@@ -53,7 +53,8 @@ def _populated_vault(tmp_path: Path) -> Path:
 
 
 def test_recall_registered_in_help(capsys: pytest.CaptureFixture):
-    rc = cli.main(["help"])
+    # `recall` is an advanced command, surfaced via `mnemo help --all`.
+    rc = cli.main(["help", "--all"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "recall" in out

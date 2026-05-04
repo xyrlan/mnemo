@@ -15,6 +15,28 @@ from typing import Callable
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {}
 
 
+# Commands that are real but advanced/maintenance — hidden from
+# ``mnemo help`` by default; surfaced via ``mnemo help --all``.
+ADVANCED_COMMANDS: frozenset[str] = frozenset({
+    "telemetry",
+    "recall",
+    "migrate-worktree-briefings",
+    "dedup-rules",
+    "disable-rule",
+    "list-enforced",
+    "regen-graph-edges",
+})
+
+# Internal subparsers that should never appear in user-facing help (wired
+# only by hooks, MCP server, statusLine composer, briefing pipeline).
+INTERNAL_COMMANDS: frozenset[str] = frozenset({
+    "briefing",
+    "mcp-server",
+    "statusline",
+    "statusline-compose",
+})
+
+
 def command(name: str) -> Callable:
     def deco(fn: Callable[[argparse.Namespace], int]) -> Callable:
         COMMANDS[name] = fn
@@ -168,5 +190,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "regen-graph-edges",
         help="refresh `## Sources` wikilink section on shared rules (idempotent, Obsidian graph)",
     )
-    sub.add_parser("help", help="list commands")
+    help_p = sub.add_parser("help", help="list commands")
+    help_p.add_argument(
+        "--all", action="store_true",
+        help="include advanced/maintenance commands",
+    )
     return p
