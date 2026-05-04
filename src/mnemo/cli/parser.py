@@ -118,12 +118,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
-    briefing = sub.add_parser("briefing", help=argparse.SUPPRESS)
+    # Hidden subparsers: omit ``help=`` entirely so argparse doesn't create a
+    # ChoicesPseudoAction for them. Passing ``help=argparse.SUPPRESS`` was the
+    # documented way to hide a subparser, but Python 3.14 regressed it: the
+    # listing still appears with the literal "==SUPPRESS==" string as the help
+    # column. Skipping ``help=`` works on every supported Python version.
+    briefing = sub.add_parser("briefing")
     briefing.add_argument("jsonl_path", type=str)
     briefing.add_argument("agent", type=str)
-    sub.add_parser("mcp-server", help=argparse.SUPPRESS)
-    sub.add_parser("statusline", help=argparse.SUPPRESS)
-    sub.add_parser("statusline-compose", help=argparse.SUPPRESS)
+    sub.add_parser("mcp-server")
+    sub.add_parser("statusline")
+    sub.add_parser("statusline-compose")
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
     uninstall.add_argument(

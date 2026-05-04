@@ -19,15 +19,37 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except SystemExit as e:
         return int(e.code) if e.code is not None else 2
-    name = args.command or "help"
-    fn = COMMANDS.get(name)
+    # Bare ``mnemo`` (no subcommand) shows the orientation card — a short list
+    # of common commands. ``mnemo help`` and ``mnemo --help`` still print the
+    # full argparse dump for users who explicitly ask for it.
+    if args.command is None:
+        return _print_landing()
+    fn = COMMANDS.get(args.command)
     if fn is None:
-        print(f"unknown command: {name}", file=sys.stderr)
+        print(f"unknown command: {args.command}", file=sys.stderr)
         return 2
     try:
         return fn(args)
     except KeyboardInterrupt:
         return 130
+
+
+def _print_landing() -> int:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    try:
+        v = _pkg_version("mnemo-claude")
+    except PackageNotFoundError:
+        v = "unknown"
+    print(f"mnemo {v} — the Obsidian that populates itself")
+    print()
+    print("  mnemo init       first-run setup")
+    print("  mnemo status     vault + hook health + recent activity")
+    print("  mnemo doctor     full diagnostic with fixes")
+    print("  mnemo open       open the vault in Obsidian")
+    print("  mnemo autopilot  autonomous monitoring + self-fix")
+    print()
+    print("  mnemo help       all commands")
+    return 0
 
 
 def _resolve_vault() -> Path:
