@@ -189,6 +189,10 @@ def test_maybe_schedule_propose_called_when_enabled(tmp_path: Path):
 
 
 def test_maybe_schedule_propose_not_called_when_disabled(tmp_path: Path):
+    # The function gates on kill_switch (`is_active`), not on cfg. With the
+    # default flip to "on", we must explicitly disable to verify no-op.
+    from mnemo.autopilot.core.kill_switch import set_state
+    set_state(vault_root=tmp_path, state="off")
     cfg = {"autopilot": {"propose": {"enabled": False}}}
     with patch(
         "mnemo.autopilot.proposer.eos_extractor.analyze_session",
@@ -202,6 +206,8 @@ def test_maybe_schedule_propose_not_called_when_disabled(tmp_path: Path):
 
 
 def test_maybe_schedule_propose_not_called_when_no_config(tmp_path: Path):
+    from mnemo.autopilot.core.kill_switch import set_state
+    set_state(vault_root=tmp_path, state="off")
     cfg = {}
     with patch(
         "mnemo.autopilot.proposer.eos_extractor.analyze_session",

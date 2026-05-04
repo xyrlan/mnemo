@@ -86,13 +86,13 @@ def test_run_due_skips_recently_run(tmp_path: Path, monkeypatch):
 
 
 def test_status_summary_lists_all_operations(tmp_path: Path):
+    set_state(vault_root=tmp_path, state="off")
     out = status_summary(vault_root=tmp_path)
     names = [r["name"] for r in out]
     assert "tier0.digest" in names
     assert "tier1.doctor" in names
     assert "tier2.bm25" in names
-    # all due since none have run AND kill switch is off → "due" must reflect that
-    # (should_run gates by kill_switch — off means due=False)
+    # kill switch off → should_run returns False → due=False
     assert all(r["due"] is False for r in out)
 
 

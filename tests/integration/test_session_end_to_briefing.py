@@ -25,6 +25,16 @@ def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
 
 
+def _is_briefing_spawn(argv) -> bool:
+    """True iff *argv* is the deferred ``mnemo briefing …`` spawn.
+
+    Filters out incidental subprocess calls from the autopilot Tier 3 git
+    signal path (``git log …``), which goes through ``subprocess.run`` and is
+    implemented on top of the same ``subprocess.Popen`` we want to inspect.
+    """
+    return "briefing" in list(argv)
+
+
 def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from mnemo import cli
     from mnemo.core import llm as llm_mod
@@ -73,12 +83,11 @@ def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeyp
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda _cfg: vault)
     monkeypatch.setattr("mnemo.core.mirror.mirror_all", lambda _cfg: None)
 
-    captured: dict = {}
+    spawns: list = []
 
     class FakePopen:
         def __init__(self, argv, **kwargs):
-            captured["argv"] = argv
-            captured["kwargs"] = kwargs
+            spawns.append({"argv": list(argv), "kwargs": kwargs})
 
     monkeypatch.setattr("subprocess.Popen", FakePopen)
 
@@ -100,9 +109,9 @@ def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeyp
     assert exit_code == 0
 
     # 2. The hook should have spawned `python -m mnemo briefing <jsonl> fake-project`.
-    argv = captured.get("argv")
-    assert argv is not None, "SessionEnd must spawn the briefing subprocess"
-    assert "briefing" in argv
+    briefing_spawns = [s for s in spawns if _is_briefing_spawn(s["argv"])]
+    assert len(briefing_spawns) == 1, f"expected one briefing spawn, got: {spawns}"
+    argv = briefing_spawns[0]["argv"]
     assert "fake-project" in argv
     jsonl_arg_idx = argv.index("briefing") + 1
     jsonl_arg = argv[jsonl_arg_idx]
@@ -151,9 +160,13 @@ def test_session_end_does_not_spawn_briefing_when_disabled(tmp_path: Path, monke
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda _cfg: vault)
     monkeypatch.setattr("mnemo.core.mirror.mirror_all", lambda _cfg: None)
 
-    calls: list = []
-    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: calls.append(a))
+    spawns: list = []
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda argv, *a, **kw: spawns.append(list(argv)) or None,
+    )
     monkeypatch.setattr("sys.stdin", io.StringIO(_session_payload("sid", fake_cwd)))
 
     session_end.main()
-    assert calls == [], "briefing must not spawn when briefings.enabled=False"
+    briefing_spawns = [a for a in spawns if _is_briefing_spawn(a)]
+    assert briefing_spawns == [], f"briefing must not spawn when disabled, got: {spawns}"
