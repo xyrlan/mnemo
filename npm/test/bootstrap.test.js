@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 
 const { buildInstallCmd, buildUpgradeCmd, isAlreadyInstalled, pathFixHint } = require("../lib/bootstrap");
 
-const SPEC = "mnemo-claude>=0.14,<0.15";
+const SPEC = "mnemo-claude>=0.15,<0.16";
 
 test("buildInstallCmd uses uv tool install for uv", () => {
   assert.equal(buildInstallCmd("uv", SPEC), `uv tool install '${SPEC}'`);
