@@ -3,6 +3,46 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] — 2026-05-04
+
+### Changed (default behaviour)
+
+- **Autopilot is ON by default.** Fresh vaults activate the autopilot loop
+  (Tier 0 digest, Tier 1 self-fix, Tier 2 BM25 / reflex tuners, Tier 3
+  end-of-session proposer) without `mnemo autopilot on`. Vaults that
+  previously ran `mnemo autopilot off` keep that explicit choice — the
+  on-disk state file always wins over the new no-file default.
+  Disable with `mnemo autopilot off` (#80).
+
+### Added
+
+- `mnemo help --all` flag surfacing 7 advanced/maintenance commands
+  (`telemetry`, `recall`, `migrate-worktree-briefings`, `dedup-rules`,
+  `disable-rule`, `list-enforced`, `regen-graph-edges`) that are now
+  hidden from the default help listing (#83).
+- `mnemo init` ends with a richer summary card: vault path, verify
+  command, and live autopilot state — so users learn how to toggle the
+  new default (#82).
+- Bare `mnemo` (no subcommand) now prints a 5-line orientation card
+  instead of the full argparse dump. `mnemo help` and `mnemo --help`
+  still show the full listing (#82).
+
+### Fixed
+
+- **Python 3.14 argparse regression:** `help=argparse.SUPPRESS` on a
+  subparser stopped hiding the entry (rendered the literal
+  `==SUPPRESS==` string instead). Switched the four internal
+  subparsers (`briefing`, `mcp-server`, `statusline`,
+  `statusline-compose`) to omit `help=` entirely, which hides them on
+  every supported Python version (#82).
+- **macOS `pip --user` install hint:** the npm bootstrap told users to
+  add `~/.local/bin` to PATH, but on macOS pip-user lives in
+  `~/Library/Python/<X.Y>/bin`. Now the hint shells out to
+  `python3 -m site --user-base` for the authoritative path on every
+  platform (#81).
+- Seven test regressions on master, surfaced after the default flip
+  and the Tier 3 git-signal subprocess work (#84).
+
 ## [0.11.0] — 2026-04-23
 
 ### Breaking
