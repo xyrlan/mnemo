@@ -194,11 +194,32 @@ def cmd_init(args: argparse.Namespace) -> int:
         except Exception as e:
             say(f"  (mirror skipped: {e})")
 
+    autopilot_state = _autopilot_state(vault_root)
+
     if project:
+        say("")
         say("mnemo is ready (project scope).")
-        say(f"  Launch Claude Code in this directory ({cwd}) to activate the local hooks:")
-        say("      claude")
-        say("  Open the vault with: mnemo open")
+        say(f"  Vault:      {vault_root}  (mnemo open)")
+        say("  Verify:     mnemo status")
+        say(f"  Autopilot:  {autopilot_state}  (toggle: mnemo autopilot on/off)")
+        say("")
+        say(f"Launch Claude Code in {cwd} to activate the local hooks:")
+        say("    claude")
     else:
-        say("mnemo is ready. Open the vault with: mnemo open")
+        say("")
+        say("mnemo is ready.")
+        say(f"  Vault:      {vault_root}  (mnemo open)")
+        say("  Verify:     mnemo status")
+        say(f"  Autopilot:  {autopilot_state}  (toggle: mnemo autopilot on/off)")
+        say("")
+        say("Open Claude Code in any directory — mnemo is active globally.")
     return 0
+
+
+def _autopilot_state(vault_root: Path) -> str:
+    """Return the upper-cased autopilot state (ON/OFF/PAUSED), best-effort."""
+    try:
+        from mnemo.autopilot.core.kill_switch import get_state
+        return get_state(vault_root=vault_root).upper()
+    except Exception:
+        return "?"
