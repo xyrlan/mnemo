@@ -174,11 +174,13 @@ class TestOpenBM25TunePR:
 
     def test_skips_when_kill_switch_off(self, tmp_path: Path, capsys):
         """When autopilot is not active, open_bm25_tune_pr should skip."""
+        from mnemo.autopilot.core.kill_switch import set_state
+        set_state(vault_root=tmp_path, state="off")
+
         config = BM25Config(b=0.65, k1=1.2, weights={"name": 2.0, "topic_tags": 3.0, "aliases": 2.5, "description": 2.0, "body": 1.0})
         before = ScoreReport(primacy_at_5=0.5, mrr=0.3, p95_latency_ms=5.0, n_cases=10)
         after = ScoreReport(primacy_at_5=0.6, mrr=0.35, p95_latency_ms=4.8, n_cases=10)
 
-        # kill switch is off by default (no state file)
         result = open_bm25_tune_pr(config, before, after, vault_root=tmp_path, dry_run=False)
         assert result == -2  # skipped due to budget/kill switch
 

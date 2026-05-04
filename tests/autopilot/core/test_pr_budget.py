@@ -19,7 +19,7 @@ def test_default_budget_allows_first_pr(tmp_path: Path):
 
 
 def test_budget_blocks_when_kill_switch_off(tmp_path: Path):
-    # default state off
+    set_state(vault_root=tmp_path, state="off")
     ok, reason = can_open(vault_root=tmp_path, category="doctor_self_fix")
     assert ok is False
     assert "kill switch" in reason.lower() or "off" in reason.lower()

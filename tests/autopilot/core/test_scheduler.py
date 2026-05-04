@@ -10,6 +10,7 @@ from mnemo.autopilot.core.triggers import last_run, mark_run, runs_path
 
 
 def test_run_due_noop_when_kill_switch_off(tmp_path: Path):
+    set_state(vault_root=tmp_path, state="off")
     out = run_due_jobs(vault_root=tmp_path)
     assert out == {"active": False, "fired": []}
 
