@@ -23,9 +23,13 @@ def _now_iso() -> str:
 def _read(vault_root: Path) -> dict:
     path = autopilot_state_path(vault_root)
     if not path.exists():
+        # Default = "on" so fresh installs get the full autopilot loop without
+        # opt-in. Explicit `mnemo autopilot off` writes the state file, so a
+        # user's prior choice is preserved across upgrades — only vaults that
+        # never wrote a state file inherit the new default.
         return {
             "schema_version": SCHEMA_VERSION,
-            "state": "off",
+            "state": "on",
             "paused_until": None,
             "last_changed_at": None,
             "last_changed_by": None,

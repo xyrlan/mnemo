@@ -19,10 +19,10 @@ def _run(monkeypatch, tmp_path: Path, *args: str, capsys) -> tuple[int, str]:
     return rc, out
 
 
-def test_autopilot_status_default_off(monkeypatch, tmp_path, capsys):
+def test_autopilot_status_default_on(monkeypatch, tmp_path, capsys):
     rc, out = _run(monkeypatch, tmp_path, "autopilot", "status", capsys=capsys)
     assert rc == 0
-    assert "off" in out.lower()
+    assert "on" in out.lower()
 
 
 def test_autopilot_on_then_status_shows_on(monkeypatch, tmp_path, capsys):

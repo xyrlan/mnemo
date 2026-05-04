@@ -18,6 +18,7 @@ from mnemo.autopilot.core.triggers import (
 
 
 def test_should_run_false_when_kill_switch_off(tmp_path: Path):
+    set_state(vault_root=tmp_path, state="off")
     assert should_run(vault_root=tmp_path, name="x", interval_days=7) is False
 
 

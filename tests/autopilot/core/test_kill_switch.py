@@ -11,9 +11,9 @@ from mnemo.autopilot.core.kill_switch import (
 )
 
 
-def test_default_state_is_off(tmp_path: Path):
-    assert get_state(vault_root=tmp_path) == "off"
-    assert is_active(vault_root=tmp_path) is False
+def test_default_state_is_on(tmp_path: Path):
+    assert get_state(vault_root=tmp_path) == "on"
+    assert is_active(vault_root=tmp_path) is True
 
 
 def test_set_state_persists(tmp_path: Path):

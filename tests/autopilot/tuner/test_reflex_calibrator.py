@@ -258,6 +258,9 @@ class TestOpenReflexCalibrationPR:
         assert result == -1
 
     def test_skips_when_kill_switch_off(self, tmp_path: Path):
+        from mnemo.autopilot.core.kill_switch import set_state
+        set_state(vault_root=tmp_path, state="off")
+
         configs = {"p": self._good_config("p")}
         result = open_reflex_calibration_pr(configs, vault_root=tmp_path, dry_run=False)
         assert result == -2  # skipped due to budget/kill switch
