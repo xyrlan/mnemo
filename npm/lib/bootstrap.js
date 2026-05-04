@@ -58,11 +58,40 @@ function verifyOnPath() {
 }
 
 
-function pathFixHint(installer) {
+function _userBaseFromPython(execFn) {
+  // `python3 -m site --user-base` is authoritative across platforms:
+  //   Linux  → ~/.local
+  //   macOS  → ~/Library/Python/<X.Y>     (NOT ~/.local — common gotcha)
+  //   Win    → %APPDATA%\Python
+  // Returns the bin/Scripts dir, or null on failure (caller falls back to
+  // platform heuristics).
+  try {
+    const out = execFn("python3 -m site --user-base").trim();
+    if (!out) return null;
+    return out;
+  } catch (_e) {
+    return null;
+  }
+}
+
+
+function pathFixHint(installer, {
+  platform = process.platform,
+  execFn = (cmd) => execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }),
+} = {}) {
   if (installer === "pipx") return "Run `pipx ensurepath` and reopen your shell.";
   if (installer === "uv")   return "Run `uv tool update-shell` and reopen your shell.";
   if (installer === "pip-user") {
-    if (process.platform === "win32") return "Add %APPDATA%\\Python\\Scripts to PATH.";
+    if (platform === "win32") {
+      const base = _userBaseFromPython(execFn);
+      if (base) return `Add ${base}\\Scripts to PATH.`;
+      return "Add %APPDATA%\\Python\\Scripts to PATH.";
+    }
+    const base = _userBaseFromPython(execFn);
+    if (base) return `Add ${base}/bin to PATH (e.g. via your shell profile).`;
+    if (platform === "darwin") {
+      return "Add ~/Library/Python/<X.Y>/bin to PATH (run `python3 -m site --user-base` to find the right X.Y).";
+    }
     return "Add ~/.local/bin to PATH (e.g. via your shell profile).";
   }
   return "Re-open your shell to refresh PATH.";
