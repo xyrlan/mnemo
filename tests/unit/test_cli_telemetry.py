@@ -33,7 +33,8 @@ def _sample_entry(**overrides) -> dict:
 
 
 def test_telemetry_registered_in_help(capsys: pytest.CaptureFixture):
-    rc = cli.main(["help"])
+    # `telemetry` is an advanced command, surfaced via `mnemo help --all`.
+    rc = cli.main(["help", "--all"])
     captured = capsys.readouterr()
     assert rc == 0
     assert "telemetry" in captured.out

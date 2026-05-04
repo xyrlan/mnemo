@@ -16,6 +16,28 @@ def test_help_lists_all_commands(capsys: pytest.CaptureFixture):
     assert " compile" not in captured.out
 
 
+def test_help_hides_advanced_commands_by_default(capsys: pytest.CaptureFixture):
+    rc = cli.main(["help"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    # Advanced/maintenance commands are hidden unless --all is passed
+    for advanced in ("telemetry", "recall", "dedup-rules", "list-enforced", "regen-graph-edges"):
+        assert advanced not in captured.out
+    # The footer points users at --all
+    assert "mnemo help --all" in captured.out
+
+
+def test_help_all_shows_advanced_commands(capsys: pytest.CaptureFixture):
+    rc = cli.main(["help", "--all"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    for advanced in ("telemetry", "recall", "dedup-rules", "list-enforced", "regen-graph-edges"):
+        assert advanced in captured.out
+    # Internal-only subparsers stay hidden even with --all
+    for internal in ("mcp-server", "statusline-compose"):
+        assert internal not in captured.out
+
+
 def test_unknown_command_returns_nonzero(capsys: pytest.CaptureFixture):
     rc = cli.main(["bogus-cmd"])
     captured = capsys.readouterr()
