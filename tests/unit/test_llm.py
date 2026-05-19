@@ -253,3 +253,41 @@ def test_call_array_envelope_missing_result_raises(mock_subprocess_run):
     mock_subprocess_run([MockCompletedProcess(stdout=array_envelope)])
     with pytest.raises(llm.LLMParseError, match="no result event"):
         llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+
+
+def test_call_sums_cache_token_buckets(mock_subprocess_run):
+    """input_tokens must include cache_read + cache_creation so cached
+    prompts don't report ~0 input tokens in telemetry."""
+    envelope = json.dumps({
+        "type": "result",
+        "result": "{}",
+        "total_cost_usd": 0.001,
+        "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 1200,
+            "cache_read_input_tokens": 6000,
+            "output_tokens": 500,
+        },
+        "apiKeySource": "none",
+    })
+    mock_subprocess_run([MockCompletedProcess(stdout=envelope)])
+    resp = llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    assert resp.input_tokens == 7203
+    assert resp.output_tokens == 500
+
+
+def test_call_handles_missing_raw_input_with_cache_only(mock_subprocess_run):
+    """When the CLI omits input_tokens entirely but reports cache buckets,
+    fall back to the cache sum rather than dropping the count."""
+    envelope = json.dumps({
+        "type": "result",
+        "result": "{}",
+        "usage": {
+            "cache_read_input_tokens": 4000,
+            "output_tokens": 100,
+        },
+        "apiKeySource": "none",
+    })
+    mock_subprocess_run([MockCompletedProcess(stdout=envelope)])
+    resp = llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+    assert resp.input_tokens == 4000
