@@ -58,6 +58,13 @@ DEFAULTS: dict[str, Any] = {
     "scoping": {
         "universalThreshold": 2,
     },
+    "doctor": {
+        # Set ``skipStatuslineDrift`` to true to silence the statusLine
+        # drift warning when you've intentionally reverted to the default
+        # Claude Code statusLine (e.g., after uninstalling a custom composer
+        # but keeping the mnemo state file). Default false: drift is loud.
+        "skipStatuslineDrift": False,
+    },
     "reflex": {
         "enabled": True,  # v0.8.0 stable — flip to False in mnemo.config.json to disable
         "maxEmissionsPerSession": 10,

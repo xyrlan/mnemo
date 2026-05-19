@@ -183,6 +183,11 @@ def archive_rule(rule_path: Path, *, vault_root: Path) -> Path:
 
 
 def _run_pytest(*, repo_root: Path) -> bool:
+    """Run pytest in *repo_root*.  Returns True iff exit code is 0 or 5.
+
+    Exit code 5 ("no tests collected") is treated as success so the
+    autopilot can sweep dead rules from a vault dir with no test suite.
+    """
     try:
         result = subprocess.run(
             ["python", "-m", "pytest", "-q", "--tb=short"],
@@ -192,7 +197,7 @@ def _run_pytest(*, repo_root: Path) -> bool:
         )
     except (FileNotFoundError, OSError):
         return False
-    return result.returncode == 0
+    return result.returncode in (0, 5)
 
 
 # ---------------------------------------------------------------------------

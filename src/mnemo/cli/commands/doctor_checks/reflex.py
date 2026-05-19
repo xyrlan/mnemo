@@ -28,9 +28,18 @@ def _doctor_check_statusline_drift(vault: Path) -> bool:
     - composer present + state file present → healthy (return True)
     - state file present but no scope wires the composer → drift
     - no state file at all → mnemo init never ran or already uninstalled (skip)
+
+    Opt-out: set ``doctor.skipStatuslineDrift: true`` in mnemo.config.json to
+    silence the warning when you've intentionally reverted to the default
+    Claude Code statusLine and don't want the check to nag.
     """
     import os
     import json as _json
+
+    from mnemo.core.config import load_config
+
+    if bool((load_config().get("doctor") or {}).get("skipStatuslineDrift", False)):
+        return True
 
     state_path = vault / ".mnemo" / "statusline-original.json"
     if not state_path.exists():

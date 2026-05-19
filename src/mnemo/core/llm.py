@@ -174,10 +174,23 @@ def call(
     if api_key_source is None:
         api_key_source = result_event.get("apiKeySource")
 
+    # Sum non-cached + cache_creation + cache_read so cached prompts don't
+    # report ~0 input tokens. Claude CLI splits usage across three buckets;
+    # totalling them gives the wall-clock input size billed by Anthropic.
+    raw_in = usage.get("input_tokens")
+    cache_create = usage.get("cache_creation_input_tokens") or 0
+    cache_read = usage.get("cache_read_input_tokens") or 0
+    if raw_in is None and (cache_create or cache_read):
+        input_total: int | None = int(cache_create + cache_read)
+    elif raw_in is None:
+        input_total = None
+    else:
+        input_total = int(raw_in) + int(cache_create) + int(cache_read)
+
     return LLMResponse(
         text=text,
         total_cost_usd=result_event.get("total_cost_usd"),
-        input_tokens=usage.get("input_tokens"),
+        input_tokens=input_total,
         output_tokens=usage.get("output_tokens"),
         api_key_source=api_key_source,
         raw={"events": events, "result": result_event, "init": init_event},

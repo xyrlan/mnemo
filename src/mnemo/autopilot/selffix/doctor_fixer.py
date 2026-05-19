@@ -130,7 +130,13 @@ def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
 
 
 def _run_pytest(*, repo_root: Path) -> bool:
-    """Run pytest in *repo_root*.  Returns True iff exit code is 0."""
+    """Run pytest in *repo_root*.  Returns True iff exit code is 0 or 5.
+
+    Exit code 5 ("no tests collected") is treated as success: when the autopilot
+    runs from a vault directory with no test suite, pytest's empty-collection
+    exit must not block a vault-only doctor fix. Real test failures (exit 1)
+    still abort the PR.
+    """
     try:
         result = subprocess.run(
             ["python", "-m", "pytest", "-q", "--tb=short"],
@@ -140,7 +146,7 @@ def _run_pytest(*, repo_root: Path) -> bool:
         )
     except (FileNotFoundError, OSError):
         return False
-    return result.returncode == 0
+    return result.returncode in (0, 5)
 
 
 # ---------------------------------------------------------------------------
