@@ -44,3 +44,8 @@ class ApplyResult:
     auto_promoted: list[str] = field(default_factory=list)
     sibling_bounced: list[tuple[str, str]] = field(default_factory=list)
     upgrade_proposed: list[tuple[str, str]] = field(default_factory=list)
+    # Slugs that crossed ``scoping.universalThreshold`` and were moved from
+    # ``shared/_inbox/<type>/`` into ``shared/<type>/`` during this run.
+    # Distinct from ``auto_promoted`` (single-source direct writes) so the
+    # extraction summary can surface universal-promotion volume separately.
+    universal_promoted: list[str] = field(default_factory=list)

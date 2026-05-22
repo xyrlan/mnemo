@@ -25,6 +25,9 @@ from mnemo.cli.commands.doctor_checks.reflex import (  # noqa: F401
     _doctor_check_statusline_drift,
 )
 from mnemo.cli.commands.doctor_checks.rules import (  # noqa: F401
+    _doctor_check_bare_deny_command,
     _doctor_check_rule_integrity,
+    _doctor_check_stripped_enforce,
     _doctor_check_universal_promotion,
+    _doctor_check_unpromoted_universal_candidates,
 )

@@ -177,3 +177,48 @@ def _doctor_check_universal_promotion(vault: Path) -> bool:
             + ", ".join(sorted(on_verge)[:5])
         )
     return True
+
+
+def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
+    """Warn when extraction-state has _inbox entries that cross the
+    universal threshold but never moved into ``shared/<type>/``.
+
+    Diagnoses the v0.15 dogfood gap: ``_union_with_prior_sources`` accrued
+    cross-project ``source_files`` but the apply dispatcher had no branch
+    that would promote them. The reconciler in
+    :mod:`mnemo.core.extract` clears the backlog on every extract; if
+    this warning fires, the user is reading doctor between extracts.
+
+    Always returns True — advisory check, not a gate.
+    """
+    from mnemo.core.config import load_config
+    from mnemo.core.extract.inbox.state_io import load_state
+    from mnemo.core.rule_activation.index import is_universal, projects_for_rule
+
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    if not state_path.exists():
+        return True
+    try:
+        state = load_state(state_path)
+    except Exception:
+        return True
+
+    threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
+    pending: list[str] = []
+    for key, entry in state.entries.items():
+        if entry.status != "inbox":
+            continue
+        projects = projects_for_rule(list(entry.source_files))
+        if is_universal(projects, threshold):
+            pending.append(key)
+
+    if pending:
+        print(
+            f"  ⚠ {len(pending)} rule(s) cross universalThreshold but remain in _inbox/ — "
+            f"run 'mnemo extract' to reconcile:"
+        )
+        for k in sorted(pending)[:5]:
+            print(f"    • {k}")
+        if len(pending) > 5:
+            print(f"    … {len(pending) - 5} more")
+    return True

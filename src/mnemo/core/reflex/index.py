@@ -63,12 +63,12 @@ def _field_tokens(fm: dict, body_text: str, slug: str) -> dict[str, list[str]]:
 
 
 def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
-    """Walk shared/{feedback,user,reference}/*.md, build the BM25F index."""
+    """Walk shared/{feedback,user,reference,project}/*.md, build the BM25F index."""
     docs: dict[str, dict] = {}
     postings: dict[str, list[dict]] = {}
     field_length_totals = {f: 0 for f in _FIELD_NAMES}
 
-    for page_type in ("feedback", "user", "reference"):
+    for page_type in ("feedback", "user", "reference", "project"):
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
             continue

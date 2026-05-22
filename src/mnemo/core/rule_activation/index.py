@@ -58,17 +58,28 @@ def projects_for_rule(
 ) -> list[str]:
     """From a list of source_files, return sorted unique project names.
 
-    Expects paths like ``bots/<project-name>/...``. Paths not under ``bots/<name>/``
-    are ignored. When no bots/ paths are present and *frontmatter* supplies a
+    Accepts both vault-relative (``bots/<name>/...``) and absolute
+    (``/.../mnemo/bots/<name>/...``) paths. Locates the ``bots`` segment
+    anywhere in the path; the immediately following segment is the project
+    name. When multiple ``bots`` segments are present (e.g. nested vault
+    fixtures), the **last** occurrence wins so an outer-coincidence
+    dirname doesn't shadow the real project marker.
+
+    When no ``bots/<name>/`` segment is found and *frontmatter* supplies a
     ``project`` (str) or ``projects`` (list[str]) key, that is used as the
-    fallback so LLM-generated cluster pages with explicit project attribution
-    survive the index build even before they accumulate bots/ sources.
+    fallback so LLM-generated cluster pages with explicit project
+    attribution survive the index build even before they accumulate
+    bots/ sources.
     """
     projects: set[str] = set()
     for sf in source_files:
         parts = Path(sf).parts
-        if len(parts) >= 2 and parts[0] == "bots":
-            projects.add(parts[1])
+        for idx in range(len(parts) - 2, -1, -1):
+            if parts[idx] == "bots":
+                name = parts[idx + 1]
+                if name:
+                    projects.add(name)
+                break
     if projects:
         return sorted(projects)
     fm = frontmatter or {}
@@ -247,7 +258,7 @@ def _aggregate_rules(rules: dict[str, dict]) -> tuple[dict[str, dict], list[str]
 
 
 def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> dict:
-    """Walk shared/{feedback,user,reference}/*.md, build and return the v3 index dict.
+    """Walk shared/{feedback,user,reference,project}/*.md, build and return the v3 index dict.
 
     Orchestrator only — per-file work lives in :func:`_build_rule_entry` and
     post-walk aggregation lives in :func:`_aggregate_rules`. Never raises on
@@ -260,7 +271,7 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
         )
     rules: dict[str, dict] = {}
     malformed: list[dict] = []
-    for page_type in ("feedback", "user", "reference"):
+    for page_type in ("feedback", "user", "reference", "project"):
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
             continue

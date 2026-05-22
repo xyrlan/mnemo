@@ -111,6 +111,46 @@ def test_projects_for_rule_deduplicates():
     assert result == ["mnemo"]
 
 
+def test_projects_for_rule_handles_absolute_paths():
+    """Absolute paths (the real-world YAML shape) resolve same as relative."""
+    result = projects_for_rule([
+        "/Users/x/mnemo/bots/clearframe/briefings/sessions/aaa.md",
+        "/Users/x/mnemo/bots/sg-imports/briefings/sessions/bbb.md",
+    ])
+    assert result == ["clearframe", "sg-imports"]
+
+
+def test_projects_for_rule_picks_last_bots_segment():
+    """Nested ``bots/`` dirnames don't shadow the inner project marker."""
+    result = projects_for_rule([
+        "/home/u/repos/bots/scratch/bots/real-project/x.md",
+    ])
+    assert result == ["real-project"]
+
+
+def test_projects_for_rule_unions_absolute_and_relative():
+    """Mixed absolute + relative sources still union into a sorted set."""
+    result = projects_for_rule([
+        "/Users/x/mnemo/bots/proj-a/x.md",
+        "bots/proj-b/y.md",
+    ])
+    assert result == ["proj-a", "proj-b"]
+
+
+def test_build_index_includes_project_type_rules(tmp_vault: Path):
+    """shared/project/ rules must surface in the index (v0.16 fix)."""
+    _write_rule(
+        tmp_vault,
+        "bingx-robot__overview.md",
+        name="bingx-robot overview",
+        subdir="project",
+        sources=["bots/bingx-robot/memory/x.md"],
+    )
+    index = build_index(tmp_vault)
+    assert "bingx-robot overview" in index["rules"]
+    assert index["rules"]["bingx-robot overview"]["type"] == "project"
+
+
 # ---------------------------------------------------------------------------
 # build_index — gating (NON-NEGOTIABLE)
 # ---------------------------------------------------------------------------

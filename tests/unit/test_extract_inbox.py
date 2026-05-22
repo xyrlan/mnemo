@@ -15,10 +15,14 @@ def _hash(s: str) -> str:
 
 
 def _page(slug: str, type_: str = "feedback", body: str = "body", sources: list[str] | None = None):
-    # Default to 2 sources so v0.2 tests route through the _inbox/ branch in
-    # v0.3's source-count split. Tests that want single-source behavior
-    # explicitly pass sources=[...].
-    sources = sources or [f"bots/a/memory/{slug}.md", f"bots/b/memory/{slug}.md"]
+    # Default to 2 sources from the SAME project so v0.2 tests route through
+    # the _inbox/ branch in v0.3's source-count split. Tests that want
+    # universal-promotion routing (>=2 distinct projects) must pass
+    # explicit cross-project ``sources=[...]``.
+    sources = sources or [
+        f"bots/proj/memory/{slug}-a.md",
+        f"bots/proj/memory/{slug}-b.md",
+    ]
     src_hash = _hash("".join(sources) + body)
     return inbox.ExtractedPage(
         slug=slug,
@@ -53,8 +57,8 @@ def test_fresh_write_creates_inbox_file(tmp_vault: Path):
 def test_frontmatter_contains_required_fields(tmp_vault: Path):
     state = _empty_state()
     page = _page("use-yarn", sources=[
-        "bots/a/memory/feedback_use_yarn.md",
-        "bots/b/memory/feedback_yarn_only.md",
+        "bots/proj/memory/feedback_use_yarn.md",
+        "bots/proj/memory/feedback_yarn_only.md",
     ])
     inbox.apply_pages([page], state, tmp_vault)
     text = (tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").read_text()
@@ -63,7 +67,7 @@ def test_frontmatter_contains_required_fields(tmp_vault: Path):
     assert "type: feedback" in text
     assert "extracted_at:" in text
     assert "sources:" in text
-    assert "bots/a/memory/feedback_use_yarn.md" in text
+    assert "bots/proj/memory/feedback_use_yarn.md" in text
     assert "needs-review" in text  # tag
 
 
@@ -95,8 +99,8 @@ def test_overwrite_safe_when_source_changes_and_disk_matches(tmp_vault: Path):
         description="desc",
         body="v2",
         source_files=[
-            "bots/a/memory/use-yarn.md",
-            "bots/b/memory/use-yarn.md",
+            "bots/proj/memory/use-yarn-a.md",
+            "bots/proj/memory/use-yarn-b.md",
         ],
         source_hash=_hash("different source hash"),
     )
@@ -125,8 +129,8 @@ def test_sibling_proposed_when_user_edited_inbox(tmp_vault: Path):
         description="desc",
         body="new upstream body",
         source_files=[
-            "bots/a/memory/feedback_use_yarn.md",
-            "bots/b/memory/feedback_use_yarn.md",
+            "bots/proj/memory/feedback_use_yarn_a.md",
+            "bots/proj/memory/feedback_use_yarn_b.md",
         ],
         source_hash=_hash("mutated source"),
     )
@@ -164,8 +168,8 @@ def test_promoted_slug_writes_update_proposed(tmp_vault: Path):
         description="desc",
         body="v2 upstream",
         source_files=[
-            "bots/a/memory/feedback_use_yarn.md",
-            "bots/b/memory/feedback_use_yarn.md",
+            "bots/proj/memory/feedback_use_yarn_a.md",
+            "bots/proj/memory/feedback_use_yarn_b.md",
         ],
         source_hash=_hash("new source"),
     )
@@ -195,8 +199,8 @@ def test_dismissed_slug_is_not_resurrected(tmp_vault: Path):
         description="desc",
         body="v2",
         source_files=[
-            "bots/a/memory/feedback_use_yarn.md",
-            "bots/b/memory/feedback_use_yarn.md",
+            "bots/proj/memory/feedback_use_yarn_a.md",
+            "bots/proj/memory/feedback_use_yarn_b.md",
         ],
         source_hash=_hash("new"),
     )
