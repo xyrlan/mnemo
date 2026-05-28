@@ -25,7 +25,7 @@ from mnemo.core.extract.inbox.branches.universal_promotion import (
     _apply_universal_promotion,
     _universal_threshold,
 )
-from mnemo.core.extract.inbox.io import content_hash
+from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.inbox.rendering import _render_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
@@ -174,7 +174,9 @@ def test_handler_safe_overwrites_existing_unedited_dest(tmp_path: Path):
         "bots/proj-b/briefings/sessions/bbb.md",
     )
     initial_content = _render_page(page_v1, run_id="2026-01-01T00:00:00", auto_promoted=True)
-    dest.write_text(initial_content)
+    # Use atomic_write so on-disk bytes match the in-memory string byte-for-byte
+    # (Path.write_text does newline translation on Windows, breaking the hash).
+    atomic_write(dest, initial_content)
 
     entry = StateEntry(
         source_files=list(page_v1.source_files),
