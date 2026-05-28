@@ -82,13 +82,18 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     assert "auto-promoted" in single_content
     assert "last_sync:" in single_content
 
-    multi_target = vault / "shared" / "_inbox" / "feedback" / "no-commits.md"
+    # Multi-source page spans two distinct projects (clubinho + central), so
+    # it crosses universalThreshold=2 and is intercepted by the
+    # universal-promotion dispatch row — landing in shared/<type>/ directly
+    # instead of staging under _inbox/.
+    multi_target = vault / "shared" / "feedback" / "no-commits.md"
     assert multi_target.exists()
+    assert not (vault / "shared" / "_inbox" / "feedback" / "no-commits.md").exists()
     multi_content = multi_target.read_text()
-    assert "needs-review" in multi_content
-    assert "auto-promoted" not in multi_content
+    assert "auto-promoted" in multi_content
 
     assert summary.auto_promoted == 1
+    assert summary.universal_promoted == 1
     assert summary.pages_written == 2
     assert summary.mode == "background"
 
@@ -98,6 +103,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     assert payload["mode"] == "background"
     assert payload["exit_code"] == 0
     assert payload["summary"]["auto_promoted"] == 1
+    assert payload["summary"]["universal_promoted"] == 1
 
 
 def test_second_run_unchanged_source_is_noop(tmp_path, monkeypatch):

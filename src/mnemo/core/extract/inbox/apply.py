@@ -20,11 +20,17 @@ from typing import Callable
 
 from mnemo.core.extract.inbox.branches.auto_promoted import _apply_auto_promoted
 from mnemo.core.extract.inbox.branches.inbox_flow import _apply_inbox
+from mnemo.core.extract.inbox.branches.universal_promotion import (
+    _apply_universal_promotion,
+    _universal_threshold,
+    merged_projects_for,
+)
 from mnemo.core.extract.inbox.branches.upgrade import _apply_upgrade_proposed
 from mnemo.core.extract.inbox.dedup import _detect_drift_slug, _detect_stem_collision
 from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
+from mnemo.core.rule_activation.index import is_universal
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +38,29 @@ from mnemo.core.extract.scanner import ExtractionState, StateEntry
 # are evaluated top-to-bottom; the first match wins. The fallback row pinned
 # to the bottom (``lambda *_: True``) routes everything that didn't match.
 # ---------------------------------------------------------------------------
+
+
+def _is_universal_promotion(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    target: Path,
+    is_auto: bool,
+) -> bool:
+    """Page accumulates >= universalThreshold distinct projects across sources.
+
+    Only fires for fresh inbox-staging targets:
+    - ``is_auto`` false (target lives under ``shared/_inbox/<type>/``)
+    - prior entry is either absent or already at status="inbox" — auto_promoted
+      entries gaining a second project keep going through the upgrade branch
+      (which writes a ``.update-proposed.md`` sibling for human review rather
+      than overwriting the sacred file).
+    """
+    if is_auto:
+        return False
+    if entry is not None and entry.status == "auto_promoted":
+        return False
+    projects = merged_projects_for(page, entry)
+    return is_universal(projects, _universal_threshold())
 
 
 def _is_upgrade(
@@ -59,6 +88,21 @@ def _is_auto_branch(
 
 _Predicate = Callable[[ExtractedPage, "StateEntry | None", Path, bool], bool]
 _Handler = Callable[..., None]
+
+
+def _run_universal_promotion(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    target: Path,
+    vault_root: Path,
+    state: ExtractionState,
+    run_id: str,
+    force: bool,
+    result: ApplyResult,
+) -> None:
+    _apply_universal_promotion(
+        page, entry, target, vault_root, state, run_id, force, result,
+    )
 
 
 def _run_upgrade(
@@ -107,6 +151,10 @@ def _run_inbox(
 
 
 _DISPATCH: list[tuple[_Predicate, _Handler]] = [
+    # Multi-source-multi-project pages bypass the inbox flow and land
+    # directly in shared/<type>/. Must precede the upgrade + auto rows
+    # because both of those assume single-project lineage.
+    (_is_universal_promotion, _run_universal_promotion),
     (_is_upgrade, _run_upgrade),
     (_is_auto_branch, _run_auto),
     (lambda *_: True, _run_inbox),  # fallback: always-match must stay last

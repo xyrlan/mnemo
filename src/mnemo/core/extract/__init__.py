@@ -143,6 +143,7 @@ class ExtractionSummary:
     auto_promoted: int = 0
     sibling_bounced: int = 0
     upgrade_proposed: int = 0
+    universal_promoted: int = 0
     mode: str = "manual"
 
 
@@ -151,6 +152,7 @@ def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
         len(result.written_fresh)
         + len(result.overwrite_safe)
         + len(result.auto_promoted)
+        + len(result.universal_promoted)
     )
     summary.sibling_proposed += len(result.sibling_proposed)
     summary.update_proposed += len(result.update_proposed)
@@ -159,6 +161,7 @@ def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
     summary.auto_promoted += len(result.auto_promoted)
     summary.sibling_bounced += len(result.sibling_bounced)
     summary.upgrade_proposed += len(result.upgrade_proposed)
+    summary.universal_promoted += len(result.universal_promoted)
     summary.conflicts.extend(result.sibling_proposed)
     summary.conflicts.extend(result.sibling_bounced)
     summary.conflicts.extend(result.upgrade_proposed)
@@ -423,6 +426,101 @@ def _run_extraction_body(
                 errors.log_error(vault_root, "extract.state", exc)
                 raise
 
+    # End-of-extract reconciliation: drain orphan _inbox/<type>/<slug>.md
+    # files whose state entries already cross universalThreshold. Always
+    # runs (even when no cluster pages produced this run) so the backlog
+    # discovered during the v0.15 dogfood clears deterministically.
+    try:
+        promoted = _reconcile_universal_promotions(state, vault_root, run_id, summary)
+    except Exception as exc:  # noqa: BLE001 — reconciler must fail-open
+        errors.log_error(vault_root, "extract.reconcile_universal", exc)
+        promoted = 0
+    if promoted:
+        try:
+            inbox.atomic_write_state(state, state_path)
+        except ExtractionIOError as exc:
+            errors.log_error(vault_root, "extract.state", exc)
+
+
+def _reconcile_universal_promotions(
+    state: scanner.ExtractionState,
+    vault_root: Path,
+    run_id: str,
+    summary: ExtractionSummary,
+) -> int:
+    """Drain ``shared/_inbox/<type>/*.md`` files whose state entry already
+    crosses ``scoping.universalThreshold``.
+
+    Runs at the tail of every extract so the legacy backlog discovered
+    during the v0.15 dogfood (six rules sat in ``_inbox/feedback/`` with
+    cross-project sources but no dispatch branch to move them out) clears
+    without requiring those source briefings to be re-mined.
+
+    Idempotent — entries with status="promoted" are skipped on subsequent
+    runs. Returns the number of slugs successfully promoted.
+    """
+    from mnemo.core.extract.inbox.branches.universal_promotion import (
+        _apply_universal_promotion,
+        _universal_threshold,
+    )
+    from mnemo.core.extract.inbox.paths import _inbox_path
+    from mnemo.core.extract.inbox.rendering import _extract_body
+    from mnemo.core.extract.inbox.types import ApplyResult
+    from mnemo.core.extract.scanner import parse_frontmatter
+    from mnemo.core.rule_activation.index import is_universal, projects_for_rule
+
+    threshold = _universal_threshold()
+    promoted_count = 0
+    # Snapshot keys: handler mutates state.entries (status flips, key reused).
+    keys = [
+        key for key, entry in state.entries.items()
+        if entry.status == "inbox"
+        and is_universal(projects_for_rule(entry.source_files), threshold)
+    ]
+    for key in keys:
+        entry = state.entries.get(key)
+        if entry is None:
+            continue
+        try:
+            page_type, slug = key.split("/", 1)
+        except ValueError:
+            continue
+        inbox_md = vault_root / "shared" / "_inbox" / page_type / f"{slug}.md"
+        if not inbox_md.exists():
+            # State entry references an _inbox file the user deleted —
+            # nothing to promote. Leave the entry alone; doctor surfaces it.
+            continue
+        try:
+            text = inbox_md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, body = parse_frontmatter(text)
+        page = inbox.ExtractedPage(
+            slug=slug,
+            type=page_type,
+            name=str(fm.get("name") or slug),
+            description=str(fm.get("description") or ""),
+            body=_extract_body(text),
+            source_files=list(entry.source_files),
+            source_hash=entry.source_hash,
+            stability=str(fm.get("stability") or "stable"),
+            tags=list(fm.get("tags") or []),
+        )
+        scratch = ApplyResult()
+        target = _inbox_path(vault_root, page)
+        try:
+            _apply_universal_promotion(
+                page, entry, target, vault_root, state,
+                run_id=run_id, force=False, result=scratch,
+            )
+        except Exception as exc:  # noqa: BLE001 — reconciler must fail-open
+            errors.log_error(vault_root, "extract.reconcile_universal", exc)
+            continue
+        if scratch.universal_promoted:
+            promoted_count += 1
+        _merge_apply(scratch, summary)
+    return promoted_count
+
 
 def _cleanup_legacy_wiki_dirs(vault_root: Path) -> None:
     """v0.4: delete the fossil ``wiki/sources/`` and ``wiki/compiled/`` dirs.
@@ -511,6 +609,16 @@ def run_extraction(
                 )
             except Exception as exc:  # noqa: BLE001 — fail-open by design
                 errors.log_error(vault_root, "extract.rule_activation_index", exc)
+            # Rebuild the reflex BM25F index as well. Newly-promoted rules
+            # would otherwise be invisible to UserPromptSubmit retrieval
+            # until the next SessionStart triggers a rebuild.
+            try:
+                from mnemo.core.reflex import index as reflex_index
+                reflex_index.write_index(
+                    vault_root, reflex_index.build_index(vault_root)
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-open by design
+                errors.log_error(vault_root, "extract.reflex_index", exc)
 
         summary.wall_time_s = time.monotonic() - start
 
