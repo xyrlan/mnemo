@@ -36,9 +36,28 @@ class SettingsError(Exception):
     pass
 
 
+def _posix_executable() -> str:
+    """Return ``sys.executable`` with forward slashes (POSIX form).
+
+    Hook and statusLine commands are written into settings.json as a single
+    shell string that Claude Code dispatches through bash (Git Bash on
+    Windows). Bash treats ``\\`` as an escape character, so a raw Windows path
+    like ``C:\\Users\\...\\python.exe`` collapses to ``C:Users...python.exe``
+    and the executable becomes unreachable. Windows accepts ``/`` in paths, so
+    emitting the POSIX form is safe on every platform.
+    """
+    if not sys.executable:
+        return "python3"
+    # Plain string replace (not Path.as_posix()) so the conversion is identical
+    # on every platform: on POSIX, Path treats "\" as a literal filename char,
+    # so as_posix() would leave a Windows path's backslashes intact. sys.executable
+    # never legitimately contains a backslash on POSIX, so this is always safe.
+    return sys.executable.replace("\\", "/")
+
+
 def _hook_command(module: str) -> str:
     """Return the command line that invokes a mnemo hook."""
-    return f"{sys.executable or 'python3'} -m mnemo.hooks.{module}"
+    return f"{_posix_executable()} -m mnemo.hooks.{module}"
 
 
 HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -260,7 +279,7 @@ def _do_uninject_mcp(claude_json_path: Path) -> None:
 
 def _statusline_compose_command() -> str:
     """Build the composer command line. Uses sys.executable for venv correctness."""
-    return f"{sys.executable or 'python3'} -m mnemo statusline-compose"
+    return f"{_posix_executable()} -m mnemo statusline-compose"
 
 
 def _is_mnemo_composer(spec: Any) -> bool:
