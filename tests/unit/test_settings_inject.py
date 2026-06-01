@@ -55,6 +55,26 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
                 )
 
 
+def test_hook_command_has_no_backslashes_on_windows(tmp_home: Path, monkeypatch):
+    """Regression (Windows): hook commands are dispatched through bash (Git
+    Bash), which treats ``\\`` as an escape char. A raw Windows ``sys.executable``
+    like ``C:\\Users\\me\\...\\python.exe`` would collapse to ``C:Usersme...``
+    and fail with command-not-found. The emitted command must use POSIX slashes.
+    """
+    win_exe = r"C:\Users\nalryx\AppData\Roaming\uv\tools\mnemo-claude\Scripts\python.exe"
+    monkeypatch.setattr(settings.sys, "executable", win_exe)
+
+    cmd = settings._hook_command("session_start")
+    first_token = cmd.split()[0]
+    assert "\\" not in first_token, f"hook executable still has backslashes: {first_token!r}"
+    assert first_token == (
+        "C:/Users/nalryx/AppData/Roaming/uv/tools/mnemo-claude/Scripts/python.exe"
+    )
+
+    statusline_cmd = settings._statusline_compose_command()
+    assert "\\" not in statusline_cmd.split()[0]
+
+
 def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
     """Migration regression: an existing settings.json with legacy mnemo
     entries for modules that no longer exist must have those stale command
