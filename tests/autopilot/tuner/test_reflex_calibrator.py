@@ -188,6 +188,69 @@ class TestCalibrateThresholds:
 
 
 # ---------------------------------------------------------------------------
+# T8b — emit-rate over ELIGIBLE prompts (excludes pre-scoring skips)
+# ---------------------------------------------------------------------------
+
+class TestEligibleEmitRate:
+    """index_missing / below_min_tokens are pre-scoring skips, not threshold
+    rejections — they must NOT dilute emit_rate, else a chatty project hides
+    behind a deflated raw rate and never gets tightened."""
+
+    def _stats(self, *, total: int, emitted: int, reasons: dict) -> ReflexStats:
+        return ReflexStats(
+            project="p",
+            total_prompts=total,
+            emitted_count=emitted,
+            silence_reasons=reasons,
+            days_covered=30,
+        )
+
+    def test_emit_rate_excludes_dead_end_silences(self):
+        # 130 total, 100 of which were never scored (no index / too short).
+        # 10 emitted out of 30 eligible = 33%, NOT 10/130 = 7.7%.
+        stats = self._stats(
+            total=130,
+            emitted=10,
+            reasons={"index_missing": 80, "below_min_tokens": 20},
+        )
+        assert stats.eligible_prompts == 30
+        assert abs(stats.emit_rate - (10 / 30)) < 1e-9
+
+    def test_threshold_fails_stay_in_denominator(self):
+        # absolute_floor_fail / relative_gap_fail ARE scored rejections — keep them.
+        stats = self._stats(
+            total=100,
+            emitted=10,
+            reasons={"absolute_floor_fail": 50, "relative_gap_fail": 40},
+        )
+        assert stats.eligible_prompts == 100
+        assert abs(stats.emit_rate - 0.10) < 1e-9
+
+    def test_tightens_when_eligible_rate_high_despite_low_raw_rate(self):
+        # The real dogfood bug: raw rate 6% (in target) but eligible rate 20%.
+        # Calibrator must tighten, not coast on the deflated raw rate.
+        stats = self._stats(
+            total=500,
+            emitted=30,  # raw 6% — looks fine
+            reasons={"index_missing": 350},  # eligible = 150, rate = 20%
+        )
+        config = calibrate_thresholds(stats)
+        assert config is not None
+        from mnemo.autopilot.tuner.reflex_calibrator import DEFAULT_REFLEX_CONFIG
+        assert config.relative_gap > DEFAULT_REFLEX_CONFIG.relative_gap
+        assert config.absolute_floor > DEFAULT_REFLEX_CONFIG.absolute_floor
+
+    def test_insufficient_eligible_data_returns_none(self):
+        # High raw total but few scored prompts → not enough signal to tune.
+        stats = self._stats(
+            total=300,
+            emitted=5,
+            reasons={"index_missing": 250},  # eligible = 45 < 100
+        )
+        assert calibrate_thresholds(stats) is None
+
+
+# ---------------------------------------------------------------------------
 # T9 — reflex config JSON I/O
 # ---------------------------------------------------------------------------
 
