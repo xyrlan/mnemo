@@ -20,6 +20,16 @@ from mnemo.core.reflex.gates import DEFAULT_THRESHOLDS
 # Default config mirrors gates.DEFAULT_THRESHOLDS
 DEFAULT_REFLEX_CONFIG = None  # set after class definition
 
+# Pre-scoring skips: reflex never ran the gates on these, so they are NOT
+# threshold rejections. Counting them in the emit-rate denominator deflates
+# the rate and lets a chatty project hide behind a fake-low number — the
+# calibrator then never tightens it. Exclude them; calibrate over the prompts
+# that were actually scored.
+_DEAD_END_REASONS = frozenset({"index_missing", "below_min_tokens"})
+
+# Minimum scored (eligible) prompts required before auto-tuning a project.
+_MIN_ELIGIBLE = 100
+
 
 @dataclass
 class ReflexStats:
@@ -31,10 +41,17 @@ class ReflexStats:
     days_covered: int
 
     @property
+    def eligible_prompts(self) -> int:
+        """Prompts that were actually scored (total minus pre-scoring skips)."""
+        dead = sum(self.silence_reasons.get(r, 0) for r in _DEAD_END_REASONS)
+        return self.total_prompts - dead
+
+    @property
     def emit_rate(self) -> float:
-        if self.total_prompts == 0:
+        eligible = self.eligible_prompts
+        if eligible <= 0:
             return 0.0
-        return self.emitted_count / self.total_prompts
+        return self.emitted_count / eligible
 
 
 @dataclass
@@ -172,13 +189,14 @@ def calibrate_thresholds(stats: ReflexStats) -> Optional[ReflexConfig]:
     """Propose calibrated thresholds for a project.
 
     Returns None if:
-    - stats.total_prompts < 100 (insufficient data)
+    - stats.eligible_prompts < 100 (insufficient SCORED data — pre-scoring
+      skips like index_missing don't count toward the sample)
 
     Otherwise returns a ReflexConfig with thresholds tuned to target
     a 5–10% emit-rate. Uses linear interpolation between the current
     rate and the target midpoint to compute threshold adjustments.
     """
-    if stats.total_prompts < 100:
+    if stats.eligible_prompts < _MIN_ELIGIBLE:
         return None
 
     rate = stats.emit_rate
