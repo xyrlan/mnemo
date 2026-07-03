@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -260,3 +260,29 @@ def test_open_dead_rule_pr_caps_at_max(tmp_path: Path) -> None:
     archive_dir = tmp_path / "shared" / "_archive"
     archived = list(archive_dir.glob("*.md"))
     assert len(archived) == MAX_RULES_PER_SWEEP_PR
+
+
+# ---------------------------------------------------------------------------
+# _run_pytest interpreter
+# ---------------------------------------------------------------------------
+
+
+def test_run_pytest_uses_sys_executable(tmp_path: Path) -> None:
+    """Gate must spawn pytest via sys.executable, not bare "python".
+
+    On macOS there is often no `python` on PATH (only `python3`), so a bare
+    "python" argv raises FileNotFoundError and the gate reports a false
+    "pytest failed" — blocking every sweep PR.
+    """
+    import sys
+    from mnemo.autopilot.selffix import dead_rule_sweep
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return MagicMock(returncode=0)
+
+    with patch("mnemo.autopilot.selffix.dead_rule_sweep.subprocess.run", side_effect=fake_run):
+        assert dead_rule_sweep._run_pytest(repo_root=tmp_path) is True
+    assert captured["argv"][0] == sys.executable
