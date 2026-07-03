@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -190,7 +191,7 @@ def _run_pytest(*, repo_root: Path) -> bool:
     """
     try:
         result = subprocess.run(
-            ["python", "-m", "pytest", "-q", "--tb=short"],
+            [sys.executable, "-m", "pytest", "-q", "--tb=short"],
             capture_output=True,
             text=True,
             cwd=str(repo_root),
