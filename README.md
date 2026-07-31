@@ -22,6 +22,11 @@ dependencies, zero network calls, identical on Linux, macOS, and Windows.
   - automatic injection of the most relevant rule on every prompt
   - hard guardrails on `Bash` and contextual hints on `Edit`/`Write`
 
+- **Maintains itself.** An opt-out autopilot runs between sessions: it
+  heals broken rule provenance, retunes retrieval scoring against your own
+  hit/miss log, calibrates how often a rule is injected, and files a weekly
+  health digest — all on-device, no LLM calls for the mechanical parts.
+
 The result: Claude consumes in real time the rules you taught it weeks
 earlier in a different session, without you having to copy them in.
 
@@ -108,15 +113,36 @@ block at the top.
 mnemo init [--project]    first-run setup (global or scoped to <cwd>)
 mnemo status              vault state + hook health
 mnemo doctor              full diagnostic with actionable fixes
+mnemo autopilot status    self-maintenance state, schedule, and budget
 mnemo extract             run the extraction pipeline manually
 mnemo regen-graph-edges   refresh wikilinks for graph viewers (idempotent)
 mnemo open                open the vault
 mnemo uninstall           remove hooks, MCP server, status line
-mnemo help                list commands
+mnemo help                list commands (`--all` for advanced)
 ```
 
 The same commands are available as slash commands inside Claude Code
 (`/init`, `/status`, `/doctor`, `/open`, …).
+
+## Autopilot
+
+Between sessions, mnemo keeps its own brain in shape so you don't have to.
+Work is scheduled in tiers and rate-limited by a budget — nothing runs on
+the hot prompt path:
+
+- **Self-fix** — repairs rule integrity: relativizes machine-absolute
+  source paths, relocates sources whose briefing moved, repopulates
+  provenance from extraction state, and refuses edits that would orphan a
+  rule from project scoping.
+- **Self-tune** — grid-searches BM25F retrieval weights against your recall
+  hit/miss log, and calibrates the per-project reflex emit-rate into a
+  healthy band over *eligible* prompts.
+- **Insights** — collects recall misses into rule candidates and surfaces
+  cross-project near-duplicate rules as promotion candidates in `doctor`.
+- **Digest** — a weekly health report under `briefings/autopilot/`.
+
+It is on by default and fully local for the mechanical work. Control it
+with `mnemo autopilot {status,pause,off,on}`.
 
 ## Optional: browse the vault in Obsidian
 
