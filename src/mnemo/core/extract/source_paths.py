@@ -47,10 +47,20 @@ def vault_relative_source(src: str | Path, vault_root: Path) -> str:
         idx = parts.index("bots")
         return PurePosixPath(*parts[idx:]).as_posix()
 
+    # Absoluteness must be judged the same on every OS: a POSIX source path
+    # like "/etc/passwd" is not "absolute" to a Windows Path, which would let
+    # the relative branch below strip its leading slash. Treat a leading
+    # separator or a Windows drive as absolute regardless of host.
+    looks_absolute = (
+        raw.startswith(("/", "\\"))
+        or Path(raw).is_absolute()
+        or bool(PureWindowsPath(raw).drive)
+    )
+    if looks_absolute:
+        return raw  # outside the vault, no bots anchor — leave it alone
+
     # Relative and un-anchored — normalize separators, leave content alone.
-    if not Path(raw).is_absolute():
-        return PurePosixPath(*parts).as_posix() if parts else raw
-    return raw
+    return PurePosixPath(*parts).as_posix() if parts else raw
 
 
 def normalize_sources(sources: list[str], vault_root: Path) -> list[str]:

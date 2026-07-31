@@ -50,3 +50,15 @@ def test_posix_separators_on_all_platforms():
     src = "/Users/x/mnemo/bots/a/memory/b.md"
     out = vault_relative_source(src, vault)
     assert "\\" not in out
+
+
+def test_windows_drive_path_outside_vault_is_left_alone():
+    vault = Path("/Users/x/mnemo")
+    src = r"C:\Users\other\note.md"
+    assert vault_relative_source(src, vault) == src
+
+
+def test_backslash_absolute_without_drive_is_left_alone():
+    vault = Path("/Users/x/mnemo")
+    # A POSIX-absolute path must not have its leading slash stripped on any host.
+    assert vault_relative_source("/var/data/x.md", vault) == "/var/data/x.md"
