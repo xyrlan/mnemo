@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -119,3 +121,86 @@ def test_iter_unanalyzed_includes_session_id_field(tmp_path, monkeypatch):
     assert len(entries) == 1
     assert entries[0]["session_id"] == "sid-xyz"
     assert entries[0]["name"] == "p"
+
+
+# --- concurrent-save durability (tier3.catchup FileNotFoundError regression) ---
+
+
+def test_save_uses_unique_tmp_name_per_call(tmp_tempdir: Path, monkeypatch):
+    """Two writers on the same session_id must not share a tmp path.
+
+    A fixed ``<target>.tmp`` name lets a second process' os.replace consume
+    the first process' tmp file, so the loser raises FileNotFoundError.
+    """
+    seen: list[str] = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen.append(str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(session.os, "replace", spy)
+    session.save("dup", {"a": 1})
+    session.save("dup", {"a": 2})
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1], "tmp path must be unique per save() call"
+
+
+def test_save_leaves_no_stray_tmp_files(tmp_tempdir: Path):
+    session.save("clean", {"a": 1})
+    leftovers = list(session._cache_dir().glob("*.tmp*"))
+    assert leftovers == []
+
+
+def test_save_recovers_when_cache_dir_vanishes(tmp_tempdir: Path, monkeypatch):
+    """macOS wipes $TMPDIR periodically; save() must recreate and retry."""
+    calls = {"n": 0}
+    real_replace = os.replace
+    cache_dir = session._cache_dir()
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            raise FileNotFoundError(2, "No such file or directory", str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(session.os, "replace", flaky)
+    session.save("vanish", {"a": 1})
+    assert session.load("vanish") == {"a": 1}
+    assert calls["n"] == 2
+
+
+def test_concurrent_saves_same_session_never_raise(tmp_tempdir: Path):
+    errors: list[BaseException] = []
+
+    def worker(n: int) -> None:
+        try:
+            for i in range(25):
+                session.save("hot", {"writer": n, "i": i})
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"concurrent save() raised: {errors[:3]}"
+    assert session.load("hot") is not None
+
+
+def test_cleanup_stale_removes_orphaned_tmp_files(tmp_tempdir: Path):
+    """Crashed writers leave tmp files; nothing else sweeps them."""
+    session.save("keep", {"a": 1})
+    orphan = session._cache_dir() / "session-dead.abc123.json.tmp"
+    orphan.write_text("{}")
+    ancient = time.time() - 100_000
+    os.utime(orphan, (ancient, ancient))
+
+    session.cleanup_stale(max_age_seconds=86400)
+
+    assert not orphan.exists()
+    assert session.load("keep") == {"a": 1}

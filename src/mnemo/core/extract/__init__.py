@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mnemo.core import dashboard, errors, locks, llm, paths
-from mnemo.core.extract import inbox, promote, prompts, scanner
+from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
 from mnemo.core.filters import MANAGED_TAGS
@@ -409,7 +409,9 @@ def _run_extraction_body(
             entry = state.entries.get(file_key)
             if entry is None:
                 state.entries[file_key] = scanner.StateEntry(
-                    source_files=[str(mf.path)],
+                    source_files=[
+                        source_paths.vault_relative_source(mf.path, vault_root)
+                    ],
                     source_hash=mf.source_hash,
                     written_hash="",
                     written_at=run_id,
