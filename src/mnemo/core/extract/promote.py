@@ -7,6 +7,7 @@ from pathlib import Path
 from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.scanner import ExtractionState, MemoryFile, StateEntry
+from mnemo.core.extract.source_paths import vault_relative_source
 
 
 def _project_slug(file: MemoryFile) -> str:
@@ -60,7 +61,7 @@ def promote_projects(
         if entry is None:
             atomic_write(target, content)
             state.entries[key] = StateEntry(
-                source_files=[str(file.path)],
+                source_files=[vault_relative_source(file.path, vault_root)],
                 source_hash=file.source_hash,
                 written_hash=new_written_hash,
                 written_at=run_id,
@@ -73,7 +74,7 @@ def promote_projects(
         if not target.exists():
             if force:
                 atomic_write(target, content)
-                entry.source_files = [str(file.path)]
+                entry.source_files = [vault_relative_source(file.path, vault_root)]
                 entry.source_hash = file.source_hash
                 entry.written_hash = new_written_hash
                 entry.written_at = run_id
@@ -87,7 +88,7 @@ def promote_projects(
         disk_hash = content_hash(target)
         if disk_hash == entry.written_hash:
             atomic_write(target, content)
-            entry.source_files = [str(file.path)]
+            entry.source_files = [vault_relative_source(file.path, vault_root)]
             entry.source_hash = file.source_hash
             entry.written_hash = new_written_hash
             entry.written_at = run_id

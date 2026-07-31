@@ -68,11 +68,18 @@ def test_doctor_warning_auto_fixable_false_for_unsupported() -> None:
 
 
 def test_detect_fixable_finds_missing_source(tmp_path: Path) -> None:
-    """A rule referencing a non-existent source should surface as fixable."""
+    """A rule referencing a non-existent source should surface as fixable.
+
+    A second, resolvable source keeps the rule's provenance alive — stripping
+    the only source is refused (see the provenance-guard tests below).
+    """
+    keep = tmp_path / "briefings" / "keep.md"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("x", encoding="utf-8")
     _make_rule(
         tmp_path,
         "my-rule",
-        sources=["briefings/nonexistent.md"],
+        sources=["briefings/nonexistent.md", "briefings/keep.md"],
     )
     warnings = detect_fixable(vault_root=tmp_path)
     assert len(warnings) == 1
@@ -182,7 +189,13 @@ def test_open_doctor_fix_pr_skips_when_budget_exhausted(tmp_path: Path) -> None:
 def test_open_doctor_fix_pr_dry_run_no_pr_opened(tmp_path: Path) -> None:
     from mnemo.autopilot.selffix.doctor_fixer import open_doctor_fix_pr
 
-    rule_path = _make_rule(tmp_path, "my-rule", sources=["briefings/missing.md"])
+    keep = tmp_path / "briefings" / "keep.md"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("x", encoding="utf-8")
+    rule_path = _make_rule(
+        tmp_path, "my-rule",
+        sources=["briefings/missing.md", "briefings/keep.md"],
+    )
     warnings = [
         DoctorWarning(
             kind="source_path_missing",
@@ -212,7 +225,13 @@ def test_open_doctor_fix_pr_dry_run_no_pr_opened(tmp_path: Path) -> None:
 def test_open_doctor_fix_pr_records_budget_on_success(tmp_path: Path) -> None:
     from mnemo.autopilot.selffix.doctor_fixer import open_doctor_fix_pr
 
-    rule_path = _make_rule(tmp_path, "my-rule", sources=["briefings/missing.md"])
+    keep = tmp_path / "briefings" / "keep.md"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("x", encoding="utf-8")
+    rule_path = _make_rule(
+        tmp_path, "my-rule",
+        sources=["briefings/missing.md", "briefings/keep.md"],
+    )
     warnings = [
         DoctorWarning(
             kind="source_path_missing",
@@ -244,7 +263,13 @@ def test_open_doctor_fix_pr_records_budget_on_success(tmp_path: Path) -> None:
 def test_open_doctor_fix_pr_aborts_when_pytest_fails(tmp_path: Path) -> None:
     from mnemo.autopilot.selffix.doctor_fixer import open_doctor_fix_pr
 
-    rule_path = _make_rule(tmp_path, "my-rule", sources=["briefings/missing.md"])
+    keep = tmp_path / "briefings" / "keep.md"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("x", encoding="utf-8")
+    rule_path = _make_rule(
+        tmp_path, "my-rule",
+        sources=["briefings/missing.md", "briefings/keep.md"],
+    )
     warnings = [
         DoctorWarning(
             kind="source_path_missing",
@@ -295,3 +320,240 @@ def test_run_pytest_uses_sys_executable(tmp_path: Path) -> None:
     with patch("mnemo.autopilot.selffix.doctor_fixer.subprocess.run", side_effect=fake_run):
         assert doctor_fixer._run_pytest(repo_root=tmp_path) is True
     assert captured["argv"][0] == sys.executable
+
+
+# ---------------------------------------------------------------------------
+# Provenance guard (v0.15.1 dogfood: self-fix was emptying `sources:`)
+# ---------------------------------------------------------------------------
+
+
+def test_last_source_is_not_stripped(tmp_path: Path) -> None:
+    """Stripping a rule's only source empties `sources:` and orphans the rule.
+
+    The rule then resolves to zero projects, drops out of per-project scoping,
+    and trades a 'source path missing' warning for a worse one.
+    """
+    rule = _make_rule(tmp_path, "solo", ["briefings/sessions/gone.md"])
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert warnings == []
+    assert "briefings/sessions/gone.md" in rule.read_text(encoding="utf-8")
+
+
+def test_strips_orphan_source_when_another_survives(tmp_path: Path) -> None:
+    """With a live source left over, stripping is safe and still happens."""
+    live = tmp_path / "briefings" / "sessions" / "live.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text("x", encoding="utf-8")
+
+    rule = _make_rule(
+        tmp_path, "pair",
+        ["briefings/sessions/gone.md", "briefings/sessions/live.md"],
+    )
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert len(warnings) == 1
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    text = rule.read_text(encoding="utf-8")
+    assert "gone.md" not in text
+    assert "live.md" in text
+
+
+def test_fix_source_path_missing_refuses_to_empty_sources(tmp_path: Path) -> None:
+    """Direct fix_warning call is guarded too, not just the detector."""
+    rule = _make_rule(tmp_path, "solo2", ["briefings/sessions/gone.md"])
+    warning = DoctorWarning(
+        kind="source_path_missing",
+        rule_path=rule,
+        detail="briefings/sessions/gone.md",
+    )
+    with pytest.raises(ValueError, match="only source"):
+        fix_warning(warning, vault_root=tmp_path)
+    assert "gone.md" in rule.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# sources_empty repair (heals rules the old strip-fixer already orphaned)
+# ---------------------------------------------------------------------------
+
+
+def _write_state(tmp_path: Path, entries: dict) -> None:
+    import json
+
+    state_dir = tmp_path / ".mnemo"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "extraction-state.json").write_text(
+        json.dumps({"entries": entries}), encoding="utf-8",
+    )
+
+
+def test_detects_empty_sources_recoverable_from_state(tmp_path: Path) -> None:
+    rule = _make_rule(tmp_path, "orphaned", [])
+    src = tmp_path / "briefings" / "sessions" / "s1.md"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("x", encoding="utf-8")
+    _write_state(tmp_path, {
+        "feedback/orphaned": {"source_files": ["briefings/sessions/s1.md"]},
+    })
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    kinds = {w.kind for w in warnings}
+    assert "sources_empty" in kinds
+
+    warning = next(w for w in warnings if w.kind == "sources_empty")
+    fix_warning(warning, vault_root=tmp_path)
+
+    text = rule.read_text(encoding="utf-8")
+    assert "  - briefings/sessions/s1.md" in text
+
+
+def test_empty_sources_not_fixable_without_state_entry(tmp_path: Path) -> None:
+    _make_rule(tmp_path, "unrecoverable", [])
+    _write_state(tmp_path, {})
+    assert detect_fixable(vault_root=tmp_path) == []
+
+
+def test_empty_sources_not_fixable_when_state_source_is_gone(tmp_path: Path) -> None:
+    """Restoring a path that no longer resolves just recreates the old warning."""
+    _make_rule(tmp_path, "stale", [])
+    _write_state(tmp_path, {
+        "feedback/stale": {"source_files": ["briefings/sessions/deleted.md"]},
+    })
+    assert detect_fixable(vault_root=tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# Source relocation (dead path but the briefing still exists elsewhere)
+# ---------------------------------------------------------------------------
+
+
+def _briefing(tmp_path: Path, project: str, sid: str) -> Path:
+    p = tmp_path / "bots" / project / "briefings" / "sessions" / f"{sid}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("briefing", encoding="utf-8")
+    return p
+
+
+def test_relocates_source_instead_of_stripping(tmp_path: Path) -> None:
+    """Legacy vault-relative path: the briefing moved under bots/<project>/."""
+    sid = "b8f895ca-9f90-4070-88ce-2e3888afb0d3"
+    _briefing(tmp_path, "meunu", sid)
+    rule = _make_rule(tmp_path, "moved", [f"briefings/sessions/{sid}.md"])
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["source_path_moved"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    text = rule.read_text(encoding="utf-8")
+    assert f"  - bots/meunu/briefings/sessions/{sid}.md" in text
+    assert f"  - briefings/sessions/{sid}.md" not in text
+
+
+def test_relocation_corrects_wrong_project_attribution(tmp_path: Path) -> None:
+    """A source under the wrong project orphans the rule from real scoping."""
+    sid = "aa41cbf4-257c-4168-be43-dee4d718fad6"
+    _briefing(tmp_path, "clearframe", sid)
+    rule = _make_rule(
+        tmp_path, "misattributed",
+        [f"bots/clubinho/briefings/sessions/{sid}.md"],
+    )
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["source_path_moved"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    assert f"bots/clearframe/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+
+
+def test_ambiguous_relocation_is_not_auto_fixed(tmp_path: Path) -> None:
+    """Two candidates with the same basename — a human decides."""
+    sid = "dup-session"
+    _briefing(tmp_path, "a", sid)
+    _briefing(tmp_path, "b", sid)
+    _make_rule(tmp_path, "ambiguous", [f"briefings/sessions/{sid}.md"])
+    assert detect_fixable(vault_root=tmp_path) == []
+
+
+def test_empty_sources_healed_via_relocated_state_path(tmp_path: Path) -> None:
+    """State's recorded path is stale, but the briefing is still findable."""
+    sid = "4282f958-8ffd-4385-9733-330028ae68f2"
+    _briefing(tmp_path, "sg-imports", sid)
+    rule = _make_rule(tmp_path, "orphan-relocatable", [])
+    _write_state(tmp_path, {
+        "feedback/orphan-relocatable": {
+            "source_files": [f"briefings/sessions/{sid}.md"],
+        },
+    })
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["sources_empty"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    assert f"  - bots/sg-imports/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+
+
+def test_relocates_extensionless_source_path(tmp_path: Path) -> None:
+    """Some state entries recorded the session id without the .md suffix."""
+    sid = "f1186308-b629-488d-896c-adeaf74f4b59"
+    _briefing(tmp_path, "sg-imports", sid)
+    rule = _make_rule(tmp_path, "noext", [f"briefings/sessions/{sid}"])
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["source_path_moved"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    assert f"bots/sg-imports/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Absolute source-path normalization (v0.15.1 dogfood: 46% of rules absolute)
+# ---------------------------------------------------------------------------
+
+
+def test_detects_and_relativizes_absolute_source(tmp_path: Path) -> None:
+    src_rel = "bots/meunu/briefings/sessions/s.md"
+    src_abs = str(tmp_path / src_rel)
+    briefing = tmp_path / src_rel
+    briefing.parent.mkdir(parents=True, exist_ok=True)
+    briefing.write_text("x", encoding="utf-8")
+    rule = _make_rule(tmp_path, "abs-src", [src_abs])
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["source_path_absolute"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+
+    text = rule.read_text(encoding="utf-8")
+    assert f"  - {src_rel}" in text
+    assert src_abs not in text
+
+
+def test_absolute_source_outside_vault_is_not_auto_fixed(tmp_path: Path) -> None:
+    _make_rule(tmp_path, "foreign", ["/etc/passwd"])
+    kinds = {w.kind for w in detect_fixable(vault_root=tmp_path)}
+    assert "source_path_absolute" not in kinds
+
+
+def _make_project_rule(tmp_path: Path, name: str, sources: list) -> Path:
+    d = tmp_path / "shared" / "project"
+    d.mkdir(parents=True, exist_ok=True)
+    content = (
+        "---\ntype: project\ntags:\n  - test\nsources:\n"
+        + "\n".join(f"  - {s}" for s in sources)
+        + "\n---\n" + "x" * 60 + "\n"
+    )
+    path = d / f"{name}.md"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_project_subtype_absolute_source_is_fixed(tmp_path: Path) -> None:
+    """shared/project/ rules carried the most absolute paths — scan them too."""
+    src_rel = "bots/bingx-robot/memory/foo.md"
+    briefing = tmp_path / src_rel
+    briefing.parent.mkdir(parents=True, exist_ok=True)
+    briefing.write_text("x", encoding="utf-8")
+    rule = _make_project_rule(tmp_path, "bingx__foo", [str(tmp_path / src_rel)])
+
+    warnings = detect_fixable(vault_root=tmp_path)
+    assert [w.kind for w in warnings] == ["source_path_absolute"]
+    fix_warning(warnings[0], vault_root=tmp_path)
+    assert f"  - {src_rel}" in rule.read_text(encoding="utf-8")

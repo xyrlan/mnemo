@@ -3,7 +3,7 @@
 Hosts :func:`_doctor_check_rule_integrity` (frontmatter validation +
 source-path resolution + body length floor) and
 :func:`_doctor_check_universal_promotion` (informational health line
-about how many rules sit one project away from auto-promotion).
+reporting universal rule count + cross-project promotion candidates).
 """
 from __future__ import annotations
 
@@ -145,37 +145,44 @@ def _doctor_check_stripped_enforce(vault: Path, idx: object = None) -> bool:
 
 
 def _doctor_check_universal_promotion(vault: Path) -> bool:
-    """Report universal-promotion health: count + on-verge rules.
+    """Report universal-promotion health: count + cross-project candidates.
 
     Returns True always — this is an informational check, not a pass/fail gate.
     (If there is no index yet, we still print a placeholder line for consistency.)
     """
     from mnemo.core import rule_activation
-    from mnemo.core.config import load_config
+    from mnemo.core.universal_candidates import find_universal_candidates
 
     idx = rule_activation.load_index(vault)
     if idx is None or "rules" not in idx:
         print("Universal promotion health: index unavailable (run a SessionStart).")
         return True
 
-    threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
     universal_slugs = idx.get("universal", {}).get("slugs", [])
     universal_topics = idx.get("universal", {}).get("topics", [])
-
-    on_verge: list[str] = [
-        slug for slug, rule in idx["rules"].items()
-        if not rule.get("universal")
-        and len(rule.get("projects", [])) == threshold - 1
-    ]
 
     print(f"Universal promotion health: {len(universal_slugs)} universal rule(s).")
     if universal_topics:
         print("  Top universal topics: " + ", ".join(universal_topics[:5]))
-    if on_verge:
+
+    # Counting rules at `threshold - 1` projects used to be reported as "one
+    # project away", but with the default threshold of 2 that is every
+    # single-project rule in the vault (541 of 556 on the v0.15.1 dogfood) —
+    # noise, not a signal. Exact-slug promotion effectively never fires, so
+    # what is actionable is the differently-named pair teaching one lesson.
+    candidates = find_universal_candidates(idx)
+    if candidates:
         print(
-            f"  {len(on_verge)} rule(s) one project away from promotion: "
-            + ", ".join(sorted(on_verge)[:5])
+            f"  {len(candidates)} cross-project promotion candidate(s) "
+            f"(near-duplicate rules in different projects):"
         )
+        for c in candidates[:5]:
+            print(f"    • [{'+'.join(c.projects)}] sim={c.similarity:.2f}")
+            for slug in c.slugs:
+                print(f"        - {slug}")
+        if len(candidates) > 5:
+            print(f"    … {len(candidates) - 5} more")
+        print("    (merge with `mnemo dedup-rules` after aligning names, or ignore)")
     return True
 
 

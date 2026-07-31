@@ -4,7 +4,14 @@ Detects auto-fixable doctor warnings and can open a self-fix PR.
 
 Auto-fixable categories:
 - ``source_path_missing`` — strip the source line from frontmatter
-  (the briefing/file was deleted)
+  (the briefing/file was deleted), unless it is the rule's only source:
+  emptying ``sources:`` orphans the rule from per-project scoping
+- ``source_path_moved`` — re-point a dead source at the path the briefing
+  now lives under (also repairs wrong project attribution)
+- ``source_path_absolute`` — relativize a machine-absolute source path that
+  still resolves under the vault
+- ``sources_empty`` — re-populate an empty ``sources:`` block from
+  extraction state (heals rules orphaned before that guard existed)
 
 Categories explicitly NOT auto-fixed:
 - ``body_too_short`` — requires human review
@@ -24,11 +31,14 @@ from mnemo.autopilot.core import pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 from mnemo.autopilot.selffix._perimeter import assert_perimeter
+from mnemo.core.extract.source_paths import vault_relative_source
 
 # Kinds that the fixer knows how to handle mechanically.
-_AUTO_FIXABLE_KINDS = frozenset({"source_path_missing"})
+_AUTO_FIXABLE_KINDS = frozenset({
+    "source_path_missing", "source_path_moved", "source_path_absolute", "sources_empty",
+})
 
-_SHARED_SUBTYPES = ("feedback", "user", "reference")
+_SHARED_SUBTYPES = ("feedback", "user", "reference", "project")
 
 
 @dataclass
@@ -52,8 +62,11 @@ class DoctorWarning:
 def detect_fixable(*, vault_root: Path) -> List[DoctorWarning]:
     """Scan ``shared/`` for auto-fixable doctor warnings.
 
-    Currently detects: ``source_path_missing`` — a ``sources`` entry pointing
-    to a file that no longer exists under *vault_root*.
+    Detects ``source_path_absolute`` (machine-absolute path that still
+    resolves under the vault), ``source_path_moved`` (dead path, briefing
+    found elsewhere), ``source_path_missing`` (dead path, nothing to relocate
+    to, and at least one other source survives) and ``sources_empty`` (an
+    empty ``sources:`` block that extraction state can still repopulate).
     """
     from mnemo.core.filters import is_consumer_visible, parse_frontmatter
 
@@ -79,11 +92,51 @@ def detect_fixable(*, vault_root: Path) -> List[DoctorWarning]:
                 continue
             if not is_consumer_visible(md_path, fm, vault_root):
                 continue  # skip drafts / transient artefacts
-            sources = fm.get("sources") or []
+            sources = [s for s in (fm.get("sources") or []) if isinstance(s, str)]
+            if not sources:
+                recovered = _sources_from_state(vault_root, subtype, md_path.stem)
+                if recovered:
+                    warnings.append(
+                        DoctorWarning(
+                            kind="sources_empty",
+                            rule_path=md_path,
+                            detail="\n".join(recovered),
+                        )
+                    )
+                continue
+            # Absolute paths under the vault resolve as files (pathlib lets an
+            # absolute right-hand operand win), so they never surface as
+            # "missing" — but they are machine-brittle and must be relativized.
             for src in sources:
-                if not isinstance(src, str):
-                    continue
-                if not (vault_root / src).is_file():
+                rel = vault_relative_source(src, vault_root)
+                if rel != src and (vault_root / rel).is_file():
+                    warnings.append(
+                        DoctorWarning(
+                            kind="source_path_absolute",
+                            rule_path=md_path,
+                            detail=f"{src}\n{rel}",
+                        )
+                    )
+
+            missing = [s for s in sources if not (vault_root / s).is_file()]
+            relocatable = any(_relocate_source(vault_root, s) for s in missing)
+            if len(missing) >= len(sources) and not relocatable:
+                # Stripping every source would leave `sources:` empty: the rule
+                # loses its provenance, resolves to zero projects, and falls out
+                # of per-project scoping. That trades one warning for a worse
+                # one, so it is not auto-fixable — a human re-points the source.
+                continue
+            for src in missing:
+                moved = _relocate_source(vault_root, src)
+                if moved:
+                    warnings.append(
+                        DoctorWarning(
+                            kind="source_path_moved",
+                            rule_path=md_path,
+                            detail=f"{src}\n{moved}",
+                        )
+                    )
+                else:
                     warnings.append(
                         DoctorWarning(
                             kind="source_path_missing",
@@ -108,12 +161,122 @@ def fix_warning(warning: DoctorWarning, *, vault_root: Path) -> Path:
     """
     if warning.kind == "source_path_missing":
         return _fix_source_path_missing(warning.rule_path, warning.detail)
+    if warning.kind in ("source_path_moved", "source_path_absolute"):
+        old_src, new_src = warning.detail.split("\n", 1)
+        return _fix_source_path_moved(warning.rule_path, old_src, new_src)
+    if warning.kind == "sources_empty":
+        return _fix_sources_empty(warning.rule_path, warning.detail.splitlines())
     raise ValueError(f"No fixer for kind {warning.kind!r}")
 
 
-def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
-    """Strip the orphan source line from the rule's frontmatter."""
+def _relocate_source(vault_root: Path, src: str) -> str | None:
+    """Return the vault-relative path a dead ``sources`` entry now lives at.
+
+    Two drifts produce dead-but-recoverable paths: the pre-worktree layout
+    wrote ``briefings/sessions/<id>.md`` without the ``bots/<project>/``
+    prefix, and a session analysed from the wrong cwd recorded the wrong
+    project. Both keep the filename, so the basename locates the survivor —
+    and relocating (rather than stripping) also repairs the project
+    attribution that per-project scoping reads.
+
+    Returns None when there is no match or more than one: an ambiguous
+    relocation would silently attribute a rule to an arbitrary project.
+    """
+    name = Path(src).name
+    if not name:
+        return None
+    # Some entries recorded the bare session id, without the .md suffix.
+    candidates = [name] if name.endswith(".md") else [name, f"{name}.md"]
+    for candidate in candidates:
+        matches = [
+            p for p in vault_root.glob(f"bots/*/briefings/sessions/{candidate}")
+            if p.is_file()
+        ]
+        if len(matches) == 1:
+            return matches[0].relative_to(vault_root).as_posix()
+        if matches:
+            return None  # ambiguous — a human decides
+    return None
+
+
+def _sources_from_state(vault_root: Path, page_type: str, stem: str) -> list[str]:
+    """Return still-resolvable ``source_files`` recorded for ``<type>/<stem>``.
+
+    Extraction state keeps a rule's provenance even when the rule file lost
+    it, which is how rules orphaned by the pre-guard strip-fixer can be
+    healed. A recorded path that no longer resolves is relocated by basename
+    when possible and dropped otherwise — restoring a dead path would just
+    re-raise ``source_path_missing``.
+    """
+    import json
+
+    state_path = vault_root / ".mnemo" / "extraction-state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+    entry = (state.get("entries") or {}).get(f"{page_type}/{stem}")
+    if not isinstance(entry, dict):
+        return []
+    out: list[str] = []
+    for s in entry.get("source_files") or []:
+        if not isinstance(s, str):
+            continue
+        if (vault_root / s).is_file():
+            out.append(s)
+            continue
+        moved = _relocate_source(vault_root, s)
+        if moved:
+            out.append(moved)
+    return out
+
+
+def _fix_source_path_moved(rule_path: Path, old_src: str, new_src: str) -> Path:
+    """Re-point a dead ``sources`` line at the path the briefing moved to."""
     text = rule_path.read_text(encoding="utf-8", errors="replace")
+    pattern = re.compile(
+        r"^([ \t]*-[ \t]+)" + re.escape(old_src) + r"[ \t]*$",
+        re.MULTILINE,
+    )
+    new_text, count = pattern.subn(lambda m: m.group(1) + new_src, text)
+    if count == 0:
+        raise ValueError(f"source line {old_src!r} not found in {rule_path.name}")
+    rule_path.write_text(new_text, encoding="utf-8")
+    return rule_path
+
+
+def _fix_sources_empty(rule_path: Path, sources: list[str]) -> Path:
+    """Re-populate an empty ``sources:`` block from recovered paths."""
+    if not sources:
+        raise ValueError(f"no recoverable sources for {rule_path.name}")
+    text = rule_path.read_text(encoding="utf-8", errors="replace")
+    block = "sources:\n" + "".join(f"  - {s}\n" for s in sources)
+    new_text, count = re.subn(r"^sources:[ \t]*\n", block, text, count=1, flags=re.MULTILINE)
+    if count != 1:
+        raise ValueError(f"no empty sources block found in {rule_path.name}")
+    rule_path.write_text(new_text, encoding="utf-8")
+    return rule_path
+
+
+def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
+    """Strip the orphan source line from the rule's frontmatter.
+
+    Refuses when it is the rule's only source — see ``detect_fixable``: an
+    empty ``sources:`` block orphans the rule from project scoping.
+    """
+    from mnemo.core.filters import parse_frontmatter
+
+    text = rule_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        sources = [s for s in (parse_frontmatter(text).get("sources") or [])
+                   if isinstance(s, str)]
+    except Exception:
+        sources = []
+    if len(sources) <= 1:
+        raise ValueError(
+            f"refusing to strip the only source of {rule_path.name} "
+            f"({missing_source!r}) — re-point it manually"
+        )
     # Match the YAML list item "  - <missing_source>" and remove it
     # We handle both leading spaces and tabs (YAML style).
     pattern = re.compile(

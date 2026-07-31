@@ -709,10 +709,47 @@ def test_doctor_reports_universal_promotion_health(
     assert "1 universal" in out.lower()
 
 
-def test_doctor_universal_promotion_on_verge_warning(
+def test_doctor_reports_cross_project_promotion_candidates(
     tmp_home: Path, capsys: pytest.CaptureFixture,
 ):
-    """Rules one project short of the threshold surface as on-verge."""
+    """Near-duplicate rules in different projects surface as candidates.
+
+    Exact-slug promotion never fires on real vaults, so 'N rules one project
+    away' just counted every single-project rule. What is actionable is the
+    pair of differently-named rules teaching the same lesson.
+    """
+    from tests.unit.test_rule_activation_index import _write_rule
+    from mnemo.core.rule_activation import build_index, write_index
+    from mnemo.core.paths import vault_root as _vault_root
+    from mnemo.core.config import load_config
+    from mnemo import cli
+
+    vault = _vault_root(load_config())
+    (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
+    body = "**Why:** Deploying before running migrations makes the app 500.\n"
+    _write_rule(
+        vault, "mig-a.md", name="Run migrations before deploy",
+        tags=["deployment", "auto-promoted"], body=body,
+        sources=["bots/a/memory/v.md"],
+    )
+    _write_rule(
+        vault, "mig-b.md", name="Run migrations before deploying",
+        tags=["deployment", "auto-promoted"], body=body,
+        sources=["bots/b/memory/v.md"],
+    )
+    write_index(vault, build_index(vault))
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "cross-project promotion candidate" in out
+    assert "Run migrations before deploy" in out
+    assert "one project away" not in out
+
+
+def test_doctor_silent_when_no_promotion_candidates(
+    tmp_home: Path, capsys: pytest.CaptureFixture,
+):
+    """A single-project rule alone is not a candidate — no noise line."""
     from tests.unit.test_rule_activation_index import _write_rule
     from mnemo.core.rule_activation import build_index, write_index
     from mnemo.core.paths import vault_root as _vault_root
@@ -722,13 +759,13 @@ def test_doctor_universal_promotion_on_verge_warning(
     vault = _vault_root(load_config())
     (vault / "shared" / "feedback").mkdir(parents=True, exist_ok=True)
     _write_rule(
-        vault, "onverge.md", name="on-verge",
+        vault, "lonely.md", name="lonely-rule",
         tags=["git", "auto-promoted"],
-        sources=["bots/a/memory/v.md"],  # 1 project — 1 away from threshold=2
+        sources=["bots/a/memory/v.md"],
     )
     write_index(vault, build_index(vault))
 
     cli.main(["doctor"])
     out = capsys.readouterr().out
-    assert "one project away" in out
-    assert "on-verge" in out
+    assert "Universal promotion health" in out
+    assert "promotion candidate" not in out

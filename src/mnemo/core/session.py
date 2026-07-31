@@ -23,11 +23,34 @@ def _cache_file(session_id: str) -> Path:
 
 
 def save(session_id: str, info: dict[str, Any]) -> None:
-    _cache_dir().mkdir(parents=True, exist_ok=True)
+    """Atomically write the session cache entry.
+
+    Two writers can target the same session_id concurrently (the SessionEnd
+    hook and ``tier3.eos-catchup``). A fixed ``<target>.tmp`` name let one
+    process' ``os.replace`` consume the other's tmp file, so the loser raised
+    FileNotFoundError. Each call gets its own tmp file instead. The retry
+    covers the other cause: the OS wiping $TMPDIR between mkdir and replace.
+    """
     target = _cache_file(session_id)
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(info))
-    os.replace(tmp, target)
+    payload = json.dumps(info)
+    for attempt in (0, 1):
+        cache_dir = _cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=cache_dir, prefix=f"{target.stem}.", suffix=".json.tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(payload)
+            os.replace(tmp_name, target)
+            return
+        except FileNotFoundError:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            if attempt == 1:
+                raise
 
 
 def load(session_id: str) -> dict[str, Any] | None:
@@ -58,7 +81,8 @@ def cleanup_stale(max_age_seconds: float = 86400.0) -> None:
     if not cache_dir.exists():
         return
     cutoff = time.time() - max_age_seconds
-    for f in cache_dir.glob("session-*.json"):
+    stale = [*cache_dir.glob("session-*.json"), *cache_dir.glob("session-*.json.tmp")]
+    for f in stale:
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink()
