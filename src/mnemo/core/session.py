@@ -60,6 +60,13 @@ def save(session_id: str, info: dict[str, Any]) -> None:
             # Stagger retries so racing writers don't collide on every attempt.
             if attempt < _SAVE_ATTEMPTS - 1:
                 time.sleep(0.002 * (attempt + 1))
+    # All attempts lost the race. On Windows os.replace to a target another
+    # writer holds open raises PermissionError, and no finite retry is
+    # guaranteed to win under heavy contention. If a peer has meanwhile
+    # populated the target, the cache entry exists — treat that as success
+    # rather than surfacing a transient sharing violation to a hook.
+    if target.exists():
+        return
     if last_exc is not None:
         raise last_exc
 
