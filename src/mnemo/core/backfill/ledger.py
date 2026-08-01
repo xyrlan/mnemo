@@ -8,22 +8,123 @@ transcript filename stem) with the file's content hash, so:
 - a transcript that grew on disk is harvested again,
 - a transcript that fails three times is skipped for good.
 
+Two vault-wide fields sit beside the per-session map:
+
+- ``installRunDone`` — a first-run sweep **completed**. Written by
+  ``cmd_backfill`` on an install run that actually got to the end, never by
+  the hook that launches it, so an environmental abort (missing ``claude``
+  CLI, expired auth, rate limit) leaves the one-shot unspent.
+- the spawn lock, a separate file — "a first-run sweep is in flight". See
+  :func:`acquire_spawn_lock`.
+
 Pure filesystem + hashing. No LLM dependency, so it tests without stubbing.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
 MAX_ATTEMPTS = 3
 _STATE_NAME = "backfill-state.json"
+_LOCK_NAME = "backfill-install.lock"
+
+# How long a spawn lock is believed before it is treated as abandoned. Sized
+# against the work it guards, not against impatience: an install run is capped
+# at ``installCap`` (20) sessions, each an LLM call that may retry after a
+# timeout, so a legitimate sweep can run well over an hour. Stealing the lock
+# from a sweep that is merely slow would double the user's spend, which is the
+# thing the lock exists to prevent — so the TTL errs long. A sweep that ends
+# normally, or aborts, releases the lock explicitly and never waits this out;
+# only a hard kill does.
+SPAWN_LOCK_TTL_SECONDS = 6 * 3600
 
 
 def state_path(vault_root: Path) -> Path:
     return Path(vault_root) / ".mnemo" / _STATE_NAME
+
+
+def spawn_lock_path(vault_root: Path) -> Path:
+    return Path(vault_root) / ".mnemo" / _LOCK_NAME
+
+
+def acquire_spawn_lock(vault_root: Path) -> bool:
+    """Claim the right to launch an install run. True when this caller won.
+
+    Two Claude Code windows opened in the same instant both read
+    ``installRunDone`` as False and, without this, both spawn a sweep — twice
+    ``installCap`` LLM calls on the user's account, and two children racing on
+    ``save``'s shared temp file. ``O_CREAT | O_EXCL`` is the atomic test-and-set
+    that a load/check/save cannot be.
+
+    A lock older than :data:`SPAWN_LOCK_TTL_SECONDS` is assumed abandoned by a
+    killed process and stolen, so a hard kill cannot wedge the feature forever.
+    Stealing is deliberately not atomic against a *second* stealer arriving in
+    the same microsecond at the six-hour boundary; that residual race costs one
+    duplicate sweep in a case that requires two simultaneous session starts
+    against an already-abandoned lock, and closing it would cost a real lock
+    manager.
+    """
+    path = spawn_lock_path(vault_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _claim(path):
+        return True
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    if age < SPAWN_LOCK_TTL_SECONDS:
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return _claim(path)
+
+
+def _claim(path: Path) -> bool:
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(fd, f"pid={os.getpid()} at={int(time.time())}\n".encode())
+    finally:
+        os.close(fd)
+    return True
+
+
+def release_spawn_lock(vault_root: Path) -> None:
+    """Drop the lock. Safe to call when it is already gone."""
+    try:
+        spawn_lock_path(vault_root).unlink()
+    except OSError:
+        pass
+
+
+def spawn_lock_age(vault_root: Path) -> float | None:
+    """Seconds since the lock was taken, or None when there is no lock."""
+    try:
+        return time.time() - spawn_lock_path(vault_root).stat().st_mtime
+    except OSError:
+        return None
+
+
+def mark_install_run_done(vault_root: Path) -> None:
+    """Record that a first-run sweep reached the end.
+
+    Read-modify-write: the sweep it is reporting on just wrote the per-session
+    records this shares a file with.
+    """
+    led = load(vault_root)
+    led["installRunDone"] = True
+    save(vault_root, led)
 
 
 def transcript_hash(path: Path) -> str:

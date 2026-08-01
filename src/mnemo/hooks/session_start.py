@@ -232,14 +232,23 @@ def _maybe_schedule_install_backfill(
 ) -> None:
     """Spawn the one-time install backfill, at most once per vault.
 
-    The ledger marker is written *before* the spawn so a crash mid-harvest
-    cannot cause the sweep to restart on every subsequent session. Resuming
-    is the explicit ``mnemo backfill`` command's job, not the hook's.
+    Two separate pieces of state, because "we launched something" and "a
+    backfill happened" are different facts and conflating them silently burns
+    the user's only automatic run:
 
-    A ``Popen`` that raises is the one case where the marker is rolled back:
-    nothing was launched, so keeping the marker would silently guarantee the
-    user never gets a backfill — the exact outcome this hook exists to
-    prevent — while the mid-harvest reasoning above does not apply.
+    - ``installRunDone`` says a sweep **finished**. This function only ever
+      reads it; ``cmd_backfill`` writes it, and only on a run that got to the
+      end. So a child that dies on a missing ``claude`` CLI, expired auth or a
+      rate limit — printing its explanation to a ``DEVNULL`` stderr nobody
+      will ever see — leaves the one-shot unspent and the next session tries
+      again. The cost of that retry is one fast failed CLI invocation and no
+      LLM call, which is the right price for not silently abandoning the
+      feature this vault was installed for.
+    - the spawn lock says a sweep is **in flight**, and is what stops two
+      simultaneous sessions from launching two sweeps.
+
+    A ``Popen`` that raises releases the lock immediately: nothing was
+    launched, so nothing should be held.
     """
     try:
         from mnemo.core.backfill import ledger as _ledger
@@ -250,17 +259,15 @@ def _maybe_schedule_install_backfill(
         if not backfill_cfg.get("autoOnFirstSession", True):
             return
 
-        led = _ledger.load(vault_root)
-        if led.get("installRunDone"):
+        if _ledger.load(vault_root).get("installRunDone"):
             return
-        led["installRunDone"] = True
-        _ledger.save(vault_root, led)
+        if not _ledger.acquire_spawn_lock(vault_root):
+            return  # another session is already sweeping
 
         try:
             _spawn_detached_backfill(cwd=cwd)
         except Exception:
-            led["installRunDone"] = False
-            _ledger.save(vault_root, led)
+            _ledger.release_spawn_lock(vault_root)
             raise
     except Exception as exc:
         try:
@@ -339,8 +346,9 @@ def main() -> int:
         # A brand-new vault injects on 0% of prompts until something puts rules
         # in it. Runs at most once per vault, capped, detached — one LLM call
         # per session harvested is minutes of work and must not touch the
-        # prompt path. Placed after scaffolding so .mnemo/ exists to write the
-        # marker into.
+        # prompt path. Must stay below `errors.should_run`, which is the kill
+        # switch for every hook; it does not depend on scaffolding, since the
+        # lock and ledger writes create `.mnemo/` themselves.
         _maybe_schedule_install_backfill(cfg, vault, cwd)
 
         if cfg.get("capture", {}).get("sessionStartEnd", True):

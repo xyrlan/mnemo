@@ -108,6 +108,36 @@ def _first_line(exc: BaseException, limit: int = 200) -> str:
 
 @command("backfill")
 def cmd_backfill(args: argparse.Namespace) -> int:
+    """Entry point. On an install run, owns the one-shot's bookkeeping.
+
+    ``session_start`` launches this and immediately forgets about it — stdout
+    and stderr are ``DEVNULL``, because the hook's stdout carries the
+    injection envelope. That makes this process the only one that knows
+    whether a backfill actually happened, so it is the only one that may say
+    so. It marks ``installRunDone`` on a sweep that reached the end, including
+    one that had nothing to do; it deliberately does **not** mark an
+    environmental abort or an interrupt, so a broken ``claude`` CLI costs the
+    user a retry next session rather than the whole feature.
+    """
+    if not getattr(args, "install_run", False):
+        return _run_backfill(args)
+
+    cfg = cfg_mod.load_config()
+    vault_root = paths.vault_root(cfg)
+    try:
+        code = _run_backfill(args)
+    finally:
+        # Paired with session_start's acquire. A hard kill skips this and the
+        # lock is reaped by its TTL instead.
+        ledger.release_spawn_lock(vault_root)
+    if code in (_EXIT_OK, _EXIT_SOME_FAILED) and (cfg.get("backfill") or {}).get(
+        "enabled", True
+    ):
+        ledger.mark_install_run_done(vault_root)
+    return code
+
+
+def _run_backfill(args: argparse.Namespace) -> int:
     cfg = cfg_mod.load_config()
     backfill_cfg = cfg.get("backfill") or {}
     if not backfill_cfg.get("enabled", True):

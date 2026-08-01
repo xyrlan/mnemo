@@ -538,3 +538,102 @@ def test_estimate_survives_an_unreadable_transcript(tmp_path: Path):
 ])
 def test_fmt_tokens_rounds_hard(n, expected):
     assert cmd._fmt_tokens(n) == expected
+
+
+# --------------------------------------------------------------------------
+# the install-run one-shot: who is allowed to say it happened
+# --------------------------------------------------------------------------
+#
+# `session_start` launches this with stdout and stderr on DEVNULL, so this
+# process is the only one that ever knows whether a backfill actually ran.
+# Letting the *hook* set `installRunDone` meant a `claude` CLI that was
+# missing, unauthenticated or rate-limited spent the user's one automatic run
+# doing zero work, recording nothing, and explaining itself to a discarded
+# stderr.
+
+def test_a_completed_install_run_marks_the_ledger(env, monkeypatch):
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, result=["a.md"])
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 0
+    assert ledger.load(vault)["installRunDone"] is True
+
+
+def test_an_install_run_with_nothing_to_do_still_counts(env, monkeypatch):
+    """A machine with no history has been fully backfilled, correctly, by doing
+    nothing. Leaving the marker unset would respawn a sweep every session."""
+    cfg, vault, made, _ = env
+    _recorder(monkeypatch)
+    monkeypatch.setattr(cmd.discover, "find_transcripts", lambda **kw: [])
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 0
+    assert ledger.load(vault)["installRunDone"] is True
+
+
+def test_a_partial_failure_still_counts_as_a_run(env, monkeypatch):
+    """One hostile transcript is recorded against itself and stepped over. The
+    sweep ran; it does not owe the user another automatic one."""
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, raises=ValueError("bad transcript"))
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 1
+    assert ledger.load(vault)["installRunDone"] is True
+
+
+def test_an_environmental_abort_leaves_the_one_shot_unspent(env, monkeypatch):
+    """The fix. A broken environment must cost a retry, not the feature."""
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, raises=llm.LLMSubprocessError("claude: command not found"))
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 2
+    assert ledger.load(vault)["installRunDone"] is False
+    assert not ledger.spawn_lock_path(vault).exists()
+
+
+def test_an_interrupted_install_run_leaves_the_one_shot_unspent(env, monkeypatch):
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, raises=KeyboardInterrupt())
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 130
+    assert ledger.load(vault)["installRunDone"] is False
+
+
+def test_an_install_run_releases_the_spawn_lock_it_was_launched_under(env, monkeypatch):
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, result=["a.md"])
+    assert ledger.acquire_spawn_lock(vault) is True
+
+    cmd.cmd_backfill(_args(install_run=True))
+    assert not ledger.spawn_lock_path(vault).exists()
+
+
+def test_an_install_run_that_explodes_still_releases_the_lock(env, monkeypatch):
+    """A leaked lock blocks every future session until the TTL reaps it."""
+    cfg, vault, _, _ = env
+    ledger.acquire_spawn_lock(vault)
+    monkeypatch.setattr(cmd, "_run_backfill",
+                        lambda _a: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError):
+        cmd.cmd_backfill(_args(install_run=True))
+    assert not ledger.spawn_lock_path(vault).exists()
+
+
+def test_an_ordinary_run_never_touches_the_one_shot(env, monkeypatch):
+    """`mnemo backfill` typed by a user is not the automatic install run."""
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, result=["a.md"])
+    ledger.acquire_spawn_lock(vault)
+
+    cmd.cmd_backfill(_args())
+    assert ledger.load(vault)["installRunDone"] is False
+    assert ledger.spawn_lock_path(vault).exists(), "not this run's lock to release"
+
+
+def test_a_disabled_backfill_install_run_marks_nothing(env, monkeypatch):
+    cfg, vault, _, _ = env
+    cfg["backfill"]["enabled"] = False
+    _recorder(monkeypatch)
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 0
+    assert ledger.load(vault)["installRunDone"] is False

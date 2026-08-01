@@ -1,18 +1,23 @@
-"""session_start fires the install backfill exactly once, detached, in the repo.
+"""session_start fires the install backfill once, detached, in the session's repo.
 
-Three things have to be true or the feature silently does nothing for the user
+Four things have to be true or the feature silently does nothing for the user
 it exists to help:
 
 1. it fires without being asked, on the first session after install;
-2. it fires *once* — a sweep restarting every session is worse than none;
+2. it does not fire twice — not on the next session, and not from a second
+   window opened in the same instant;
 3. it fires **in the session's repo**. ``mnemo backfill --install-run`` picks
    its project from ``os.getcwd()``, so the child's working directory is what
    decides which repo gets backfilled. A spawn that inherits the hook's own
    cwd backfills whatever directory Claude Code happened to launch the hook
-   from, which is not necessarily the session's.
+   from, which is not necessarily the session's;
+4. a run that never happened stays retryable. The hook holds a *spawn lock*
+   and nothing more — ``installRunDone`` is the CLI's to write, and only for
+   a sweep that reached the end (see test_cli_backfill.py).
 """
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -22,7 +27,6 @@ import pytest
 
 from mnemo.core.backfill import ledger
 from mnemo.hooks import session_start
-
 
 # conftest's autouse guard replaces the module attribute so no test ever really
 # spawns a sweep. The tests below that exercise the spawn itself need the real
@@ -66,20 +70,68 @@ def test_the_suite_wide_spawn_guard_is_active():
 
 # --- scheduling ------------------------------------------------------------
 
-def test_spawns_once_and_marks_the_ledger(vault, monkeypatch):
+def test_spawns_once_and_takes_the_spawn_lock(vault, monkeypatch):
     spawned = _recorder(monkeypatch)
 
     session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
     assert len(spawned) == 1
-    assert ledger.load(vault)["installRunDone"] is True
+    assert ledger.spawn_lock_path(vault).exists()
 
 
-def test_second_session_does_not_spawn_again(vault, monkeypatch):
+def test_the_hook_never_claims_the_run_completed(vault, monkeypatch):
+    """``installRunDone`` means a sweep finished, and the hook cannot know that.
+
+    It only launches a child whose entire output goes to DEVNULL. Writing the
+    marker here is what made an environmental abort — no ``claude`` CLI,
+    expired auth, rate limit — permanently spend the user's one automatic run
+    while doing zero work and saying nothing.
+    """
+    _recorder(monkeypatch)
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    assert ledger.load(vault)["installRunDone"] is False
+
+
+def test_a_completed_run_is_never_repeated(vault, monkeypatch):
+    spawned = _recorder(monkeypatch)
+    ledger.mark_install_run_done(vault)
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    assert spawned == []
+
+
+def test_second_session_does_not_spawn_while_one_is_in_flight(vault, monkeypatch):
     spawned = _recorder(monkeypatch)
 
     session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
     session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
     assert len(spawned) == 1
+
+
+def test_a_finished_run_that_released_its_lock_is_still_not_repeated(vault, monkeypatch):
+    """Lock released + marker set is the normal end state. It must stay quiet."""
+    spawned = _recorder(monkeypatch)
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    ledger.release_spawn_lock(vault)
+    ledger.mark_install_run_done(vault)
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    assert len(spawned) == 1
+
+
+def test_an_aborted_run_that_released_its_lock_is_retried(vault, monkeypatch):
+    """The whole point of the split: no marker means try again.
+
+    An environmental abort releases the lock and records nothing, so the next
+    session gets another go. That costs one fast failed ``claude`` invocation
+    and no LLM call — the right price for not silently abandoning the feature.
+    """
+    spawned = _recorder(monkeypatch)
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    ledger.release_spawn_lock(vault)  # what cmd_backfill's finally does
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    assert len(spawned) == 2
 
 
 def test_disabled_auto_flag_never_spawns(vault, monkeypatch):
@@ -100,35 +152,25 @@ def test_disabled_backfill_never_spawns(vault, monkeypatch):
     assert spawned == []
 
 
-def test_a_declined_run_leaves_the_ledger_untouched(vault, monkeypatch):
-    """Turning the flag off must not consume the one-shot marker.
+def test_a_declined_run_takes_no_lock(vault, monkeypatch):
+    """Turning the flag off must not consume the one-shot.
 
-    Otherwise flipping ``autoOnFirstSession`` back on would never fire, because
-    the session that skipped it already claimed the only run.
+    Otherwise flipping ``autoOnFirstSession`` back on would be blocked by a
+    lock the declined session took and no child will ever release.
     """
     _recorder(monkeypatch)
 
     session_start._maybe_schedule_install_backfill(
         _cfg(vault, autoOnFirstSession=False), vault, cwd="/repo",
     )
-    assert ledger.load(vault)["installRunDone"] is False
+    assert not ledger.spawn_lock_path(vault).exists()
 
 
-def test_a_spawn_failure_is_swallowed(vault, monkeypatch):
-    def boom(**_kw):
-        raise OSError("no fork for you")
+def test_a_spawn_failure_releases_the_lock_and_is_swallowed(vault, monkeypatch):
+    """A spawn that never launched must not hold the lock, and must not raise.
 
-    monkeypatch.setattr(session_start, "_spawn_detached_backfill", boom)
-    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
-
-
-def test_a_spawn_failure_does_not_burn_the_one_shot(vault, monkeypatch):
-    """A spawn that never launched must stay retryable.
-
-    The marker is written before the spawn so a crash *inside* the harvest
-    cannot restart the sweep every session. A failed ``Popen`` is the other
-    case entirely: nothing ran, so the user would silently never get a
-    backfill at all — the exact outcome this feature exists to prevent.
+    Nothing ran, so the user would silently never get a backfill at all — the
+    exact outcome this feature exists to prevent.
     """
     calls: list[str] = []
 
@@ -138,35 +180,10 @@ def test_a_spawn_failure_does_not_burn_the_one_shot(vault, monkeypatch):
 
     monkeypatch.setattr(session_start, "_spawn_detached_backfill", boom)
     session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
-    assert ledger.load(vault)["installRunDone"] is False
+    assert not ledger.spawn_lock_path(vault).exists()
 
     session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
     assert len(calls) == 2, "a failed spawn should be retried next session"
-
-
-def test_a_preexisting_done_marker_survives_a_disabled_flag(vault, monkeypatch):
-    """Rollback must not resurrect a run that already happened."""
-    spawned = _recorder(monkeypatch)
-    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
-
-    session_start._maybe_schedule_install_backfill(
-        _cfg(vault, autoOnFirstSession=False), vault, cwd="/repo",
-    )
-    assert ledger.load(vault)["installRunDone"] is True
-    assert len(spawned) == 1
-
-
-def test_ledger_sessions_are_preserved_when_marking(vault, monkeypatch):
-    """The marker is a read-modify-write, not a clobber of the harvest record."""
-    _recorder(monkeypatch)
-    ledger.save(vault, {"schemaVersion": 1, "sessions": {"abc": {"status": "done"}},
-                        "installRunDone": False})
-
-    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
-
-    led = ledger.load(vault)
-    assert led["installRunDone"] is True
-    assert led["sessions"]["abc"]["status"] == "done"
 
 
 # --- the cwd the child actually gets ---------------------------------------
@@ -278,7 +295,7 @@ def test_windows_detaches_with_creationflags(monkeypatch):
 
 def _run_hook(monkeypatch, vault: Path, cwd: Path) -> None:
     payload = {"session_id": "s1", "cwd": str(cwd), "source": "startup"}
-    monkeypatch.setattr("json.load", lambda _f: dict(payload))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(
         "mnemo.core.paths.vault_root", lambda _cfg=None: vault, raising=False
     )
@@ -300,7 +317,7 @@ def test_main_schedules_the_backfill_with_the_payload_cwd(
     _run_hook(monkeypatch, vault, repo)
 
     assert seen and seen[0]["cwd"] == str(repo), "hook must pass the session's cwd"
-    assert ledger.load(vault)["installRunDone"] is True
+    assert ledger.spawn_lock_path(vault).exists()
 
 
 def test_main_only_schedules_it_on_the_first_session(monkeypatch, tmp_path, tmp_home):
@@ -319,14 +336,26 @@ def test_main_only_schedules_it_on_the_first_session(monkeypatch, tmp_path, tmp_
 
 
 def test_main_still_emits_clean_json_on_stdout(monkeypatch, tmp_path, tmp_home, capsys):
-    """The spawn must not put anything on stdout — it carries the injection envelope."""
+    """stdout is the injection envelope's channel and the spawn must not touch it.
+
+    The envelope is forced into existence rather than hoped for — a version of
+    this test that only checked stdout *if* something was written asserted
+    nothing at all, because on a bare vault nothing is.
+    """
     repo = tmp_path / "theproject"
     repo.mkdir()
     vault = tmp_path / "vault"
     monkeypatch.setattr(session_start, "_spawn_detached_backfill", lambda **kw: None)
+    monkeypatch.setattr(
+        session_start, "_build_injection_payload",
+        lambda *a, **k: "mnemo://v1\nlocal: [testing]",
+    )
 
     _run_hook(monkeypatch, vault, repo)
 
     out = capsys.readouterr().out
-    if out.strip():
-        json.loads(out)  # must parse; anything the spawn printed would break it
+    assert out.strip(), "the envelope must be on stdout for this test to mean anything"
+    parsed = json.loads(out)
+    assert parsed["hookSpecificOutput"]["additionalContext"] == (
+        "mnemo://v1\nlocal: [testing]"
+    )

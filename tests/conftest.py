@@ -24,9 +24,7 @@ def _no_real_install_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
     the ones that exercise the real function bind it at import time.
     """
     monkeypatch.setattr(
-        "mnemo.hooks.session_start._spawn_detached_backfill",
-        lambda **_kw: None,
-        raising=False,
+        "mnemo.hooks.session_start._spawn_detached_backfill", lambda **_kw: None
     )
 
 
