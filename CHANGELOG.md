@@ -3,6 +3,25 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] — 2026-08-01
+
+Fixes the 0.17.0 release itself. That tag published to PyPI and npm but
+shipped **no binaries**, so the plugin install it was cut for did not work.
+
+### Fixed
+
+- **The Windows binary job failed on a missing `shasum`.** Neither `shasum`
+  nor `sha256sum` is guaranteed in the Git Bash that GitHub runs
+  `shell: bash` under on Windows. Checksums are now generated with Python,
+  which every one of these jobs already sets up, in a format byte-identical
+  to `shasum -a 256` so `bin/launch` parses it unchanged.
+- **The release published before it built.** `publish-pypi` ran first and
+  unconditionally, so when the Windows job failed, PyPI and npm were already
+  advertising a version whose release had no binaries — a version number,
+  once taken, cannot be reused. Publishing is now gated behind the binary
+  build: the fallible step runs first, the irreversible step second. Tests
+  pin the ordering so it cannot quietly regress.
+
 ## [0.17.0] — 2026-08-01
 
 This is the release that makes the plugin install work: the launcher fetches

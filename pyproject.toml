@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemo-claude"
-version = "0.17.0"
+version = "0.17.1"
 description = "The Obsidian that populates itself so your Claude never forgets."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -16,6 +16,9 @@ dependencies = []  # stdlib only — this is intentional
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    # Only to let the tests read .github/workflows/*.yml. Without it the
+    # release-ordering tests would importorskip themselves into never running.
+    "PyYAML>=6.0",
 ]
 # Only needed to produce the standalone binaries; never a runtime dependency.
 # mnemo itself stays stdlib-only, which is what makes freezing it viable.
