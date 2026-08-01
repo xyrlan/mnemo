@@ -202,6 +202,44 @@ def test_quotes_in_description_do_not_end_the_value(cfg, tmp_path, monkeypatch):
     assert fm["origin"] == "backfill"
 
 
+def test_session_id_with_dashes_round_trips(cfg, tmp_path, monkeypatch):
+    """`originSessionId` comes from the filename stem, not the LLM — pin it anyway."""
+    _stub_llm(monkeypatch, [
+        {"slug": "s", "type": "feedback", "name": "N", "description": "d", "body": "b"},
+    ])
+    t = _write_transcript(tmp_path, mutations=1)
+    weird = t.with_name("sess---1---odd.jsonl")
+    t.rename(weird)
+
+    fm, _ = parse_frontmatter(harvest.harvest_session(weird, "alpha", cfg)[0].read_text("utf-8"))
+
+    assert fm["origin"] == "backfill"
+    assert fm["originSessionId"] == "sess---1---odd"
+
+
+def test_newline_in_session_id_cannot_bury_the_origin_stamp():
+    """Rendered directly: a newline in a *filename* is not portable enough to
+    write to disk (Windows rejects it), but the render must still be safe —
+    `origin: backfill` is the only thing keeping backfill pages out of shared/.
+    """
+    text = harvest._render_memory_file(
+        slug="s",
+        page_type="project",
+        name="N",
+        description="d",
+        body="real body",
+        session_id="sess\n---\ninjected: yes",
+    )
+    fm, body = parse_frontmatter(text)
+
+    assert fm["origin"] == "backfill"
+    assert fm["type"] == "project"
+    assert fm["originSessionId"] == "sess --- injected: yes"
+    assert "injected" not in body
+    assert set(fm) == {"name", "description", "metadata", "node_type", "type",
+                       "originSessionId", "origin"}
+
+
 def test_zero_mutation_session_is_skipped_without_calling_llm(cfg, tmp_path, monkeypatch):
     def explode(*a, **k):
         raise AssertionError("LLM must not be called for a zero-mutation session")

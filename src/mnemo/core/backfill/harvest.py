@@ -59,8 +59,21 @@ def _render_memory_file(
     ``name`` (rendered as an ``# {name}`` heading) and ``body`` both sit after
     the closing ``---``, so neither can perturb the frontmatter — at worst a
     multi-line ``name`` looks untidy. They are written through unmodified.
+
+    ``session_id`` also lands inside the block, but it is *not* LLM-authored:
+    it is ``jsonl_path.stem``, and Claude Code names transcripts with UUIDs. It
+    gets the same whitespace collapse anyway, as defence in depth rather than
+    against a live threat — a stem containing a ``---`` line would bury the
+    ``origin: backfill`` stamp exactly as a description could, and that stamp
+    is the only thing keeping reconstructed pages out of ``shared/``. Reaching
+    it would require planting a hand-named file in ``~/.claude/projects/``,
+    which is not a threat model we defend; one word of collapse is still
+    cheaper than relying on the filename staying well-formed forever. The
+    quote swap is deliberately *not* applied here: the value is unquoted, so
+    a double quote in it is inert.
     """
     safe_desc = " ".join(str(description).split()).replace('"', "'")
+    safe_session_id = " ".join(str(session_id).split())
     return (
         "---\n"
         f"name: {slug}\n"
@@ -68,7 +81,7 @@ def _render_memory_file(
         "metadata:\n"
         "  node_type: memory\n"
         f"  type: {page_type}\n"
-        f"  originSessionId: {session_id}\n"
+        f"  originSessionId: {safe_session_id}\n"
         "  origin: backfill\n"
         "---\n\n"
         f"# {name}\n\n"
