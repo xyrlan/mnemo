@@ -1234,6 +1234,140 @@ git commit -m "feat(backfill): stage backfill-origin pages in _inbox, never auto
 
 ---
 
+## Task 6b: Close the universal-promotion bypass
+
+Task 6's gate is not the only door into `shared/`. **Universal promotion** moves a staged `_inbox` page into the sacred dir with no human review once its merged sources span `scoping.universalThreshold` distinct projects (default 2). Neither entry point consults `origin_backfill`:
+
+- `extract/inbox/apply.py::_is_universal_promotion` — the apply-time branch
+- `extract/__init__.py::_reconcile_universal_promotions` — the end-of-extract reconciler, which runs on *every* extract and rebuilds pages from on-disk `_inbox` files
+
+Reproduced during Task 6: two harvested `origin: backfill` memory files under different agents, one page citing both → the gate correctly routes to `_inbox`, then universal promotion immediately writes `shared/feedback/<slug>.md`.
+
+This matters specifically for backfill. A first sweep harvests many sessions across many projects at once, so cross-project slug collisions are *more* likely than in normal live extraction.
+
+**Why the apply-time predicate alone is not enough.** Fixing only `_is_universal_promotion` leaves the page at `status="inbox"` with cross-project sources, so the reconciler promotes it on the next run anyway. The flag has to survive into the staged file so the reconciler can see it.
+
+**Files:**
+- Modify: `src/mnemo/core/extract/inbox/rendering.py` (`_render_page`)
+- Modify: `src/mnemo/core/extract/inbox/sources.py` (the merge that rebuilds a page)
+- Modify: `src/mnemo/core/extract/inbox/branches/universal_promotion.py` or `apply.py` (`_is_universal_promotion`)
+- Modify: `src/mnemo/core/extract/__init__.py` (`_reconcile_universal_promotions`)
+- Test: `tests/unit/test_extract_backfill_universal_gate.py`
+
+- [ ] **Step 1: Write the failing test**
+
+Start from the reproduction, which is already a working failing test. Create `tests/unit/test_extract_backfill_universal_gate.py`:
+
+```python
+"""A backfill page must not reach shared/ via universal promotion."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from mnemo.core import llm as llm_mod
+from mnemo.core.extract import run_extraction
+
+
+def _resp(pages):
+    return llm_mod.LLMResponse(
+        text=json.dumps({"pages": pages}), total_cost_usd=0.0,
+        input_tokens=1, output_tokens=1, api_key_source="subscription", raw={},
+    )
+
+
+def _vault(tmp_path: Path, *, origin: str | None) -> Path:
+    root = tmp_path / "vault"
+    (root / "shared").mkdir(parents=True)
+    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}))
+    stamp = f"metadata:\n  origin: {origin}\n" if origin else ""
+    for agent in ("alpha", "beta"):
+        d = root / "bots" / agent / "memory"
+        d.mkdir(parents=True)
+        (d / "prefer-pathlib.md").write_text(
+            f"---\nname: Prefer pathlib\ntype: feedback\n{stamp}---\n\nUse pathlib.\n",
+            encoding="utf-8",
+        )
+    return root
+
+
+def _cfg(root: Path) -> dict:
+    return {"vaultRoot": str(root), "extraction": {
+        "model": "m", "chunkSize": 10, "hintThreshold": 5,
+        "preferAPI": False, "subprocessTimeout": 60, "costSoftCap": None}}
+
+
+def _stub(monkeypatch):
+    monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([{
+        "slug": "prefer-pathlib", "type": "feedback", "name": "Prefer pathlib",
+        "description": "d", "body": "Use pathlib.",
+        "source_files": ["bots/alpha/memory/prefer-pathlib.md",
+                         "bots/beta/memory/prefer-pathlib.md"],
+    }]))
+
+
+def test_backfill_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
+    root = _vault(tmp_path, origin="backfill")
+    _stub(monkeypatch)
+    run_extraction(_cfg(root))
+
+    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
+
+
+def test_backfill_page_still_blocked_on_a_second_extract(tmp_path, monkeypatch):
+    """The reconciler runs on every extract — one pass proves nothing."""
+    root = _vault(tmp_path, origin="backfill")
+    _stub(monkeypatch)
+    run_extraction(_cfg(root))
+    run_extraction(_cfg(root))
+
+    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+
+
+def test_live_cross_project_page_still_universally_promotes(tmp_path, monkeypatch):
+    """Control: the gate must not break universal promotion for live memory."""
+    root = _vault(tmp_path, origin=None)
+    _stub(monkeypatch)
+    run_extraction(_cfg(root))
+    run_extraction(_cfg(root))
+
+    assert (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+```
+
+- [ ] **Step 2: Run to verify the first two fail**
+
+Run: `python -m pytest tests/unit/test_extract_backfill_universal_gate.py -v`
+Expected: the two backfill tests FAIL (page found in `shared/feedback/`), the live control test PASSES. If the control test fails, stop — the fixture does not reproduce normal promotion and the whole test is invalid.
+
+- [ ] **Step 3: Carry the flag into the staged file**
+
+In `rendering.py::_render_page`, emit a top-level `origin: backfill` key when `page.origin_backfill` is set. **Top-level, not nested** — `parse_frontmatter` is flat, so a nested block would read back as `""` (the same bug corrected in `32f8a5e`).
+
+- [ ] **Step 4: Preserve the flag when sources merge**
+
+`inbox/sources.py` rebuilds an `ExtractedPage` when merging source lists and copies fields explicitly — it will silently drop `origin_backfill`. Add it to the reconstruction.
+
+- [ ] **Step 5: Teach both promotion paths to respect it**
+
+`_is_universal_promotion` returns False for a backfill-origin page. In `_reconcile_universal_promotions`, the rebuilt page reads `origin_backfill=str(fm.get("origin") or "") == "backfill"` from the staged file's frontmatter, so the reconciler sees what Step 3 wrote.
+
+- [ ] **Step 6: Run the tests**
+
+Run: `python -m pytest tests/unit/test_extract_backfill_universal_gate.py tests/unit/test_extract_inbox_universal_promotion.py tests/unit/test_extract_backfill_gate.py -v`
+Expected: PASS. The existing universal-promotion suite is the guard that live behavior is unchanged.
+
+Then the full suite: `python -m pytest tests/unit -q`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/mnemo/core/extract/ tests/unit/test_extract_backfill_universal_gate.py
+git commit -m "fix(backfill): universal promotion must not bypass the origin gate"
+```
+
+---
+
 ## Task 7: CLI command
 
 **Files:**
