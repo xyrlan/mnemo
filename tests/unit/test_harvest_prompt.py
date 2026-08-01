@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from mnemo.core.extract import prompts
+from mnemo.core.extract.scanner import _VALID_TYPES
 
 
 def test_system_prompt_is_exported_and_nonempty():
@@ -11,7 +12,7 @@ def test_system_prompt_is_exported_and_nonempty():
 
 def test_system_prompt_names_every_valid_type():
     text = prompts.HARVEST_SYSTEM_PROMPT
-    for t in ("feedback", "user", "reference", "project"):
+    for t in _VALID_TYPES:
         assert t in text
 
 
@@ -26,3 +27,22 @@ def test_user_prompt_wraps_the_transcript():
     assert "USER: do the thing" in out
     assert "=== TRANSCRIPT ===" in out
     assert "=== END TRANSCRIPT ===" in out
+
+
+def test_system_prompt_disambiguates_reference_from_project():
+    """reference vs project is the one type pairing with no prior LLM-facing
+    prompt in the tree to inherit calibration from — it needs an explicit
+    disambiguator, not just two separate bullet definitions."""
+    text = prompts.HARVEST_SYSTEM_PROMPT.lower()
+    assert "outside this codebase" in text
+    assert "this codebase itself" in text
+
+
+def test_system_prompt_includes_few_shot_examples():
+    """Type classification (4-way) + durability judgment is a harder joint
+    call than any existing consolidation prompt; it needs calibration
+    examples, including a zero-pages case and a reference/project case."""
+    text = prompts.HARVEST_SYSTEM_PROMPT
+    assert text.count('{"pages":[]}') >= 1
+    assert '"type":"reference"' in text
+    assert '"type":"project"' in text
