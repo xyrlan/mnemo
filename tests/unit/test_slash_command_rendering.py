@@ -56,13 +56,6 @@ def test_multi_word_commands_keep_their_flags(as_frozen):
     assert "!`/usr/local/bin/mnemo uninstall --project`" in body
 
 
-def test_manifest_line_stays_generic_regardless_of_the_build(as_frozen):
-    """Committed plugin.json must not carry a maintainer's local path."""
-    line = settings.slash_command_manifest_line(settings.SLASH_COMMANDS["init-project"])
-
-    assert line == "python3 -m mnemo init --project"
-
-
 def test_rendered_body_keeps_the_ownership_tag_and_frontmatter(as_package):
     body = settings._render_slash_command("doctor", settings.SLASH_COMMANDS["doctor"])
 

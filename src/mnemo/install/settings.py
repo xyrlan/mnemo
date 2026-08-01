@@ -418,11 +418,10 @@ def _do_uninject_statusline(settings_path: Path, vault_root: Path) -> None:
 SLASH_COMMAND_TAG = "<!-- mnemo:slash-command -->"
 
 
-# Each command stores its argv, not a rendered command line, because the two
-# consumers need different renderings: the .md files written at `mnemo init`
-# must point at the mnemo that is actually installed (see
-# _render_slash_command), while the committed plugin manifest must stay
-# generic (see slash_command_manifest_line).
+# Each command stores its argv, not a rendered command line: the .md files
+# written at `mnemo init` must point at the mnemo that is actually installed
+# rather than a bare `python3` that may resolve elsewhere. See
+# _render_slash_command, and PLUGIN_COMMANDS below for the plugin's own set.
 SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "init":              {"description": "first-run setup (global)",
                           "args": ("init",)},
@@ -479,16 +478,6 @@ def render_plugin_command(spec: dict[str, Any]) -> str:
         "\n"
         f'!`"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {args}`\n'
     )
-
-
-def slash_command_manifest_line(spec: dict[str, Any]) -> str:
-    """Render the generic form used by the committed plugin manifest.
-
-    Deliberately *not* resolved against the running interpreter: the manifest
-    is generated on a maintainer's machine and checked in, so baking in a local
-    path would ship that path to every user.
-    """
-    return " ".join(["python3", "-m", "mnemo", *spec["args"]])
 
 
 def _render_slash_command(name: str, spec: dict[str, Any]) -> str:
