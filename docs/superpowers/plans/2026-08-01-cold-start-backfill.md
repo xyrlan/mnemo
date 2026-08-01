@@ -1368,6 +1368,71 @@ git commit -m "fix(backfill): universal promotion must not bypass the origin gat
 
 ---
 
+## Task 6c: Project-type bypass, and the doctor advisory it breaks
+
+Two loose ends found during Task 6b, both blocking a user-visible backfill.
+
+### Part 1 — project-type files never touch the gate
+
+`extract/promote.py` is a separate pipeline: project-type memory files are promoted **1:1 straight into `shared/project/<agent>__<slug>.md`** with no LLM, no clustering, no `_inbox`, and no origin check. Its module docstring says so outright. Reproduced in Task 6b: a harvested file stamped `metadata.origin: backfill` with `type: project` lands unreviewed in `shared/project/` on the next extract.
+
+This is the largest hole of the six, because project-type is the *most* common thing backfill produces — the maintainer's own vault runs 90 project rules against 15 feedback.
+
+**Design decision: stage them in `shared/_inbox/project/`. Do not make harvest refuse to emit `type: project`.** Refusing the type would gut the feature's most valuable category to dodge a routing bug, and every other type already stages. Staging is the consistent answer.
+
+**Files:**
+- Modify: `src/mnemo/core/extract/promote.py` (`_target_path`, `_render_project_page`)
+- Test: `tests/unit/test_extract_promote_backfill.py`
+
+- [ ] **Step 1: Write the failing test**
+
+The `MemoryFile` objects `promote_projects` receives already carry a parsed `.frontmatter` dict, and `origin` sits at the top level of it (flat parser — same rule as everywhere else in this feature).
+
+Test both directions:
+- a project memory file stamped `origin: backfill` lands in `shared/_inbox/project/`, **not** `shared/project/`
+- an unstamped project file still lands in `shared/project/` exactly as today
+- the staged file's own frontmatter carries `origin: backfill` forward, so a later reader can still tell
+
+Model the vault fixture on `tests/unit/test_extract_promote.py`.
+
+- [ ] **Step 2: Verify it fails**
+
+Run: `python -m pytest tests/unit/test_extract_promote_backfill.py -v`
+Expected: the backfill test fails (file found in `shared/project/`); the unstamped control passes. If the control fails, stop — the fixture doesn't reproduce normal promotion.
+
+- [ ] **Step 3: Route on origin**
+
+In `_target_path`, return `vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"` when `file.frontmatter.get("origin") == "backfill"`. Have `_render_project_page` emit a top-level `origin: backfill` line so the staged file stays self-describing.
+
+Check whether `promote_projects`'s state bookkeeping (the `key = f"project/{_project_slug(file)}"` entry and its `status`) needs to distinguish staged from promoted. Report what you conclude rather than guessing.
+
+- [ ] **Step 4: Verify**
+
+Run: `python -m pytest tests/unit/test_extract_promote_backfill.py tests/unit/test_extract_promote.py -v`, then `python -m pytest tests/unit -q`.
+
+### Part 2 — the doctor advisory now cries wolf
+
+`cli/commands/doctor_checks/rules.py::_doctor_check_unpromoted_universal_candidates` warns about `status="inbox"` entries that cross the universal threshold, advising the user to "run `mnemo extract` to reconcile". Its docstring states the assumption directly: *"The reconciler clears the backlog on every extract; if this warning fires, the user is reading doctor between extracts."*
+
+Task 6b makes that assumption false. Backfill pages now sit at `status="inbox"` **permanently and by design**, so the warning fires forever and its advice never works. Advisory-only, no correctness impact — but a permanent false alarm with useless advice trains users to ignore doctor.
+
+- [ ] **Step 5: Separate the two populations**
+
+Backfill-staged entries are not a backlog; they are the feature working. Exclude them from the existing warning and surface them separately as a neutral status line — e.g. `N backfill rules staged in _inbox awaiting review`, with the actual review command rather than `mnemo extract`.
+
+Update the docstring — it currently documents an invariant that no longer holds.
+
+- [ ] **Step 6: Test and commit**
+
+Add a test that a vault whose only threshold-crossing entries are backfill-origin produces **no** backlog warning, and that a genuine live backlog still does.
+
+```bash
+git add src/mnemo/core/extract/promote.py src/mnemo/cli/commands/doctor_checks/rules.py tests/unit/
+git commit -m "fix(backfill): stage project-type pages and stop the doctor false alarm"
+```
+
+---
+
 ## Task 7: CLI command
 
 **Files:**
