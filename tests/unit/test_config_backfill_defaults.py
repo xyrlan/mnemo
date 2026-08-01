@@ -14,7 +14,6 @@ def test_defaults_have_backfill_block():
 
 
 def test_load_config_merges_backfill(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    cfg = load_config()
+    monkeypatch.delenv("MNEMO_CONFIG_PATH", raising=False)
+    cfg = load_config(missing_path=tmp_path / "nope.json")
     assert cfg["backfill"]["installCap"] == 20
