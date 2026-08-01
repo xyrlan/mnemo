@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mnemo.autopilot.selffix._gh import (
-    create_branch,
+    open_issue,
     open_pr,
     push_branch,
 )
@@ -22,32 +22,48 @@ def _make_proc(returncode: int = 0, stdout: str = "42\n") -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# create_branch
+# open_issue
 # ---------------------------------------------------------------------------
 
 
-def test_create_branch_returns_branch_name(tmp_path: Path) -> None:
-    with patch("subprocess.run", return_value=_make_proc(0)) as mock_run:
-        result = create_branch("mnemo/self-fix/doctor-2026-04-30", repo_root=tmp_path)
-    assert result == "mnemo/self-fix/doctor-2026-04-30"
-    assert mock_run.called
+def test_open_issue_parses_the_number_from_the_url(tmp_path: Path) -> None:
+    url = "https://github.com/acme/mnemo/issues/128\n"
+    with patch("subprocess.run", return_value=_make_proc(0, stdout=url)):
+        result = open_issue(
+            title="fix(autopilot): telemetry anomalies",
+            body="report",
+            labels=["mnemo:self-fix"],
+            repo_root=tmp_path,
+        )
+    assert result == 128
 
 
-def test_create_branch_returns_none_when_gh_missing(tmp_path: Path) -> None:
+def test_open_issue_passes_labels(tmp_path: Path) -> None:
+    url = "https://github.com/acme/mnemo/issues/1\n"
+    with patch("subprocess.run", return_value=_make_proc(0, stdout=url)) as mock_run:
+        open_issue(
+            title="t", body="b", labels=["mnemo:self-fix"], repo_root=tmp_path
+        )
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:3] == ["gh", "issue", "create"]
+    assert "--label" in cmd and "mnemo:self-fix" in cmd
+
+
+def test_open_issue_returns_none_when_gh_missing(tmp_path: Path) -> None:
     with patch("subprocess.run", side_effect=FileNotFoundError):
-        result = create_branch("mnemo/self-fix/doctor-2026-04-30", repo_root=tmp_path)
+        result = open_issue(title="t", body="b", labels=[], repo_root=tmp_path)
     assert result is None
 
 
-def test_create_branch_returns_none_on_nonzero(tmp_path: Path) -> None:
-    with patch("subprocess.run", return_value=_make_proc(1)):
-        result = create_branch("mnemo/self-fix/doctor-2026-04-30", repo_root=tmp_path)
+def test_open_issue_returns_none_on_nonzero(tmp_path: Path) -> None:
+    with patch("subprocess.run", return_value=_make_proc(1, stdout="")):
+        result = open_issue(title="t", body="b", labels=[], repo_root=tmp_path)
     assert result is None
 
 
-def test_create_branch_returns_none_on_oserror(tmp_path: Path) -> None:
-    with patch("subprocess.run", side_effect=OSError("no gh")):
-        result = create_branch("mnemo/self-fix/doctor-2026-04-30", repo_root=tmp_path)
+def test_open_issue_returns_none_on_unparseable_output(tmp_path: Path) -> None:
+    with patch("subprocess.run", return_value=_make_proc(0, stdout="created ok\n")):
+        result = open_issue(title="t", body="b", labels=[], repo_root=tmp_path)
     assert result is None
 
 

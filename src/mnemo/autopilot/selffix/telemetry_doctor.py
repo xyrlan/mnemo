@@ -127,13 +127,17 @@ def open_telemetry_fix_pr(
     anomalies: List[TelemetryAnomaly],
     *,
     vault_root: Path,
-    repo_root: Path,
+    repo_root: Optional[Path],
     dry_run: bool = False,
 ) -> Optional[int]:
-    """Open a draft PR explaining the telemetry anomalies.
+    """Open a GitHub **issue** describing the telemetry anomalies.
 
-    Returns the PR number on success, ``None`` otherwise.
-    The PR is always opened as a **draft** — a human must fix the root cause.
+    An anomaly report changes no files, so there is no diff and therefore no
+    pull request to open — a branch cut here would be empty and ``gh pr
+    create`` would refuse it. A human must find and fix the root cause, which
+    is exactly what an issue is for.
+
+    Returns the issue number on success, ``None`` otherwise.
     """
     if not anomalies:
         return None
@@ -144,39 +148,38 @@ def open_telemetry_fix_pr(
         return None
 
     if dry_run:
-        print(f"[autopilot] dry-run: would open telemetry-bug PR for {len(anomalies)} anomaly(ies)")
+        print(
+            f"[autopilot] dry-run: would open telemetry-bug issue "
+            f"for {len(anomalies)} anomaly(ies)"
+        )
         for a in anomalies:
             print(f"  • {a.kind}: {a.detail}")
         return None
 
-    date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    branch = f"mnemo/self-fix/telemetry-{date_tag}"
-    if _gh.create_branch(branch, repo_root=repo_root) is None:
-        print("[autopilot] telemetry PR skipped: could not create branch")
+    if repo_root is None:
+        print("[autopilot] telemetry issue skipped: vault is not a git repo")
         return None
 
-    _gh.push_branch(branch, repo_root=repo_root)
+    date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     body_lines = [
         "## Telemetry anomalies detected\n",
         f"Detected {len(anomalies)} telemetry anomaly(ies). "
-        "This PR is a **draft** — a human must investigate and fix the root cause.\n",
+        "Filed by the autopilot — a human must investigate and fix the root cause.\n",
     ]
     for a in anomalies:
         body_lines.append(f"### `{a.kind}` ({a.affected_count} affected entries)")
         body_lines.append(f"{a.detail}\n")
     body = "\n".join(body_lines)
 
-    pr_number = _gh.open_pr(
-        branch=branch,
+    issue_number = _gh.open_issue(
         title=f"fix(autopilot): telemetry anomalies {date_tag}",
         body=body,
         labels=[SELF_FIX_LABEL],
-        draft=True,
         repo_root=repo_root,
     )
-    if pr_number is not None:
+    if issue_number is not None:
         pr_budget.record_opened(
-            vault_root=vault_root, category="telemetry_bug", pr_number=pr_number
+            vault_root=vault_root, category="telemetry_bug", pr_number=issue_number
         )
-        print(f"[autopilot] opened telemetry-bug PR #{pr_number}")
-    return pr_number
+        print(f"[autopilot] opened telemetry-bug issue #{issue_number}")
+    return issue_number

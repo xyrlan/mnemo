@@ -212,7 +212,11 @@ def test_open_dead_rule_pr_opens_pr_on_success(tmp_path: Path) -> None:
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
                     "last_changed_at": None, "last_changed_by": None})
     )
-    with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_branch", return_value="b"), \
+    with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_worktree",
+               return_value=tmp_path / "wt"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.mirror_paths"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.commit_all", return_value=True), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.remove_worktree"), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.push_branch", return_value=True), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.open_pr", return_value=55), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep.pr_budget.record_opened") as mock_rec, \
@@ -251,7 +255,11 @@ def test_open_dead_rule_pr_caps_at_max(tmp_path: Path) -> None:
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
                     "last_changed_at": None, "last_changed_by": None})
     )
-    with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_branch", return_value="b"), \
+    with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_worktree",
+               return_value=tmp_path / "wt"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.mirror_paths"), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.commit_all", return_value=True), \
+         patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.remove_worktree"), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.push_branch", return_value=True), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.open_pr", return_value=99), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep.pr_budget.record_opened"), \

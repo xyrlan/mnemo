@@ -219,10 +219,14 @@ def open_dead_rule_pr(
     rules: List[DeadRule],
     *,
     vault_root: Path,
-    repo_root: Path,
+    repo_root: Optional[Path],
     dry_run: bool = False,
 ) -> Optional[int]:
     """Archive *rules* and open a self-fix PR.
+
+    Rules are archived in the live vault either way; *repo_root* only controls
+    whether the move can also become a PR. Pass ``None`` when the vault is not
+    under version control.
 
     Returns the PR number on success, ``None`` otherwise.
     """
@@ -241,14 +245,17 @@ def open_dead_rule_pr(
         print(f"[autopilot] dead-rule sweep skipped: {reason}")
         return None
 
-    # Archive rules
+    # Archive rules. Both ends of the move are recorded: the commit has to
+    # carry the deletion of the old path, not just the new copy.
     archived: List[Path] = []
+    moved: List[Path] = []
     for r in rules:
         if not r.rule_path.exists():
             continue
         try:
             dest = archive_rule(r.rule_path, vault_root=vault_root)
             archived.append(dest)
+            moved += [r.rule_path, dest]
         except Exception as exc:
             print(f"[autopilot] failed to archive {r.rule_path.name}: {exc}")
 
@@ -257,7 +264,9 @@ def open_dead_rule_pr(
 
     # Perimeter guard
     try:
-        assert_perimeter(archived, repo_root=repo_root, vault_root=vault_root)
+        assert_perimeter(
+            archived, repo_root=repo_root or vault_root, vault_root=vault_root
+        )
     except Exception as exc:
         print(f"[autopilot] perimeter violation, aborting sweep PR: {exc}")
         return None
@@ -268,33 +277,55 @@ def open_dead_rule_pr(
             print(f"  • {p}")
         return None
 
+    if repo_root is None:
+        print(
+            f"[autopilot] archived {len(archived)} rule(s); "
+            "vault is not a git repo, no PR opened"
+        )
+        return None
+
     date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     branch = f"mnemo/self-fix/sweep-{date_tag}"
-    if _gh.create_branch(branch, repo_root=repo_root) is None:
-        print("[autopilot] sweep skipped: could not create branch")
+    title = f"fix(autopilot): dead-rule sweep {date_tag}"
+
+    worktree = _gh.create_worktree(branch, repo_root=repo_root)
+    if worktree is None:
+        print("[autopilot] sweep skipped: could not create worktree")
         return None
 
-    if not _run_pytest(repo_root=repo_root):
-        print("[autopilot] sweep aborted: pytest failed after archiving rules")
-        return None
+    try:
+        _gh.mirror_paths(moved, source_root=repo_root, worktree=worktree)
+        if not _gh.commit_all(title, worktree=worktree):
+            print("[autopilot] sweep skipped: nothing to commit")
+            return None
 
-    _gh.push_branch(branch, repo_root=repo_root)
-    body_lines = [
-        f"Archiving {len(rules)} rule(s) with no usage signal in "
-        f"{DEFAULT_DEAD_WINDOW_DAYS} days:\n"
-    ]
-    for r in rules:
-        body_lines.append(f"- `{r.slug}` (last seen: >{r.last_seen_days}d ago)")
-    body = "\n".join(body_lines)
+        if not _run_pytest(repo_root=worktree):
+            print("[autopilot] sweep aborted: pytest failed after archiving rules")
+            return None
 
-    pr_number = _gh.open_pr(
-        branch=branch,
-        title=f"fix(autopilot): dead-rule sweep {date_tag}",
-        body=body,
-        labels=[SELF_FIX_LABEL],
-        draft=True,
-        repo_root=repo_root,
-    )
+        if not _gh.push_branch(branch, repo_root=worktree):
+            print("[autopilot] sweep aborted: could not push branch")
+            return None
+
+        body_lines = [
+            f"Archiving {len(rules)} rule(s) with no usage signal in "
+            f"{DEFAULT_DEAD_WINDOW_DAYS} days:\n"
+        ]
+        for r in rules:
+            body_lines.append(f"- `{r.slug}` (last seen: >{r.last_seen_days}d ago)")
+        body = "\n".join(body_lines)
+
+        pr_number = _gh.open_pr(
+            branch=branch,
+            title=title,
+            body=body,
+            labels=[SELF_FIX_LABEL],
+            draft=True,
+            repo_root=worktree,
+        )
+    finally:
+        _gh.remove_worktree(worktree, repo_root=repo_root)
+
     if pr_number is not None:
         pr_budget.record_opened(
             vault_root=vault_root, category="dead_rule_sweep", pr_number=pr_number

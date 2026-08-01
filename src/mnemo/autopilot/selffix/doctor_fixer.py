@@ -331,13 +331,19 @@ def open_doctor_fix_pr(
     warnings: List[DoctorWarning],
     *,
     vault_root: Path,
-    repo_root: Path,
+    repo_root: Optional[Path],
     dry_run: bool = False,
 ) -> Optional[int]:
     """Apply *warnings* and open a self-fix PR.
 
+    The cures are applied to the live vault either way; *repo_root* only
+    controls whether they can also become a PR. Pass ``None`` when the vault
+    is not under version control — the vault is still healed, silently
+    skipping the PR is the only sane alternative to branching a repo that
+    does not contain the edited files.
+
     Returns the PR number on success, ``None`` when skipped (dry-run, budget
-    exhausted, gh unavailable, or pytest fails).
+    exhausted, no repo, gh unavailable, empty diff, or pytest fails).
     """
     if not warnings:
         return None
@@ -361,7 +367,9 @@ def open_doctor_fix_pr(
 
     # Perimeter guard — abort if any modified file is outside the safe set
     try:
-        assert_perimeter(modified, repo_root=repo_root, vault_root=vault_root)
+        assert_perimeter(
+            modified, repo_root=repo_root or vault_root, vault_root=vault_root
+        )
     except Exception as exc:
         print(f"[autopilot] perimeter violation, aborting PR: {exc}")
         return None
@@ -372,33 +380,54 @@ def open_doctor_fix_pr(
             print(f"  • {p}")
         return None
 
-    # Branch
+    if repo_root is None:
+        print(
+            f"[autopilot] doctor fix applied to {len(modified)} file(s); "
+            "vault is not a git repo, no PR opened"
+        )
+        return None
+
     date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     branch = f"mnemo/self-fix/doctor-{date_tag}"
-    if _gh.create_branch(branch, repo_root=repo_root) is None:
-        print("[autopilot] doctor fix skipped: could not create branch")
+    title = f"fix(autopilot): doctor self-fix {date_tag}"
+
+    # Everything below happens in a throwaway worktree — the live checkout,
+    # its HEAD and its index are never touched.
+    worktree = _gh.create_worktree(branch, repo_root=repo_root)
+    if worktree is None:
+        print("[autopilot] doctor fix skipped: could not create worktree")
         return None
 
-    # Run pytest before pushing
-    if not _run_pytest(repo_root=repo_root):
-        print("[autopilot] doctor fix aborted: pytest failed after applying fixes")
-        return None
+    try:
+        _gh.mirror_paths(modified, source_root=repo_root, worktree=worktree)
+        if not _gh.commit_all(title, worktree=worktree):
+            print("[autopilot] doctor fix skipped: nothing to commit")
+            return None
 
-    # Push + open PR
-    _gh.push_branch(branch, repo_root=repo_root)
-    body_lines = [f"Automated self-fix for {len(warnings)} doctor warning(s):\n"]
-    for w in warnings:
-        body_lines.append(f"- `{w.rule_path.name}`: {w.kind} ({w.detail})")
-    body = "\n".join(body_lines)
+        if not _run_pytest(repo_root=worktree):
+            print("[autopilot] doctor fix aborted: pytest failed after applying fixes")
+            return None
 
-    pr_number = _gh.open_pr(
-        branch=branch,
-        title=f"fix(autopilot): doctor self-fix {date_tag}",
-        body=body,
-        labels=[SELF_FIX_LABEL],
-        draft=True,
-        repo_root=repo_root,
-    )
+        if not _gh.push_branch(branch, repo_root=worktree):
+            print("[autopilot] doctor fix aborted: could not push branch")
+            return None
+
+        body_lines = [f"Automated self-fix for {len(warnings)} doctor warning(s):\n"]
+        for w in warnings:
+            body_lines.append(f"- `{w.rule_path.name}`: {w.kind} ({w.detail})")
+        body = "\n".join(body_lines)
+
+        pr_number = _gh.open_pr(
+            branch=branch,
+            title=title,
+            body=body,
+            labels=[SELF_FIX_LABEL],
+            draft=True,
+            repo_root=worktree,
+        )
+    finally:
+        _gh.remove_worktree(worktree, repo_root=repo_root)
+
     if pr_number is not None:
         pr_budget.record_opened(
             vault_root=vault_root, category="doctor_self_fix", pr_number=pr_number
