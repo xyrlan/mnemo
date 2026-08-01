@@ -44,19 +44,29 @@ def is_consumer_visible(
 ) -> bool:
     """Return True if the page should appear in consumer surfaces.
 
-    Three conditions, short-circuited in order:
+    Two conditions, short-circuited in order:
     1. Path filter — anything under ``shared/_inbox/`` is draft.
-    2. ``needs-review`` tag — explicit user-reviewable marker.
-    3. ``stability: evolving`` — decision still in flux.
+    2. ``stability: evolving`` — decision still in flux.
+
+    **Location is the authority on draft-ness, not the ``needs-review`` tag.**
+    Until v0.18 this predicate also hid any page carrying ``needs-review``.
+    That condition was redundant with (1) and actively wrong: the writer
+    (``extract/inbox/rendering._render_page``) stamps ``needs-review`` on
+    exactly the pages it routes to ``shared/_inbox/<type>/``, and stamps
+    ``auto-promoted`` on the ones it routes to ``shared/<type>/``. Promotion
+    is a manual ``mv`` — there is no promote command and no hook that strips
+    the tag — so a ``needs-review`` page sitting in ``shared/<type>/`` can only
+    mean *a human reviewed it and moved it there*. Hiding it made the entire
+    manual-review path a silent no-op.
+
+    ``needs-review`` is still a MANAGED_TAG: ``topic_tags`` strips it so it
+    never leaks into topic vocabularies.
     """
     try:
         rel = page_path.relative_to(vault_root / "shared")
     except ValueError:
         return False
     if rel.parts and rel.parts[0] == "_inbox":
-        return False
-    tags = frontmatter.get("tags") or []
-    if "needs-review" in tags:
         return False
     if (frontmatter.get("stability") or "stable") == "evolving":
         return False

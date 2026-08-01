@@ -55,11 +55,29 @@ def test_project_inbox_also_excluded(tmp_path: Path) -> None:
     assert is_consumer_visible(page, {"stability": "stable"}, vault) is False
 
 
-def test_needs_review_tag_is_excluded(tmp_path: Path) -> None:
+def test_needs_review_page_in_inbox_is_excluded(tmp_path: Path) -> None:
+    """Condition 1 (location) does all the work for genuine drafts.
+
+    The writer stamps ``needs-review`` on exactly the pages it routes to
+    ``shared/_inbox/<type>/``, so this is the shape drafts really have.
+    """
     vault = tmp_path
-    page = vault / "shared" / "feedback" / "draft.md"
+    page = vault / "shared" / "_inbox" / "feedback" / "draft.md"
     fm = {"tags": ["needs-review", "auth"], "stability": "stable"}
     assert is_consumer_visible(page, fm, vault) is False
+
+
+def test_needs_review_page_promoted_to_shared_is_visible(tmp_path: Path) -> None:
+    """Regression (v0.18): a hand-promoted page MUST become visible.
+
+    Promotion is a manual ``mv`` — nothing strips the tag — so a
+    ``needs-review`` page under ``shared/<type>/`` means a human reviewed it
+    and moved it there. Hiding it made the whole manual-review path a no-op.
+    """
+    vault = tmp_path
+    page = vault / "shared" / "feedback" / "reviewed.md"
+    fm = {"tags": ["needs-review", "auth"], "stability": "stable"}
+    assert is_consumer_visible(page, fm, vault) is True
 
 
 def test_evolving_stability_is_excluded(tmp_path: Path) -> None:
@@ -67,6 +85,20 @@ def test_evolving_stability_is_excluded(tmp_path: Path) -> None:
     page = vault / "shared" / "feedback" / "draft.md"
     fm = {"tags": ["auto-promoted"], "stability": "evolving"}
     assert is_consumer_visible(page, fm, vault) is False
+
+
+def test_evolving_stability_is_excluded_even_when_hand_promoted(tmp_path: Path) -> None:
+    """Condition 2 survives the needs-review removal as an independent filter.
+
+    Both locations, both tag shapes: ``evolving`` alone must hide the page.
+    """
+    vault = tmp_path
+    for page in (
+        vault / "shared" / "feedback" / "in-flux.md",
+        vault / "shared" / "_inbox" / "feedback" / "in-flux.md",
+    ):
+        fm = {"tags": ["needs-review", "auth"], "stability": "evolving"}
+        assert is_consumer_visible(page, fm, vault) is False
 
 
 def test_stable_auto_promoted_page_is_visible(tmp_path: Path) -> None:

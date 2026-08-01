@@ -6,7 +6,16 @@ to ``shared/_archive/``.
 Heuristics for "dead":
 - 0 hits in ``mcp-access-log.jsonl`` over ``days``
 - 0 entries in ``reflex-log.jsonl`` (``emitted`` arrays) over ``days``
-- Created at least ``days`` ago
+- Known to have been created at least ``days`` ago
+
+The age check fails **closed**. It used to read a ``created_at:`` frontmatter
+field that no writer in this codebase has ever emitted, so it parsed to
+``None`` for every real page and the guard — written as
+``if created is not None and created > cutoff`` — never fired. Every rule with
+no usage signal was archived regardless of age, including rules minutes old.
+Age is now derived from fields that pages actually carry (see
+:data:`_AGE_FIELDS`) with an mtime fallback, and a page whose age cannot be
+established is never archived.
 """
 from __future__ import annotations
 
@@ -60,7 +69,69 @@ def _parse_ts(ts_str: str) -> Optional[datetime]:
             return datetime.strptime(ts_str, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-    return None
+    # Page frontmatter carries the extraction ``run_id``, which is
+    # ``datetime.now().isoformat(timespec="seconds")`` — naive *local* time
+    # with no ``Z`` (e.g. ``2026-08-01T20:31:45``). None of the formats above
+    # match it. Interpret naive values in the local zone, which is where they
+    # were produced; assuming UTC would age them by the UTC offset and push
+    # them toward the archive.
+    try:
+        parsed = datetime.fromisoformat(ts_str)
+    except ValueError:
+        return None
+    return parsed.astimezone() if parsed.tzinfo is None else parsed
+
+
+#: Frontmatter fields consulted to establish a page's age, best first.
+#:
+#: ``created_at`` is a true creation stamp and wins if it is ever present (no
+#: writer emits it today — see module docstring). ``promoted_at`` /
+#: ``extracted_at`` / ``extraction_run`` record the run that last *wrote* the
+#: page, so they are refreshed by re-extraction and therefore an upper bound
+#: on age: a page can look younger than it is, never older. That is the
+#: direction a preservation guard must err in.
+_AGE_FIELDS = ("created_at", "promoted_at", "extracted_at", "extraction_run")
+
+
+def _frontmatter_lines(text: str) -> List[str]:
+    """Return the lines of the leading ``---`` frontmatter block, if any.
+
+    Scanning the whole file would let a body line that happens to start with
+    ``extracted_at:`` decide the page's age — and a stale date in prose is
+    exactly the input that would get a live rule archived.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    out: List[str] = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return out
+        out.append(line)
+    return []  # unterminated frontmatter — treat as absent
+
+
+def _rule_age_date(md_path: Path, text: str) -> Optional[datetime]:
+    """Best estimate of when *md_path* came into existence.
+
+    Tries the frontmatter fields in :data:`_AGE_FIELDS` order, then falls back
+    to filesystem mtime. Returns ``None`` only when age cannot be established
+    at all — in which case the caller must **not** archive.
+    """
+    fm = _frontmatter_lines(text)
+    for field in _AGE_FIELDS:
+        prefix = f"{field}:"
+        for line in fm:
+            if line.startswith(prefix):
+                parsed = _parse_ts(line.split(":", 1)[1].strip())
+                if parsed is not None:
+                    return parsed
+                break  # field present but unparseable — try the next field
+    # Filesystem fallback. Also refreshed by writes, so it too errs young.
+    try:
+        return datetime.fromtimestamp(md_path.stat().st_mtime, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def _active_slugs_from_access_log(vault_root: Path, cutoff: datetime) -> Set[str]:
@@ -116,15 +187,6 @@ def _active_slugs_from_reflex_log(vault_root: Path, cutoff: datetime) -> Set[str
     return active
 
 
-def _rule_created_at(text: str) -> Optional[datetime]:
-    """Parse ``created_at:`` from frontmatter."""
-    for line in text.splitlines():
-        if line.startswith("created_at:"):
-            val = line.split(":", 1)[1].strip()
-            return _parse_ts(val)
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -158,10 +220,12 @@ def detect_dead_rules(
                 text = md_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            # Must be old enough to be considered dead
-            created = _rule_created_at(text)
-            if created is not None and created > cutoff:
-                continue  # too recent — skip
+            # Must be old enough to be considered dead. The guard fails
+            # CLOSED: a page whose age cannot be established is preserved.
+            # Silence about age is not evidence of death.
+            created = _rule_age_date(md_path, text)
+            if created is None or created > cutoff:
+                continue  # unknown age, or too recent — skip
             dead.append(DeadRule(rule_path=md_path, slug=slug, last_seen_days=days))
 
     return dead

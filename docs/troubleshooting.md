@@ -148,6 +148,33 @@ signal than that.
 
 To stop producing more: `"backfill": { "enabled": false }`.
 
+## After upgrading to v0.18, rules I promoted months ago suddenly went live
+
+They did, and they should have been live all along.
+
+Promoting a staged page is a plain `mv` into `shared/<type>/`. Nothing rewrites
+its frontmatter, so it keeps the `needs-review` tag it was written with — and
+until v0.18 the visibility filter treated that tag as "still a draft" and hid
+the page from injection, the MCP tools and the HOME dashboard. Every page you
+reviewed and moved by hand was silently doing nothing.
+
+v0.18 makes **location** the only authority on draft-ness: under
+`shared/_inbox/` it's a draft, under `shared/<type>/` it's live. So the first
+session after upgrading rebuilds the index and your hand-promoted rules start
+injecting.
+
+If some of them shouldn't be live, you have two ways out:
+
+```bash
+mv ~/mnemo/shared/feedback/x.md ~/mnemo/shared/_inbox/feedback/x.md   # back to draft
+rm ~/mnemo/shared/feedback/x.md                                       # or just delete it
+```
+
+To hide a rule without moving it, set `stability: evolving` in its frontmatter
+— that filter is unchanged and still hides a page wherever it lives.
+
+To see what is actually live right now, run `/mnemo:doctor`.
+
 ## Backfill's cost estimate looks wrong
 
 It's a rough figure, and only for input. It's measured on the flattened text

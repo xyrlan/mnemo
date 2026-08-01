@@ -235,6 +235,13 @@ $0 on a Claude subscription.
   editorial call) land in `shared/_inbox/<type>/<slug>.md` tagged
   `needs-review`. Review before promoting.
 
+**Promoting is a plain move.** `mv shared/_inbox/feedback/x.md
+shared/feedback/x.md` and you're done — the rule goes live at your next
+session, when the activation index is rebuilt. Leave the `needs-review` tag
+alone if you like; **location** is what decides whether a rule is a draft, not
+the tag. (Before v0.18 the tag also hid the page, which quietly made promotion
+a no-op. See [troubleshooting.md](troubleshooting.md).)
+
 **Your edits win.** If you edit an auto-promoted page and its source later
 changes, the new output is written as `shared/_inbox/<type>/<slug>.proposed.md`
 rather than overwriting your file.

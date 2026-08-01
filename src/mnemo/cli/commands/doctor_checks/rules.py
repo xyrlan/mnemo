@@ -21,8 +21,8 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
       - every source path resolves under the vault
       - body (text after frontmatter) >= _MIN_BODY_CHARS
     Files that the shared filter marks as non-canonical (drafts in
-    ``shared/_inbox/``, ``needs-review``-tagged, ``stability: evolving``) are
-    excluded to avoid noise on transient extraction artefacts.
+    ``shared/_inbox/``, ``stability: evolving``) are excluded to avoid noise
+    on transient extraction artefacts.
     """
     from mnemo.core.filters import is_consumer_visible, parse_frontmatter
     from mnemo.core.mcp.tools import _RETRIEVAL_TYPES, _extract_body
@@ -53,7 +53,7 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
                 continue
 
             if not is_consumer_visible(md_path, fm, vault):
-                continue  # draft / needs-review / evolving — skip integrity
+                continue  # draft / evolving — skip integrity
 
             rel = f"{page_type}/{md_path.name}"
             if not fm.get("type"):
@@ -282,5 +282,9 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
         print(
             "    (read each one; move keepers to shared/<same type>/, "
             "e.g. shared/_inbox/project/ → shared/project/, and delete the rest)"
+        )
+        print(
+            "    (a plain mv is enough — leave the needs-review tag; the move "
+            "is what makes it live, from your next session on)"
         )
     return True

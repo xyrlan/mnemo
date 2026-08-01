@@ -87,14 +87,15 @@ def test_list_rules_by_topic_filters_inbox_drafts(tmp_vault):
     assert list_rules_by_topic(tmp_vault, "git") == []
 
 
-def test_list_rules_by_topic_filters_needs_review_tag(tmp_vault):
-    # Page lives in shared/<type>/ but is tagged needs-review (manual override).
+def test_list_rules_by_topic_surfaces_hand_promoted_needs_review_page(tmp_vault):
+    """Regression (v0.18): the page lives in shared/<type>/, so a human put it
+    there. The stale ``needs-review`` tag must not hide it from MCP consumers."""
     _write_page(
         tmp_vault, "feedback", "marked-draft",
         tags=["needs-review", "git"],
         sources=["bots/a/m.md"],
     )
-    assert list_rules_by_topic(tmp_vault, "git") == []
+    assert [r["slug"] for r in list_rules_by_topic(tmp_vault, "git")] == ["marked-draft"]
 
 
 def test_list_rules_by_topic_filters_evolving_stability(tmp_vault):
@@ -201,13 +202,27 @@ def test_read_mnemo_rule_returns_none_for_evolving_page(tmp_vault):
     assert read_mnemo_rule(tmp_vault, "in-flux") is None
 
 
-def test_read_mnemo_rule_returns_none_for_needs_review_page(tmp_vault):
+def test_read_mnemo_rule_returns_hand_promoted_needs_review_page(tmp_vault):
+    """Regression (v0.18): promoted by ``mv``, so it is readable."""
     _write_page(
         tmp_vault, "feedback", "marked-draft",
         tags=["needs-review", "git"],
         sources=["bots/a/m.md"],
     )
-    assert read_mnemo_rule(tmp_vault, "marked-draft") is None
+    rule = read_mnemo_rule(tmp_vault, "marked-draft")
+    assert rule is not None
+    assert rule["tags"] == ["git"]
+
+
+def test_read_mnemo_rule_returns_none_for_needs_review_page_in_inbox(tmp_vault):
+    """Location, not the tag, is what keeps a staged draft unreadable."""
+    _write_page(
+        tmp_vault, "feedback", "staged-draft",
+        tags=["needs-review", "git"],
+        sources=["bots/a/m.md"],
+        inbox=True,
+    )
+    assert read_mnemo_rule(tmp_vault, "staged-draft") is None
 
 
 def test_read_mnemo_rule_skips_project_type(tmp_vault):

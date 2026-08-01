@@ -38,6 +38,47 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `backfill.minFileMutations`, `backfill.autoOnFirstSession`. See
   [docs/configuration.md](docs/configuration.md).
 
+### Fixed
+
+- **The dead-rule sweep archived every rule, at any age.** Autopilot's sweep
+  archives rules with no usage signal in the last 180 days, behind an age guard
+  meant to protect new rules. The guard read a `created_at:` frontmatter field
+  that no writer in mnemo has ever emitted — pages carry `extracted_at:` /
+  `promoted_at:` / `extraction_run:` instead — so it parsed to "unknown age"
+  for every page ever written, and it was coded to archive on unknown
+  (`if created is not None and created > cutoff`). It failed open where it had
+  to fail closed. A rule created minutes ago was swept as dead.
+
+  The damage compounded with the promotion bug above: rules that couldn't
+  inject couldn't earn a usage signal, so they looked dead and were swept. The
+  categories that inject least were wiped fastest. On the maintainer's vault
+  that read 942 archived against 113 live, `feedback` fell 15 → 2 in a single
+  session, and 7 hand-promoted rules were archived within hours of promotion.
+
+  Age is now taken from fields pages actually carry — `created_at`,
+  `promoted_at`, `extracted_at`, `extraction_run`, then filesystem mtime — and
+  a page whose age cannot be established is **never** archived. Nothing was
+  deleted: archived rules are in `shared/_archive/` and can be moved back. `mnemo doctor` and the
+  docs both tell you to review a staged page and move it into
+  `shared/<type>/`. Promotion is a plain `mv` — there is no promote command,
+  and nothing rewrites the frontmatter — so the page kept the `needs-review`
+  tag it was written with. The visibility filter read that tag as "still a
+  draft" and hid the page from injection, the MCP tools, the reflex index and
+  the HOME dashboard. Every keeper anyone ever promoted by hand was silently
+  doing nothing; on the maintainer's own vault that was 7 rules.
+
+  **Location is now the only authority on draft-ness**: under
+  `shared/_inbox/` it is a draft, under `shared/<type>/` it is live. The tag
+  is left as a harmless marker (`topic_tags` still strips it, so it never
+  shows up as a topic). `stability: evolving` is unchanged and still hides a
+  page wherever it lives.
+
+  ⚠ **Behaviour change for existing vaults.** Rules you promoted months ago
+  and assumed were live will now actually become live, on the first session
+  after upgrading. If some of them shouldn't be, move them back under
+  `shared/_inbox/<type>/` or delete them — see
+  [docs/troubleshooting.md](docs/troubleshooting.md).
+
 ### Removed
 
 - **`extraction.preferAPI`**, a documented config key that nothing has ever
