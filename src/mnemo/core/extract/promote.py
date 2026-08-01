@@ -17,7 +17,12 @@ from mnemo.core.backfill.origin import (
 )
 from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
-from mnemo.core.extract.scanner import ExtractionState, MemoryFile, StateEntry
+from mnemo.core.extract.scanner import (
+    SACRED_STATUSES,
+    ExtractionState,
+    MemoryFile,
+    StateEntry,
+)
 from mnemo.core.extract.source_paths import vault_relative_source
 
 
@@ -118,8 +123,20 @@ def promote_projects(
         key = f"project/{_project_slug(file)}"
         entry = state.entries.get(key)
         backfill = _sticky_backfill(file, entry, vault_root)
-        if backfill and entry is not None:
-            # Make it stick before any branch below can return early.
+        if (
+            backfill
+            and entry is not None
+            and entry.status not in SACRED_STATUSES
+        ):
+            # Make it stick before any branch below can return early — but
+            # never for a page that already lives in shared/project/. There is
+            # no staged page to protect there, and a permanent stamp on such an
+            # entry is worse here than in the cluster pipeline: every later run
+            # routes to an _inbox target that does not exist and falls through
+            # to status="dismissed", so the page is dropped with no _inbox
+            # copy, no .proposed.md, and a stale file left in the sacred dir
+            # (Task 9b review). Same guard as
+            # ``inbox/apply._stamp_entry_origin``.
             entry.origin_backfill = True
         target = _target_path(vault_root, file, backfill)
         # "direct" means "lives in shared/<type>/". A staged page does not, so

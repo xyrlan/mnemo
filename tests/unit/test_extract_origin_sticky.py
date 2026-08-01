@@ -421,9 +421,69 @@ def test_resolver_never_clears_a_flag_the_page_already_carries(tmp_path):
 
 
 def test_is_backfill_markdown_on_a_missing_file(tmp_path):
+    """Missing → False. The dangerous direction to get wrong.
+
+    Answering True for a file that is not there would stage every live page
+    forever — the reverse of the leak, but just as broken.
+    """
     from mnemo.core.backfill.origin import is_backfill_markdown
 
     assert is_backfill_markdown(tmp_path / "nope.md") is False
+
+
+def test_is_backfill_markdown_on_an_unreadable_path(tmp_path):
+    """Present but unreadable → True. The safe direction.
+
+    A directory stands in for the family (permissions, a dangling symlink
+    target): reading one raises ``IsADirectoryError`` on POSIX and
+    ``PermissionError`` on Windows, both ``OSError``. The stamp may be in
+    there, and both callers read True as "leave it alone".
+    """
+    from mnemo.core.backfill.origin import is_backfill_markdown
+
+    unreadable = tmp_path / "a-directory.md"
+    unreadable.mkdir()
+    assert is_backfill_markdown(unreadable) is True
+
+
+def test_is_backfill_markdown_survives_undecodable_bytes(tmp_path):
+    """Undecodable is not unreadable — decode with replacement and answer.
+
+    ``UnicodeDecodeError`` subclasses ``ValueError``, so an ``OSError`` catch
+    lets it straight through.
+    """
+    from mnemo.core.backfill.origin import is_backfill_markdown
+
+    stamped = tmp_path / "stamped.md"
+    stamped.write_bytes(
+        b"---\nname: n\ntype: feedback\norigin: backfill\n---\n\nbody \xff\xfe\n"
+    )
+    assert is_backfill_markdown(stamped) is True
+
+    plain = tmp_path / "plain.md"
+    plain.write_bytes(b"---\nname: n\ntype: feedback\n---\n\nbody \xff\xfe\n")
+    assert is_backfill_markdown(plain) is False
+
+
+def test_force_survives_an_undecodable_inbox_file(tmp_path, monkeypatch):
+    """``--force`` calls the predicate on every staged file, outside any try.
+
+    ``shared/_inbox/`` is a directory users are invited to edit by hand, so one
+    stray byte used to abort the entire extract with a traceback out of
+    ``run_extraction``.
+    """
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "prefer-pathlib", origin="backfill")
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
+    run_extraction(_cfg(root))
+
+    junk = root / "shared" / "_inbox" / "feedback" / "hand-edited.md"
+    junk.write_bytes(b"---\nname: n\ntype: feedback\n---\n\noops \xff\n")
+
+    run_extraction(_cfg(root), force=True)  # must not raise
+
+    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
+    assert not junk.exists(), "an unstamped hand-edited file is still a wipe target"
 
 
 def test_is_backfill_markdown_accepts_the_nested_spelling(tmp_path):
@@ -521,6 +581,46 @@ def test_a_project_page_survives_losing_both_its_stamps(tmp_path, monkeypatch):
 
     assert not (root / "shared" / "project" / "alpha__layout.md").exists()
     assert staged.exists()
+
+
+def test_a_stamp_on_a_direct_project_source_does_not_strand_the_page(
+    tmp_path, monkeypatch,
+):
+    """The ``promote.py`` half of the sacred-status guard.
+
+    A live project page lives in ``shared/project/`` at status ``direct``. If
+    its source memory file later acquires a stamp — a hand edit, or some
+    future rewriter — an unguarded stamp made the entry permanently
+    backfill-origin. Every subsequent run then routes to an ``_inbox`` target
+    that does not exist and falls through to ``status="dismissed"``, so the
+    page is silently dropped: no ``_inbox`` copy, no ``.proposed.md``, and a
+    stale file left in the sacred dir. Worse than the cluster case, which at
+    least leaves a review artifact.
+
+    The recovery that matters: once the stamp goes away again, the page must
+    come back.
+    """
+    root = _vault(tmp_path)
+    monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
+    _memory(root, "alpha", "layout", type_="project", origin=None, body="v1")
+    run_extraction(_cfg(root))
+
+    sacred = root / "shared" / "project" / "alpha__layout.md"
+    assert sacred.exists(), "precondition: the live page promoted directly"
+    assert _state(root)["entries"]["project/alpha__layout"]["status"] == "direct"
+
+    # The source acquires a stamp it has no business having.
+    _memory(root, "alpha", "layout", type_="project", origin="backfill", body="v2")
+    run_extraction(_cfg(root))
+    assert _state(root)["entries"]["project/alpha__layout"]["origin_backfill"] is False
+
+    # ...and loses it again. The page must refresh, not stay stranded.
+    _memory(root, "alpha", "layout", type_="project", origin=None, body="v3")
+    run_extraction(_cfg(root))
+
+    assert "v3" in sacred.read_text(encoding="utf-8"), (
+        "a live project page was stranded by a stamp that has since gone away"
+    )
 
 
 def test_a_live_project_page_still_promotes_directly(tmp_path, monkeypatch):

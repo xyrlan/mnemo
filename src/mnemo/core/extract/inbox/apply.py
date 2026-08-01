@@ -34,7 +34,7 @@ from mnemo.core.extract.inbox.branches.upgrade import _apply_upgrade_proposed
 from mnemo.core.extract.inbox.dedup import _detect_drift_slug, _detect_stem_collision
 from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
-from mnemo.core.extract.scanner import ExtractionState, StateEntry
+from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
 from mnemo.core.rule_activation.index import is_universal
 
 
@@ -209,12 +209,6 @@ def _resolve_sticky_origin(
         page.origin_backfill = True
 
 
-#: Entry statuses meaning "this page already lives in ``shared/<type>/``".
-#: There is no staged page under these, so there is nothing for the origin
-#: gate to protect and nothing to make sticky.
-_SACRED_STATUSES = frozenset({"auto_promoted", "direct", "promoted"})
-
-
 def _stamp_entry_origin(
     state: ExtractionState, key: str, page: ExtractedPage,
 ) -> None:
@@ -225,8 +219,8 @@ def _stamp_entry_origin(
     means no branch has to remember to carry the flag. Only ever sets True, so
     a later run that no longer sees the origin cannot unstick it.
 
-    Entries whose status says the page already lives in the sacred dir are
-    skipped. Stamping those froze **live** pages (Task 9b review): one backfill
+    Entries at a :data:`SACRED_STATUSES` status are skipped. Stamping those
+    froze **live** pages (Task 9b review): one backfill
     reconstruction co-citing an auto-promoted page routes through the upgrade
     branch — which deliberately leaves the sacred file and the entry alone —
     and a stamp applied there made every later purely-live update take the
@@ -237,7 +231,7 @@ def _stamp_entry_origin(
     if not is_backfill_page(page):
         return
     entry = state.entries.get(key)
-    if entry is None or entry.status in _SACRED_STATUSES:
+    if entry is None or entry.status in SACRED_STATUSES:
         return
     entry.origin_backfill = True
 

@@ -99,8 +99,26 @@ def is_backfill_markdown(path: Path) -> bool:
     Used to recover the answer for vaults whose extraction state predates
     ``StateEntry.origin_backfill``: the staged page in ``shared/_inbox/`` was
     rendered with :data:`ORIGIN_LINE`, so the file itself still knows even
-    when the state entry has forgotten. Missing/unreadable file → False, so
-    a page that was never staged is never mistaken for a backfill page.
+    when the state entry has forgotten.
+
+    The two failure directions are **opposite**, and both callers depend on
+    it:
+
+    * **missing → False.** A page that was never staged must never be
+      mistaken for a backfill page, or every live page would stage forever.
+    * **present but unreadable → True.** The stamp may well be in there. Both
+      callers treat True as "leave it alone" (don't auto-promote, don't wipe),
+      which is the reversible direction — and matches this module's standing
+      doctrine that when in doubt the answer is yes.
+
+    Undecodable bytes are not "unreadable": like the rest of the codebase
+    (``dead_rule_sweep``, ``eos_extractor``) this decodes with
+    ``errors="replace"`` and answers from whatever frontmatter survives.
+    ``shared/_inbox/`` is a directory users are invited to edit by hand, and
+    ``_force_clear_inbox_cluster_dirs`` now calls this on *every* file in it
+    outside any ``try`` — one stray byte used to abort the whole extract with
+    a ``UnicodeDecodeError`` (it subclasses ``ValueError``, so the old
+    ``OSError`` catch let it through).
 
     Deliberately *not* in ``extract/inbox/paths.py``: that module documents
     itself as I/O-free, and this is I/O. Callers read here and pass the
@@ -109,8 +127,12 @@ def is_backfill_markdown(path: Path) -> bool:
     from mnemo.core.extract.scanner import parse_frontmatter
 
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
         return False
+    except OSError:
+        # Exists but we cannot read it (permissions, a directory, a dead
+        # symlink target). Fail safe: assume the stamp is there.
+        return True
     fm, _ = parse_frontmatter(text)
     return is_backfill_frontmatter(fm)

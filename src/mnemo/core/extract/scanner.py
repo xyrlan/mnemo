@@ -22,6 +22,16 @@ class MemoryFile:
     source_hash: str
 
 
+#: Entry statuses meaning "this page already lives in ``shared/<type>/``".
+#: There is no staged page under these, so the backfill origin gate has
+#: nothing to protect — and making such an entry sticky does active harm:
+#: in the cluster pipeline it freezes the sacred page (every later live
+#: update diverts to a ``.proposed.md``), and in ``promote.py`` it silently
+#: dismisses the page with no artifact anywhere. Consulted by
+#: ``inbox/apply._stamp_entry_origin`` and ``promote.promote_projects``.
+SACRED_STATUSES = frozenset({"auto_promoted", "direct", "promoted"})
+
+
 @dataclass
 class StateEntry:
     source_files: list[str]
