@@ -9,6 +9,7 @@ import pytest
 
 from mnemo.core import llm
 from mnemo.core.backfill import harvest
+from mnemo.core.extract import prompts
 from mnemo.core.extract.prompts.templates.harvest import _FEW_SHOT_HARVEST
 from mnemo.core.extract.scanner import parse_frontmatter
 
@@ -42,8 +43,13 @@ def _write_transcript(tmp_path: Path, *, mutations: int) -> Path:
     return p
 
 
-def _stub_llm_text(monkeypatch, text: str):
-    def fake_call(prompt, *, system, model="claude-haiku-4-5", timeout=60):
+def _stub_llm_text(monkeypatch, text: str) -> dict:
+    """Stub `llm.call`, returning a dict that captures how it was invoked."""
+    seen: dict = {}
+
+    def fake_call(prompt, **kwargs):
+        seen["prompt"] = prompt
+        seen.update(kwargs)
         return llm.LLMResponse(
             text=text,
             total_cost_usd=0.0,
@@ -54,10 +60,11 @@ def _stub_llm_text(monkeypatch, text: str):
         )
 
     monkeypatch.setattr(harvest.llm, "call", fake_call)
+    return seen
 
 
-def _stub_llm(monkeypatch, pages: list[dict]):
-    _stub_llm_text(monkeypatch, json.dumps({"pages": pages}))
+def _stub_llm(monkeypatch, pages: list[dict]) -> dict:
+    return _stub_llm_text(monkeypatch, json.dumps({"pages": pages}))
 
 
 def test_writes_a_memory_file_per_page(cfg, tmp_path, monkeypatch):
@@ -75,6 +82,40 @@ def test_writes_a_memory_file_per_page(cfg, tmp_path, monkeypatch):
     assert len(written) == 1
     assert written[0].name == "use-pathlib.md"
     assert written[0].parent == Path(cfg["vaultRoot"]) / "bots" / "alpha" / "memory"
+
+
+def test_calls_the_llm_with_the_harvest_prompt_and_configured_model(cfg, tmp_path, monkeypatch):
+    """Guards against silently inheriting briefing's prompt or hardcoding the model."""
+    cfg["extraction"] = {"model": "claude-sonnet-4-5", "subprocessTimeout": 123}
+    seen = _stub_llm(monkeypatch, [])
+    t = _write_transcript(tmp_path, mutations=1)
+
+    harvest.harvest_session(t, "alpha", cfg)
+
+    assert seen["system"] is prompts.HARVEST_SYSTEM_PROMPT
+    assert seen["model"] == "claude-sonnet-4-5"
+    assert seen["timeout"] == 123
+    assert "no, use pathlib" in seen["prompt"]
+
+
+def test_llm_failure_propagates_to_the_caller(cfg, tmp_path, monkeypatch):
+    """Task 7 catches per-session so one bad transcript can't abort a sweep."""
+    def boom(*a, **k):
+        raise llm.LLMSubprocessError("subprocess died")
+
+    monkeypatch.setattr(harvest.llm, "call", boom)
+    t = _write_transcript(tmp_path, mutations=1)
+
+    with pytest.raises(llm.LLMSubprocessError):
+        harvest.harvest_session(t, "alpha", cfg)
+
+
+def test_unparseable_llm_response_raises(cfg, tmp_path, monkeypatch):
+    _stub_llm_text(monkeypatch, "I could not find any lessons, sorry.")
+    t = _write_transcript(tmp_path, mutations=1)
+
+    with pytest.raises(llm.LLMParseError):
+        harvest.harvest_session(t, "alpha", cfg)
 
 
 def test_stamps_origin_backfill_in_frontmatter(cfg, tmp_path, monkeypatch):
@@ -124,6 +165,43 @@ def test_harvested_file_is_readable_by_the_extraction_scanner(cfg, tmp_path, mon
     assert "single-threaded" in mf.body
 
 
+def test_multiline_description_cannot_break_out_of_the_frontmatter(cfg, tmp_path, monkeypatch):
+    """A `---` inside the description used to close the block early, burying the stamp."""
+    _stub_llm(monkeypatch, [{
+        "slug": "queue-single-threaded",
+        "type": "project",
+        "name": "Queue stays single-threaded",
+        "description": "Constraint summary\n---\nsee ADR-7: the 2024 incident",
+        "body": "The consumer must remain single-threaded.",
+    }])
+    t = _write_transcript(tmp_path, mutations=1)
+
+    written = harvest.harvest_session(t, "alpha", cfg)
+    text = written[0].read_text(encoding="utf-8")
+    fm, body = parse_frontmatter(text)
+
+    assert fm["origin"] == "backfill"
+    assert fm["type"] == "project"
+    assert fm["originSessionId"] == "sess-1"
+    # The description survives as one line, and contributes no stray keys.
+    assert fm["description"] == '"Constraint summary --- see ADR-7: the 2024 incident"'
+    assert "see ADR-7" not in body
+    assert set(fm) == {"name", "description", "metadata", "node_type", "type",
+                       "originSessionId", "origin"}
+
+
+def test_quotes_in_description_do_not_end_the_value(cfg, tmp_path, monkeypatch):
+    _stub_llm(monkeypatch, [{
+        "slug": "s", "type": "feedback", "name": "N",
+        "description": 'Never say "any"', "body": "b",
+    }])
+    t = _write_transcript(tmp_path, mutations=1)
+
+    fm, _ = parse_frontmatter(harvest.harvest_session(t, "alpha", cfg)[0].read_text("utf-8"))
+    assert fm["description"] == "\"Never say 'any'\""
+    assert fm["origin"] == "backfill"
+
+
 def test_zero_mutation_session_is_skipped_without_calling_llm(cfg, tmp_path, monkeypatch):
     def explode(*a, **k):
         raise AssertionError("LLM must not be called for a zero-mutation session")
@@ -132,6 +210,59 @@ def test_zero_mutation_session_is_skipped_without_calling_llm(cfg, tmp_path, mon
     t = _write_transcript(tmp_path, mutations=0)
 
     assert harvest.harvest_session(t, "alpha", cfg) == []
+
+
+@pytest.mark.parametrize(
+    ("threshold", "mutations", "expect_written"),
+    [(3, 2, 0), (3, 3, 1), (3, 4, 1)],
+)
+def test_min_file_mutations_threshold_is_inclusive(
+    cfg, tmp_path, monkeypatch, threshold, mutations, expect_written
+):
+    """`minFileMutations: 3` means three edits is enough — guards an off-by-one."""
+    cfg["backfill"] = {"minFileMutations": threshold}
+    _stub_llm(monkeypatch, [
+        {"slug": "s", "type": "feedback", "name": "N", "description": "d", "body": "b"},
+    ])
+    t = _write_transcript(tmp_path, mutations=mutations)
+
+    assert len(harvest.harvest_session(t, "alpha", cfg)) == expect_written
+
+
+@pytest.mark.parametrize("payload", ['{"pages": null}', '{"pages": "nope"}', "{}"])
+def test_non_list_pages_returns_empty_rather_than_raising(cfg, tmp_path, monkeypatch, payload):
+    _stub_llm_text(monkeypatch, payload)
+    t = _write_transcript(tmp_path, mutations=1)
+
+    assert harvest.harvest_session(t, "alpha", cfg) == []
+
+
+def test_non_dict_entry_inside_pages_is_skipped(cfg, tmp_path, monkeypatch):
+    _stub_llm_text(monkeypatch, json.dumps({"pages": [
+        "just a string",
+        None,
+        {"slug": "good", "type": "feedback", "name": "G", "description": "d", "body": "b"},
+    ]}))
+    t = _write_transcript(tmp_path, mutations=1)
+
+    assert [p.name for p in harvest.harvest_session(t, "alpha", cfg)] == ["good.md"]
+
+
+def test_two_pages_colliding_on_one_slug_write_once(cfg, tmp_path, monkeypatch):
+    """`Use Pathlib!` and `use-pathlib` normalise to the same filename."""
+    _stub_llm(monkeypatch, [
+        {"slug": "Use Pathlib!", "type": "feedback", "name": "First",
+         "description": "d", "body": "first body"},
+        {"slug": "use-pathlib", "type": "feedback", "name": "Second",
+         "description": "d", "body": "second body"},
+    ])
+    t = _write_transcript(tmp_path, mutations=1)
+
+    written = harvest.harvest_session(t, "alpha", cfg)
+
+    assert [p.name for p in written] == ["use-pathlib.md"]
+    # First page wins; the second must not have silently overwritten it.
+    assert "first body" in written[0].read_text(encoding="utf-8")
 
 
 def test_invalid_page_type_is_dropped(cfg, tmp_path, monkeypatch):
