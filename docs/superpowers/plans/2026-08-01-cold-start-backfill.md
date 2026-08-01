@@ -1195,8 +1195,7 @@ with:
                 chunk_backfill = frozenset(
                     source_paths.vault_relative_source(mf.path, vault_root)
                     for mf in chunk
-                    if str((mf.frontmatter.get("metadata") or {}).get("origin") or "")
-                    == "backfill"
+                    if str(mf.frontmatter.get("origin") or "") == "backfill"
                 )
                 pages = _parse_pages_from_response(
                     response.text, type_name, backfill_sources=chunk_backfill,
@@ -1204,6 +1203,22 @@ with:
 ```
 
 `source_paths` is already imported at the top of `extract/__init__.py`.
+
+**Why `mf.frontmatter.get("origin")` and not `.get("metadata").get("origin")`.** Found during Task 5. `scanner.parse_frontmatter` is a **flat** `key: value` line reader — it splits every frontmatter line on the first `:` with no YAML and no nesting. A nested block therefore flattens: `metadata:` becomes `fm["metadata"] == ""`, and the indented `origin: backfill` becomes `fm["origin"] == "backfill"`. The nested lookup evaluates to `""` for every page, so the gate would silently never fire and every backfilled page would auto-promote into `shared/` — precisely the failure this gate exists to prevent.
+
+Verify it yourself before implementing:
+
+```
+python3 -c "
+from mnemo.core.extract.scanner import parse_frontmatter
+fm, _ = parse_frontmatter(open('<a harvested memory file>').read())
+print(repr(fm.get('metadata')), repr(fm.get('origin')))"
+```
+
+Two consequences for this task's tests:
+
+1. `parse_frontmatter` returns a **tuple** `(fm, body)`, not a dict. Unpack it.
+2. At least one test must reach the gate through a **real harvested file** — `harvest_session(...)` → `scanner._read_memory_file(...)` → `_parse_pages_from_response`. Tests that hand-build `ExtractedPage(origin_backfill=True)` verify the routing but cannot catch a broken frontmatter read, which is exactly how this bug survived plan review.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
