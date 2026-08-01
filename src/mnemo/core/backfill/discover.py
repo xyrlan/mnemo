@@ -89,9 +89,18 @@ def find_transcripts(
         # root, which is comparatively expensive. A dir with no transcripts
         # can never contribute a result regardless of `project`, so check
         # for transcripts first and skip resolution entirely when there are
-        # none — this matters for `session_start`'s capped, current-repo-only
-        # sweep, which otherwise pays full resolution for every other repo's
-        # project directory just to discard it.
+        # none.
+        #
+        # The remaining "waste" — resolving every *populated* directory before
+        # the `project` filter discards it — was measured rather than assumed:
+        # 9 populated dirs, 117 transcripts, 0.7ms for a filtered call. The
+        # cost is a handful of stats per directory, since a Claude project dir
+        # is almost always a repo root and `_find_git_root` returns on its
+        # first iteration. Filtering by cwd *before* resolving would be the
+        # only way to avoid it, and it would be wrong: a worktree encodes to a
+        # different cwd and canonicalises to the same agent, which is the
+        # whole reason resolution happens here. Nobody waits on this anyway —
+        # `session_start` spawns the sweep detached.
         jsonl_paths = list(project_dir.glob("*.jsonl"))
         if not jsonl_paths:
             continue

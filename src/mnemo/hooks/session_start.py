@@ -194,6 +194,83 @@ def _warn_about_duplicate_install(vault) -> None:
     migration.mark_notified(state)
 
 
+def _spawn_detached_backfill(cwd: str | None = None) -> None:
+    """Fire-and-forget background install backfill via subprocess.Popen.
+
+    Invokes ``mnemo backfill --install-run``. Detach semantics match
+    session_end's briefing spawn — see hooks/session_end.py:139.
+
+    ``cwd`` is the session's working directory, and it is not decoration:
+    ``backfill --install-run`` picks the repo to sweep with
+    ``resolve_canonical_agent(os.getcwd())``, and Popen otherwise inherits
+    whatever directory the hook process was launched in. Passed only when it
+    still exists — a stale path would make Popen raise before the child ran.
+    """
+    import subprocess
+
+    from mnemo._selfexec import self_argv
+
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    kwargs["cwd"] = cwd if cwd and os.path.isdir(cwd) else None
+
+    subprocess.Popen(self_argv("backfill", "--install-run"), **kwargs)
+
+
+def _maybe_schedule_install_backfill(
+    cfg: dict, vault_root, cwd: str | None = None
+) -> None:
+    """Spawn the one-time install backfill, at most once per vault.
+
+    The ledger marker is written *before* the spawn so a crash mid-harvest
+    cannot cause the sweep to restart on every subsequent session. Resuming
+    is the explicit ``mnemo backfill`` command's job, not the hook's.
+
+    A ``Popen`` that raises is the one case where the marker is rolled back:
+    nothing was launched, so keeping the marker would silently guarantee the
+    user never gets a backfill — the exact outcome this hook exists to
+    prevent — while the mid-harvest reasoning above does not apply.
+    """
+    try:
+        from mnemo.core.backfill import ledger as _ledger
+
+        backfill_cfg = cfg.get("backfill") or {}
+        if not backfill_cfg.get("enabled", True):
+            return
+        if not backfill_cfg.get("autoOnFirstSession", True):
+            return
+
+        led = _ledger.load(vault_root)
+        if led.get("installRunDone"):
+            return
+        led["installRunDone"] = True
+        _ledger.save(vault_root, led)
+
+        try:
+            _spawn_detached_backfill(cwd=cwd)
+        except Exception:
+            led["installRunDone"] = False
+            _ledger.save(vault_root, led)
+            raise
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+
+            _e.log_error(vault_root, "session_start.backfill", exc)
+        except Exception:
+            pass
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -258,6 +335,13 @@ def main() -> int:
                 reflex_index.write_index(vault, reflex_index.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.reflex_index", exc)
+
+        # A brand-new vault injects on 0% of prompts until something puts rules
+        # in it. Runs at most once per vault, capped, detached — one LLM call
+        # per session harvested is minutes of work and must not touch the
+        # prompt path. Placed after scaffolding so .mnemo/ exists to write the
+        # marker into.
+        _maybe_schedule_install_backfill(cfg, vault, cwd)
 
         if cfg.get("capture", {}).get("sessionStartEnd", True):
             source = payload.get("source", "startup")
