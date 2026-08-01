@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from mnemo.core.backfill.origin import ORIGIN_LINE, is_backfill_frontmatter
 from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.scanner import ExtractionState, MemoryFile, StateEntry
@@ -22,13 +23,12 @@ def _project_slug(file: MemoryFile) -> str:
 def _is_backfill(file: MemoryFile) -> bool:
     """True when this memory file was reconstructed by cold-start backfill.
 
-    Harvest stamps ``metadata:\\n  origin: backfill``, but
-    ``scanner.parse_frontmatter`` is a flat ``key: value`` line reader — the
-    nested block flattens and the stamp lands at the *top* level of
-    ``.frontmatter``. Reading ``fm["metadata"]["origin"]`` would silently
-    never match.
+    Harvest nests the stamp under ``metadata:``; ``scanner.parse_frontmatter``
+    is a flat reader that lifts it to the top level. The shared predicate
+    accepts either spelling, so this does not depend on which parser filled
+    ``file.frontmatter``.
     """
-    return str(file.frontmatter.get("origin") or "") == "backfill"
+    return is_backfill_frontmatter(file.frontmatter)
 
 
 def _target_path(vault_root: Path, file: MemoryFile) -> Path:
@@ -42,10 +42,11 @@ def _target_path(vault_root: Path, file: MemoryFile) -> Path:
 
 
 def _render_project_page(file: MemoryFile, *, run_id: str) -> str:
-    # TOP-LEVEL, not nested under `metadata:` — parse_frontmatter is a flat
-    # reader, so this is the only spelling that round-trips for the doctor
-    # advisory and any later reviewer.
-    origin_line = "origin: backfill\n" if _is_backfill(file) else ""
+    # TOP-LEVEL, not nested under `metadata:` — that is the one spelling both
+    # frontmatter parsers in this codebase agree on (see backfill/origin.py).
+    # Pinned at the text level by test_extract_promote_backfill.py; a
+    # parser-level assertion cannot tell the two spellings apart.
+    origin_line = ORIGIN_LINE if _is_backfill(file) else ""
     return (
         "---\n"
         f"name: {file.frontmatter.get('name', file.slug)}\n"

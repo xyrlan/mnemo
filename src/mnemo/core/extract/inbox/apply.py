@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from mnemo.core.backfill.origin import is_backfill_page
 from mnemo.core.extract.inbox.branches.auto_promoted import _apply_auto_promoted
 from mnemo.core.extract.inbox.branches.inbox_flow import _apply_inbox
 from mnemo.core.extract.inbox.branches.universal_promotion import (
@@ -62,7 +63,7 @@ def _is_universal_promotion(
     """
     if is_auto:
         return False
-    if getattr(page, "origin_backfill", False):
+    if is_backfill_page(page):
         return False
     if entry is not None and entry.status == "auto_promoted":
         return False

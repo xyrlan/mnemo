@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mnemo.core import dashboard, errors, locks, llm, paths
+from mnemo.core.backfill.origin import is_backfill_frontmatter
 from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
@@ -395,14 +396,14 @@ def _run_extraction_body(
                 summary.all_calls_subscription = False
 
             try:
-                # ``scanner.parse_frontmatter`` is a flat key: value reader, so
-                # a harvested file's nested ``metadata: / origin: backfill``
-                # block lands as a top-level ``origin`` key. Reading it as
-                # ``fm["metadata"]["origin"]`` would silently never match.
+                # Harvest nests the stamp under ``metadata:`` and
+                # ``scanner.parse_frontmatter`` (a flat key: value reader)
+                # lifts it to the top level; the shared predicate accepts
+                # either spelling so this cannot drift on a parser change.
                 chunk_backfill = frozenset(
                     source_paths.vault_relative_source(mf.path, vault_root)
                     for mf in chunk
-                    if str(mf.frontmatter.get("origin") or "") == "backfill"
+                    if is_backfill_frontmatter(mf.frontmatter)
                 )
                 pages = _parse_pages_from_response(
                     response.text, type_name, backfill_sources=chunk_backfill,
@@ -529,9 +530,10 @@ def _reconcile_universal_promotions(
             source_hash=entry.source_hash,
             stability=str(fm.get("stability") or "stable"),
             tags=list(fm.get("tags") or []),
-            # Written top-level by rendering._render_page; parse_frontmatter is
-            # a flat reader, so this is the only spelling that round-trips.
-            origin_backfill=str(fm.get("origin") or "") == "backfill",
+            # Written top-level by rendering._render_page; the shared
+            # predicate also accepts the nested spelling so a hand-edited or
+            # future-rendered page cannot slip past the gate.
+            origin_backfill=is_backfill_frontmatter(fm),
         )
         if page.origin_backfill:
             # Reconstructed from archived transcripts — the origin gate keeps

@@ -99,13 +99,26 @@ def test_unstamped_project_file_still_promotes_directly(tmp_vault: Path):
 
 
 def test_staged_project_page_keeps_the_origin_stamp(tmp_vault: Path):
-    """The staged file stays self-describing, and the stamp round-trips."""
+    """The staged file stays self-describing, in the spelling both readers share.
+
+    Asserted at the **text** level, and through the *consumer's* parser. The
+    flat ``scanner.parse_frontmatter`` lifts nested keys to the top level, so a
+    ``scanner``-only assertion here cannot tell ``origin: backfill`` from
+    ``metadata:\\n  origin: backfill`` — and the doctor advisory reads this file
+    with the nesting-aware ``filters.parse_frontmatter``. A mutation to the
+    nested spelling survived the entire suite until this assertion changed.
+    """
+    from mnemo.core.filters import parse_frontmatter as filters_parse
+
     state = scanner.ExtractionState(last_run=None, entries={})
     f = _mk_project_file(tmp_vault, "a", "project_x", backfill=True)
     promote.promote_projects([f], state, tmp_vault)
 
     staged = tmp_vault / "shared" / "_inbox" / "project" / "a__x.md"
-    fm, _body = scanner.parse_frontmatter(staged.read_text())
+    text = staged.read_text()
+    assert "\norigin: backfill\n" in text, "stamp must be written top-level"
+    assert filters_parse(text).get("origin") == "backfill"
+    fm, _body = scanner.parse_frontmatter(text)
     assert fm.get("origin") == "backfill"
 
 

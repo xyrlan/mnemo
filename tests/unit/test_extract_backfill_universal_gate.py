@@ -147,15 +147,28 @@ def test_union_with_prior_sources_keeps_the_backfill_flag():
 
 
 def test_rendered_backfill_page_round_trips_through_parse_frontmatter():
-    """Top-level key, not nested — a nested block reads back as ""."""
+    """Top-level key, not nested — and pinned at the text level.
+
+    ``scanner.parse_frontmatter`` is flat: it lifts nested keys to the top
+    level, so it alone cannot tell ``origin: backfill`` from
+    ``metadata:\\n  origin: backfill``. The doctor advisory reads this same
+    staged file with the nesting-aware ``filters.parse_frontmatter``, which
+    can, so the writer's spelling has to be asserted directly.
+    """
     from mnemo.core.extract.inbox.rendering import _render_page
     from mnemo.core.extract.scanner import parse_frontmatter
+    from mnemo.core.filters import parse_frontmatter as filters_parse
 
-    fm, _ = parse_frontmatter(_render_page(_page(origin_backfill=True), run_id="r"))
+    text = _render_page(_page(origin_backfill=True), run_id="r")
+    assert "\norigin: backfill\n" in text, "stamp must be written top-level"
+    assert filters_parse(text).get("origin") == "backfill"
+    fm, _ = parse_frontmatter(text)
     assert fm.get("origin") == "backfill"
 
-    fm_live, _ = parse_frontmatter(_render_page(_page(), run_id="r"))
+    live_text = _render_page(_page(), run_id="r")
+    fm_live, _ = parse_frontmatter(live_text)
     assert fm_live.get("origin") is None
+    assert filters_parse(live_text).get("origin") is None
 
 
 def test_live_cross_project_page_still_universally_promotes(tmp_path, monkeypatch):

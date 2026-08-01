@@ -190,12 +190,18 @@ def _is_backfill_staged(vault: Path, key: str) -> bool:
     """True when the _inbox file behind a state key carries the backfill stamp.
 
     Origin lives on disk, not in the state file: the state schema has no
-    ``origin`` field, and both writers (``inbox.rendering._render_page`` and
-    ``extract.promote._render_project_page``) stamp a **top-level**
-    ``origin: backfill`` line into the staged page itself. Reading it back is
-    therefore a one-file read keyed off ``<type>/<slug>``, and needs no state
-    migration for vaults written before the backfill feature landed.
+    ``origin`` field, so reading it back is a one-file read keyed off
+    ``<type>/<slug>`` that needs no migration for vaults written before the
+    backfill feature landed.
+
+    Parses with ``filters.parse_frontmatter`` — the nesting-aware reader —
+    because that is the parser written for the shape mnemo itself writes, and
+    it does not false-positive on an unrelated nested ``origin`` subkey.
+    Whether the stamp is nested or top-level is *not* load-bearing here:
+    :func:`is_backfill_frontmatter` accepts both, so this check cannot drift
+    away from the routing gate the way it did before Task 6c.
     """
+    from mnemo.core.backfill.origin import is_backfill_frontmatter
     from mnemo.core.filters import parse_frontmatter
 
     page_type, _, slug = key.partition("/")
@@ -206,7 +212,7 @@ def _is_backfill_staged(vault: Path, key: str) -> bool:
         fm = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
     except Exception:  # missing file, unreadable bytes, malformed frontmatter
         return False
-    return str(fm.get("origin") or "") == "backfill"
+    return is_backfill_frontmatter(fm)
 
 
 def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
@@ -266,8 +272,15 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
 
     if backfill_staged:
         print(
-            f"  {len(backfill_staged)} backfill rule(s) staged in _inbox/ awaiting review — "
-            f"reconstructed from old transcripts; read them under "
-            f"shared/_inbox/ and move the keepers into shared/<type>/."
+            f"  {len(backfill_staged)} backfill rule(s) staged in _inbox/ awaiting review "
+            "(reconstructed from old transcripts, so they stage by design):"
+        )
+        for k in sorted(backfill_staged)[:5]:
+            print(f"    • shared/_inbox/{k}.md")
+        if len(backfill_staged) > 5:
+            print(f"    … {len(backfill_staged) - 5} more")
+        print(
+            "    (read each one; move keepers to shared/<same type>/, "
+            "e.g. shared/_inbox/project/ → shared/project/, and delete the rest)"
         )
     return True
