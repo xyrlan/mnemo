@@ -79,6 +79,7 @@ def should_harvest(led: dict[str, Any], path: Path) -> bool:
 
 
 def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
+    """Record success, resetting the attempt count to 0."""
     led.setdefault("sessions", {})[Path(path).stem] = {
         "status": "done",
         "hash": transcript_hash(path),
@@ -88,6 +89,7 @@ def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
 
 
 def mark_failed(led: dict[str, Any], path: Path, reason: str) -> None:
+    """Record failure, re-hashing the file while carrying the attempt count forward."""
     key = Path(path).stem
     sessions = led.setdefault("sessions", {})
     prior = sessions.get(key) if isinstance(sessions.get(key), dict) else {}
