@@ -69,6 +69,27 @@ def test_no_platform_is_allowed_to_fail_quietly(jobs: dict):
     assert "continue-on-error" not in jobs["build-binaries"]
 
 
+def test_a_manual_run_can_never_publish():
+    """workflow_dispatch exists to test the build without burning a version.
+
+    Every publishing job must therefore be guarded on the ref being a tag —
+    otherwise triggering a test build would release from a branch.
+    """
+    wf = yaml.safe_load(WORKFLOW.read_text())
+    triggers = wf[True] if True in wf else wf["on"]
+    assert "workflow_dispatch" in triggers
+
+    for name in ("publish-pypi", "publish-npm", "publish-binaries"):
+        guard = wf["jobs"][name].get("if", "")
+        assert "refs/tags/v" in guard, f"{name} would run on a manual dispatch"
+
+
+def test_the_build_job_is_not_tag_guarded():
+    """It is the whole point of a manual run."""
+    wf = yaml.safe_load(WORKFLOW.read_text())
+    assert "if" not in wf["jobs"]["build-binaries"]
+
+
 def test_checksums_are_generated_without_shasum(jobs: dict):
     """Neither shasum nor sha256sum is guaranteed in Git Bash on Windows."""
     package = next(
