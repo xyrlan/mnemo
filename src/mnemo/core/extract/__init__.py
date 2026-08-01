@@ -167,7 +167,12 @@ def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
     summary.conflicts.extend(result.upgrade_proposed)
 
 
-def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.ExtractedPage]:
+def _parse_pages_from_response(
+    text: str,
+    default_type: str,
+    *,
+    backfill_sources: frozenset[str] = frozenset(),
+) -> list[inbox.ExtractedPage]:
     payload = llm._parse_llm_json(text)
     raw_pages = payload.get("pages", [])
     if not isinstance(raw_pages, list):
@@ -193,6 +198,9 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
         tags = _sanitize_llm_tags(rp.get("tags"))
         enforce = _sanitize_llm_enforce(rp.get("enforce"))
         activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
+        origin_backfill = bool(backfill_sources) and all(
+            s in backfill_sources for s in source_files
+        )
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -205,6 +213,7 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
             tags=tags,
             enforce=enforce,
             activates_on=activates_on,
+            origin_backfill=origin_backfill,
         ))
     return out
 
@@ -384,7 +393,18 @@ def _run_extraction_body(
                 summary.all_calls_subscription = False
 
             try:
-                pages = _parse_pages_from_response(response.text, type_name)
+                # ``scanner.parse_frontmatter`` is a flat key: value reader, so
+                # a harvested file's nested ``metadata: / origin: backfill``
+                # block lands as a top-level ``origin`` key. Reading it as
+                # ``fm["metadata"]["origin"]`` would silently never match.
+                chunk_backfill = frozenset(
+                    source_paths.vault_relative_source(mf.path, vault_root)
+                    for mf in chunk
+                    if str(mf.frontmatter.get("origin") or "") == "backfill"
+                )
+                pages = _parse_pages_from_response(
+                    response.text, type_name, backfill_sources=chunk_backfill,
+                )
             except llm.LLMParseError as exc:
                 errors.log_error(vault_root, "extract.parse", exc)
                 summary.failed_chunks += 1

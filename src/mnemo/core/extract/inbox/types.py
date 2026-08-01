@@ -31,6 +31,11 @@ class ExtractedPage:
     # on the next extraction run.
     enforce: dict | None = None
     activates_on: dict | None = None
+    # True when every source memory file carried metadata.origin: backfill.
+    # Such pages are reconstructed from archived transcripts rather than
+    # observed live, so they always stage in _inbox for review — see
+    # inbox/paths.py::_target_path_for_page.
+    origin_backfill: bool = False
 
 
 @dataclass

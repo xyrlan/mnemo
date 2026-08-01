@@ -26,15 +26,20 @@ def _promoted_path(vault_root: Path, page: ExtractedPage) -> Path:
 
 
 def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
-    """Return the filesystem target for a page based on its source count.
+    """Return the filesystem target for a page.
 
     Single-source pages go directly to the sacred dir (auto-promote).
     Multi-source pages stage in _inbox/ for review.
+    Backfill-origin pages always stage, whatever their source count: they are
+    reconstructed from archived transcripts, so a human confirms before they
+    reach the sacred dir.
 
     Routes through ``_promoted_path`` / ``_inbox_path`` so the shared
     ``shared/<type>/<slug>.md`` shape lives in exactly one place
     (kills D1 inline target construction in PR I).
     """
+    if getattr(page, "origin_backfill", False):
+        return _inbox_path(vault_root, page)
     if len(page.source_files) == 1:
         return _promoted_path(vault_root, page)
     return _inbox_path(vault_root, page)
