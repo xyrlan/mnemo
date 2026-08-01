@@ -10,7 +10,6 @@ and dispatches in the right mode. Everything is gated by
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from mnemo._selfexec import self_argv
@@ -20,16 +19,6 @@ from mnemo.autopilot.core.triggers import run_detached, run_inline, should_run
 # Operation registry. (name, interval_days, mode, runner-or-argv)
 # - mode "inline": runner is a zero-arg callable run synchronously
 # - mode "detached": runner is a list[str] argv spawned as a subprocess
-
-
-def _python_for_mnemo() -> str:
-    """Best-effort path to the Python interpreter that hosts mnemo.
-
-    Retained for callers outside this module; the detached-job argvs now go
-    through :func:`mnemo._selfexec.self_argv`, which is also correct when
-    ``sys.executable`` is a frozen mnemo binary rather than an interpreter.
-    """
-    return sys.executable or "python3"
 
 
 def _digest_inline(vault_root: Path) -> None:
