@@ -35,11 +35,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _print_landing() -> int:
-    from importlib.metadata import PackageNotFoundError, version as _pkg_version
-    try:
-        v = _pkg_version("mnemo-claude")
-    except PackageNotFoundError:
-        v = "unknown"
+    from mnemo._version import resolve_version
+    v = resolve_version()
     print(f"mnemo {v} — the Obsidian that populates itself")
     print()
     print("  mnemo init       first-run setup")

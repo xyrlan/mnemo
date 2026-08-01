@@ -45,11 +45,8 @@ def command(name: str) -> Callable:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    from importlib.metadata import PackageNotFoundError, version as _pkg_version
-    try:
-        _v = _pkg_version("mnemo-claude")
-    except PackageNotFoundError:
-        _v = "unknown"
+    from mnemo._version import resolve_version
+    _v = resolve_version()
     p = argparse.ArgumentParser(prog="mnemo", description="The Obsidian that populates itself.")
     p.add_argument("--version", "-V", action="version", version=f"mnemo {_v}")
     sub = p.add_subparsers(dest="command")

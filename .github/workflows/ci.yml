@@ -34,6 +34,38 @@ jobs:
       - name: Coverage gate
         run: pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
 
+  npm-wrapper:
+    name: npm wrapper (node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # These ran only inside the release job, which is gated behind
+      # `needs: publish-pypi` — so a wrapper regression surfaced *after* PyPI
+      # had already published, leaving the two registries on different versions.
+      - name: npm tests
+        working-directory: npm
+        run: npm test
+
+  generated-files:
+    name: generated manifests are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # plugin.json drifted two minors behind and marketplace.json twelve,
+      # because regenerating them was a manual step in the release commit.
+      - name: Regenerate and diff
+        run: |
+          python3 tools/sync_npm_version.py
+          python3 tools/sync_plugin_manifest.py
+          git diff --exit-code -- .claude-plugin/ npm/package.json npm/lib/bootstrap.js \
+            || { echo "::error::Generated files are stale. Run tools/sync_npm_version.py and tools/sync_plugin_manifest.py, then commit."; exit 1; }
+
   windows-experimental:
     name: windows-latest / py3.11 (experimental)
     runs-on: windows-latest

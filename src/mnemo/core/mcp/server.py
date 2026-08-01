@@ -21,13 +21,14 @@ import time
 from pathlib import Path
 from typing import IO, Any
 
+from mnemo._version import resolve_version
 from mnemo.core.mcp import access_log as mcp_access_log
 from mnemo.core.mcp import session_state as mcp_session_state
 from mnemo.core.mcp import tools as mcp_tools
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "mnemo"
-SERVER_VERSION = "0.8.0"
+SERVER_VERSION = resolve_version()
 
 _TOOL_DEFS: list[dict[str, Any]] = [
     {
