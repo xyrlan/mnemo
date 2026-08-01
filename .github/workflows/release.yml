@@ -4,9 +4,20 @@ on:
   push:
     tags: ["v*"]
 
+# Ordering matters here, and it is deliberate.
+#
+# Publishing to PyPI and npm is irreversible: a version number, once taken,
+# can never be reused. Building four platform binaries is the fallible step --
+# it depends on runners, toolchains, and per-OS shell differences. So the
+# fallible work runs FIRST and the irreversible work is gated behind it.
+#
+# v0.17.0 is why. PyPI and npm both published, then the Windows binary job
+# failed on a missing `shasum`, and the release shipped with no binaries at
+# all -- which is precisely what the plugin install needs.
 jobs:
   publish-pypi:
     name: Publish to PyPI
+    needs: build-binaries
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -81,9 +92,19 @@ jobs:
         shell: bash
         run: |
           cd dist/bin
-          tar -czf "mnemo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" mnemo
-          shasum -a 256 "mnemo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" \
-            > "mnemo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256"
+          ASSET="mnemo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ASSET" mnemo
+          # Python rather than shasum/sha256sum: neither is guaranteed in the
+          # Git Bash that GitHub runs `shell: bash` under on Windows, and the
+          # missing one there failed the whole release. Python is set up by
+          # this job already, so it is the one tool present on every target.
+          # Format matches `shasum -a 256` output, which bin/launch parses.
+          python -c "
+          import hashlib, sys
+          p = sys.argv[1]
+          print(f'{hashlib.sha256(open(p, \"rb\").read()).hexdigest()}  {p}')
+          " "$ASSET" > "$ASSET.sha256"
+          cat "$ASSET.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
