@@ -106,12 +106,18 @@ def harvest_session(jsonl_path: Path, agent: str, cfg: dict) -> list[Path]:
 
     Raises:
 
-    * whatever ``llm.call`` raises — ``LLMError``/``LLMRateLimitError`` on a
-      failed or timed-out subprocess.
-    * ``LLMParseError`` when the response text contains no parseable JSON
-      object. Note the asymmetry with the list above: malformed JSON raises,
-      well-formed JSON with a nonsense ``pages`` value returns ``[]``.
+    * whatever ``llm.call`` raises: ``LLMSubprocessError`` (missing CLI, failed
+      auth, rate limit), ``LLMTimeoutError``, or ``LLMEnvelopeError`` when the
+      CLI's own output envelope is unparseable.
+    * ``LLMParseError`` from the ``_parse_llm_json`` call below, when the
+      *model's* response text contains no parseable JSON object. Note the
+      asymmetry with the list above: malformed JSON raises, well-formed JSON
+      with a nonsense ``pages`` value returns ``[]``.
     * ``OSError`` from writing a page.
+
+    Those distinctions are load-bearing for a batch caller: only some of them
+    are properties of *this transcript*. See ``cli/commands/backfill.py``'s
+    ``_environmental`` for the split and why it is drawn where it is.
 
     Callers that want fire-and-forget semantics wrap this in a try/except, as
     the CLI does.

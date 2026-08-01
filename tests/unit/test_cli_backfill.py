@@ -59,7 +59,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _args(**kw) -> argparse.Namespace:
     base = dict(all=False, dry_run=False, project=None, limit=None,
-                install_run=False, yes=True)
+                install_run=False, yes=True, retry_failed=False)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -322,6 +322,110 @@ def test_parse_errors_stay_attributable_to_their_transcript(env, monkeypatch):
     assert led["sessions"][made[0].path.stem]["attempts"] == 1
 
 
+def test_a_timing_out_transcript_does_not_wedge_the_sweep(env, monkeypatch):
+    """A double timeout is the input's fault, so the sweep must step over it.
+
+    Treating it as environmental wedges the sweep permanently: `find_transcripts`
+    applies `limit` as a newest-first prefix, so no `--limit` can skip the
+    hostile transcript to reach the ones behind it, and every rerun burns two
+    full timeouts to make zero progress.
+    """
+    cfg, vault, made, _ = env
+    hostile = made[1].path
+    seen: list[Path] = []
+
+    def fake(jsonl_path, agent, config):
+        seen.append(jsonl_path)
+        if jsonl_path == hostile:
+            raise llm.LLMTimeoutError("subprocess timed out twice after 60s")
+        return []
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+
+    assert cmd.cmd_backfill(_args(all=True)) == 1
+    assert seen == [t.path for t in made]  # reached everything behind the wedge
+
+    led = ledger.load(vault)
+    assert led["sessions"][hostile.stem]["status"] == "failed"
+    for t in made:
+        if t.path != hostile:
+            assert ledger.should_harvest(led, t.path) is False  # done, not stuck
+
+
+def test_a_malformed_cli_envelope_is_environmental(env, monkeypatch):
+    """A `claude` that exits 0 printing a login nag must not poison the ledger.
+
+    `llm.call` raises LLMParseError for three envelope-level conditions that
+    are purely environmental — a login nag, an update notice, a PATH shim, an
+    --output-format change. Keying on LLMParseError alone reinstated the
+    original Critical through this door.
+    """
+    cfg, vault, made, _ = env
+    _recorder(monkeypatch, raises=llm.LLMEnvelopeError(
+        "envelope JSON invalid: Expecting value"))
+
+    for _ in range(3):
+        assert cmd.cmd_backfill(_args(all=True)) == 2
+
+    led = ledger.load(vault)
+    for t in made:
+        assert ledger.should_harvest(led, t.path) is True
+        assert ledger.attempts_exhausted(led, t.path) is False
+
+
+def test_envelope_errors_are_still_parse_errors(env):
+    """The new types subclass the old ones, so existing handlers keep working."""
+    assert issubclass(llm.LLMEnvelopeError, llm.LLMParseError)
+    assert issubclass(llm.LLMTimeoutError, llm.LLMSubprocessError)
+
+
+# --------------------------------------------------------------------------
+# --retry-failed
+# --------------------------------------------------------------------------
+
+def test_retry_failed_makes_exhausted_transcripts_eligible_again(env, monkeypatch):
+    cfg, vault, made, _ = env
+    led = ledger.load(vault)
+    for t in made:
+        for _ in range(ledger.MAX_ATTEMPTS):
+            ledger.mark_failed(led, t.path, "boom")
+    ledger.save(vault, led)
+
+    calls = _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True)) == 0
+    assert calls == []  # terminal without the flag
+
+    calls = _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True, retry_failed=True)) == 0
+    assert len(calls) == 3
+
+
+def test_retry_failed_does_not_re_harvest_finished_work(env, monkeypatch):
+    cfg, vault, made, _ = env
+    calls = _recorder(monkeypatch)
+    cmd.cmd_backfill(_args(all=True))
+    assert len(calls) == 3
+
+    calls = _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True, retry_failed=True)) == 0
+    assert calls == []  # done entries are left alone
+
+
+def test_gave_up_message_names_the_remedy(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+    led = ledger.load(vault)
+    for _ in range(ledger.MAX_ATTEMPTS):
+        ledger.mark_failed(led, made[0].path, "boom")
+    ledger.save(vault, led)
+    _recorder(monkeypatch)
+
+    cmd.cmd_backfill(_args(all=True))
+    cmd.cmd_backfill(_args(all=True))  # second run: everything else is done
+    out = capsys.readouterr().out
+    assert "gave up after 3 failed attempts" in out
+    assert "--retry-failed" in out
+
+
 def test_keyboard_interrupt_exits_130_and_keeps_earlier_work(env, monkeypatch, capsys):
     cfg, vault, made, _ = env
 
@@ -369,6 +473,35 @@ def test_disabled_config_is_a_no_op(env, monkeypatch):
     # would pass even with the enabled check gone.
     assert calls == []
     assert not ledger.state_path(vault).exists()
+
+
+def test_failure_message_points_at_the_real_log_path(env, monkeypatch, capsys):
+    """errors.log lives in the vault, not at ~/.errors.log."""
+    cfg, vault, made, _ = env
+    _recorder(monkeypatch, raises=RuntimeError("boom"))
+
+    cmd.cmd_backfill(_args(all=True))
+    err = capsys.readouterr().err
+    assert str(vault / ".errors.log") in err
+    assert "~/.errors.log" not in err
+    # And the path named is the one log_error actually wrote to.
+    assert (vault / ".errors.log").exists()
+
+
+def test_abort_message_survives_a_multiline_stderr(env, monkeypatch, capsys):
+    cfg, vault, _, _ = env
+    noise = "Error: boom\n" + "\n".join(f"    at frame{i} (/x.js:{i})" for i in range(40))
+    _recorder(monkeypatch, raises=llm.LLMSubprocessError(
+        f"claude exited with code 1: {noise}"))
+
+    assert cmd.cmd_backfill(_args(all=True)) == 2
+    err = capsys.readouterr().err
+    stopped = [ln for ln in err.splitlines() if "stopped —" in ln]
+    assert len(stopped) == 1
+    assert len(stopped[0]) < 250
+    assert "frame39" not in err
+    # The actionable sentence is not buried.
+    assert "rerun to resume" in err
 
 
 def test_estimate_measures_the_flattened_prompt_not_the_raw_bytes(tmp_path: Path):

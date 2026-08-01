@@ -95,6 +95,32 @@ def attempts_exhausted(led: dict[str, Any], path: Path) -> bool:
     return int(entry.get("attempts") or 0) >= MAX_ATTEMPTS
 
 
+def clear_failed(led: dict[str, Any]) -> int:
+    """Drop every failed entry so it can be attempted again. Returns the count.
+
+    ``attempts >= MAX_ATTEMPTS`` is otherwise terminal: nothing decrements it,
+    and the changed-on-disk escape hatch cannot fire for archived transcripts,
+    which never change. That makes any misclassification of a failure
+    permanent and hand-editable only. This is the blast-radius limiter — it
+    matters more than getting every classification right, because it is what
+    makes getting one wrong survivable.
+
+    Entries are removed rather than reset, so a retried transcript is
+    indistinguishable from one never seen. ``done`` entries are untouched: this
+    retries failures, it does not re-harvest finished work.
+    """
+    sessions = led.get("sessions")
+    if not isinstance(sessions, dict):
+        return 0
+    doomed = [
+        key for key, entry in sessions.items()
+        if isinstance(entry, dict) and entry.get("status") != "done"
+    ]
+    for key in doomed:
+        del sessions[key]
+    return len(doomed)
+
+
 def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
     """Record success, resetting the attempt count to 0."""
     led.setdefault("sessions", {})[Path(path).stem] = {

@@ -61,29 +61,49 @@ def _select(args: argparse.Namespace, cfg: dict) -> list[discover.Transcript]:
 def _environmental(exc: BaseException) -> bool:
     """True when the failure is about the machine, not about this transcript.
 
-    ``LLMSubprocessError`` means no response was ever obtained: the ``claude``
-    CLI is missing, auth expired, the account is rate limited, or the
-    subprocess timed out twice. In none of those cases did anything judge the
-    transcript, so charging it an attempt is simply wrong — and charging
-    *every* transcript an attempt, three sweeps running, permanently abandons
-    the user's entire history, with the ledger's changed-on-disk escape hatch
-    unable to help because archived transcripts never change.
+    Environmental failures are identical for every input, so charging one an
+    attempt is wrong, and charging *all* of them an attempt — three sweeps
+    running — permanently abandons the user's entire history, since archived
+    transcripts never change and the ledger's changed-hash escape hatch can
+    never fire. Those abort the sweep instead, recording nothing.
 
-    Timeouts are the ambiguous case: a genuinely enormous transcript can time
-    out on its own merits. They are counted as environmental anyway, because
-    the two mistakes are not symmetric. Treating an environmental failure as
-    transcript-attributable silently and irreversibly poisons the ledger.
-    Treating a transcript-attributable failure as environmental stops the sweep
-    with a message naming the cause, which the user can route around with
-    ``--project`` or ``--limit``. Loud and recoverable beats silent and not.
+    Attributable failures are properties of the input. They consume that
+    transcript's budget and the sweep steps over them, because a sweep that
+    stops dead on one hostile transcript can never reach the ones behind it:
+    ``find_transcripts`` applies ``limit`` as a newest-first *prefix*, so no
+    ``--limit`` value skips past a wedge, and ``--project`` only helps when the
+    wedge happens to sit in a different project from the remaining work —
+    which the biggest, most timeout-prone transcripts do not.
 
-    Everything else — ``LLMParseError`` (the model answered, but with garbage
-    for this input), ``OSError`` on write, anything unforeseen — is treated as
-    attributable and consumes the transcript's attempt budget.
+    The split cannot be inferred from exception type alone: ``llm.call``
+    overloads two types across four unrelated conditions. It is drawn where
+    the errors are raised, via :class:`llm.LLMTimeoutError` and
+    :class:`llm.LLMEnvelopeError`.
+
+    environmental — missing CLI, failed auth, rate limit (``LLMSubprocessError``);
+        malformed CLI envelope (``LLMEnvelopeError``: a login nag, an update
+        notice, a PATH shim, an ``--output-format`` change).
+    attributable — double timeout (``LLMTimeoutError``: scales with prompt
+        size, so usually an oversized transcript); content-level parse garbage
+        (``LLMParseError`` from ``harvest``'s own ``_parse_llm_json`` call);
+        ``OSError`` on write; anything unforeseen.
     """
     from mnemo.core import llm
 
-    return isinstance(exc, llm.LLMSubprocessError)
+    if isinstance(exc, llm.LLMTimeoutError):
+        return False  # checked first: it is an LLMSubprocessError subclass
+    return isinstance(exc, (llm.LLMSubprocessError, llm.LLMEnvelopeError))
+
+
+def _first_line(exc: BaseException, limit: int = 200) -> str:
+    """One tidy line from an exception.
+
+    ``LLMSubprocessError`` embeds the subprocess's ``stderr``, which for a
+    Node-based CLI can be a multi-line stack trace. Splattering that across
+    the abort message buries the sentence that tells the user what to do.
+    """
+    text = " ".join(str(exc).splitlines()).strip() or type(exc).__name__
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 @command("backfill")
@@ -97,10 +117,17 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     vault_root = paths.vault_root(cfg)
     candidates = _select(args, cfg)
     led = ledger.load(vault_root)
+
+    if getattr(args, "retry_failed", False):
+        cleared = ledger.clear_failed(led)
+        ledger.save(vault_root, led)
+        noun = "entry" if cleared == 1 else "entries"
+        print(f"backfill: cleared {cleared} failed {noun} — eligible again.")
+
     todo = [t for t in candidates if ledger.should_harvest(led, t.path)]
 
     if not todo:
-        _report_nothing_to_do(candidates, led)
+        _report_nothing_to_do(candidates, led, vault_root)
         return _EXIT_OK
 
     projects = sorted({t.agent for t in todo})
@@ -173,18 +200,30 @@ def _sweep(
 
     if aborted is not None:
         print(
-            f"backfill: stopped — {aborted}\n"
+            f"backfill: stopped — {_first_line(aborted)}\n"
             f"          {processed} session(s) completed first; nothing was held "
             "against the remaining transcripts. Fix the above and rerun to resume.",
             file=sys.stderr,
         )
         return _EXIT_ABORTED
 
-    _report_summary(processed, produced, barren, failed)
+    _report_summary(processed, produced, barren, failed, vault_root)
     return _EXIT_SOME_FAILED if failed else _EXIT_OK
 
 
-def _report_summary(processed: int, produced: int, barren: int, failed: int) -> None:
+def _error_log(vault_root: Path) -> Path:
+    """Where ``errors.log_error`` actually writes — not ``~/.errors.log``.
+
+    The log lives in the vault, which defaults to ``~/mnemo``. Pointing a
+    brand-new user at a path that does not exist, on the first command they
+    ever run, is a bad first impression to inherit.
+    """
+    return Path(vault_root) / err_mod.ERROR_LOG_NAME
+
+
+def _report_summary(
+    processed: int, produced: int, barren: int, failed: int, vault_root: Path
+) -> None:
     fruitful = processed - barren
     print(
         f"backfill: processed {processed} session(s), wrote {produced} "
@@ -207,12 +246,15 @@ def _report_summary(processed: int, produced: int, barren: int, failed: int) -> 
               "shared/_inbox/ for review.")
     if failed:
         print(
-            f"          ⚠ failed: {failed} (see ~/.errors.log; re-run to retry)",
+            f"          ⚠ failed: {failed} (see {_error_log(vault_root)}; "
+            "re-run to retry)",
             file=sys.stderr,
         )
 
 
-def _report_nothing_to_do(candidates: list[discover.Transcript], led: dict) -> None:
+def _report_nothing_to_do(
+    candidates: list[discover.Transcript], led: dict, vault_root: Path
+) -> None:
     """Explain *why* there is nothing to do.
 
     ``should_harvest`` is False for finished work and for abandoned work alike.
@@ -229,8 +271,12 @@ def _report_nothing_to_do(candidates: list[discover.Transcript], led: dict) -> N
     done = len(candidates) - len(exhausted)
     print(
         f"backfill: nothing to do — {done} already harvested, {len(exhausted)} "
-        f"gave up after {ledger.MAX_ATTEMPTS} failed attempts (see ~/.errors.log)."
+        f"gave up after {ledger.MAX_ATTEMPTS} failed attempts "
+        f"(see {_error_log(vault_root)})."
     )
+    # The remedy belongs where the problem is reported: without it the only
+    # way out of a terminal `attempts >= 3` is hand-editing backfill-state.json.
+    print("          `mnemo backfill --retry-failed` clears them for another try.")
 
 
 def _estimate_input_tokens(transcripts: list[discover.Transcript]) -> int:
