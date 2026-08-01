@@ -78,6 +78,23 @@ def should_harvest(led: dict[str, Any], path: Path) -> bool:
     return int(entry.get("attempts") or 0) < MAX_ATTEMPTS
 
 
+def attempts_exhausted(led: dict[str, Any], path: Path) -> bool:
+    """True when this transcript is being skipped because it kept failing.
+
+    ``should_harvest`` returns False for two unrelated populations — finished
+    work and abandoned work — and a caller that reports "nothing to do" without
+    telling them apart hides every failure the sweep ever had. This is the
+    read-only predicate that separates them, so the key layout stays in this
+    module rather than being reconstructed by the CLI.
+    """
+    entry = _entry(led, path)
+    if entry is None or entry.get("status") == "done":
+        return False
+    if entry.get("hash") != transcript_hash(path):
+        return False  # changed on disk — it gets a fresh budget
+    return int(entry.get("attempts") or 0) >= MAX_ATTEMPTS
+
+
 def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
     """Record success, resetting the attempt count to 0."""
     led.setdefault("sessions", {})[Path(path).stem] = {

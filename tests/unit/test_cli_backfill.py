@@ -1,4 +1,11 @@
-"""backfill CLI: dry-run spends nothing, caps are honoured, ledger advances."""
+"""backfill CLI: dry-run spends nothing, caps are honoured, ledger advances.
+
+The load-bearing test in here is
+``test_environmental_failure_never_poisons_the_ledger``: an environment-level
+failure (no ``claude`` on PATH, expired auth, rate limit) used to charge an
+attempt against every transcript in the sweep, so three fruitless runs
+permanently abandoned the user's entire history.
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from mnemo.core import llm
 from mnemo.core.backfill import discover, ledger
 from mnemo.cli.commands import backfill as cmd
 
@@ -22,6 +30,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                      "autoOnFirstSession": True},
     }
     monkeypatch.setattr(cmd.cfg_mod, "load_config", lambda: cfg)
+    monkeypatch.setattr(cmd, "_current_project", lambda: "alpha")
 
     made: list[discover.Transcript] = []
     for i, name in enumerate(["s1", "s2", "s3"]):
@@ -29,11 +38,23 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         p.write_text('{"type":"user"}\n', encoding="utf-8")
         made.append(discover.Transcript(path=p, agent="alpha", cwd="/tmp/alpha", mtime=float(i)))
     made.sort(key=lambda t: t.mtime, reverse=True)
-    monkeypatch.setattr(
-        cmd.discover, "find_transcripts",
-        lambda **kw: made[: kw["limit"]] if kw.get("limit") else made,
-    )
-    return cfg, vault, made
+
+    # Records the kwargs it was called with and actually honours them, so a
+    # test can catch the CLI passing the wrong project or limit — a stub that
+    # ignored `project` would let the whole scoping branch rot untested.
+    seen_kwargs: list[dict] = []
+
+    def fake_find(**kw):
+        seen_kwargs.append(kw)
+        out = made
+        if kw.get("project") is not None:
+            out = [t for t in out if t.agent == kw["project"]]
+        if kw.get("limit") is not None:
+            out = out[: kw["limit"]]
+        return list(out)
+
+    monkeypatch.setattr(cmd.discover, "find_transcripts", fake_find)
+    return cfg, vault, made, seen_kwargs
 
 
 def _args(**kw) -> argparse.Namespace:
@@ -43,8 +64,26 @@ def _args(**kw) -> argparse.Namespace:
     return argparse.Namespace(**base)
 
 
+def _recorder(monkeypatch, result=None, raises=None):
+    """Stub harvest_session; returns the list it records called paths into."""
+    calls: list[Path] = []
+
+    def fake(jsonl_path, agent, config):
+        calls.append(jsonl_path)
+        if raises is not None:
+            raise raises
+        return list(result or [])
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+    return calls
+
+
+# --------------------------------------------------------------------------
+# dry run
+# --------------------------------------------------------------------------
+
 def test_dry_run_writes_nothing_and_calls_no_llm(env, monkeypatch, capsys):
-    cfg, vault, _ = env
+    cfg, vault, made, _ = env
 
     def explode(*a, **k):
         raise AssertionError("dry run must not harvest")
@@ -53,18 +92,21 @@ def test_dry_run_writes_nothing_and_calls_no_llm(env, monkeypatch, capsys):
 
     assert cmd.cmd_backfill(_args(dry_run=True, all=True)) == 0
     assert not ledger.state_path(vault).exists()
-    assert "3" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "3 session(s)" in out
+    # Every candidate is named, so a user can see what they would be paying for.
+    for t in made:
+        assert t.path.name in out
+    assert "nothing written" in out
 
+
+# --------------------------------------------------------------------------
+# the happy path + the ledger
+# --------------------------------------------------------------------------
 
 def test_harvests_and_records_in_ledger(env, monkeypatch):
-    cfg, vault, made = env
-    calls: list[Path] = []
-
-    def fake(jsonl_path, agent, config):
-        calls.append(jsonl_path)
-        return [Path("written.md")]
-
-    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+    cfg, vault, made, _ = env
+    calls = _recorder(monkeypatch, result=[Path("written.md")])
 
     assert cmd.cmd_backfill(_args(all=True)) == 0
     assert len(calls) == 3
@@ -73,25 +115,9 @@ def test_harvests_and_records_in_ledger(env, monkeypatch):
     assert ledger.should_harvest(led, made[0].path) is False
 
 
-def test_install_run_respects_install_cap(env, monkeypatch):
-    cfg, vault, _ = env
-    calls: list[Path] = []
-    monkeypatch.setattr(
-        cmd.harvest, "harvest_session",
-        lambda p, a, c: calls.append(p) or [],
-    )
-
-    assert cmd.cmd_backfill(_args(install_run=True)) == 0
-    assert len(calls) == 2  # installCap
-
-
 def test_second_run_skips_already_done_sessions(env, monkeypatch):
-    cfg, vault, _ = env
-    calls: list[Path] = []
-    monkeypatch.setattr(
-        cmd.harvest, "harvest_session",
-        lambda p, a, c: calls.append(p) or [],
-    )
+    cfg, vault, _, _ = env
+    calls = _recorder(monkeypatch)
 
     cmd.cmd_backfill(_args(all=True))
     first = len(calls)
@@ -99,8 +125,117 @@ def test_second_run_skips_already_done_sessions(env, monkeypatch):
     assert len(calls) == first  # nothing re-harvested
 
 
+def test_summary_separates_barren_sessions_from_productive_ones(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+
+    def fake(jsonl_path, agent, config):
+        return [Path("a.md")] if jsonl_path == made[0].path else []
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+
+    assert cmd.cmd_backfill(_args(all=True)) == 0
+    out = capsys.readouterr().out
+    assert "processed 3 session(s)" in out
+    assert "wrote 1 memory file(s) from 1 of them" in out
+    assert "2 produced nothing" in out
+    assert "mnemo extract" in out
+
+
+# --------------------------------------------------------------------------
+# scoping
+# --------------------------------------------------------------------------
+
+def test_install_run_respects_install_cap_and_scopes_to_this_repo(env, monkeypatch):
+    cfg, vault, _, seen = env
+    calls = _recorder(monkeypatch)
+
+    assert cmd.cmd_backfill(_args(install_run=True)) == 0
+    assert len(calls) == 2  # installCap
+    assert seen[-1] == {"project": "alpha", "limit": 2}
+
+
+def test_install_run_never_prompts(env, monkeypatch):
+    cfg, vault, _, _ = env
+    calls = _recorder(monkeypatch)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda *a: (_ for _ in ()).throw(AssertionError("install-run must not prompt")),
+    )
+    # yes=False: only the install_run branch can keep this from prompting.
+    assert cmd.cmd_backfill(_args(install_run=True, yes=False)) == 0
+    assert len(calls) == 2
+
+
+def test_default_scope_is_the_current_repo(env, monkeypatch):
+    cfg, vault, _, seen = env
+    _recorder(monkeypatch)
+    cmd.cmd_backfill(_args())
+    assert seen[-1] == {"project": "alpha", "limit": None}
+
+
+def test_all_flag_drops_the_project_filter(env, monkeypatch):
+    cfg, vault, _, seen = env
+    _recorder(monkeypatch)
+    cmd.cmd_backfill(_args(all=True))
+    assert seen[-1] == {"project": None, "limit": None}
+
+
+def test_explicit_project_wins_over_the_cwd(env, monkeypatch):
+    cfg, vault, _, seen = env
+    calls = _recorder(monkeypatch)
+    cmd.cmd_backfill(_args(project="beta"))
+    assert seen[-1] == {"project": "beta", "limit": None}
+    assert calls == []  # no transcripts belong to beta
+
+
+def test_limit_zero_means_zero_not_unlimited(env, monkeypatch, capsys):
+    cfg, vault, _, seen = env
+    calls = _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True, limit=0)) == 0
+    assert seen[-1] == {"project": None, "limit": 0}
+    assert calls == []
+    assert "no transcripts found" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# the confirmation prompt
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("reply", ["y", "YES", " yes "])
+def test_prompt_accepts_yes(env, monkeypatch, reply):
+    cfg, vault, _, _ = env
+    calls = _recorder(monkeypatch)
+    monkeypatch.setattr("builtins.input", lambda *a: reply)
+    assert cmd.cmd_backfill(_args(all=True, yes=False)) == 0
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("reply", ["", "n", "no", "whatever"])
+def test_prompt_declines_by_default(env, monkeypatch, reply, capsys):
+    cfg, vault, _, _ = env
+    calls = _recorder(monkeypatch)
+    monkeypatch.setattr("builtins.input", lambda *a: reply)
+    assert cmd.cmd_backfill(_args(all=True, yes=False)) == 0
+    assert calls == []
+    assert "cancelled" in capsys.readouterr().out
+
+
+def test_prompt_treats_eof_as_no(env, monkeypatch):
+    cfg, vault, _, _ = env
+    calls = _recorder(monkeypatch)
+    monkeypatch.setattr(
+        "builtins.input", lambda *a: (_ for _ in ()).throw(EOFError())
+    )
+    assert cmd.cmd_backfill(_args(all=True, yes=False)) == 0
+    assert calls == []
+
+
+# --------------------------------------------------------------------------
+# failure handling
+# --------------------------------------------------------------------------
+
 def test_one_failing_session_does_not_abort_the_run(env, monkeypatch):
-    cfg, vault, made = env
+    cfg, vault, made, _ = env
     seen: list[Path] = []
 
     def flaky(jsonl_path, agent, config):
@@ -111,24 +246,162 @@ def test_one_failing_session_does_not_abort_the_run(env, monkeypatch):
 
     monkeypatch.setattr(cmd.harvest, "harvest_session", flaky)
 
-    assert cmd.cmd_backfill(_args(all=True)) == 0
+    assert cmd.cmd_backfill(_args(all=True)) == 1  # some work failed
     assert len(seen) == 3
 
     led = ledger.load(vault)
     assert led["sessions"][made[0].path.stem]["status"] == "failed"
 
 
-def test_disabled_config_is_a_no_op(env, monkeypatch):
-    cfg, vault, _ = env
-    cfg["backfill"]["enabled"] = False
+def test_failures_are_reported_and_change_the_exit_code(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+
+    def flaky(jsonl_path, agent, config):
+        if jsonl_path == made[0].path:
+            raise RuntimeError("boom")
+        return []
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", flaky)
+
+    assert cmd.cmd_backfill(_args(all=True)) == 1
+    captured = capsys.readouterr()
+    assert "failed: 1" in captured.err
+    assert ".errors.log" in captured.err
+
+
+def test_environmental_failure_never_poisons_the_ledger(env, monkeypatch):
+    """Three runs with a broken `claude` must leave everything harvestable.
+
+    Regression test for the bug where every transcript in the sweep was
+    charged an attempt for a failure that had nothing to do with it. Archived
+    transcripts never change on disk, so the ledger's changed-hash escape
+    hatch cannot rescue them: three bad runs abandoned the whole history for
+    good, and said nothing about it.
+    """
+    cfg, vault, made, _ = env
+    _recorder(monkeypatch, raises=llm.LLMSubprocessError(
+        "claude CLI not found; install Claude Code first"))
+
+    for _ in range(3):
+        assert cmd.cmd_backfill(_args(all=True)) == 2  # aborted, not "fine"
+
+    led = ledger.load(vault)
+    for t in made:
+        assert ledger.should_harvest(led, t.path) is True
+        assert ledger.attempts_exhausted(led, t.path) is False
+
+    # And a working environment afterwards harvests all of them.
+    calls = _recorder(monkeypatch, result=[Path("a.md")])
+    assert cmd.cmd_backfill(_args(all=True)) == 0
+    assert len(calls) == 3
+
+
+def test_environmental_failure_stops_the_sweep_immediately(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
     calls: list[Path] = []
-    monkeypatch.setattr(
-        cmd.harvest, "harvest_session",
-        lambda p, a, c: calls.append(p) or [],
-    )
+
+    def fake(jsonl_path, agent, config):
+        calls.append(jsonl_path)
+        raise llm.LLMSubprocessError("rate limit exceeded")
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+
+    assert cmd.cmd_backfill(_args(all=True)) == 2
+    assert len(calls) == 1  # did not burn through the other two
+    assert "rate limit exceeded" in capsys.readouterr().err
+
+
+def test_parse_errors_stay_attributable_to_their_transcript(env, monkeypatch):
+    """A model that answers with garbage is this transcript's problem."""
+    cfg, vault, made, _ = env
+    calls = _recorder(monkeypatch, raises=llm.LLMParseError("no JSON object found"))
+
+    assert cmd.cmd_backfill(_args(all=True)) == 1
+    assert len(calls) == 3  # every one attempted; not an abort
+    led = ledger.load(vault)
+    assert led["sessions"][made[0].path.stem]["attempts"] == 1
+
+
+def test_keyboard_interrupt_exits_130_and_keeps_earlier_work(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+
+    def fake(jsonl_path, agent, config):
+        if jsonl_path == made[1].path:
+            raise KeyboardInterrupt()
+        return []
+
+    monkeypatch.setattr(cmd.harvest, "harvest_session", fake)
+
+    assert cmd.cmd_backfill(_args(all=True)) == 130
+    assert "interrupted" in capsys.readouterr().err.lower()
+
+    led = ledger.load(vault)
+    assert ledger.should_harvest(led, made[0].path) is False  # flushed
+    assert ledger.should_harvest(led, made[1].path) is True   # resumable
+
+
+def test_exhausted_transcripts_are_not_reported_as_harvested(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+    led = ledger.load(vault)
+    for t in made:
+        for _ in range(ledger.MAX_ATTEMPTS):
+            ledger.mark_failed(led, t.path, "boom")
+    ledger.save(vault, led)
+
+    _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True)) == 0
+    out = capsys.readouterr().out
+    assert "3 gave up after 3 failed attempts" in out
+    assert "every transcript is already harvested" not in out
+
+
+# --------------------------------------------------------------------------
+# config + estimate
+# --------------------------------------------------------------------------
+
+def test_disabled_config_is_a_no_op(env, monkeypatch):
+    cfg, vault, _, _ = env
+    cfg["backfill"]["enabled"] = False
+    calls = _recorder(monkeypatch)
     assert cmd.cmd_backfill(_args(all=True)) == 0
     # Asserted positively rather than by a raising stub: the sweep's
     # per-session ``except Exception`` would swallow the raise and the test
     # would pass even with the enabled check gone.
     assert calls == []
     assert not ledger.state_path(vault).exists()
+
+
+def test_estimate_measures_the_flattened_prompt_not_the_raw_bytes(tmp_path: Path):
+    """A megabyte of tool_use input is a handful of tokens once flattened."""
+    import json
+
+    p = tmp_path / "big.jsonl"
+    p.write_text(
+        json.dumps({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write", "input": {"content": "x" * 1_000_000}},
+            ]},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    t = discover.Transcript(path=p, agent="a", cwd="/tmp/a", mtime=0.0)
+
+    raw_proxy = p.stat().st_size // 4
+    est = cmd._estimate_input_tokens([t])
+    assert est < 100            # "[assistant] [tool_use: Write]"
+    assert raw_proxy > 200_000  # what the byte proxy would have claimed
+
+
+def test_estimate_survives_an_unreadable_transcript(tmp_path: Path):
+    missing = discover.Transcript(path=tmp_path / "gone.jsonl", agent="a",
+                                  cwd="/tmp/a", mtime=0.0)
+    assert cmd._estimate_input_tokens([missing]) == 0
+
+
+@pytest.mark.parametrize("n,expected", [
+    (0, "0"), (999, "999"), (1_000, "1K"), (37_528, "38K"),
+    (999_999, "1000K"), (5_994_882, "6.0M"), (93_787_077, "93.8M"),
+])
+def test_fmt_tokens_rounds_hard(n, expected):
+    assert cmd._fmt_tokens(n) == expected
