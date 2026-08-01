@@ -186,15 +186,43 @@ def _doctor_check_universal_promotion(vault: Path) -> bool:
     return True
 
 
+def _is_backfill_staged(vault: Path, key: str) -> bool:
+    """True when the _inbox file behind a state key carries the backfill stamp.
+
+    Origin lives on disk, not in the state file: the state schema has no
+    ``origin`` field, and both writers (``inbox.rendering._render_page`` and
+    ``extract.promote._render_project_page``) stamp a **top-level**
+    ``origin: backfill`` line into the staged page itself. Reading it back is
+    therefore a one-file read keyed off ``<type>/<slug>``, and needs no state
+    migration for vaults written before the backfill feature landed.
+    """
+    from mnemo.core.filters import parse_frontmatter
+
+    page_type, _, slug = key.partition("/")
+    if not slug:
+        return False
+    md = vault / "shared" / "_inbox" / page_type / f"{slug}.md"
+    try:
+        fm = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # missing file, unreadable bytes, malformed frontmatter
+        return False
+    return str(fm.get("origin") or "") == "backfill"
+
+
 def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
     """Warn when extraction-state has _inbox entries that cross the
     universal threshold but never moved into ``shared/<type>/``.
 
     Diagnoses the v0.15 dogfood gap: ``_union_with_prior_sources`` accrued
     cross-project ``source_files`` but the apply dispatcher had no branch
-    that would promote them. The reconciler in
-    :mod:`mnemo.core.extract` clears the backlog on every extract; if
-    this warning fires, the user is reading doctor between extracts.
+    that would promote them. The reconciler in :mod:`mnemo.core.extract`
+    clears that backlog on every extract, so a live entry sitting above the
+    threshold means the user is reading doctor between extracts.
+
+    Backfill-origin entries are exempt: the origin gate keeps them staged
+    permanently and by design, so they are not a backlog and no amount of
+    ``mnemo extract`` will move them. They are reported separately as a
+    neutral status line.
 
     Always returns True — advisory check, not a gate.
     """
@@ -212,8 +240,15 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
 
     threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
     pending: list[str] = []
+    backfill_staged: list[str] = []
     for key, entry in state.entries.items():
         if entry.status != "inbox":
+            continue
+        if _is_backfill_staged(vault, key):
+            # Awaiting human review, not awaiting reconciliation. Counted
+            # regardless of threshold — project-type staged pages are
+            # single-source and never cross it.
+            backfill_staged.append(key)
             continue
         projects = projects_for_rule(list(entry.source_files))
         if is_universal(projects, threshold):
@@ -228,4 +263,11 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
             print(f"    • {k}")
         if len(pending) > 5:
             print(f"    … {len(pending) - 5} more")
+
+    if backfill_staged:
+        print(
+            f"  {len(backfill_staged)} backfill rule(s) staged in _inbox/ awaiting review — "
+            f"reconstructed from old transcripts; read them under "
+            f"shared/_inbox/ and move the keepers into shared/<type>/."
+        )
     return True
