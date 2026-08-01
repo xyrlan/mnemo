@@ -444,6 +444,42 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
                           "args": ("help",)},
 }
 
+# The subset that makes sense under the plugin. init/uninstall are absent by
+# design: the plugin declares its own hooks and MCP server, so there is nothing
+# for them to wire or unwire — `/plugin uninstall mnemo` is the uninstall.
+# migrate-plugin is plugin-only, for users who ran `mnemo init` beforehand.
+PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
+    "status":  {"description": "vault state + hook health", "args": ("status",)},
+    "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
+    "open":    {"description": "open vault in Obsidian", "args": ("open",)},
+    "fix":     {"description": "reset circuit breaker", "args": ("fix",)},
+    "help":    {"description": "list commands", "args": ("help",)},
+    "migrate": {"description": "remove a pre-plugin install so hooks stop firing twice",
+                "args": ("migrate-plugin",)},
+    "statusline": {"description": "install the optional mnemo status line",
+                   "args": ("statusline", "--install")},
+}
+
+
+def render_plugin_command(spec: dict[str, Any]) -> str:
+    """Render a plugin command file.
+
+    Goes through ${CLAUDE_PLUGIN_ROOT} rather than a resolved path: the plugin
+    is generated once and installed on every platform, so it cannot bake in a
+    location, and the launcher is what knows where the binary actually lives.
+    """
+    desc = spec["description"].replace('"', '\\"')
+    args = " ".join(spec["args"])
+    return (
+        "---\n"
+        f"description: {desc}\n"
+        "allowed-tools: Bash\n"
+        "disable-model-invocation: true\n"
+        "---\n"
+        "\n"
+        f'!`"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {args}`\n'
+    )
+
 
 def slash_command_manifest_line(spec: dict[str, Any]) -> str:
     """Render the generic form used by the committed plugin manifest.

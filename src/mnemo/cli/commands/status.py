@@ -31,6 +31,32 @@ def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) ->
     )
 
 
+def _count_plugin_hooks(expected_events: tuple[str, ...]) -> int | None:
+    """Count hooks the plugin declares, or None when not running as one.
+
+    A plugin install has no hooks in settings.json — they live in the plugin's
+    own hooks.json. Reading only settings.json made status report "not
+    installed" to users whose install was working.
+    """
+    import json
+    import os
+
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if not root:
+        return None
+    try:
+        data = json.loads((Path(root) / "hooks" / "hooks.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
+    return sum(
+        1
+        for ev in expected_events
+        for entry in hooks.get(ev, [])
+        for _ in entry.get("hooks", [])
+    )
+
+
 def _print_scope_line(label: str, settings_path: Path, expected_events: tuple[str, ...]) -> None:
     n = _count_mnemo_hooks(settings_path, expected_events)
     if not settings_path.exists():
@@ -57,10 +83,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     project_settings = cwd / ".claude" / "settings.json"
     global_settings = Path(os.path.expanduser("~/.claude/settings.json"))
 
-    if scope in ("project", "all"):
-        _print_scope_line("project", project_settings, expected_events)
-    if scope in ("global", "all"):
-        _print_scope_line("global", global_settings, expected_events)
+    # Under a plugin the two settings.json scopes are both legitimately empty,
+    # so reporting them would read as "mnemo is not installed". One line about
+    # where the hooks actually come from replaces both.
+    plugin_n = _count_plugin_hooks(expected_events)
+    if plugin_n is not None:
+        print(f"Hooks (plugin): {plugin_n}/{len(expected_events)} — declared by the mnemo plugin")
+    else:
+        if scope in ("project", "all"):
+            _print_scope_line("project", project_settings, expected_events)
+        if scope in ("global", "all"):
+            _print_scope_line("global", global_settings, expected_events)
     breaker = "closed (ok)" if err_mod.should_run(vault) else "OPEN — recent errors detected"
     print(f"Circuit breaker: {breaker}")
     log = vault / ".errors.log"

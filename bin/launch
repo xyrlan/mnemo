@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Resolve the mnemo binary for this platform, fetching it once, then exec it.
+#
+# The plugin ships this script, not the binary: four platform builds at ~20MB
+# each would be cloned by every user for the three they cannot run. Instead the
+# tarball for the running platform is downloaded on first use into
+# ${CLAUDE_PLUGIN_DATA}, which survives plugin updates, and cached per version.
+#
+# Every path through this script exits 0. It runs as a Claude Code hook, where
+# a non-zero exit is not "mnemo is unavailable" but "something went wrong with
+# your session" — and on PreToolUse it would read as a denial. Failing open is
+# the whole contract: mnemo missing must be invisible, never obstructive.
+
+set -u
+
+REPO="xyrlan/mnemo"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.mnemo-plugin}"
+
+# The hooks Claude Code fires on the hot path. A download here would stall
+# every prompt behind a network round trip, so these run only from cache and
+# no-op when it is cold. SessionStart does the fetching (see below), which
+# means a fresh install is fully armed from its second session onward, and
+# `mnemo status` / `mnemo doctor` can force it sooner.
+HOT_PATH_HOOKS="user_prompt_submit pre_tool_use session_end"
+
+log() { printf 'mnemo: %s\n' "$1" >&2; }
+
+plugin_version() {
+    # Deliberately not jq: it is not guaranteed present, and this is one field.
+    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null | head -1
+}
+
+detect_target() {
+    local os arch
+    os="$(uname -s 2>/dev/null || echo unknown)"
+    arch="$(uname -m 2>/dev/null || echo unknown)"
+    case "$os" in
+        Darwin) os=darwin ;;
+        Linux)  os=linux ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT) os=win ;;
+        *) return 1 ;;
+    esac
+    case "$arch" in
+        arm64|aarch64) arch=arm64 ;;
+        x86_64|amd64)  arch=x64 ;;
+        *) return 1 ;;
+    esac
+    # Only darwin ships an arm64 build; linux/win are x64-only for now, and
+    # both run x64 binaries on arm hardware through emulation.
+    [ "$os" = darwin ] || arch=x64
+    printf '%s-%s' "$os" "$arch"
+}
+
+fetch() {
+    local url="$1" dest="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 120 -o "$dest" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=120 -O "$dest" "$url"
+    else
+        return 1
+    fi
+}
+
+verify_checksum() {
+    local file="$1" expected_file="$2" expected actual
+    expected="$(awk '{print $1}' "$expected_file" 2>/dev/null | head -1)"
+    [ -n "$expected" ] || return 1
+    if command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    else
+        # Refuse rather than install an unverified binary off the network.
+        return 1
+    fi
+    [ "$actual" = "$expected" ]
+}
+
+download_binary() {
+    local version="$1" target="$2" install_dir="$3"
+    local tag="v$version"
+    local asset="mnemo-$tag-$target.tar.gz"
+    local base="https://github.com/$REPO/releases/download/$tag"
+    local tmp
+
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/mnemo-dl.XXXXXX")" || return 1
+    # shellcheck disable=SC2064  # expand tmp now, not at trap time
+    trap "rm -rf '$tmp'" EXIT
+
+    log "fetching the mnemo $tag binary for $target (one time, ~10MB)…"
+    fetch "$base/$asset" "$tmp/$asset" || {
+        log "download failed — check your connection, or install manually:"
+        log "  pipx install mnemo-claude && mnemo init"
+        return 1
+    }
+    fetch "$base/$asset.sha256" "$tmp/$asset.sha256" || {
+        log "checksum file unavailable; refusing to install unverified binary"
+        return 1
+    }
+    verify_checksum "$tmp/$asset" "$tmp/$asset.sha256" || {
+        log "checksum mismatch — refusing to install. Report this at"
+        log "  https://github.com/$REPO/issues"
+        return 1
+    }
+
+    tar -xzf "$tmp/$asset" -C "$tmp" || { log "could not unpack $asset"; return 1; }
+    [ -d "$tmp/mnemo" ] || { log "unexpected archive layout in $asset"; return 1; }
+
+    mkdir -p "$(dirname "$install_dir")" || return 1
+    # Atomic: a concurrent hook may have won the race, which is fine — its copy
+    # is byte-identical, and the loser's temp dir is cleaned up by the trap.
+    if ! mv "$tmp/mnemo" "$install_dir" 2>/dev/null; then
+        [ -x "$install_dir/mnemo" ] || { log "could not install to $install_dir"; return 1; }
+    fi
+    log "mnemo $tag ready."
+}
+
+main() {
+    local version target install_dir binary sub
+    version="$(plugin_version)"
+    [ -n "$version" ] || { log "cannot read the plugin version; skipping"; return 0; }
+
+    target="$(detect_target)" || {
+        log "unsupported platform ($(uname -s 2>/dev/null) $(uname -m 2>/dev/null))."
+        log "Install from source instead: pipx install mnemo-claude && mnemo init"
+        return 0
+    }
+
+    install_dir="$DATA_DIR/bin/$version/$target"
+    binary="$install_dir/mnemo"
+    [ "${target%%-*}" = "win" ] && binary="$install_dir/mnemo.exe"
+
+    if [ ! -x "$binary" ]; then
+        # `hook <event>` — check the event against the hot-path list.
+        sub=""
+        [ "${1:-}" = "hook" ] && sub="${2:-}"
+        case " $HOT_PATH_HOOKS " in
+            *" $sub "*) return 0 ;;  # cold cache on the hot path: stay silent
+        esac
+        download_binary "$version" "$target" "$install_dir" || return 0
+        [ -x "$binary" ] || return 0
+    fi
+
+    exec "$binary" "$@"
+}
+
+main "$@"
+exit 0
