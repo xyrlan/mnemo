@@ -51,7 +51,15 @@ def test_parser_flags_page_whose_sources_are_all_backfill():
     assert pages[0].origin_backfill is True
 
 
-def test_parser_leaves_mixed_origin_page_unflagged():
+def test_parser_flags_mixed_origin_page():
+    """One reconstructed source is enough — see Task 6b.
+
+    This asserted ``is False`` when the gate only governed routing, where
+    ``all`` vs ``any`` made no observable difference (multi-source pages stage
+    unconditionally). Once the gate also governs universal promotion, ``all``
+    lets a page with one live and one backfill source cross two projects and
+    land in the sacred dir unreviewed.
+    """
     text = json.dumps({"pages": [{
         "slug": "s", "type": "feedback", "name": "n", "description": "d",
         "body": "b", "source_files": ["bots/a/memory/x.md", "bots/a/memory/live.md"],
@@ -59,7 +67,7 @@ def test_parser_leaves_mixed_origin_page_unflagged():
     pages = _parse_pages_from_response(
         text, "feedback", backfill_sources=frozenset({"bots/a/memory/x.md"}),
     )
-    assert pages[0].origin_backfill is False
+    assert pages[0].origin_backfill is True
 
 
 def test_parser_without_backfill_sources_flags_nothing():

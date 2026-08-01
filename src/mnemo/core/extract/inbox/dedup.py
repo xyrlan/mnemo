@@ -54,6 +54,12 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
             tags=all_tags,
             enforce=getattr(chosen, "enforce", None),
             activates_on=getattr(chosen, "activates_on", None),
+            # Sticky across the merge: if any contributing page was
+            # reconstructed from an archived transcript, the merged page is
+            # partly reconstructed too and must stay behind the origin gate.
+            origin_backfill=any(
+                getattr(p, "origin_backfill", False) for p in items
+            ),
         ))
     return merged
 

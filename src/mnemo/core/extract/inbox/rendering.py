@@ -104,6 +104,12 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         system_marker = "needs-review"
 
     stability = getattr(page, "stability", None) or "stable"
+    # Origin stamp — TOP-LEVEL, not nested under `metadata:`. scanner's
+    # parse_frontmatter is a flat `key: value` line reader, so a nested block
+    # reads back as "". The end-of-extract universal-promotion reconciler
+    # rebuilds pages from these staged files and needs to see the stamp, so it
+    # has to survive the round-trip verbatim.
+    origin_line = "origin: backfill\n" if getattr(page, "origin_backfill", False) else ""
     # Unified tags list: system marker first, then LLM-emitted topic tags.
     # The shared filter (core/filters.py) reads this same list; topic_tags()
     # strips the marker when bucketing by topic in the HOME dashboard.
@@ -155,6 +161,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         f"stability: {stability}\n"
+        f"{origin_line}"
         f"{extras}"
         "sources:\n"
         f"{sources_yaml}\n"

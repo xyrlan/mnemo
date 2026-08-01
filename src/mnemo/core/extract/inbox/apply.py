@@ -54,8 +54,15 @@ def _is_universal_promotion(
       entries gaining a second project keep going through the upgrade branch
       (which writes a ``.update-proposed.md`` sibling for human review rather
       than overwriting the sacred file).
+
+    Backfill-origin pages never qualify. Universal promotion writes into the
+    sacred dir unreviewed, which is exactly what the origin gate exists to
+    prevent; returning False here drops the page through to the inbox
+    fallback row instead.
     """
     if is_auto:
+        return False
+    if getattr(page, "origin_backfill", False):
         return False
     if entry is not None and entry.status == "auto_promoted":
         return False

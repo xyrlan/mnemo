@@ -198,9 +198,11 @@ def _parse_pages_from_response(
         tags = _sanitize_llm_tags(rp.get("tags"))
         enforce = _sanitize_llm_enforce(rp.get("enforce"))
         activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
-        origin_backfill = bool(backfill_sources) and all(
-            s in backfill_sources for s in source_files
-        )
+        # ``any``, not ``all``: a page mixing one live source with one
+        # reconstructed source is still partly reconstructed, and under ``all``
+        # it would carry origin_backfill=False, span two projects, and be
+        # universally promoted into the sacred dir unreviewed.
+        origin_backfill = any(s in backfill_sources for s in source_files)
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -527,7 +529,14 @@ def _reconcile_universal_promotions(
             source_hash=entry.source_hash,
             stability=str(fm.get("stability") or "stable"),
             tags=list(fm.get("tags") or []),
+            # Written top-level by rendering._render_page; parse_frontmatter is
+            # a flat reader, so this is the only spelling that round-trips.
+            origin_backfill=str(fm.get("origin") or "") == "backfill",
         )
+        if page.origin_backfill:
+            # Reconstructed from archived transcripts — the origin gate keeps
+            # it staged until a human reviews it, cross-project or not.
+            continue
         scratch = ApplyResult()
         target = _inbox_path(vault_root, page)
         try:

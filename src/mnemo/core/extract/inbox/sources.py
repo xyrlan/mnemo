@@ -46,4 +46,5 @@ def union_with_prior_sources(page: ExtractedPage, entry: StateEntry | None) -> E
         tags=list(getattr(page, "tags", None) or []),
         enforce=getattr(page, "enforce", None),
         activates_on=getattr(page, "activates_on", None),
+        origin_backfill=getattr(page, "origin_backfill", False),
     )
