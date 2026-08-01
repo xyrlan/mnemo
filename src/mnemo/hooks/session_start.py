@@ -165,6 +165,35 @@ def _emit_injection(payload_text: str, out: object = None) -> None:
     out_stream.flush()
 
 
+def _warn_about_duplicate_install(vault) -> None:
+    """Tell the user once when a plugin install overlaps a `mnemo init` one.
+
+    Only meaningful under the plugin: outside it, mnemo hooks in settings.json
+    *are* the install, not a leftover. CLAUDE_PLUGIN_ROOT is how we tell.
+    """
+    from pathlib import Path
+
+    if not os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        return
+
+    from mnemo.install import migration
+
+    state = Path(vault) / ".mnemo" / "plugin-migration-notice"
+    if not migration.should_notify(state):
+        return
+
+    candidates = [
+        Path.home() / ".claude" / "settings.json",
+        Path(os.getcwd()) / ".claude" / "settings.json",
+    ]
+    legacy = migration.find_legacy_installs(candidates)
+    if not legacy:
+        return
+
+    print(migration.notice(legacy), file=sys.stderr)
+    migration.mark_notified(state)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -177,6 +206,18 @@ def main() -> int:
         vault = paths.vault_root(cfg)
         if not errors.should_run(vault):
             return 0
+        # A plugin install never runs `mnemo init`, so nothing else scaffolds
+        # the vault: the hooks below would create only the directories they
+        # touch, leaving no HOME.md, no config, and no shared/ for extracted
+        # rules to land in. scaffold_vault is idempotent and skips files that
+        # already exist, so this is a no-op on every subsequent session.
+        try:
+            if not (Path(vault) / "HOME.md").exists():
+                from mnemo.install import scaffold
+                scaffold.scaffold_vault(vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.scaffold", e)
+
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()
         ainfo = agent.resolve_agent(cwd)
@@ -224,6 +265,15 @@ def main() -> int:
                 log_writer.append_line(ainfo.name, f"🟢 session started ({source})", cfg)
             except Exception as e:
                 errors.log_error(vault, "session_start.log", e)
+
+        # Plugin installs cannot rewrite settings.json, so a leftover
+        # `mnemo init` from before the plugin keeps firing alongside it and
+        # everything happens twice. Report it once, on stderr — stdout carries
+        # the injection envelope and must stay pure JSON.
+        try:
+            _warn_about_duplicate_install(vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.migration_notice", e)
 
         # v0.5 injection — opt-in, fail-silent. Must run last so the JSON
         # envelope is the only thing on stdout.

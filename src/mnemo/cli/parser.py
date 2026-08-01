@@ -21,6 +21,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "telemetry",
     "recall",
     "migrate-worktree-briefings",
+    "migrate-plugin",
     "dedup-rules",
     "disable-rule",
     "list-enforced",
@@ -153,7 +154,14 @@ def _build_parser() -> argparse.ArgumentParser:
     hook = sub.add_parser("hook")
     hook.add_argument("event", choices=sorted(HOOK_MODULES))
     sub.add_parser("mcp-server")
-    sub.add_parser("statusline")
+    # Bare `statusline` stays internal (the composer calls it every render);
+    # the two flags are the user-facing opt-in, since a plugin cannot declare
+    # a status line for the user.
+    statusline = sub.add_parser("statusline")
+    statusline.add_argument("--install", action="store_true",
+                            help="wire the mnemo status line into ~/.claude/settings.json")
+    statusline.add_argument("--remove", action="store_true",
+                            help="remove it and restore any status line it replaced")
     sub.add_parser("statusline-compose")
     uninstall = sub.add_parser("uninstall", help="remove hooks (keeps vault)")
     uninstall.add_argument("--yes", "-y", action="store_true")
@@ -175,6 +183,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--repos", nargs="+", default=[],
         help="canonical repo paths whose worktree briefings should be relocated",
     )
+    migrate_plugin = sub.add_parser(
+        "migrate-plugin",
+        help="remove a pre-plugin `mnemo init` install so hooks stop firing twice",
+    )
+    migrate_plugin.add_argument("--dry-run", action="store_true", help="report without changing anything")
     migrate.add_argument(
         "--dry-run", action="store_true",
         help="list planned moves without performing them",

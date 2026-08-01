@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mnemo": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd",
+      "args": ["mcp-server"]
+    }
+  }
+}

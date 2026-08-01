@@ -41,24 +41,56 @@ function parseFlags(argv, { warn = (msg) => process.stderr.write(`warning: ${msg
 }
 
 
+// Decide what we need before installing anything.
+//
+// Installer first, Python second -- the reverse order bailed out on a machine
+// that had uv but no system Python, which is precisely the case uv solves: it
+// provisions its own CPython. The tool that would have worked was never
+// reached, and the user was told to go install Python.
+function resolveToolchain({ pickInstallerFn = pickInstaller, detectPythonFn = detectPython } = {}) {
+  const installer = pickInstallerFn();
+  const python = detectPythonFn();
+
+  if (installer === "uv") return { installer, python };
+
+  if (!installer) {
+    return {
+      error: python
+        ? `No Python installer (uv, pipx, or pip) found on PATH.\n  → ${pep668InstallHint()}`
+        : "Neither a Python installer nor Python 3.8+ was found.\n" +
+          "  → Install uv (https://docs.astral.sh/uv/) — it brings its own Python:\n" +
+          "      curl -LsSf https://astral.sh/uv/install.sh | sh",
+    };
+  }
+
+  // pipx and pip both run on the system interpreter.
+  if (!python) {
+    return {
+      error:
+        `Python 3.8+ not found (required by ${installer}).\n` +
+        "  → Install Python 3.8+ (https://www.python.org/downloads/), or install uv,\n" +
+        "    which brings its own: curl -LsSf https://astral.sh/uv/install.sh | sh",
+    };
+  }
+
+  return { installer, python };
+}
+
+
 async function runInstall(argv) {
   const flags = parseFlags(argv);
 
-  const py = detectPython();
-  if (!py) {
-    m.err("Python 3.8+ not found.");
-    m.plain("  → Install Python 3.8 or newer (https://www.python.org/downloads/) and retry.");
+  const { installer, python: py, error } = resolveToolchain();
+  if (error) {
+    const [first, ...rest] = error.split("\n");
+    m.err(first);
+    rest.forEach((line) => m.plain(line));
     return 1;
   }
-  if (!flags.quiet) m.ok(`Python ${py.version.major}.${py.version.minor} detected`);
-
-  const installer = pickInstaller();
-  if (!installer) {
-    m.err("No Python installer (uv, pipx, or pip) found on PATH.");
-    m.plain(`  → ${pep668InstallHint()}`);
-    return 1;
+  if (!flags.quiet) {
+    if (py) m.ok(`Python ${py.version.major}.${py.version.minor} detected`);
+    m.ok(`installer: ${installer}`);
   }
-  if (!flags.quiet) m.ok(`installer: ${installer}`);
 
   const installed = isAlreadyInstalled();
   if (installed && !flags.upgrade) {
@@ -100,4 +132,4 @@ async function runInstall(argv) {
 }
 
 
-module.exports = { runInstall, parseFlags };
+module.exports = { runInstall, parseFlags, resolveToolchain };

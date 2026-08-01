@@ -58,13 +58,13 @@ def _write_claude_json_with_mnemo(path: Path) -> None:
 def test_render_returns_empty_when_mcp_not_registered(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     # File doesn't exist
-    assert sl.render(tmp_vault, claude_json) == ""
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 def test_render_returns_empty_when_claude_json_has_no_mcp_section(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text(json.dumps({"theme": "dark"}))
-    assert sl.render(tmp_vault, claude_json) == ""
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 def test_render_returns_empty_when_other_servers_but_no_mnemo(tmp_vault, tmp_path):
@@ -72,13 +72,13 @@ def test_render_returns_empty_when_other_servers_but_no_mnemo(tmp_vault, tmp_pat
     claude_json.write_text(json.dumps({
         "mcpServers": {"other": {"command": "node"}},
     }))
-    assert sl.render(tmp_vault, claude_json) == ""
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 def test_render_zero_topics_zero_calls(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     _write_claude_json_with_mnemo(claude_json)
-    assert sl.render(tmp_vault, claude_json) == "mnemo · 0 topics · 0↓"
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == "mnemo · 0 topics · 0↓"
 
 
 def test_render_with_topics_and_calls(tmp_vault, tmp_path):
@@ -100,19 +100,19 @@ def test_render_with_topics_and_calls(tmp_vault, tmp_path):
 
     claude_json = tmp_path / ".claude.json"
     _write_claude_json_with_mnemo(claude_json)
-    assert sl.render(tmp_vault, claude_json) == "mnemo · 2 topics · 3↓"
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == "mnemo · 2 topics · 3↓"
 
 
 def test_render_handles_malformed_claude_json(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text("{not valid")
-    assert sl.render(tmp_vault, claude_json) == ""
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 def test_render_handles_non_dict_claude_json(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text("[1, 2, 3]")
-    assert sl.render(tmp_vault, claude_json) == ""
+    assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 # --- write_state / read_state / clear_state ---
@@ -241,7 +241,10 @@ def test_compose_with_failing_original_still_emits_mnemo(tmp_vault, monkeypatch)
 def test_compose_with_no_mnemo_segment_only_emits_original(tmp_vault, monkeypatch):
     """If MCP isn't registered, mnemo segment is empty — but original still runs."""
     sl.write_state(tmp_vault, {"command": "printf 'just original'"})
-    # No claude.json → MCP not registered
+    # No claude.json → MCP not registered.
+    # compose() takes no cwd, so it reads the real one — run from a directory
+    # with no project-scoped .mcp.json, or that registration counts instead.
+    monkeypatch.chdir(tmp_vault)
 
     claude_json = tmp_vault / "nonexistent.json"
 

@@ -20,16 +20,61 @@ def _plugin_dir(tmp_path: Path) -> Path:
     return manifest.parent
 
 
-def test_sync_plugin_manifest_uses_slash_commands(tmp_path: Path):
+def test_sync_bumps_the_manifest_version(tmp_path: Path):
     manifest = _plugin_dir(tmp_path) / "plugin.json"
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.12.0")
 
-    data = json.loads(manifest.read_text())
-    names = [c["name"] for c in data["commands"]]
-    assert "init-project" in names
-    assert "uninstall-project" in names
-    assert data["version"] == "0.12.0"
+    assert json.loads(manifest.read_text())["version"] == "0.12.0"
+
+
+def test_sync_drops_the_legacy_commands_array(tmp_path: Path):
+    """Claude Code reads commands/ ; the array only invited drift.
+
+    Every entry in it also invoked `python3 -m mnemo`, which a plugin install
+    has no way to run.
+    """
+    manifest = _plugin_dir(tmp_path) / "plugin.json"
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    assert "commands" not in json.loads(manifest.read_text())
+
+
+def test_sync_generates_the_plugin_command_files(tmp_path: Path):
+    _plugin_dir(tmp_path)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    commands = tmp_path / "commands"
+    names = {p.stem for p in commands.glob("*.md")}
+    assert {"status", "doctor", "migrate", "statusline"} <= names
+    # init/uninstall have no meaning under a plugin: it declares its own hooks
+    # and MCP server, and `/plugin uninstall mnemo` is the uninstall.
+    assert "init" not in names
+    assert "uninstall" not in names
+
+
+def test_generated_commands_go_through_the_launcher(tmp_path: Path):
+    """Never a resolved path — the plugin is built once, installed everywhere."""
+    _plugin_dir(tmp_path)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    body = (tmp_path / "commands" / "status.md").read_text()
+    assert '!`"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd" status`' in body
+    assert "python3" not in body
+
+
+def test_sync_removes_a_command_file_that_no_longer_exists(tmp_path: Path):
+    _plugin_dir(tmp_path)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "renamed-away.md").write_text("stale")
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    assert not (commands / "renamed-away.md").exists()
 
 
 def test_sync_also_bumps_the_marketplace_listing(tmp_path: Path):

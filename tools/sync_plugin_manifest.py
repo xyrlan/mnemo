@@ -31,24 +31,36 @@ def _sync_marketplace(marketplace_path: Path, version: str) -> None:
     marketplace_path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def _sync_plugin_commands(commands_dir: Path) -> None:
+    """Regenerate the plugin's commands/ directory from PLUGIN_COMMANDS."""
+    from mnemo.install.settings import PLUGIN_COMMANDS, render_plugin_command
+
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    expected = {f"{name}.md" for name in PLUGIN_COMMANDS}
+    for name, spec in PLUGIN_COMMANDS.items():
+        (commands_dir / f"{name}.md").write_text(render_plugin_command(spec))
+    # Drop files for commands that no longer exist, so a rename can't leave a
+    # stale command behind that still invokes a subcommand we removed.
+    for stale in commands_dir.glob("*.md"):
+        if stale.name not in expected:
+            stale.unlink()
+
+
 def sync(repo_root: Path, version: str) -> None:
     sys.path.insert(0, str(repo_root / "src"))
-    from mnemo.install.settings import SLASH_COMMANDS, slash_command_manifest_line
 
     plugin_dir = repo_root / ".claude-plugin"
     manifest_path = plugin_dir / "plugin.json"
     data = json.loads(manifest_path.read_text())
     data["version"] = version
-    data["commands"] = [
-        {
-            "name": name,
-            "description": spec["description"],
-            "command": slash_command_manifest_line(spec),
-        }
-        for name, spec in SLASH_COMMANDS.items()
-    ]
+    # The manifest used to carry a `commands` array. Claude Code discovers
+    # commands from the commands/ directory instead, and every entry in that
+    # array invoked `python3 -m mnemo`, which a plugin install has no way to
+    # run. Generating the directory (below) replaces it.
+    data.pop("commands", None)
     manifest_path.write_text(json.dumps(data, indent=2) + "\n")
 
+    _sync_plugin_commands(repo_root / "commands")
     _sync_marketplace(plugin_dir / "marketplace.json", version)
 
 
