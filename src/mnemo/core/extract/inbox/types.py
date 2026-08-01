@@ -43,6 +43,12 @@ class ExtractedPage:
     # inbox/paths.py::_target_path_for_page — and never universally promote
     # (inbox/apply.py::_is_universal_promotion plus the end-of-extract
     # reconciler in extract/__init__.py).
+    #
+    # Derived per chunk, so it is False on every run after the one that
+    # harvested the source — ``inbox/apply._resolve_sticky_origin`` restores it
+    # from the durable ``StateEntry.origin_backfill`` before any gate reads it
+    # (Task 9b). Set this field directly only when you know the origin; ask
+    # ``backfill.origin.is_backfill_page`` when you want to read it.
     origin_backfill: bool = False
 
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mnemo.core import dashboard, errors, locks, llm, paths
-from mnemo.core.backfill.origin import is_backfill_frontmatter
+from mnemo.core.backfill.origin import is_backfill_entry, is_backfill_frontmatter
 from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
@@ -456,11 +456,11 @@ def _run_extraction_body(
     # runs (even when no cluster pages produced this run) so the backlog
     # discovered during the v0.15 dogfood clears deterministically.
     try:
-        promoted = _reconcile_universal_promotions(state, vault_root, run_id, summary)
+        changed = _reconcile_universal_promotions(state, vault_root, run_id, summary)
     except Exception as exc:  # noqa: BLE001 — reconciler must fail-open
         errors.log_error(vault_root, "extract.reconcile_universal", exc)
-        promoted = 0
-    if promoted:
+        changed = 0
+    if changed:
         try:
             inbox.atomic_write_state(state, state_path)
         except ExtractionIOError as exc:
@@ -482,7 +482,13 @@ def _reconcile_universal_promotions(
     without requiring those source briefings to be re-mined.
 
     Idempotent — entries with status="promoted" are skipped on subsequent
-    runs. Returns the number of slugs successfully promoted.
+    runs.
+
+    Returns the number of state entries this pass changed — promotions plus
+    the origin stamps it back-fills onto entries that predate
+    ``StateEntry.origin_backfill``. Non-zero means the caller must persist the
+    state file; counting the stamps too is what makes the healed origin
+    survive the run it was recovered in.
     """
     from mnemo.core.extract.inbox.branches.universal_promotion import (
         _apply_universal_promotion,
@@ -495,7 +501,7 @@ def _reconcile_universal_promotions(
     from mnemo.core.rule_activation.index import is_universal, projects_for_rule
 
     threshold = _universal_threshold()
-    promoted_count = 0
+    changed_count = 0
     # Snapshot keys: handler mutates state.entries (status flips, key reused).
     keys = [
         key for key, entry in state.entries.items()
@@ -530,14 +536,25 @@ def _reconcile_universal_promotions(
             source_hash=entry.source_hash,
             stability=str(fm.get("stability") or "stable"),
             tags=list(fm.get("tags") or []),
-            # Written top-level by rendering._render_page; the shared
-            # predicate also accepts the nested spelling so a hand-edited or
-            # future-rendered page cannot slip past the gate.
-            origin_backfill=is_backfill_frontmatter(fm),
+            # Two durable readings, OR'd: the stamp written top-level by
+            # rendering._render_page (the shared predicate also accepts the
+            # nested spelling, so a hand-edited or future-rendered page cannot
+            # slip past), and the sticky flag on the state entry — which still
+            # answers True if someone stripped the stamp out of the staged
+            # file by hand.
+            origin_backfill=(
+                is_backfill_frontmatter(fm) or is_backfill_entry(entry)
+            ),
         )
         if page.origin_backfill:
             # Reconstructed from archived transcripts — the origin gate keeps
-            # it staged until a human reviews it, cross-project or not.
+            # it staged until a human reviews it, cross-project or not. Stamp
+            # the entry on the way past so a vault whose state predates the
+            # field carries the answer from here on, even if the user later
+            # edits the stamp out of the staged file.
+            if not entry.origin_backfill:
+                entry.origin_backfill = True
+                changed_count += 1
             continue
         scratch = ApplyResult()
         target = _inbox_path(vault_root, page)
@@ -550,9 +567,9 @@ def _reconcile_universal_promotions(
             errors.log_error(vault_root, "extract.reconcile_universal", exc)
             continue
         if scratch.universal_promoted:
-            promoted_count += 1
+            changed_count += 1
         _merge_apply(scratch, summary)
-    return promoted_count
+    return changed_count
 
 
 def _cleanup_legacy_wiki_dirs(vault_root: Path) -> None:

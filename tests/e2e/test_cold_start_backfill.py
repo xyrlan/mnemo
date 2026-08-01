@@ -323,8 +323,8 @@ def test_a_backfilled_source_gates_a_page_that_a_live_sibling_would_promote(
     # filename deliberately differs from the harvested one: extraction state is
     # keyed ``<type>/<slug>`` with no project segment, so two projects holding
     # the same memory *filename* share one entry and only one of them stays
-    # dirty-tracked afterwards. That collision is real (see the xfail below)
-    # but it is not what this test is about.
+    # dirty-tracked afterwards. That collision is real (see the third test
+    # below) but it is not what this test is about.
     live = vault / "bots" / "other" / "memory"
     live.mkdir(parents=True)
     (live / "always-run-tests.md").write_text(
@@ -363,20 +363,13 @@ def test_a_backfilled_source_gates_a_page_that_a_live_sibling_would_promote(
 
 
 # --------------------------------------------------------------------------
-# 3. KNOWN BYPASS — the stamp is recomputed per chunk and never persisted
+# 3. REGRESSION — the stamp must survive a run that cannot see it
 # --------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known bypass: origin is derived from the current chunk, not from "
-           "state or from the already-staged file, so a later extract that "
-           "re-emits the slug without its backfill source in the chunk "
-           "auto-promotes it into shared/",
-)
 def test_a_later_extract_must_not_launder_an_already_staged_page(
     tmp_home: Path, tmp_tempdir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """An eighth way past the origin stamp, found writing this file.
+    """An eighth way past the origin stamp, found writing this file — now shut.
 
     ``_parse_pages_from_response`` computes ``origin_backfill`` by asking
     whether any of the page's ``source_files`` is a memory file *in the chunk
@@ -404,29 +397,29 @@ def test_a_later_extract_must_not_launder_an_already_staged_page(
     it is the first gate Task 6 added, reached with the flag already gone. The
     staged ``_inbox`` copy is left behind, so the vault ends up holding both.
 
-    Closing that one door is not enough, which was checked rather than assumed:
-    teaching ``_target_path_for_page`` to read the staged file's stamp leaves
+    Closing that one door was not enough, which was checked rather than assumed:
+    teaching ``_target_path_for_page`` to read the staged file's stamp left
     this test failing, because the page is then one source short of auto-promote
-    but its *merged* sources still span two projects and it leaves by the
+    but its *merged* sources still span two projects and it left by the
     universal door instead — landing in ``shared/`` with the ``_inbox`` copy
-    deleted this time. Any real fix has to reach every gate at once.
+    deleted that time. The fix had to reach every gate at once.
+
+    Task 9b made origin **sticky** rather than derived:
+    ``StateEntry.origin_backfill`` persists the answer and
+    ``inbox/apply._resolve_sticky_origin`` puts it back onto the page before
+    the first gate reads it, so all four routes into ``shared/`` see the same
+    answer on every run. Vaults whose state file predates the field recover it
+    by reading the staged page, which still carries the stamp. The pieces are
+    unit-tested in ``tests/unit/test_extract_origin_sticky.py``; this stays the
+    end-to-end proof, from a real transcript.
 
     The same laundering happens without step 2 being a different lesson at all:
     extraction state is keyed ``<type>/<slug>`` with no project segment, so a
     live memory file sharing the harvested file's *filename* in another project
     collides on one entry, and whichever file loses the collision drops out of
-    every later chunk.
-
-    A fix has to make origin durable rather than derived: persist it on the
-    state entry (or read it back off the staged file) somewhere every gate
-    consults, rather than recomputing it per chunk. That is a production change
-    outside this task, so the bug is pinned here instead of patched.
-    ``strict=True``: whoever fixes it is told by an XPASS.
-
-    Caveat worth knowing before trusting this test: ``xfail`` swallows the
-    earlier assertions too, so if run 1 regressed this would still register as
-    a plain xfail. The run-1 behaviour is what the two tests above assert, so
-    the regression would surface there.
+    every later chunk. Stickiness does not repair that collision — it only
+    makes it harmless for the origin gate, since both files answer to the one
+    sticky entry. Fixing the key is still its own task.
     """
     vault = _install(tmp_home, monkeypatch)
     repo = _make_repo(tmp_home, "repo")

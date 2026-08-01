@@ -34,6 +34,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
                 "written_at": v.written_at,
                 "last_sync": v.last_sync,
                 "status": v.status,
+                "origin_backfill": v.origin_backfill,
             }
             for k, v in state.entries.items()
         },
@@ -86,6 +87,14 @@ def load_state(path: Path) -> ExtractionState:
             written_at=written_at,
             status=str(v.get("status") or "inbox"),
             last_sync=last_sync,
+            # Additive optional field (Task 9b), NOT a schema bump: it is
+            # readable by older mnemo (unknown keys are ignored here) and
+            # absent in files older mnemo wrote, which load as False.
+            # Bumping SCHEMA_VERSION would instead make every older mnemo
+            # raise StateSchemaError on a vault a newer one has touched —
+            # a hard downgrade break bought for a field that degrades
+            # gracefully on its own.
+            origin_backfill=bool(v.get("origin_backfill", False)),
         )
     return ExtractionState(
         last_run=payload.get("last_run"),

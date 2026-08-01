@@ -26,12 +26,19 @@ Writers still emit exactly one spelling each — ``ORIGIN_LINE`` for staged
 pages — and tests pin that spelling at the *text* level rather than through a
 parser, because a parser-level assertion cannot distinguish the two.
 
+There is a third reader, added by Task 9b: the extraction **state entry**.
+The two file-level readings above are only available while the file in
+question is in front of the code that needs the answer, and a harvested
+memory file is dirty exactly once — so ``StateEntry.origin_backfill`` carries
+the answer between runs, and :func:`is_backfill_entry` reads it.
+
 Failure direction is deliberate: a false positive stages a live page for
 review (visible, cheap, reversible); a false negative floods the sacred dir
 with unreviewed reconstructions. When in doubt this predicate says yes.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 #: Value of the ``origin`` key on anything backfill produced.
@@ -67,3 +74,43 @@ def is_backfill_page(page: Any) -> bool:
     predate the field.
     """
     return bool(getattr(page, "origin_backfill", False))
+
+
+def is_backfill_entry(entry: Any) -> bool:
+    """True when an extraction-state entry remembers a backfill origin.
+
+    The durable answer. ``origin_backfill`` on the page is derived from the
+    *chunk being processed right now*, so it evaporates the run after the
+    first (the harvested source stops being dirty and stops appearing in any
+    chunk). The state entry is the one place that survives between runs, and
+    ``StateEntry.origin_backfill`` is written by every branch that stages a
+    backfill page.
+
+    Same ``getattr`` tolerance as :func:`is_backfill_page`: entries loaded
+    from a state file written before this field existed simply answer False,
+    and :func:`is_backfill_markdown` heals those.
+    """
+    return bool(getattr(entry, "origin_backfill", False))
+
+
+def is_backfill_markdown(path: Path) -> bool:
+    """True when the markdown file at *path* carries the origin stamp.
+
+    Used to recover the answer for vaults whose extraction state predates
+    ``StateEntry.origin_backfill``: the staged page in ``shared/_inbox/`` was
+    rendered with :data:`ORIGIN_LINE`, so the file itself still knows even
+    when the state entry has forgotten. Missing/unreadable file → False, so
+    a page that was never staged is never mistaken for a backfill page.
+
+    Deliberately *not* in ``extract/inbox/paths.py``: that module documents
+    itself as I/O-free, and this is I/O. Callers read here and pass the
+    answer into the routing helpers.
+    """
+    from mnemo.core.extract.scanner import parse_frontmatter
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    fm, _ = parse_frontmatter(text)
+    return is_backfill_frontmatter(fm)

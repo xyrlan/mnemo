@@ -9,7 +9,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from mnemo.core.backfill.origin import ORIGIN_LINE, is_backfill_frontmatter
+from mnemo.core.backfill.origin import (
+    ORIGIN_LINE,
+    is_backfill_entry,
+    is_backfill_frontmatter,
+)
 from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.scanner import ExtractionState, MemoryFile, StateEntry
@@ -31,22 +35,43 @@ def _is_backfill(file: MemoryFile) -> bool:
     return is_backfill_frontmatter(file.frontmatter)
 
 
-def _target_path(vault_root: Path, file: MemoryFile) -> Path:
+def _sticky_backfill(file: MemoryFile, entry: StateEntry | None) -> bool:
+    """Backfill origin for a project page: from the file, or remembered.
+
+    The source memory file normally keeps its own stamp forever, so unlike the
+    cluster pipeline this one does not lose the answer between runs. The state
+    entry is OR'd in anyway so that stripping the stamp out of the source file
+    — by hand, or by some future rewriter — cannot re-open the door on a page
+    that is already staged for review (Task 9b).
+    """
+    return _is_backfill(file) or is_backfill_entry(entry)
+
+
+def _target_path(
+    vault_root: Path, file: MemoryFile, backfill: bool | None = None,
+) -> Path:
     # Origin gate: project-type pages are the one extraction path that writes
     # straight to the sacred dir with no _inbox hop. Backfill-origin pages are
     # LLM reconstructions of archived transcripts, so they stage for review
     # like every other backfill page (see inbox/paths._target_path_for_page).
-    if _is_backfill(file):
+    # ``backfill`` defaults to the file's own stamp; ``promote_projects`` passes
+    # the sticky answer, which also honours the state entry.
+    if backfill is None:
+        backfill = _is_backfill(file)
+    if backfill:
         return vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"
     return vault_root / "shared" / "project" / f"{_project_slug(file)}.md"
 
 
-def _render_project_page(file: MemoryFile, *, run_id: str) -> str:
+def _render_project_page(
+    file: MemoryFile, *, run_id: str, backfill: bool | None = None,
+) -> str:
     # TOP-LEVEL, not nested under `metadata:` — that is the one spelling both
     # frontmatter parsers in this codebase agree on (see backfill/origin.py).
     # Pinned at the text level by test_extract_promote_backfill.py; a
     # parser-level assertion cannot tell the two spellings apart.
-    origin_line = ORIGIN_LINE if _is_backfill(file) else ""
+    is_backfill = _is_backfill(file) if backfill is None else backfill
+    origin_line = ORIGIN_LINE if is_backfill else ""
     return (
         "---\n"
         f"name: {file.frontmatter.get('name', file.slug)}\n"
@@ -78,20 +103,24 @@ def promote_projects(
     for file in files:
         key = f"project/{_project_slug(file)}"
         entry = state.entries.get(key)
-        target = _target_path(vault_root, file)
+        backfill = _sticky_backfill(file, entry)
+        if backfill and entry is not None:
+            # Make it stick before any branch below can return early.
+            entry.origin_backfill = True
+        target = _target_path(vault_root, file, backfill)
         # "direct" means "lives in shared/<type>/". A staged page does not, so
         # it records the same "inbox" status every other _inbox page uses —
         # readers that look for the promoted file (the universal reconciler,
         # doctor) would otherwise look in the wrong place. What distinguishes a
         # staged backfill page from a live one is the file's `origin` key, not
         # the status.
-        written_status = "inbox" if _is_backfill(file) else "direct"
+        written_status = "inbox" if backfill else "direct"
 
         if entry is not None and entry.source_hash == file.source_hash and not force:
             result.unchanged_skipped.append(key)
             continue
 
-        content = _render_project_page(file, run_id=run_id)
+        content = _render_project_page(file, run_id=run_id, backfill=backfill)
         new_written_hash = content_hash(content)
 
         if entry is None:
@@ -102,6 +131,7 @@ def promote_projects(
                 written_hash=new_written_hash,
                 written_at=run_id,
                 status=written_status,
+                origin_backfill=backfill,
             )
             result.written_fresh.append(key)
             continue
