@@ -31,6 +31,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
 # only by hooks, MCP server, statusLine composer, briefing pipeline).
 INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "briefing",
+    "hook",
     "mcp-server",
     "statusline",
     "statusline-compose",
@@ -145,6 +146,12 @@ def _build_parser() -> argparse.ArgumentParser:
     briefing = sub.add_parser("briefing")
     briefing.add_argument("jsonl_path", type=str)
     briefing.add_argument("agent", type=str)
+    # Wired into settings.json by standalone installs, which have no
+    # `python -m mnemo.hooks.<event>` module path to invoke. Choices come from
+    # the same table that defines what gets installed, so the two cannot drift.
+    from mnemo.install.settings import HOOK_MODULES
+    hook = sub.add_parser("hook")
+    hook.add_argument("event", choices=sorted(HOOK_MODULES))
     sub.add_parser("mcp-server")
     sub.add_parser("statusline")
     sub.add_parser("statusline-compose")

@@ -36,11 +36,14 @@ def test_inject_slash_commands_writes_bash_injection_body(tmp_path: Path):
     init_md = (commands_dir / "init.md").read_text()
     # mnemo marker so uninject can identify mnemo-owned files
     assert inj.SLASH_COMMAND_TAG in init_md
-    # Body invokes mnemo via bash injection
-    assert "!`python3 -m mnemo init`" in init_md
+    # Body invokes mnemo via bash injection, through the mnemo that is actually
+    # installed rather than a bare `python3` that may resolve elsewhere.
+    from mnemo._selfexec import self_command
+    assert f"!`{self_command('init')}`" in init_md
+    assert init_md.rstrip().endswith("-m mnemo init`")
     # init-project carries the --project flag
     init_project_md = (commands_dir / "init-project.md").read_text()
-    assert "!`python3 -m mnemo init --project`" in init_project_md
+    assert f"!`{self_command('init', '--project')}`" in init_project_md
 
 
 def test_uninject_slash_commands_strips_only_mnemo(tmp_path: Path):

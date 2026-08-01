@@ -17,6 +17,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+# Only needed to produce the standalone binaries; never a runtime dependency.
+# mnemo itself stays stdlib-only, which is what makes freezing it viable.
+build = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 mnemo = "mnemo.cli:main"

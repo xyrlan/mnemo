@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from mnemo._selfexec import python_argv
 from mnemo.autopilot.core import pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
@@ -300,10 +301,18 @@ def _run_pytest(*, repo_root: Path) -> bool:
     runs from a vault directory with no test suite, pytest's empty-collection
     exit must not block a vault-only doctor fix. Real test failures (exit 1)
     still abort the PR.
+
+    Returns False when no Python interpreter can be found. Under a frozen
+    build ``sys.executable`` is the mnemo binary, so it cannot run pytest —
+    and failing closed is right: this gate exists to stop an unverified fix
+    from becoming a PR.
     """
+    argv = python_argv("-m", "pytest", "-q", "--tb=short")
+    if argv is None:
+        return False
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "--tb=short"],
+            argv,
             capture_output=True,
             text=True,
             cwd=str(repo_root),

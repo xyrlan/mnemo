@@ -229,7 +229,8 @@ def test_init_registers_slash_commands(tmp_home: Path):
     assert "init-project" in files
     assert "init" in files
     init_project = (commands_dir / "init-project.md").read_text()
-    assert "!`python3 -m mnemo init --project`" in init_project
+    from mnemo._selfexec import self_command
+    assert f"!`{self_command('init', '--project')}`" in init_project
 
 
 def test_uninstall_strips_slash_commands(tmp_home: Path):

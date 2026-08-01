@@ -15,6 +15,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     disable_rule,
     doctor,
     extract,
+    hook,
     init,
     list_enforced,
     migrate_worktree_briefings,

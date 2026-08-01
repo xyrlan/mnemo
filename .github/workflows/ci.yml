@@ -49,6 +49,39 @@ jobs:
         working-directory: npm
         run: npm test
 
+  binary-canary:
+    name: standalone binary builds (linux-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+      # The full four-platform matrix runs only on a tag, which would repeat
+      # the mistake this workflow just fixed for npm: a build break discovered
+      # mid-release, after PyPI has already published. The failures that
+      # actually happen here — a bad spec, a missing hiddenimport, uncollected
+      # templates — are all platform-independent, so one Linux build on every
+      # PR catches them for a fraction of the matrix's cost.
+      - name: Build
+        run: pyinstaller tools/mnemo.spec --distpath dist/bin --workpath build/pyi --noconfirm
+      # Both failure modes below are silent at build time: PyInstaller happily
+      # produces a binary that cannot scaffold a vault, or that crashes the
+      # moment Claude Code dispatches a hook.
+      - name: Smoke test
+        run: |
+          BIN="$GITHUB_WORKSPACE/dist/bin/mnemo/mnemo"
+          "$BIN" --version
+          mkdir -p /tmp/smoke && cd /tmp/smoke && git init -q .
+          "$BIN" init --project --yes --quiet
+          test -f .mnemo/HOME.md || { echo "::error::templates missing from the bundle"; exit 1; }
+          "$BIN" status | grep -q '4/4' || { echo "::error::hooks not recognised in binary form"; exit 1; }
+          echo '{"session_id":"ci","cwd":"/tmp/smoke","prompt":"a test prompt for the reflex"}' \
+            | "$BIN" hook user_prompt_submit || { echo "::error::hook dispatch failed"; exit 1; }
+
   generated-files:
     name: generated manifests are current
     runs-on: ubuntu-latest
