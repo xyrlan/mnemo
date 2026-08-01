@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Set
 
+from mnemo._selfexec import python_argv
 from mnemo.autopilot.core import pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
@@ -188,10 +189,18 @@ def _run_pytest(*, repo_root: Path) -> bool:
 
     Exit code 5 ("no tests collected") is treated as success so the
     autopilot can sweep dead rules from a vault dir with no test suite.
+
+    Returns False when no Python interpreter can be found. Under a frozen
+    build ``sys.executable`` is the mnemo binary, so it cannot be used to run
+    pytest — and failing closed here is right: this is a safety gate, and an
+    unverifiable sweep must not be treated as a verified one.
     """
+    argv = python_argv("-m", "pytest", "-q", "--tb=short")
+    if argv is None:
+        return False
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "--tb=short"],
+            argv,
             capture_output=True,
             text=True,
             cwd=str(repo_root),

@@ -98,6 +98,8 @@ def _spawn_detached_extraction() -> None:
     """
     import subprocess
 
+    from mnemo._selfexec import self_argv
+
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -111,7 +113,7 @@ def _spawn_detached_extraction() -> None:
     else:
         kwargs["start_new_session"] = True
 
-    argv = [sys.executable, "-m", "mnemo", "extract", "--background"]
+    argv = self_argv("extract", "--background")
     subprocess.Popen(argv, **kwargs)
 
 
@@ -142,6 +144,8 @@ def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
     """
     import subprocess
 
+    from mnemo._selfexec import self_argv
+
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -155,7 +159,7 @@ def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
     else:
         kwargs["start_new_session"] = True
 
-    argv = [sys.executable, "-m", "mnemo", "briefing", str(jsonl_path), agent]
+    argv = self_argv("briefing", str(jsonl_path), agent)
     subprocess.Popen(argv, **kwargs)
 
 

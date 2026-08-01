@@ -10,6 +10,7 @@ from mnemo.cli._helpers import (
     _read_enrichment_log_tail,
 )
 from mnemo.cli.parser import command
+from mnemo.install.settings import is_mnemo_hook_command
 
 
 def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) -> int | None:
@@ -26,7 +27,7 @@ def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) ->
         for ev in expected_events
         for entry in data.get("hooks", {}).get(ev, [])
         for h in entry.get("hooks", [])
-        if "mnemo" in h.get("command", "")
+        if is_mnemo_hook_command(h.get("command", ""))
     )
 
 

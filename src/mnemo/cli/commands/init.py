@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from mnemo.cli.parser import command
+from mnemo.install.settings import is_mnemo_hook_command
 
 
 GITIGNORE_ENTRIES = (".claude/", ".mnemo/")
@@ -39,7 +40,7 @@ def _has_global_mnemo_install(home_settings: Path) -> bool:
             continue
         for entry in entries:
             for h in (entry or {}).get("hooks", []) or []:
-                if "mnemo.hooks." in (h or {}).get("command", ""):
+                if is_mnemo_hook_command((h or {}).get("command", "")):
                     return True
     return False
 

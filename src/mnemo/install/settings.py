@@ -14,12 +14,14 @@ Both flows share the same lock + backup primitives below.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from mnemo._selfexec import hook_command, self_argv, self_command
 from mnemo.core import locks
 
 # Marker substring used to identify mnemo entries in settings.json. The tag
@@ -29,6 +31,12 @@ from mnemo.core import locks
 # target naturally contains "mnemo.hooks." in every command we emit, which
 # makes it the perfect marker: zero collision risk and zero impact on
 # executability.
+#
+# Kept for the installs that already exist on disk. A frozen/standalone build
+# has no importable module path to name, so it invokes `mnemo hook <event>`
+# instead and is matched by _BINARY_HOOK_RE below. Detection must accept both
+# forms indefinitely: a binary install has to be able to clean up after a
+# previous pip install, and vice versa.
 MNEMO_TAG = "mnemo.hooks."
 
 
@@ -36,28 +44,9 @@ class SettingsError(Exception):
     pass
 
 
-def _posix_executable() -> str:
-    """Return ``sys.executable`` with forward slashes (POSIX form).
-
-    Hook and statusLine commands are written into settings.json as a single
-    shell string that Claude Code dispatches through bash (Git Bash on
-    Windows). Bash treats ``\\`` as an escape character, so a raw Windows path
-    like ``C:\\Users\\...\\python.exe`` collapses to ``C:Users...python.exe``
-    and the executable becomes unreachable. Windows accepts ``/`` in paths, so
-    emitting the POSIX form is safe on every platform.
-    """
-    if not sys.executable:
-        return "python3"
-    # Plain string replace (not Path.as_posix()) so the conversion is identical
-    # on every platform: on POSIX, Path treats "\" as a literal filename char,
-    # so as_posix() would leave a Windows path's backslashes intact. sys.executable
-    # never legitimately contains a backslash on POSIX, so this is always safe.
-    return sys.executable.replace("\\", "/")
-
-
 def _hook_command(module: str) -> str:
     """Return the command line that invokes a mnemo hook."""
-    return f"{_posix_executable()} -m mnemo.hooks.{module}"
+    return hook_command(module)
 
 
 HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -82,6 +71,42 @@ HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
         "async": False,
     },
 }
+
+
+HOOK_MODULES = frozenset(d["module"] for d in HOOK_DEFINITIONS.values())
+
+# Matches the standalone form: an executable whose basename is `mnemo`
+# (optionally `.exe`, optionally quoted) invoking the `hook` subcommand with
+# one of the events we actually install.
+#
+# Anchoring on the basename is what keeps `/home/x/mnemo-notes/bin/backup.sh`
+# and `python3 .../projects/mnemo/scripts/custom.py` from being claimed as
+# ours; requiring a known event keeps `mnemo status` from looking like a hook.
+_BINARY_HOOK_RE = re.compile(
+    r"""(?:^|[/\\\s"'])          # start, path separator, whitespace, or quote
+        mnemo(?:\.exe)?          # the executable itself
+        ["']?\s+hook\s+          # the subcommand
+        (?:%s)\b                 # a hook event we install
+    """ % "|".join(sorted(HOOK_MODULES)),
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def is_mnemo_hook_command(command: str) -> bool:
+    """Return True when ``command`` is a hook mnemo installed.
+
+    Accepts both the ``python -m mnemo.hooks.<event>`` form written by pip/uv
+    installs and the ``mnemo hook <event>`` form a standalone build writes.
+    Used by uninstall, init's idempotency check, and status's hook count, which
+    previously each carried their own subtly different substring test — status
+    matched a bare ``"mnemo" in command`` and so counted any unrelated command
+    that happened to sit under a path containing "mnemo".
+    """
+    if not isinstance(command, str) or not command:
+        return False
+    if MNEMO_TAG in command:
+        return True
+    return _BINARY_HOOK_RE.search(command) is not None
 
 
 def _build_entry(event: str, defn: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +142,7 @@ def _strip_mnemo_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cleaned: list[dict[str, Any]] = []
     for entry in entries:
         hooks = entry.get("hooks", [])
-        non_mnemo = [h for h in hooks if MNEMO_TAG not in h.get("command", "")]
+        non_mnemo = [h for h in hooks if not is_mnemo_hook_command(h.get("command", ""))]
         if non_mnemo:
             new = dict(entry)
             new["hooks"] = non_mnemo
@@ -212,14 +237,12 @@ def _do_uninject(settings_path: Path) -> None:
 def _mcp_server_spec() -> dict[str, Any]:
     """Build the mcpServers entry for the mnemo stdio server.
 
-    Uses ``sys.executable`` so the registration points at the same Python
-    interpreter that ran ``mnemo init`` — important when mnemo is installed
-    in a venv that isn't first on PATH.
+    Points at whatever ran ``mnemo init`` — important when mnemo is installed
+    in a venv that isn't first on PATH, and correct for a frozen build, where
+    the executable is mnemo itself and takes no ``-m`` prefix.
     """
-    return {
-        "command": sys.executable or "python3",
-        "args": ["-m", "mnemo", "mcp-server"],
-    }
+    argv = self_argv("mcp-server")
+    return {"command": argv[0], "args": argv[1:]}
 
 
 MCPSERVER_NAME = "mnemo"
@@ -278,8 +301,8 @@ def _do_uninject_mcp(claude_json_path: Path) -> None:
 
 
 def _statusline_compose_command() -> str:
-    """Build the composer command line. Uses sys.executable for venv correctness."""
-    return f"{_posix_executable()} -m mnemo statusline-compose"
+    """Build the composer command line. Points at the running mnemo for venv correctness."""
+    return self_command("statusline-compose")
 
 
 def _is_mnemo_composer(spec: Any) -> bool:
@@ -395,29 +418,44 @@ def _do_uninject_statusline(settings_path: Path, vault_root: Path) -> None:
 SLASH_COMMAND_TAG = "<!-- mnemo:slash-command -->"
 
 
-SLASH_COMMANDS: dict[str, dict[str, str]] = {
+# Each command stores its argv, not a rendered command line, because the two
+# consumers need different renderings: the .md files written at `mnemo init`
+# must point at the mnemo that is actually installed (see
+# _render_slash_command), while the committed plugin manifest must stay
+# generic (see slash_command_manifest_line).
+SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "init":              {"description": "first-run setup (global)",
-                          "command": "python3 -m mnemo init"},
+                          "args": ("init",)},
     "init-project":      {"description": "first-run setup scoped to <cwd> (v0.12+)",
-                          "command": "python3 -m mnemo init --project"},
+                          "args": ("init", "--project")},
     "status":            {"description": "vault state + hook health",
-                          "command": "python3 -m mnemo status"},
+                          "args": ("status",)},
     "doctor":            {"description": "full diagnostic",
-                          "command": "python3 -m mnemo doctor"},
+                          "args": ("doctor",)},
     "open":              {"description": "open vault in Obsidian",
-                          "command": "python3 -m mnemo open"},
+                          "args": ("open",)},
     "fix":               {"description": "reset circuit breaker",
-                          "command": "python3 -m mnemo fix"},
+                          "args": ("fix",)},
     "uninstall":         {"description": "remove hooks (global; keeps vault)",
-                          "command": "python3 -m mnemo uninstall"},
+                          "args": ("uninstall",)},
     "uninstall-project": {"description": "remove hooks (project-scoped; keeps vault)",
-                          "command": "python3 -m mnemo uninstall --project"},
+                          "args": ("uninstall", "--project")},
     "help":              {"description": "list commands",
-                          "command": "python3 -m mnemo help"},
+                          "args": ("help",)},
 }
 
 
-def _render_slash_command(name: str, spec: dict[str, str]) -> str:
+def slash_command_manifest_line(spec: dict[str, Any]) -> str:
+    """Render the generic form used by the committed plugin manifest.
+
+    Deliberately *not* resolved against the running interpreter: the manifest
+    is generated on a maintainer's machine and checked in, so baking in a local
+    path would ship that path to every user.
+    """
+    return " ".join(["python3", "-m", "mnemo", *spec["args"]])
+
+
+def _render_slash_command(name: str, spec: dict[str, Any]) -> str:
     desc = spec["description"].replace('"', '\\"')
     body = (
         f"{SLASH_COMMAND_TAG}\n"
@@ -427,7 +465,7 @@ def _render_slash_command(name: str, spec: dict[str, str]) -> str:
         "disable-model-invocation: true\n"
         "---\n"
         "\n"
-        f"!`{spec['command']}`\n"
+        f"!`{self_command(*spec['args'])}`\n"
     )
     return body
 

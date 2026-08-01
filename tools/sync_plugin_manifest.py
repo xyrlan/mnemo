@@ -33,14 +33,18 @@ def _sync_marketplace(marketplace_path: Path, version: str) -> None:
 
 def sync(repo_root: Path, version: str) -> None:
     sys.path.insert(0, str(repo_root / "src"))
-    from mnemo.install.settings import SLASH_COMMANDS
+    from mnemo.install.settings import SLASH_COMMANDS, slash_command_manifest_line
 
     plugin_dir = repo_root / ".claude-plugin"
     manifest_path = plugin_dir / "plugin.json"
     data = json.loads(manifest_path.read_text())
     data["version"] = version
     data["commands"] = [
-        {"name": name, "description": spec["description"], "command": spec["command"]}
+        {
+            "name": name,
+            "description": spec["description"],
+            "command": slash_command_manifest_line(spec),
+        }
         for name, spec in SLASH_COMMANDS.items()
     ]
     manifest_path.write_text(json.dumps(data, indent=2) + "\n")

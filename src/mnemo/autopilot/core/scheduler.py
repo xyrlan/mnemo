@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from mnemo._selfexec import self_argv
 from mnemo.autopilot.core.kill_switch import is_active
 from mnemo.autopilot.core.triggers import run_detached, run_inline, should_run
 
@@ -22,7 +23,12 @@ from mnemo.autopilot.core.triggers import run_detached, run_inline, should_run
 
 
 def _python_for_mnemo() -> str:
-    """Best-effort path to the Python interpreter that hosts mnemo."""
+    """Best-effort path to the Python interpreter that hosts mnemo.
+
+    Retained for callers outside this module; the detached-job argvs now go
+    through :func:`mnemo._selfexec.self_argv`, which is also correct when
+    ``sys.executable`` is a frozen mnemo binary rather than an interpreter.
+    """
     return sys.executable or "python3"
 
 
@@ -85,7 +91,6 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         return {"active": False, "fired": []}
 
     fired = []
-    py = _python_for_mnemo()
 
     # Inline (fast, <1s expected): run synchronously in the hook
     if should_run(vault_root=vault_root, name="tier0.digest", interval_days=7):
@@ -117,7 +122,7 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         run_detached(
             vault_root=vault_root,
             name="tier1.doctor",
-            argv=[py, "-m", "mnemo", "autopilot", "self-fix", "doctor"],
+            argv=self_argv("autopilot", "self-fix", "doctor"),
         )
         fired.append(("tier1.doctor", "detached", None))
 
@@ -125,7 +130,7 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         run_detached(
             vault_root=vault_root,
             name="tier1.sweep",
-            argv=[py, "-m", "mnemo", "autopilot", "self-fix", "sweep"],
+            argv=self_argv("autopilot", "self-fix", "sweep"),
         )
         fired.append(("tier1.sweep", "detached", None))
 
@@ -133,7 +138,7 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         run_detached(
             vault_root=vault_root,
             name="tier1.telemetry",
-            argv=[py, "-m", "mnemo", "autopilot", "self-fix", "telemetry"],
+            argv=self_argv("autopilot", "self-fix", "telemetry"),
         )
         fired.append(("tier1.telemetry", "detached", None))
 
@@ -141,7 +146,7 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         run_detached(
             vault_root=vault_root,
             name="tier2.bm25",
-            argv=[py, "-m", "mnemo", "autopilot", "tune", "bm25"],
+            argv=self_argv("autopilot", "tune", "bm25"),
         )
         fired.append(("tier2.bm25", "detached", None))
 
@@ -149,7 +154,7 @@ def run_due_jobs(*, vault_root: Path) -> dict:
         run_detached(
             vault_root=vault_root,
             name="tier2.reflex",
-            argv=[py, "-m", "mnemo", "autopilot", "tune", "reflex"],
+            argv=self_argv("autopilot", "tune", "reflex"),
         )
         fired.append(("tier2.reflex", "detached", None))
 
