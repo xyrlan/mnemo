@@ -46,12 +46,17 @@ turn off:
 |---|---|---|
 | `extraction.model` | `claude-haiku-4-5` | Model used for extraction |
 | `extraction.chunkSize` | `10` | Source files per LLM call |
-| `extraction.preferAPI` | `false` | Use API-key auth instead of your Claude subscription |
 | `extraction.subprocessTimeout` | `60` | Seconds before an extraction call is abandoned |
 | `extraction.costSoftCap` | `null` | Warn past this spend, in dollars. `null` = no cap |
 | `extraction.auto.enabled` | `true` | Run extraction automatically at `SessionEnd` |
 | `extraction.auto.minNewMemories` | `1` | New source files required before a run |
 | `extraction.auto.minIntervalMinutes` | `60` | Minimum gap between automatic runs |
+
+Every LLM call mnemo makes — extraction, briefings, backfill — shells out to
+the `claude` CLI you already have and uses whatever authentication it already
+has. There is no separate credential to configure, and no switch here that
+changes it: on a Pro/Max subscription those calls carry no per-token charge, on
+API-key auth they are billed.
 
 ### `backfill` — filling a new vault from old transcripts
 

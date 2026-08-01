@@ -411,6 +411,62 @@ def test_retry_failed_does_not_re_harvest_finished_work(env, monkeypatch):
     assert calls == []  # done entries are left alone
 
 
+def test_dry_run_with_retry_failed_leaves_the_ledger_on_disk_alone(env, monkeypatch, capsys):
+    """`--dry-run` writes nothing, and that has to survive `--retry-failed`.
+
+    The clear happens in memory so the preview is honest about which
+    transcripts a real run would pick up — but a documented exception to a
+    safety flag is worse than no flag at all, so nothing reaches disk.
+    """
+    cfg, vault, made, _ = env
+    led = ledger.load(vault)
+    for _ in range(ledger.MAX_ATTEMPTS):
+        ledger.mark_failed(led, made[0].path, "boom")
+    ledger.save(vault, led)
+    before = ledger.state_path(vault).read_text(encoding="utf-8")
+
+    calls = _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True, dry_run=True, retry_failed=True)) == 0
+
+    assert calls == []
+    assert ledger.state_path(vault).read_text(encoding="utf-8") == before
+    assert ledger.attempts_exhausted(ledger.load(vault), made[0].path)
+
+    out = capsys.readouterr().out
+    assert "would clear 1 failed entry" in out
+    # The retired transcript is previewed as work, which is the point of
+    # clearing in memory at all.
+    assert f"would harvest alpha/{made[0].path.name}" in out
+
+
+def test_retry_failed_without_dry_run_still_persists_the_clear(env, monkeypatch, capsys):
+    cfg, vault, made, _ = env
+    led = ledger.load(vault)
+    for _ in range(ledger.MAX_ATTEMPTS):
+        ledger.mark_failed(led, made[0].path, "boom")
+    ledger.save(vault, led)
+
+    _recorder(monkeypatch)
+    assert cmd.cmd_backfill(_args(all=True, retry_failed=True)) == 0
+    assert "cleared 1 failed entry" in capsys.readouterr().out
+    assert not ledger.attempts_exhausted(ledger.load(vault), made[0].path)
+
+
+def test_project_and_all_cannot_be_combined():
+    """They answer the same question and only one can be honoured.
+
+    `_select` resolves the pair by letting `--project` win, which silently
+    discards a flag the user typed. argparse rejects it instead.
+    """
+    from mnemo.cli.parser import _build_parser
+
+    parser = _build_parser()
+    assert parser.parse_args(["backfill", "--all"]).all is True
+    assert parser.parse_args(["backfill", "--project", "alpha"]).project == "alpha"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["backfill", "--all", "--project", "alpha"])
+
+
 def test_gave_up_message_names_the_remedy(env, monkeypatch, capsys):
     cfg, vault, made, _ = env
     led = ledger.load(vault)

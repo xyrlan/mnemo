@@ -19,7 +19,6 @@ DEFAULTS: dict[str, Any] = {
     "extraction": {
         "model": "claude-haiku-4-5",
         "chunkSize": 10,
-        "preferAPI": False,
         "subprocessTimeout": 60,
         "costSoftCap": None,
         "auto": {

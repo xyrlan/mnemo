@@ -180,9 +180,10 @@ without a call, and it says nothing about output tokens.
 
 **Which sessions get picked:**
 
-- `--project NAME` wins over `--all` if you pass both. `NAME` is the project
-  name mnemo derives from the repo directory — the same name you see under
-  `bots/` — not a path. Worktrees collapse into their main checkout.
+- `--project NAME` and `--all` answer the same question, so passing both is an
+  error rather than a silent win for one of them. `NAME` is the project name
+  mnemo derives from the repo directory — the same name you see under `bots/`
+  — not a path. Worktrees collapse into their main checkout.
 - With neither flag, the selection is the current repo.
 - `--limit` applies to whatever the above selected, newest first.
 - `--limit 0` selects nothing, deliberately.
@@ -202,9 +203,9 @@ Exit codes: `0` done, `1` finished with some sessions failed, `2` aborted on an
 environment failure, `130` interrupted. Answering `n` at the prompt, or having
 nothing to do, is a normal `0`.
 
-One caveat on `--dry-run`: it writes no memory files and makes no LLM calls,
-but `--retry-failed` clears the ledger before the dry run is evaluated. Pass
-them together only if you mean it.
+`--dry-run` writes nothing at all — no memory files, no LLM calls, no bookkeeping
+— and that holds even beside `--retry-failed`, which under a dry run reports
+how many entries it *would* clear and previews the sweep as if it had.
 
 ## The loop
 

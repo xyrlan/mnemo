@@ -140,9 +140,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     bf = sub.add_parser("backfill", help="populate the vault from past session transcripts")
-    bf.add_argument("--all", action="store_true", help="every project, not just this repo")
+    # Mutually exclusive: they are answers to the same question, and the
+    # implementation can only honour one. Silently letting `--project` win
+    # over an `--all` the user typed is worse than saying so.
+    bf_scope = bf.add_mutually_exclusive_group()
+    bf_scope.add_argument("--all", action="store_true", help="every project, not just this repo")
     bf.add_argument("--dry-run", action="store_true", help="show what would be harvested, write nothing")
-    bf.add_argument("--project", type=str, default=None, help="limit to one project by name")
+    bf_scope.add_argument("--project", type=str, default=None, help="limit to one project by name")
     bf.add_argument("--limit", type=int, default=None, help="cap the number of sessions")
     bf.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
     bf.add_argument(

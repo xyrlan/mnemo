@@ -38,6 +38,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `backfill.minFileMutations`, `backfill.autoOnFirstSession`. See
   [docs/configuration.md](docs/configuration.md).
 
+### Removed
+
+- **`extraction.preferAPI`**, a documented config key that nothing has ever
+  read. Every LLM call goes through the `claude` CLI and uses whatever auth
+  that CLI already has; there was no code path the flag could switch. It is
+  gone from the defaults and from the config reference. A config file that
+  still carries the key keeps merging harmlessly — no migration needed.
+
 ### ⚠ Upgrade note — this spends LLM calls on your next session
 
 **Read this before upgrading.** The "have we done the first-run sweep?" marker

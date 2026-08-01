@@ -149,10 +149,19 @@ def _run_backfill(args: argparse.Namespace) -> int:
     led = ledger.load(vault_root)
 
     if getattr(args, "retry_failed", False):
+        # Cleared in memory first, saved only when this is a real run. A
+        # dry run that skipped the clear entirely would preview the wrong
+        # sweep — retired transcripts would still look ineligible — and one
+        # that saved would make `--dry-run` write to the vault, which is the
+        # one thing that flag promises it never does.
         cleared = ledger.clear_failed(led)
-        ledger.save(vault_root, led)
         noun = "entry" if cleared == 1 else "entries"
-        print(f"backfill: cleared {cleared} failed {noun} — eligible again.")
+        if args.dry_run:
+            print(f"backfill: would clear {cleared} failed {noun} — "
+                  "previewing the sweep as if they were eligible again.")
+        else:
+            ledger.save(vault_root, led)
+            print(f"backfill: cleared {cleared} failed {noun} — eligible again.")
 
     todo = [t for t in candidates if ledger.should_harvest(led, t.path)]
 
