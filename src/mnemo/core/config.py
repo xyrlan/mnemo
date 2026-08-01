@@ -32,6 +32,12 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "injectLastOnSessionStart": True,
     },
+    "backfill": {
+        "enabled": True,
+        "installCap": 20,
+        "minFileMutations": 1,
+        "autoOnFirstSession": True,
+    },
     "injection": {
         "enabled": True,
         "maxTopicsPerScope": 15,
