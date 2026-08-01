@@ -3,6 +3,27 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.2] — 2026-08-01
+
+The release that actually ships binaries. 0.17.0 and 0.17.1 were both blocked
+before publishing them; this is the first tag whose GitHub Release carries the
+four platform builds the plugin install needs.
+
+### Fixed
+
+- **Intel macOS built on a runner that never started.** The `macos-13` job sat
+  queued indefinitely on two consecutive releases — that runner image is on
+  its way out. Switched to `macos-15-intel`. PyInstaller cannot
+  cross-compile, so an Intel build needs an Intel runner, and dropping the
+  target would leave Intel Mac users with a silent no-op: the launcher fails
+  open when its asset is missing.
+
+### Added
+
+- `workflow_dispatch` on the release workflow, so the binary matrix can be
+  exercised without burning a version number. All three publishing jobs are
+  guarded on the ref being a tag, so a manual run builds and stops.
+
 ## [0.17.1] — 2026-08-01
 
 Fixes the 0.17.0 release itself. That tag published to PyPI and npm but
