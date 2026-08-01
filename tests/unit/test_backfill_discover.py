@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,14 @@ def _session(project_dir: Path, name: str, mtime: float) -> Path:
     p.write_text('{"type":"user"}\n', encoding="utf-8")
     os.utime(p, (mtime, mtime))
     return p
+
+
+def _encode_cwd(cwd: str) -> str:
+    """Mirror session_end.py's `_resolve_session_jsonl_path` encoder exactly."""
+    encoded = cwd.replace(os.sep, "-")
+    if os.altsep:
+        encoded = encoded.replace(os.altsep, "-")
+    return encoded
 
 
 def test_decodes_dashed_dir_back_to_cwd():
@@ -67,6 +77,35 @@ def test_project_filter_excludes_other_repos(projects_root, monkeypatch):
     found = discover.find_transcripts(project="alpha")
     assert [t.path.stem for t in found] == ["a1"]
     assert all(t.agent == "alpha" for t in found)
+
+
+def test_resolves_real_repo_through_agent_module(projects_root):
+    # Exercise the real `_agent_for_cwd` -> `resolve_canonical_agent` path
+    # against an actual matching directory, so the integration (including
+    # the `except Exception` wrapper around it) is genuinely covered rather
+    # than always falling into `_fallback_agent` or a full monkeypatch.
+    #
+    # decode_project_dir is a lossy, naive dash-split: it only round-trips
+    # exactly when no path segment contains a literal dash. pytest's own
+    # tmp_path base commonly does (e.g. "pytest-of-<user>/pytest-3"), so the
+    # repo is built under a dedicated, dash-free temp dir via tempfile
+    # instead of tmp_path, keeping the round trip honest rather than
+    # coincidentally broken by the test harness.
+    base = Path(tempfile.mkdtemp(prefix="mnemodiscovertest"))
+    try:
+        repo = base / "realrepo"
+        (repo / ".git").mkdir(parents=True)
+
+        encoded = _encode_cwd(str(repo))
+        _session(projects_root / encoded, "s1", 1000.0)
+
+        found = discover.find_transcripts()
+
+        assert [t.path.stem for t in found] == ["s1"]
+        assert found[0].agent == "realrepo"
+        assert found[0].cwd == str(repo)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_missing_projects_dir_returns_empty(tmp_path, monkeypatch):

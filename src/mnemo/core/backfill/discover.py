@@ -84,6 +84,18 @@ def find_transcripts(
     for project_dir in sorted(root.iterdir()):
         if not project_dir.is_dir():
             continue
+
+        # Agent resolution can walk up the filesystem looking for a `.git`
+        # root, which is comparatively expensive. A dir with no transcripts
+        # can never contribute a result regardless of `project`, so check
+        # for transcripts first and skip resolution entirely when there are
+        # none — this matters for `session_start`'s capped, current-repo-only
+        # sweep, which otherwise pays full resolution for every other repo's
+        # project directory just to discard it.
+        jsonl_paths = list(project_dir.glob("*.jsonl"))
+        if not jsonl_paths:
+            continue
+
         cwd = decode_project_dir(encoding=project_dir.name)
         if Path(cwd).is_dir():
             try:
@@ -96,7 +108,7 @@ def find_transcripts(
         if project is not None and agent != project:
             continue
 
-        for jsonl in project_dir.glob("*.jsonl"):
+        for jsonl in jsonl_paths:
             try:
                 mtime = jsonl.stat().st_mtime
             except OSError:
