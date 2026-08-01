@@ -3,6 +3,57 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-08-01
+
+Three months of fixes that were merged to `master` but never released: the
+0.15.0 tag was the last one cut, so PRs #86–#92 never reached PyPI or npm.
+This release ships them and closes the gaps that let the drift happen.
+
+### Fixed
+
+- **Windows: hooks and statusLine were wired with backslash paths.** Claude Code
+  dispatches hook commands through bash/Git Bash, which eats `\`, so the
+  installed commands could fail to run. `mnemo init` now emits POSIX-style
+  paths for the hook and statusLine commands (#88).
+- **Autopilot reflex calibration was measured against the wrong denominator.**
+  `emit_rate` divided by every prompt seen, including ones skipped before
+  scoring ever happened (`index_missing`, `below_min_tokens`). That deflated
+  the observed rate 2–4× and meant genuinely chatty projects never got tuned
+  down. It now divides by *eligible* prompts, and the min-sample guard counts
+  eligible prompts too (#89).
+- **Autopilot's pytest gate spawned a bare `pytest`,** which resolved against
+  whatever happened to be on PATH rather than the interpreter running mnemo.
+  It now spawns via `sys.executable` (#90).
+- **Autopilot self-fix healed source-path hygiene** — machine-absolute paths in
+  rule provenance are relativized, and sources whose briefing moved are
+  relocated — and the universal-promotion signal that fired on nearly every
+  rule was dropped as noise (#91).
+- **Universal promotion was blocked and project rules went unindexed** in the
+  extraction and activation paths (#86, #87).
+
+### Changed
+
+- `mnemo --version`, the landing card, and the MCP server's advertised version
+  now resolve through a single helper (`mnemo._version.resolve_version`). All
+  three previously inlined the same `importlib.metadata` lookup, and the MCP
+  server didn't do the lookup at all — it reported a hardcoded `0.8.0`. The
+  fallback is now the baked-in `__version__` rather than the literal
+  `"unknown"`, which matters for builds with no distribution metadata to read.
+
+### Release tooling
+
+These are the reasons 0.16.0 was three months late; each is now enforced.
+
+- `tools/sync_npm_version.py` also rewrites `PIN_SPEC` in
+  `npm/lib/bootstrap.js`. It was a hand-edit in the release commit, and
+  forgetting it ships an npm wrapper that installs the *previous* minor.
+- `tools/sync_plugin_manifest.py` also bumps `.claude-plugin/marketplace.json`,
+  which nothing synced and which had drifted twelve minors behind (0.4.0).
+- CI now runs the npm test suite and fails when the generated
+  `.claude-plugin/` manifests are stale. Previously `npm test` ran only during
+  publish — *after* the PyPI job had already succeeded — so an npm-side
+  regression would leave the two registries on different versions.
+
 ## [0.15.0] — 2026-05-04
 
 ### Changed (default behaviour)
