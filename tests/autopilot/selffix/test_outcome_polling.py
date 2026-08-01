@@ -30,7 +30,7 @@ def _make_gh_output(prs: list) -> MagicMock:
 
 def test_poll_outcomes_calls_record_outcome_for_merged_pr(tmp_path: Path) -> None:
     prs = [{"number": 42, "state": "MERGED"}]
-    with patch("subprocess.run", return_value=_make_gh_output(prs)), \
+    with patch("subprocess.run", side_effect=[_make_gh_output(prs), _make_gh_output([])]), \
          patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
         count = poll_outcomes(vault_root=tmp_path)
     assert count == 1
@@ -41,7 +41,7 @@ def test_poll_outcomes_calls_record_outcome_for_merged_pr(tmp_path: Path) -> Non
 
 def test_poll_outcomes_calls_record_outcome_for_closed_pr(tmp_path: Path) -> None:
     prs = [{"number": 7, "state": "CLOSED"}]
-    with patch("subprocess.run", return_value=_make_gh_output(prs)), \
+    with patch("subprocess.run", side_effect=[_make_gh_output(prs), _make_gh_output([])]), \
          patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
         poll_outcomes(vault_root=tmp_path)
     mock_rec.assert_called_once_with(
@@ -55,7 +55,7 @@ def test_poll_outcomes_multiple_prs(tmp_path: Path) -> None:
         {"number": 2, "state": "CLOSED"},
         {"number": 3, "state": "CLOSED"},
     ]
-    with patch("subprocess.run", return_value=_make_gh_output(prs)), \
+    with patch("subprocess.run", side_effect=[_make_gh_output(prs), _make_gh_output([])]), \
          patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
         count = poll_outcomes(vault_root=tmp_path)
     assert count == 3
@@ -84,9 +84,47 @@ def test_poll_outcomes_returns_zero_on_gh_error(tmp_path: Path) -> None:
     assert count == 0
 
 
+def test_poll_outcomes_records_a_resolved_issue_as_accepted(tmp_path: Path) -> None:
+    """Telemetry findings are filed as issues; their closure is the outcome signal.
+
+    ``COMPLETED`` means a human acted on the finding — the same signal a merged
+    PR carries. Without this the autopilot would keep re-filing findings and
+    never learn whether they landed.
+    """
+    issues = [{"number": 12, "state": "CLOSED", "stateReason": "COMPLETED"}]
+    with patch("subprocess.run", side_effect=[_make_gh_output([]), _make_gh_output(issues)]), \
+         patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
+        count = poll_outcomes(vault_root=tmp_path)
+    assert count == 1
+    mock_rec.assert_called_once_with(
+        vault_root=tmp_path, pr_number=12, outcome="merged"
+    )
+
+
+def test_poll_outcomes_records_a_wont_fix_issue_as_closed(tmp_path: Path) -> None:
+    issues = [{"number": 13, "state": "CLOSED", "stateReason": "NOT_PLANNED"}]
+    with patch("subprocess.run", side_effect=[_make_gh_output([]), _make_gh_output(issues)]), \
+         patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
+        poll_outcomes(vault_root=tmp_path)
+    mock_rec.assert_called_once_with(
+        vault_root=tmp_path, pr_number=13, outcome="closed"
+    )
+
+
+def test_poll_outcomes_survives_gh_failing_on_issues(tmp_path: Path) -> None:
+    prs = [{"number": 42, "state": "MERGED"}]
+    proc_err = MagicMock()
+    proc_err.returncode = 1
+    proc_err.stdout = ""
+    with patch("subprocess.run", side_effect=[_make_gh_output(prs), proc_err]), \
+         patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome"):
+        count = poll_outcomes(vault_root=tmp_path)
+    assert count == 1
+
+
 def test_poll_outcomes_skips_unknown_state(tmp_path: Path) -> None:
     prs = [{"number": 5, "state": "OPEN"}]
-    with patch("subprocess.run", return_value=_make_gh_output(prs)), \
+    with patch("subprocess.run", side_effect=[_make_gh_output(prs), _make_gh_output([])]), \
          patch("mnemo.autopilot.selffix.outcome_poller.pr_budget.record_outcome") as mock_rec:
         count = poll_outcomes(vault_root=tmp_path)
     assert count == 0

@@ -164,21 +164,18 @@ def test_open_telemetry_fix_pr_budget_exhausted(tmp_path: Path) -> None:
     assert result is None
 
 
-def test_open_telemetry_fix_pr_opens_draft_pr(tmp_path: Path) -> None:
+def test_open_telemetry_fix_pr_opens_issue(tmp_path: Path) -> None:
+    """An anomaly report has no diff, so it is filed as an issue, not a PR."""
     anomalies = [TelemetryAnomaly(kind="cost_usd_always_zero", detail="x", affected_count=5)]
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
                     "last_changed_at": None, "last_changed_by": None})
     )
-    with patch("mnemo.autopilot.selffix.telemetry_doctor._gh.create_branch", return_value="b"), \
-         patch("mnemo.autopilot.selffix.telemetry_doctor._gh.push_branch", return_value=True), \
-         patch("mnemo.autopilot.selffix.telemetry_doctor._gh.open_pr", return_value=77) as mock_pr, \
+    with patch("mnemo.autopilot.selffix.telemetry_doctor._gh.open_issue", return_value=77) as mock_issue, \
          patch("mnemo.autopilot.selffix.telemetry_doctor.pr_budget.record_opened") as mock_rec:
         result = open_telemetry_fix_pr(anomalies, vault_root=tmp_path, repo_root=tmp_path)
 
     assert result == 77
     mock_rec.assert_called_once()
-    # Must be opened as draft
-    call_kwargs = mock_pr.call_args[1]
-    assert call_kwargs.get("draft") is True
+    assert mock_issue.call_args.kwargs["labels"] == ["mnemo:self-fix"]

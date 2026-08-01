@@ -184,6 +184,53 @@ def test_selffix_global_dry_run_runs_all_three(monkeypatch, tmp_path: Path, caps
 # ---------------------------------------------------------------------------
 
 
+def test_selffix_anchors_the_repo_on_the_vault_not_the_cwd(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """The PR must be cut in the repo holding the edited files.
+
+    Deriving repo_root from the process cwd branched whatever repo the
+    autopilot happened to be launched from — never the one being edited.
+    """
+    import subprocess
+    from mnemo.autopilot.selffix.doctor_fixer import DoctorWarning
+
+    _setup_vault(tmp_path)
+    for cmd in (["init", "-b", "master"], ["config", "user.email", "a@b.c"],
+                ["config", "user.name", "t"]):
+        subprocess.run(["git", *cmd], cwd=str(tmp_path), capture_output=True)
+    warnings = [DoctorWarning(
+        kind="source_path_missing",
+        rule_path=tmp_path / "shared" / "feedback" / "rule.md",
+        detail="briefings/gone.md",
+    )]
+
+    with patch("mnemo.autopilot.selffix.doctor_fixer.detect_fixable", return_value=warnings), \
+         patch("mnemo.autopilot.selffix.doctor_fixer.open_doctor_fix_pr", return_value=None) as mock_pr:
+        _run(monkeypatch, tmp_path, "autopilot", "self-fix", "doctor", capsys=capsys)
+
+    assert mock_pr.call_args.kwargs["repo_root"] == tmp_path.resolve()
+
+
+def test_selffix_passes_no_repo_when_the_vault_is_not_versioned(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    from mnemo.autopilot.selffix.doctor_fixer import DoctorWarning
+
+    _setup_vault(tmp_path)
+    warnings = [DoctorWarning(
+        kind="source_path_missing",
+        rule_path=tmp_path / "shared" / "feedback" / "rule.md",
+        detail="briefings/gone.md",
+    )]
+
+    with patch("mnemo.autopilot.selffix.doctor_fixer.detect_fixable", return_value=warnings), \
+         patch("mnemo.autopilot.selffix.doctor_fixer.open_doctor_fix_pr", return_value=None) as mock_pr:
+        _run(monkeypatch, tmp_path, "autopilot", "self-fix", "doctor", capsys=capsys)
+
+    assert mock_pr.call_args.kwargs["repo_root"] is None
+
+
 def test_selffix_no_subcommand_exits_nonzero(monkeypatch, tmp_path: Path, capsys) -> None:
     _setup_vault(tmp_path)
     rc, out = _run(

@@ -246,7 +246,11 @@ def test_open_doctor_fix_pr_records_budget_on_success(tmp_path: Path) -> None:
                     "last_changed_at": None, "last_changed_by": None})
     )
 
-    with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_branch", return_value="branch") as _cb, \
+    with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_worktree",
+               return_value=tmp_path / "wt") as _cb, \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.mirror_paths"), \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.commit_all", return_value=True), \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.remove_worktree"), \
          patch("mnemo.autopilot.selffix.doctor_fixer._gh.push_branch", return_value=True) as _pb, \
          patch("mnemo.autopilot.selffix.doctor_fixer._gh.open_pr", return_value=99) as _op, \
          patch("mnemo.autopilot.selffix.doctor_fixer.pr_budget.record_opened") as mock_rec, \
@@ -284,7 +288,11 @@ def test_open_doctor_fix_pr_aborts_when_pytest_fails(tmp_path: Path) -> None:
                     "last_changed_at": None, "last_changed_by": None})
     )
 
-    with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_branch", return_value="branch"), \
+    with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_worktree",
+               return_value=tmp_path / "wt"), \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.mirror_paths"), \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.commit_all", return_value=True), \
+         patch("mnemo.autopilot.selffix.doctor_fixer._gh.remove_worktree"), \
          patch("mnemo.autopilot.selffix.doctor_fixer._run_pytest", return_value=False), \
          patch("mnemo.autopilot.selffix.doctor_fixer._gh.open_pr") as mock_pr:
         result = open_doctor_fix_pr(
