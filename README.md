@@ -2,179 +2,129 @@
 
 > The Obsidian that populates itself so your Claude never forgets.
 
-**mnemo** turns every Claude Code session into a self-organizing knowledge
-base, then feeds that knowledge back into Claude so it stops forgetting
-what you taught it last week.
+You correct Claude on Monday. On Thursday, in a different repo, it makes the
+same mistake — because the session where you taught it is gone.
 
-It runs locally as a hooks-only Python plugin — zero third-party
-dependencies, zero network calls, identical on Linux, macOS, and Windows.
+**mnemo fixes that.** It watches your Claude Code sessions, distils what you
+taught into durable rules, and feeds the relevant one back the next time it
+matters. Across sessions. Across projects. Without you copying anything.
 
-## What it does
+```
+Monday    you: "don't use `any` in this codebase — we have strict types"
+                                    ↓
+          mnemo writes shared/feedback/typescript-no-any.md
 
-- **Captures** every session's lifecycle into a Markdown vault at `~/mnemo/`
-  (logs, memory mirrors, end-of-session briefings).
-- **Extracts** that raw trail into curated rules under
-  `shared/{feedback,user,reference,project}/` — your project's brain.
-- **Surfaces** the brain back into Claude:
-  - a HOME dashboard that regenerates after every extraction
-  - an MCP server Claude can query for topics and rules
-  - a status line showing the brain's heartbeat
-  - automatic injection of the most relevant rule on every prompt
-  - hard guardrails on `Bash` and contextual hints on `Edit`/`Write`
+Thursday  you: "add a helper to parse the config"   (different repo, new session)
+                                    ↓
+          mnemo injects that rule before Claude answers
+```
 
-- **Maintains itself.** An opt-out autopilot runs between sessions: it
-  heals broken rule provenance, retunes retrieval scoring against your own
-  hit/miss log, calibrates how often a rule is injected, and files a weekly
-  health digest — all on-device, no LLM calls for the mechanical parts.
+Four moving parts, all on your machine:
 
-The result: Claude consumes in real time the rules you taught it weeks
-earlier in a different session, without you having to copy them in.
+- **Capture** — every session's trail into a Markdown vault at `~/mnemo/`
+- **Extract** — that trail into curated rules under `shared/`
+- **Inject** — the most relevant rule, on every prompt, before Claude answers
+- **Self-maintain** — an autopilot that heals and retunes itself between sessions
+
+Zero third-party dependencies. Zero network calls. Identical on Linux, macOS,
+and Windows.
 
 ## Install
 
-One command:
+Inside Claude Code, type:
 
-```bash
-npx @xyrlan/mnemo install
+```
+/plugin marketplace add xyrlan/mnemo
+/plugin install mnemo@mnemo-marketplace
 ```
 
-That installs the Python package (via `uv` / `pipx` / `pip --user`,
-whichever is available), prompts you to choose **global** (every Claude
-Code session) or **project** (this directory only), and wires the hooks,
-MCP server, and slash commands.
+That's the whole thing. No terminal, no Python, no Node — mnemo ships as a
+self-contained binary that the plugin fetches for your platform on first use.
 
-Non-interactive:
+Restart Claude Code, and it's running.
 
-```bash
-npx @xyrlan/mnemo install --yes              # global
-npx @xyrlan/mnemo install --project --yes    # this directory only
-```
+<details>
+<summary>Other ways to install</summary>
 
-To remove:
+**Via npm** — if you'd rather have `mnemo` on your `$PATH`:
 
 ```bash
-npx @xyrlan/mnemo uninstall
+npx @xyrlan/mnemo install              # prompts for global or project scope
+npx @xyrlan/mnemo install --yes        # global, no prompts
+npx @xyrlan/mnemo install --project --yes
 ```
 
-The vault is always preserved on uninstall.
-
-**Prerequisite:** Python 3.8+ on PATH. Node is already there if you can
-run `npx`.
-
-### Via Claude Code (just ask)
-
-If you already have Claude Code open in the repo you want mnemo on, paste
-this prompt — Claude will pick `pipx` / `uv` / `pip --user` based on what
-you have, install `mnemo-claude`, and run `mnemo init --project`:
-
-> Install mnemo for this project. Use `pipx install mnemo-claude` if
-> `pipx` is available, otherwise `uv tool install mnemo-claude`, otherwise
-> `python3 -m pip install --user mnemo-claude`. Then run
-> `mnemo init --project --yes`. If `mnemo` isn't on PATH after install,
-> tell me which directory to add to my shell profile.
-
-For a global install (every Claude Code session, not just this repo),
-swap `--project` for nothing and drop the directive.
-
-### Without npm
+**Via pipx / uv** — for dotfile-managed setups and CI:
 
 ```bash
-pipx install mnemo-claude        # or: uv tool install mnemo-claude
-mnemo init                        # global, or:
-mnemo init --project              # current directory only
+pipx install mnemo-claude    # or: uv tool install mnemo-claude
+mnemo init                   # global, or `mnemo init --project`
 ```
 
-## Use it
+Both need Python 3.8+ (uv brings its own). See
+[docs/getting-started.md](docs/getting-started.md) for the details, including
+what `mnemo init` writes and how to undo it.
 
-Once installed, just use Claude Code normally. mnemo runs in the
-background:
+**Already installed mnemo the old way?** Installing the plugin on top means
+both sets of hooks fire and everything happens twice. mnemo tells you when it
+sees this — run `/mnemo:migrate` to clear the old install. Your vault is
+untouched.
 
-- session start/end markers, memory mirroring, and briefings happen
-  automatically
-- extraction runs after sessions end (when there's enough new material)
-- on every prompt, mnemo retrieves the single most relevant rule and
-  injects it before Claude responds
-- when Claude is about to edit a file or run a command that matches one
-  of your rules, the rule body is surfaced as context (or hard-blocked,
-  if you marked it as a guardrail)
+</details>
 
-Open the vault any time:
+## Check it worked
 
-```bash
-mnemo open
+```
+/mnemo:status     vault state + hook health
+/mnemo:doctor     full diagnostic, with fixes
 ```
 
-Edit `HOME.md`'s notes section freely — mnemo only manages the dashboard
-block at the top.
+A healthy `status` opens like this:
+
+```
+Vault: /Users/you/mnemo  (exists)
+Hooks (plugin): 4/4 — declared by the mnemo plugin
+Circuit breaker: closed (ok)
+```
+
+Then just use Claude Code. mnemo runs in the background: it logs sessions,
+writes a briefing at the end of each one, extracts rules when there's enough
+new material, and injects the most relevant rule on every prompt.
+
+Want the live heartbeat in your status line (`mnemo · 9 topics · 7↓ today`)?
+It's opt-in, because plugins can't set a status line:
+
+```
+/mnemo:statusline
+```
 
 ## Commands
 
 ```
-mnemo init [--project]    first-run setup (global or scoped to <cwd>)
-mnemo status              vault state + hook health
-mnemo doctor              full diagnostic with actionable fixes
-mnemo autopilot status    self-maintenance state, schedule, and budget
-mnemo extract             run the extraction pipeline manually
-mnemo regen-graph-edges   refresh wikilinks for graph viewers (idempotent)
-mnemo open                open the vault
-mnemo uninstall           remove hooks, MCP server, status line
-mnemo help                list commands (`--all` for advanced)
+/mnemo:status       vault state + hook health
+/mnemo:doctor       full diagnostic with actionable fixes
+/mnemo:open         open the vault
+/mnemo:fix          reset the extraction circuit breaker
+/mnemo:statusline   install the optional status line
+/mnemo:migrate      remove a pre-plugin install
+/mnemo:help         list commands
 ```
 
-The same commands are available as slash commands inside Claude Code
-(`/init`, `/status`, `/doctor`, `/open`, …).
+Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
+
+If you installed via npm or pipx, the same commands are `mnemo <name>` in a
+terminal, plus `mnemo init`, `mnemo extract`, and `mnemo autopilot`
+(`mnemo help --all` for the full list).
 
 ## Autopilot
 
-Between sessions, mnemo keeps its own brain in shape so you don't have to.
-Work is scheduled in tiers and rate-limited by a budget — nothing runs on
-the hot prompt path:
+Between sessions, mnemo keeps its own brain in shape. Work is scheduled in
+tiers and rate-limited by a budget — nothing runs on the prompt path. It
+repairs rule provenance, grid-searches retrieval weights against your own
+hit/miss log, calibrates how often rules get injected, and files a weekly
+health digest. On by default, fully local for the mechanical work.
 
-- **Self-fix** — repairs rule integrity: relativizes machine-absolute
-  source paths, relocates sources whose briefing moved, repopulates
-  provenance from extraction state, and refuses edits that would orphan a
-  rule from project scoping.
-- **Self-tune** — grid-searches BM25F retrieval weights against your recall
-  hit/miss log, and calibrates the per-project reflex emit-rate into a
-  healthy band over *eligible* prompts.
-- **Insights** — collects recall misses into rule candidates and surfaces
-  cross-project near-duplicate rules as promotion candidates in `doctor`.
-- **Digest** — a weekly health report under `briefings/autopilot/`.
-
-It is on by default and fully local for the mechanical work. Control it
-with `mnemo autopilot {status,pause,off,on}`.
-
-## Optional: browse the vault in Obsidian
-
-The vault is plain Markdown — any editor with graph support reads it as
-is. If you point [Obsidian](https://obsidian.md/) at `~/mnemo/`:
-
-- rules link to the briefings they were extracted from,
-- briefings link back to the rules they spawned,
-- the **Graph view** renders the rule↔briefing network out of the box.
-
-Run `mnemo regen-graph-edges` once to refresh the wikilink sections on
-existing rules and briefings (the extractor emits them automatically for
-new ones). The section is bookended by an HTML comment marker so it stays
-invisible to mnemo's retrieval — zero impact on Claude's context, zero
-impact on BM25F scoring.
-
-For a more readable graph, open Graph view → settings → **Groups** and
-add (in order — first match wins):
-
-| Query                              | Suggested color |
-|------------------------------------|-----------------|
-| `path:shared/feedback`             | green           |
-| `path:shared/user`                 | yellow          |
-| `path:shared/reference`            | purple          |
-| `path:shared/_inbox`               | orange          |
-| `path:briefings/sessions`          | blue (hubs)     |
-| `path:memory`                      | cyan            |
-| `file:HOME`                        | red (dashboards)|
-| `path:bots`                        | light gray      |
-
-These groups stay in your local `.obsidian/` folder — Obsidian is **not**
-a mnemo dependency, and the vault works identically without it.
+Control it with `mnemo autopilot {status,pause,off,on}`.
 
 ## Where things live
 
@@ -188,20 +138,28 @@ a mnemo dependency, and the vault works identically without it.
 │   ├── reference/        pointers to external systems
 │   └── project/          per-repo project context
 └── .mnemo/               internal state (indices, telemetry)
-
-~/.claude/settings.json   hooks + status line composer
-~/.claude.json            MCP server registration
-~/.claude/commands/       slash commands
 ```
 
-In `--project` mode, everything lives under `<cwd>/.claude/`,
-`<cwd>/.mcp.json`, and `<cwd>/.mnemo/` instead.
+Edit `HOME.md`'s notes section freely — mnemo only manages the dashboard block
+at the top.
+
+## Docs
+
+- [Getting started](docs/getting-started.md) — the deeper tour: every install
+  path, what gets written where, and how the loop works
+- [Configuration](docs/configuration.md) — every knob in `mnemo.config.json`
+- [Troubleshooting](docs/troubleshooting.md) — when something looks wrong
+- [Obsidian](docs/obsidian.md) — optional: browse the vault as a graph
 
 ## Privacy
 
-100% local. Zero network. No third-party Python dependencies. Every
-piece of telemetry (`.mnemo/*.jsonl`) stays on disk — nothing leaves
-your machine. Read the [source](src/mnemo).
+100% local. Zero network calls in normal operation. No third-party Python
+dependencies. Every piece of telemetry (`.mnemo/*.jsonl`) stays on disk.
+
+Two exceptions, both explicit: the plugin downloads its binary from GitHub
+Releases on first use (checksum-verified), and rule extraction shells out to
+the `claude` CLI you already have — which is what turns raw session logs into
+rules. Read the [source](src/mnemo).
 
 ## License
 
