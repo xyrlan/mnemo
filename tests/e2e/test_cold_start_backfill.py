@@ -469,3 +469,7 @@ def test_a_later_extract_must_not_launder_an_already_staged_page(
         "a page staged for review was laundered into the sacred dir by a "
         "later extract that no longer saw its backfill source"
     )
+    # Both halves, always: the routing door leaves the staged copy behind
+    # while the universal door consumes it, so asserting only that shared/ is
+    # clean would pass against a fix that closed just one of them.
+    assert (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").exists()

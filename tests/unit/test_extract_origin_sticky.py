@@ -67,10 +67,13 @@ def _memory(
     return path
 
 
-def _emit(monkeypatch, sources: list[str], slug: str = "prefer-pathlib"):
+def _emit(
+    monkeypatch, sources: list[str], slug: str = "prefer-pathlib",
+    body: str = "Use pathlib.",
+):
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([{
         "slug": slug, "type": "feedback", "name": "Prefer pathlib",
-        "description": "d", "body": "Use pathlib.", "source_files": sources,
+        "description": "d", "body": body, "source_files": sources,
     }]))
 
 
@@ -78,6 +81,20 @@ def _state(root: Path) -> dict:
     return json.loads(
         (root / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8")
     )
+
+
+def _downgrade_state(root: Path) -> None:
+    """Strip ``origin_backfill`` from every entry — a pre-Task-9b state file.
+
+    Also what one run of an older mnemo binary does to a current vault: its
+    ``atomic_write_state`` builds the payload without the key.
+    """
+    path = root / ".mnemo" / "extraction-state.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for entry in payload["entries"].values():
+        entry.pop("origin_backfill", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert "origin_backfill" not in path.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -193,13 +210,7 @@ def test_an_old_state_file_is_healed_from_the_staged_page(tmp_path, monkeypatch)
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    # Downgrade the state file to what a pre-Task-9b mnemo wrote.
-    state_path = root / ".mnemo" / "extraction-state.json"
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    for entry in payload["entries"].values():
-        entry.pop("origin_backfill", None)
-    state_path.write_text(json.dumps(payload), encoding="utf-8")
-    assert "origin_backfill" not in json.dumps(payload)
+    _downgrade_state(root)
 
     _memory(root, "beta", "always-use-pathlib", origin=None)
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
@@ -240,6 +251,103 @@ def test_state_entry_origin_round_trips_without_a_schema_bump(tmp_path):
     del payload["entries"]["feedback/a"]["origin_backfill"]
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert inbox.load_state(path).entries["feedback/a"].origin_backfill is False
+
+
+def test_force_must_not_wipe_the_staged_page_a_legacy_vault_heals_from(
+    tmp_path, monkeypatch,
+):
+    """``--force`` clears ``_inbox`` before Phase 2 — including the evidence.
+
+    The ninth bypass, and the only one in this family that needs nothing
+    unusual from the user: a vault staged by a pre-Task-9b mnemo has no
+    ``origin_backfill`` on its entry, so the staged page is the *only* thing
+    that still knows. ``_force_clear_inbox_cluster_dirs`` unlinked it before
+    the resolver ever got to look, and one ``mnemo extract --force`` then put
+    the reconstruction into ``shared/`` unreviewed.
+    """
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "prefer-pathlib", origin="backfill")
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
+    run_extraction(_cfg(root))
+
+    staged = root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md"
+    assert staged.exists(), "precondition: run 1 staged the page"
+    _downgrade_state(root)
+
+    _memory(root, "beta", "always-use-pathlib", origin=None)
+    _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
+    run_extraction(_cfg(root), force=True)
+
+    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists(), (
+        "--force wiped the staged page, then laundered it into the sacred dir"
+    )
+    assert staged.exists()
+
+
+def test_force_still_wipes_live_staged_pages(tmp_path, monkeypatch):
+    """Control: the drift-duplicate wipe still does its job for live pages."""
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "prefer-pathlib", origin=None)
+    _memory(root, "beta", "always-use-pathlib", origin=None)
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md",
+                        "bots/beta/memory/always-use-pathlib.md"])
+    run_extraction(_cfg(root))
+
+    orphan = root / "shared" / "_inbox" / "feedback" / "drifted-slug.md"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_text(
+        "---\nname: Drifted\ntype: feedback\n---\n\nA prior force run's leftover.\n",
+        encoding="utf-8",
+    )
+    run_extraction(_cfg(root), force=True)
+
+    assert not orphan.exists(), "the live drift-duplicate wipe stopped working"
+
+
+# --------------------------------------------------------------------------
+# stickiness must not leak onto pages that already live in shared/
+# --------------------------------------------------------------------------
+
+def test_a_backfill_co_citation_does_not_freeze_a_live_sacred_page(
+    tmp_path, monkeypatch,
+):
+    """Stamping an ``auto_promoted`` entry froze **live** pages.
+
+    The upgrade branch fires when a page that already lives in ``shared/`` is
+    re-emitted multi-source; it deliberately leaves the sacred file and the
+    entry untouched and writes a ``.proposed.md`` for review. Stamping the
+    entry there made the page sticky-backfill forever, so every subsequent
+    purely-live update took the ``_inbox`` road and the sacred page was never
+    refreshed again. There is no staged page under that key, so the origin
+    gate has nothing to protect and nothing to lose by skipping it.
+    """
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "prefer-pathlib", origin=None)
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
+    run_extraction(_cfg(root))
+
+    sacred = root / "shared" / "feedback" / "prefer-pathlib.md"
+    assert sacred.exists(), "precondition: the live page auto-promoted"
+
+    # A reconstruction turns up citing the live page alongside itself.
+    _memory(root, "beta", "reconstructed", origin="backfill")
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md",
+                        "bots/beta/memory/reconstructed.md"])
+    run_extraction(_cfg(root))
+
+    assert sacred.exists(), "the upgrade branch must leave the sacred file alone"
+    assert _state(root)["entries"]["feedback/prefer-pathlib"]["origin_backfill"] is False
+
+    # Weeks later, a purely live update to the live source.
+    _memory(root, "alpha", "prefer-pathlib", origin=None, body="Use pathlib everywhere.")
+    _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"],
+          body="Use pathlib everywhere.")
+    run_extraction(_cfg(root))
+
+    assert "Use pathlib everywhere." in sacred.read_text(encoding="utf-8"), (
+        "a live sacred page stopped being refreshed after one backfill "
+        "co-citation stamped its state entry"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -367,6 +475,54 @@ def test_a_project_page_stays_staged_after_its_source_loses_the_stamp(
     assert staged.exists()
 
 
+def test_a_legacy_project_vault_heals_from_the_staged_page(tmp_path, monkeypatch):
+    """``promote.py`` needs the same file-level recovery the cluster path has.
+
+    Reading only the source file and the entry leaves a pre-Task-9b vault with
+    no way back once the source file has lost its stamp — and ``project`` is
+    the type backfill produces most, so it is the highest-volume gap.
+    """
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "layout", type_="project", origin="backfill")
+    monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
+    run_extraction(_cfg(root))
+
+    staged = root / "shared" / "_inbox" / "project" / "alpha__layout.md"
+    assert staged.exists(), "precondition: run 1 staged the project page"
+    _downgrade_state(root)
+
+    _memory(root, "alpha", "layout", type_="project", origin=None, body="Rewritten.")
+    run_extraction(_cfg(root), force=True)
+
+    assert not (root / "shared" / "project" / "alpha__layout.md").exists()
+    assert staged.exists()
+
+
+def test_a_project_page_survives_losing_both_its_stamps(tmp_path, monkeypatch):
+    """Source stamp gone *and* staged stamp hand-edited away — the entry holds.
+
+    The three legs of ``_sticky_backfill`` have to be independently load
+    bearing. With only the staged-file leg, editing the ``origin:`` line out of
+    the staged page (or deleting it) hands the source file back the last word,
+    and it no longer has a stamp either.
+    """
+    root = _vault(tmp_path)
+    _memory(root, "alpha", "layout", type_="project", origin="backfill")
+    monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
+    run_extraction(_cfg(root))
+
+    staged = root / "shared" / "_inbox" / "project" / "alpha__layout.md"
+    text = staged.read_text(encoding="utf-8")
+    assert "\norigin: backfill\n" in text, "precondition: the staged page was stamped"
+    staged.write_text(text.replace("\norigin: backfill\n", "\n"), encoding="utf-8")
+
+    _memory(root, "alpha", "layout", type_="project", origin=None, body="Rewritten.")
+    run_extraction(_cfg(root), force=True)
+
+    assert not (root / "shared" / "project" / "alpha__layout.md").exists()
+    assert staged.exists()
+
+
 def test_a_live_project_page_still_promotes_directly(tmp_path, monkeypatch):
     """Control for the project pipeline, including under ``--force``."""
     root = _vault(tmp_path)
@@ -442,11 +598,7 @@ def test_an_unchanged_re_emission_still_persists_a_recovered_origin(
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"], slug="use-pathlib")
     run_extraction(_cfg(root))
 
-    state_path = root / ".mnemo" / "extraction-state.json"
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    for entry in payload["entries"].values():
-        entry.pop("origin_backfill", None)
-    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    _downgrade_state(root)
 
     # Dirty the source without changing the page the model emits.
     src.write_text(src.read_text(encoding="utf-8") + "\n", encoding="utf-8")

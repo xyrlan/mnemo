@@ -209,6 +209,12 @@ def _resolve_sticky_origin(
         page.origin_backfill = True
 
 
+#: Entry statuses meaning "this page already lives in ``shared/<type>/``".
+#: There is no staged page under these, so there is nothing for the origin
+#: gate to protect and nothing to make sticky.
+_SACRED_STATUSES = frozenset({"auto_promoted", "direct", "promoted"})
+
+
 def _stamp_entry_origin(
     state: ExtractionState, key: str, page: ExtractedPage,
 ) -> None:
@@ -218,12 +224,22 @@ def _stamp_entry_origin(
     entry and the ones that install a fresh ``StateEntry``; a single write here
     means no branch has to remember to carry the flag. Only ever sets True, so
     a later run that no longer sees the origin cannot unstick it.
+
+    Entries whose status says the page already lives in the sacred dir are
+    skipped. Stamping those froze **live** pages (Task 9b review): one backfill
+    reconstruction co-citing an auto-promoted page routes through the upgrade
+    branch — which deliberately leaves the sacred file and the entry alone —
+    and a stamp applied there made every later purely-live update take the
+    ``_inbox``/``.proposed.md`` road forever, so the sacred page was never
+    refreshed again. Skipping cannot open a leak: with no staged page under the
+    key, the gate has nothing to keep staged.
     """
     if not is_backfill_page(page):
         return
     entry = state.entries.get(key)
-    if entry is not None:
-        entry.origin_backfill = True
+    if entry is None or entry.status in _SACRED_STATUSES:
+        return
+    entry.origin_backfill = True
 
 
 def apply_pages(

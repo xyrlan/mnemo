@@ -13,6 +13,7 @@ from mnemo.core.backfill.origin import (
     ORIGIN_LINE,
     is_backfill_entry,
     is_backfill_frontmatter,
+    is_backfill_markdown,
 )
 from mnemo.core.extract.inbox import ApplyResult, ExtractionIOError
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
@@ -35,16 +36,29 @@ def _is_backfill(file: MemoryFile) -> bool:
     return is_backfill_frontmatter(file.frontmatter)
 
 
-def _sticky_backfill(file: MemoryFile, entry: StateEntry | None) -> bool:
-    """Backfill origin for a project page: from the file, or remembered.
+def _sticky_backfill(
+    file: MemoryFile, entry: StateEntry | None, vault_root: Path,
+) -> bool:
+    """Backfill origin for a project page: from the file, remembered, or staged.
 
-    The source memory file normally keeps its own stamp forever, so unlike the
-    cluster pipeline this one does not lose the answer between runs. The state
-    entry is OR'd in anyway so that stripping the stamp out of the source file
-    — by hand, or by some future rewriter — cannot re-open the door on a page
-    that is already staged for review (Task 9b).
+    Three readings, cheapest first, matching ``apply._resolve_sticky_origin``:
+
+    1. the source memory file's own stamp — normally kept forever, so unlike
+       the cluster pipeline this one does not usually lose the answer;
+    2. ``StateEntry.origin_backfill``, so stripping the stamp out of the source
+       file (by hand, or by some future rewriter) cannot re-open the door on a
+       page already staged for review;
+    3. the staged ``shared/_inbox/project/<slug>.md``, for vaults whose state
+       file predates the field. Without this leg a legacy vault whose project
+       source had lost its stamp had no way back — and ``project`` is the type
+       backfill produces most, so that was the highest-volume asymmetry
+       against the cluster path (Task 9b review).
     """
-    return _is_backfill(file) or is_backfill_entry(entry)
+    if _is_backfill(file) or is_backfill_entry(entry):
+        return True
+    return is_backfill_markdown(
+        vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"
+    )
 
 
 def _target_path(
@@ -103,7 +117,7 @@ def promote_projects(
     for file in files:
         key = f"project/{_project_slug(file)}"
         entry = state.entries.get(key)
-        backfill = _sticky_backfill(file, entry)
+        backfill = _sticky_backfill(file, entry, vault_root)
         if backfill and entry is not None:
             # Make it stick before any branch below can return early.
             entry.origin_backfill = True

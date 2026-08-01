@@ -91,9 +91,16 @@ def load_state(path: Path) -> ExtractionState:
             # readable by older mnemo (unknown keys are ignored here) and
             # absent in files older mnemo wrote, which load as False.
             # Bumping SCHEMA_VERSION would instead make every older mnemo
-            # raise StateSchemaError on a vault a newer one has touched —
-            # a hard downgrade break bought for a field that degrades
-            # gracefully on its own.
+            # raise StateSchemaError on a vault a newer one has touched — a
+            # hard downgrade break, versus a field that merely goes missing.
+            #
+            # Missing, though, is not free: an older mnemo's
+            # ``atomic_write_state`` builds the payload without this key, so a
+            # single run of an older binary ERASES the flag from every entry.
+            # The only backstop is the staged page in ``shared/_inbox/``, which
+            # still carries ``origin: backfill`` and is what
+            # ``apply._resolve_sticky_origin`` reads — which is also why
+            # ``_force_clear_inbox_cluster_dirs`` must not delete it.
             origin_backfill=bool(v.get("origin_backfill", False)),
         )
     return ExtractionState(

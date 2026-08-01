@@ -10,7 +10,11 @@ from datetime import datetime
 from pathlib import Path
 
 from mnemo.core import dashboard, errors, locks, llm, paths
-from mnemo.core.backfill.origin import is_backfill_entry, is_backfill_frontmatter
+from mnemo.core.backfill.origin import (
+    is_backfill_entry,
+    is_backfill_frontmatter,
+    is_backfill_markdown,
+)
 from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
@@ -286,6 +290,17 @@ def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
     Called only when --force is set, before any cluster extraction runs.
     Wipes slug-drift duplicates from prior force runs (see v0.3.1 spec §3b).
     Intentionally leaves non-cluster subdirs (e.g. _inbox/project/) alone.
+
+    Backfill-stamped pages are exempt, for two reasons that point the same way
+    (ninth bypass, Task 9b review):
+
+    * this wipe runs *before* Phase 2, and the staged page is what
+      ``apply._resolve_sticky_origin`` reads to recover an origin for a vault
+      whose state file predates ``StateEntry.origin_backfill``. Delete it and
+      a legacy vault's staged page is laundered into ``shared/`` by the very
+      next ``--force`` run — no hand-editing, no file deletion required;
+    * a staged page is a review request. Silently deleting one on ``--force``
+      loses work the user was asked to look at, drift duplicate or not.
     """
     inbox_root = vault_root / "shared" / "_inbox"
     if not inbox_root.is_dir():
@@ -295,6 +310,8 @@ def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
         if not type_dir.is_dir():
             continue
         for md in type_dir.glob("*.md"):
+            if is_backfill_markdown(md):
+                continue
             try:
                 md.unlink()
             except OSError:
