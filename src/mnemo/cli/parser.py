@@ -139,6 +139,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
+    bf = sub.add_parser("backfill", help="populate the vault from past session transcripts")
+    bf.add_argument("--all", action="store_true", help="every project, not just this repo")
+    bf.add_argument("--dry-run", action="store_true", help="show what would be harvested, write nothing")
+    bf.add_argument("--project", type=str, default=None, help="limit to one project by name")
+    bf.add_argument("--limit", type=int, default=None, help="cap the number of sessions")
+    bf.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
+    bf.add_argument("--install-run", action="store_true", help=argparse.SUPPRESS)
     # Hidden subparsers: omit ``help=`` entirely so argparse doesn't create a
     # ChoicesPseudoAction for them. Passing ``help=argparse.SUPPRESS`` was the
     # documented way to hide a subparser, but Python 3.14 regressed it: the
