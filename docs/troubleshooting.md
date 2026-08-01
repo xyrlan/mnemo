@@ -90,10 +90,11 @@ carries the injection envelope, so the child cannot print to your terminal.
 
 - **"failed N times and never completed"** — the sweep aborted on the machine,
   not on a transcript: no `claude` CLI on `PATH`, expired auth, or a rate
-  limit. Nothing was harvested and nothing was held against your transcripts.
-  Run `mnemo backfill` in a terminal: it does the same work in the foreground
-  and prints the actual error. The one-shot is not spent, so a later session
-  will also retry on its own.
+  limit. It stopped at the first such failure and held nothing against the
+  transcripts it never reached, so nothing is lost. Run `mnemo backfill` in a
+  terminal: it does the same work in the foreground and prints the actual
+  error. The one-shot is not spent, so a later session will also retry on its
+  own.
 - **"started Nh ago and never finished"** — the process was killed mid-sweep
   and left its lock behind. Nothing is running. `mnemo backfill` resumes;
   already-harvested sessions are skipped.

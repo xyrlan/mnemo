@@ -117,10 +117,13 @@ history you already have: Claude Code stores every session it has ever run at
 
 On the first session after install, mnemo spawns a background sweep of **the
 repo you're sitting in** — newest sessions first, capped at
-`backfill.installCap` (20). Each session is one call to the `claude` CLI you
-already have, using `extraction.model` (Haiku by default). Sessions that
-touched fewer than `backfill.minFileMutations` files are skipped without a
-call.
+`backfill.installCap` (20). Each session costs one call to the `claude` CLI you
+already have, using `extraction.model` (Haiku by default) and retried once if
+it times out. Sessions that touched fewer than `backfill.minFileMutations`
+files are skipped without a call.
+
+What comes back is written into `bots/<repo>/memory/` — the same place live
+capture writes — and the next extraction turns it into rules.
 
 That is the whole automatic budget: it runs **once per vault**, never for your
 other projects, and never again. Everything beyond it is something you type.
