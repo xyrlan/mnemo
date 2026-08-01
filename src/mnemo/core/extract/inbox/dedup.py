@@ -8,6 +8,7 @@ all four sites route through ``paths._promoted_path`` /
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from mnemo.core.extract.inbox import paths
@@ -42,24 +43,20 @@ def dedupe_by_slug(pages: list[ExtractedPage]) -> list[ExtractedPage]:
             for t in getattr(p, "tags", None) or []:
                 if t not in all_tags:
                     all_tags.append(t)
-        merged.append(ExtractedPage(
-            slug=chosen.slug,
-            type=chosen.type,
-            name=chosen.name,
-            description=chosen.description,
-            body=chosen.body,
+        # Everything not listed here is taken from ``chosen`` verbatim, via
+        # dataclasses.replace — so a field added to ExtractedPage later is
+        # carried through this merge without anyone having to remember it.
+        # Field-by-field rebuilds are how origin_backfill got dropped at this
+        # exact site (Task 6b), and a dropped flag opens a bypass silently
+        # rather than raising.
+        merged.append(replace(
+            chosen,
             source_files=all_sources,
-            source_hash=chosen.source_hash,
-            stability=getattr(chosen, "stability", None) or "stable",
             tags=all_tags,
-            enforce=getattr(chosen, "enforce", None),
-            activates_on=getattr(chosen, "activates_on", None),
             # Sticky across the merge: if any contributing page was
             # reconstructed from an archived transcript, the merged page is
             # partly reconstructed too and must stay behind the origin gate.
-            origin_backfill=any(
-                getattr(p, "origin_backfill", False) for p in items
-            ),
+            origin_backfill=any(p.origin_backfill for p in items),
         ))
     return merged
 

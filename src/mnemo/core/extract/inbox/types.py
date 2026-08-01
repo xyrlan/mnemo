@@ -31,10 +31,18 @@ class ExtractedPage:
     # on the next extraction run.
     enforce: dict | None = None
     activates_on: dict | None = None
-    # True when every source memory file carried metadata.origin: backfill.
+    # True when AT LEAST ONE source memory file carried metadata.origin:
+    # backfill. The OR is deliberate and must not be "tightened" to an AND: a
+    # page mixing one live and one reconstructed source is still partly
+    # reconstructed, and requiring every source to be stamped let exactly such
+    # a page span two projects and be universally promoted into the sacred dir
+    # unreviewed (Task 6b).
+    #
     # Such pages are reconstructed from archived transcripts rather than
     # observed live, so they always stage in _inbox for review — see
-    # inbox/paths.py::_target_path_for_page.
+    # inbox/paths.py::_target_path_for_page — and never universally promote
+    # (inbox/apply.py::_is_universal_promotion plus the end-of-extract
+    # reconciler in extract/__init__.py).
     origin_backfill: bool = False
 
 
