@@ -3,7 +3,11 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.17.0] — 2026-08-01
+
+This is the release that makes the plugin install work: the launcher fetches
+its binary from the GitHub Release matching the plugin's version, and 0.16.0
+predates the binary build job.
 
 ### Added
 
