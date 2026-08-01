@@ -82,6 +82,83 @@ See [configuration.md](configuration.md) to loosen the thresholds — though the
 autopilot retunes them from your own hit/miss data, so give it a few sessions
 first.
 
+## Backfill: the first-run sweep never finished
+
+The automatic sweep runs detached with its output discarded — the hook's stdout
+carries the injection envelope, so the child cannot print to your terminal.
+`/mnemo:doctor` is where you find out it happened. It reports three shapes:
+
+- **"failed N times and never completed"** — the sweep aborted on the machine,
+  not on a transcript: no `claude` CLI on `PATH`, expired auth, or a rate
+  limit. Nothing was harvested and nothing was held against your transcripts.
+  Run `mnemo backfill` in a terminal: it does the same work in the foreground
+  and prints the actual error. The one-shot is not spent, so a later session
+  will also retry on its own.
+- **"started Nh ago and never finished"** — the process was killed mid-sweep
+  and left its lock behind. Nothing is running. `mnemo backfill` resumes;
+  already-harvested sessions are skipped.
+- **"finished having harvested nothing — N sessions failed"** — the sweep ran
+  to the end but every session failed on its own merits. See below.
+
+Detailed errors are in `~/mnemo/.errors.log` under `where=backfill.harvest` and
+`where=session_start.backfill`.
+
+## Backfill: transcripts that stopped being retried
+
+A transcript that fails three times is retired — nothing decrements the counter,
+and archived transcripts never change, so it would otherwise be skipped forever.
+`mnemo backfill` says so:
+
+```
+backfill: nothing to do — 12 already harvested, 3 gave up after 3 failed
+attempts (see /Users/you/mnemo/.errors.log).
+          `mnemo backfill --retry-failed` clears them for another try.
+```
+
+Clear them and try again:
+
+```bash
+mnemo backfill --retry-failed
+```
+
+That drops the failed entries vault-wide, whatever `--project` you pass, and
+leaves finished work alone. If they keep failing, read `~/mnemo/.errors.log` —
+the usual culprit is a single enormous transcript timing out twice at
+`extraction.subprocessTimeout`.
+
+## `shared/_inbox/` is full of pages I didn't write
+
+That's backfill, working as intended. Pages reconstructed from old transcripts
+are stamped `origin: backfill` and always stage for review — they are never
+auto-promoted into `shared/`, whatever their source count. `mnemo doctor` lists
+them:
+
+```
+2 backfill rule(s) staged in _inbox/ awaiting review
+  • shared/_inbox/project/mnemo.md
+```
+
+Read each one. Move the keepers into the matching directory
+(`shared/_inbox/feedback/x.md` → `shared/feedback/x.md`) and delete the rest —
+nothing under `_inbox/` takes part in injection. Expect to delete most of them:
+even rules extracted from *live* sessions get archived far more often than
+they're kept, and a reconstruction of a session nobody watched is a weaker
+signal than that.
+
+To stop producing more: `"backfill": { "enabled": false }`.
+
+## Backfill's cost estimate looks wrong
+
+It's a rough figure, and only for input. It's measured on the flattened text
+actually sent to the model — tool inputs dropped, tool results truncated — not
+on the size of the `.jsonl` files, which overstates by one to two orders of
+magnitude. It still counts sessions that `backfill.minFileMutations` may skip
+without any call at all, and it says nothing about output tokens. Treat it as
+an order of magnitude, not a bill. If your `claude` CLI runs on a Pro/Max
+subscription, there's no per-token charge for those calls anyway.
+
+`mnemo backfill --dry-run` prints the estimate and writes nothing.
+
 ## `doctor` warns about statusLine drift
 
 You hand-edited `~/.claude/settings.json` after installing. Re-run `mnemo init`

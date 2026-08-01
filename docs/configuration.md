@@ -11,7 +11,7 @@ truth if this page ever falls behind it.
 
 ## The switches that matter
 
-Everything below is on out of the box. These are the four you'd realistically
+Everything below is on out of the box. These are the five you'd realistically
 turn off:
 
 | Key | Default | What turning it off does |
@@ -20,6 +20,7 @@ turn off:
 | `briefings.enabled` | `true` | No per-session briefings. Extraction gets much thinner input |
 | `injection.enabled` | `true` | Claude is no longer told about the MCP tools at session start (the tools still work) |
 | `reflex.enabled` | `true` | No automatic rule injection on prompts |
+| `backfill.autoOnFirstSession` | `true` | No automatic one-time sweep of your old transcripts on the first session. `mnemo backfill` still works by hand |
 
 ```json
 {
@@ -51,6 +52,31 @@ turn off:
 | `extraction.auto.enabled` | `true` | Run extraction automatically at `SessionEnd` |
 | `extraction.auto.minNewMemories` | `1` | New source files required before a run |
 | `extraction.auto.minIntervalMinutes` | `60` | Minimum gap between automatic runs |
+
+### `backfill` — filling a new vault from old transcripts
+
+Claude Code keeps every session it ever ran at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Backfill sends those
+through the LLM and writes memory files, so a vault installed today has
+material from months ago. See [getting-started.md](getting-started.md#backfill)
+for what it does and how to review the result.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `backfill.enabled` | `true` | Master switch. `false` makes `mnemo backfill` a no-op that says so, and stops the automatic sweep |
+| `backfill.installCap` | `20` | Most sessions the automatic first-run sweep will harvest — newest first, current repo only. Ignored by an explicit `mnemo backfill`, which uses `--limit` |
+| `backfill.minFileMutations` | `1` | Sessions that touched fewer files than this are skipped without an LLM call |
+| `backfill.autoOnFirstSession` | `true` | Run that capped sweep once, in the background, on the first session after install |
+
+The automatic sweep runs **once per vault**, and only after it finishes: a
+sweep that dies because the `claude` CLI is unreachable leaves the one-shot
+unspent, and the next session tries again.
+
+To upgrade without it ever running:
+
+```json
+{ "backfill": { "autoOnFirstSession": false } }
+```
 
 ### `briefings` — the per-session summary
 

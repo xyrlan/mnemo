@@ -3,6 +3,78 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — v0.18.0
+
+### Added
+
+- **Cold-start backfill.** A new vault used to inject nothing for weeks,
+  because it had nothing to say. mnemo now reconstructs memory from the
+  session transcripts Claude Code has been keeping all along
+  (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`), which the existing
+  extraction pipeline turns into rules.
+
+  ```bash
+  mnemo backfill                  # this repo
+  mnemo backfill --all            # every project on the machine
+  mnemo backfill --dry-run        # count, projects and a rough token estimate
+  ```
+
+  Also `--project NAME`, `--limit N`, `--yes/-y`, and `--retry-failed`. The
+  command prints what it's about to read and asks before spending. Failures are
+  recorded per transcript and stepped over; an interrupted sweep resumes where
+  it stopped; a transcript that fails three times is retired until
+  `--retry-failed`. Exit codes: `0` done, `1` some sessions failed, `2` aborted,
+  `130` interrupted.
+
+- **Backfilled material always stages for review.** Pages produced from old
+  transcripts are stamped `origin: backfill`, and every rule derived from one
+  is written to `shared/_inbox/<type>/` — never auto-promoted into `shared/`,
+  whatever its source count, and the stamp survives across extraction runs.
+  These are the model's reconstruction of sessions nobody watched; they get a
+  human before they get to influence anything. `mnemo doctor` lists what's
+  staged, and reports a first-run sweep that failed where nobody could see it.
+
+- Config: `backfill.enabled`, `backfill.installCap`,
+  `backfill.minFileMutations`, `backfill.autoOnFirstSession`. See
+  [docs/configuration.md](docs/configuration.md).
+
+### ⚠ Upgrade note — this spends LLM calls on your next session
+
+**Read this before upgrading.** The "have we done the first-run sweep?" marker
+defaults to *not done* for every vault that existed before this release. So
+your next session is treated as a first session: mnemo spawns a background
+sweep of **the repo that session is in**, harvesting up to `backfill.installCap`
+(**20**) of its most recent transcripts.
+
+What that costs: **up to 20 calls to the `claude` CLI**, one per session,
+using `extraction.model` (Haiku by default). On a Pro/Max subscription that
+draws on your subscription with no per-token charge; on API-key auth it is
+billed. It happens once per vault — not once per repo, not once per session —
+and only for the repo you happen to be in. Sessions that touched no files are
+skipped without a call.
+
+It runs detached, so it will not slow your session down, and its output goes
+nowhere — `mnemo doctor` is where you find out how it went.
+
+To upgrade without it ever running, put this in
+`~/mnemo/mnemo.config.json` **first**:
+
+```json
+{ "backfill": { "autoOnFirstSession": false } }
+```
+
+`mnemo backfill` still works by hand after that. To disable backfill entirely,
+including the command:
+
+```json
+{ "backfill": { "enabled": false } }
+```
+
+If it already ran and you'd rather it hadn't: the pages it wrote are in
+`bots/<repo>/memory/` alongside the `origin: backfill` stamp, and anything
+extracted from them is sitting in `shared/_inbox/` — not in `shared/` — so
+deleting them is a local, reversible cleanup.
+
 ## [0.17.2] — 2026-08-01
 
 The release that actually ships binaries. 0.17.0 and 0.17.1 were both blocked
