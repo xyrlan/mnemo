@@ -23,12 +23,15 @@ the graph view if you enable it under Settings → Appearance → CSS Snippets.
 Everything lives on your filesystem. No telemetry, no analytics, no vault data
 leaves your machine on its own.
 
-The optional auto-brain (`extraction.auto.enabled`) and briefing (`briefings.enabled`)
-features — **off by default** — invoke Claude Code's `claude --print` subprocess,
-which calls Anthropic's API under your own subscription or API key. When those
-flags are on, the contents of your `bots/<agent>/memory/*.md` and
-`bots/<agent>/briefings/sessions/*.md` files get sent to Anthropic as part of
-the extraction/briefing prompts. Everything else — scaffolding, log writes,
-memory mirrors, `mnemo status`, `mnemo doctor` — runs fully offline.
+One thing does leave: rule extraction (`extraction.auto.enabled`) and briefing
+generation (`briefings.enabled`), both **on by default**, invoke Claude Code's
+`claude --print` subprocess under your own subscription or API key. That sends
+the contents of your `bots/<agent>/memory/*.md` and
+`bots/<agent>/briefings/sessions/*.md` files to Anthropic as part of the
+extraction and briefing prompts — which is what turns raw session logs into
+rules. Set either flag to `false` in `mnemo.config.json` to stop it.
+
+Everything else — scaffolding, log writes, memory mirrors, retrieval,
+`mnemo status`, `mnemo doctor` — runs fully offline.
 
 Delete this folder anytime.

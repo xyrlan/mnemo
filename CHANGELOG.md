@@ -3,6 +3,60 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Install with no terminal.** mnemo is now a Claude Code plugin:
+
+  ```
+  /plugin marketplace add xyrlan/mnemo
+  /plugin install mnemo@mnemo-marketplace
+  ```
+
+  No Python, no Node, no PATH setup. It ships as a self-contained binary that
+  the plugin fetches for your platform on first use, verified against a
+  published SHA-256. npm and PyPI keep working for dotfile setups and CI.
+- Standalone binaries for macOS (arm64/x64), Linux x64, and Windows x64,
+  built and attached to each GitHub Release.
+- `mnemo statusline --install` / `--remove`. Plugins cannot declare a status
+  line, so the heartbeat becomes an explicit opt-in rather than a reason to
+  open a terminal. Still additive — any status line it replaces is preserved.
+- `/mnemo:migrate` (`mnemo migrate-plugin`), for users who ran `mnemo init`
+  before installing the plugin. Both sets of hooks otherwise stay live and
+  every session gets doubled capture, injection, and enforcement.
+- `mnemo hook <event>`, the binary-invocable equivalent of
+  `python -m mnemo.hooks.<event>`.
+
+### Fixed
+
+- **The vault was never scaffolded under a plugin install.** No `mnemo init`
+  runs, and the hooks only created the directories they touched — so there was
+  no `HOME.md`, no config file, and no `shared/` for extracted rules to land
+  in. `SessionStart` now scaffolds when `HOME.md` is absent.
+- **`mnemo status` reported "settings.json missing" to plugin users** — i.e.
+  "not installed" — because hook health was read only from `settings.json`,
+  where a plugin legitimately has nothing. It now reports the plugin's hooks.
+- **`npx @xyrlan/mnemo install` bailed when `python3` was absent even with
+  `uv` installed.** It checked for Python *before* choosing an installer, so
+  the one tool that provisions its own CPython — and would therefore have
+  worked — was never reached.
+- Hook-ownership detection no longer matches a bare `"mnemo"` substring, which
+  counted any unrelated command sitting under a path containing "mnemo".
+
+### Changed
+
+- Docs rewritten around the plugin install, and corrected against the code:
+  `getting-started.md` documented 2 hooks where 4 ship, `configuration.md`
+  described the v0.1 key set, and both used a `/mnemo <cmd>` slash syntax that
+  never existed. Config keys in the reference tables are now fully qualified
+  so any row can be copied straight into `mnemo.config.json`. New
+  `docs/obsidian.md`; the v0.1 backlog moved to `docs/archive/`.
+- The vault templates shipped into every new vault said background features
+  were "off by default". They have been on since 0.15.0.
+- A test suite now checks the docs against the code: every referenced command
+  and config key must exist, and internal links must resolve.
+
 ## [0.16.0] — 2026-08-01
 
 Three months of fixes that were merged to `master` but never released: the

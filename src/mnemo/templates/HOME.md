@@ -40,14 +40,22 @@ reaches Claude via native auto-memory over `bots/<agent>/memory/`.
 
 ## Quick commands
 
-- `/mnemo status` — health check (includes auto-brain state)
-- `/mnemo doctor` — diagnose problems
-- `/mnemo extract` — manually run the consolidation pipeline (also rebuilds the dashboard above)
+- `/mnemo:status` — health check (includes auto-brain state)
+- `/mnemo:doctor` — diagnose problems
+- `mnemo extract` — manually run the consolidation pipeline (also rebuilds the dashboard above)
 
-## Opt-in background features
+Installed via npm or pipx instead of the plugin? Drop the `:` and run them in a
+terminal: `mnemo status`, `mnemo doctor`.
 
-All off by default. Flip to `true` in `~/mnemo/mnemo.config.json` when you want them:
+## Background features
 
-- `extraction.auto.enabled` — run `mnemo extract` automatically at session end, gated on `minNewMemories` (default 1) and `minIntervalMinutes` (default 60).
-- `briefings.enabled` — generate a shift-handoff briefing at every session end. Briefings land in `bots/<agent>/briefings/sessions/<session-id>.md` and are fed back into the next extraction run as dense input.
-- `injection.enabled` — Claude reaches your mnemo brain automatically via MCP at session start (v0.5). Injects a topic list and exposes `list_rules_by_topic` + `read_mnemo_rule` tools so the next session can't fail to know your rules.
+All **on by default** — mnemo is a working product out of the box, not a
+scaffold you have to switch on. Set any of these to `false` in
+`mnemo.config.json` to opt out:
+
+- `extraction.auto.enabled` — run extraction automatically at session end, gated on `minNewMemories` (default 1) and `minIntervalMinutes` (default 60).
+- `briefings.enabled` — generate a shift-handoff briefing at every session end. Briefings land in `bots/<agent>/briefings/sessions/<session-id>.md` and feed the next extraction run as dense input.
+- `injection.enabled` — tell Claude about your mnemo brain at session start: a topic list plus the `list_rules_by_topic` / `read_mnemo_rule` MCP tools, so a new session can't fail to know your rules.
+- `reflex.enabled` — retrieve and inject the single most relevant rule on every prompt.
+
+Full reference: https://github.com/xyrlan/mnemo/blob/master/docs/configuration.md
