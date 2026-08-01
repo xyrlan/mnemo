@@ -7,14 +7,20 @@ discarded, including the sentence explaining why it gave up. The mechanism
 that keeps a failed run *retryable* lives in ``ledger`` and ``cmd_backfill``;
 this is the part that lets a human ever find out it happened.
 
-Two fingerprints, both meaning "the automatic backfill did not do its job",
-and both read entirely from inside the vault:
+Three fingerprints, all meaning "the automatic backfill did not do its job",
+and all read entirely from inside the vault:
 
 - a spawn lock older than the TTL — a sweep started and its process died
   without ever reaching the ``finally`` that releases it;
 - errors logged by the backfill while the completion marker is still unset —
   the shape of an environmental abort (``claude`` CLI missing, expired auth,
-  rate limit), which releases the lock and records nothing per-session.
+  rate limit), which releases the lock and records nothing per-session;
+- a sweep that *completed* having produced nothing while recording failures.
+  Attributable failures — a transcript that times out, one per session, up to
+  ``installCap`` of them — are each stepped over rather than aborting, so the
+  run ends at ``_EXIT_SOME_FAILED``, marks itself done, and is by every other
+  measure a finished sweep. It is also a vault that got nothing, and the
+  remedy (``--retry-failed``) exists but is named nowhere the user will look.
 
 Deliberately *not* "is there unharvested history?". Answering that means
 scanning ``~/.claude/projects``, which makes the check depend on the machine
@@ -53,8 +59,9 @@ def _doctor_check_install_backfill(vault: Path) -> bool:
                   "skipped)")
             return False
 
-        if ledger.load(vault).get("installRunDone"):
-            return True
+        led = ledger.load(vault)
+        if led.get("installRunDone"):
+            return _report_barren_sweep(led)
         if age is not None:
             return True  # a sweep is in flight right now — say nothing
 
@@ -70,6 +77,40 @@ def _doctor_check_install_backfill(vault: Path) -> bool:
         return False
     except Exception:
         return True
+
+
+def _report_barren_sweep(led: dict) -> bool:
+    """A finished sweep that harvested nothing and failed doing it.
+
+    The zero-produced half alone is not a fault: a sweep of quiet sessions, or
+    of a machine with no history at all, correctly produces nothing and must
+    stay silent — that is the fresh-install case this check exists not to
+    nag about. It is the *combination* with recorded failures that means the
+    user has an empty vault and an unread reason for it.
+    """
+    sessions = led.get("sessions")
+    if not isinstance(sessions, dict):
+        return True  # hand-edited ledger; the empty case falls out below
+
+    failed = 0
+    produced = 0
+    for entry in sessions.values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") == "done":
+            produced += int(entry.get("produced") or 0)
+        else:
+            failed += 1
+
+    if produced or not failed:
+        return True
+
+    noun = "session" if failed == 1 else "sessions"
+    print(f"  ⚠ The first-run backfill finished having harvested nothing — "
+          f"{failed} {noun} failed")
+    print("       → `mnemo backfill --retry-failed` clears them for another attempt")
+    print("       → `mnemo backfill` then reports what went wrong, in the foreground")
+    return False
 
 
 def _logged_backfill_failures(vault: Path) -> int:

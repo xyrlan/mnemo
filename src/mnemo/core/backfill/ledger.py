@@ -73,10 +73,9 @@ def acquire_spawn_lock(vault_root: Path) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     if _claim(path):
         return True
-    try:
-        age = time.time() - path.stat().st_mtime
-    except OSError:
-        return False
+    age = spawn_lock_age(vault_root)
+    if age is None:
+        return False  # it vanished under us; the next session can have it
     if age < SPAWN_LOCK_TTL_SECONDS:
         return False
     try:
@@ -109,9 +108,18 @@ def release_spawn_lock(vault_root: Path) -> None:
 
 
 def spawn_lock_age(vault_root: Path) -> float | None:
-    """Seconds since the lock was taken, or None when there is no lock."""
+    """How far the lock's timestamp is from now, or None when there is no lock.
+
+    Absolute distance, not signed elapsed time. A lock dated in the *future* —
+    a backward clock jump, an NTP correction, a copied vault — otherwise
+    produces a negative age that is forever below the TTL, so a lock left
+    behind by a killed process could never be reaped and the feature would be
+    wedged permanently. Reading the distance in either direction costs nothing
+    and turns "impossible to reap" into "reaped once the skew exceeds the
+    TTL", which is the safe end to fail towards.
+    """
     try:
-        return time.time() - spawn_lock_path(vault_root).stat().st_mtime
+        return abs(time.time() - spawn_lock_path(vault_root).stat().st_mtime)
     except OSError:
         return None
 

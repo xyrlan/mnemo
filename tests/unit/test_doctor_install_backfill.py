@@ -33,6 +33,22 @@ def _log_failure(vault: Path, where: str = "backfill.harvest") -> None:
     err_mod.log_error(vault, where, RuntimeError("claude: command not found"))
 
 
+def _sweep(vault: Path, *, done: list[int] = (), failed: int = 0) -> None:
+    """Write the ledger a real sweep would leave behind.
+
+    ``done`` is one produced-count per successfully harvested session.
+    """
+    led = ledger.load(vault)
+    sessions = led.setdefault("sessions", {})
+    for i, produced in enumerate(done):
+        sessions[f"ok-{i}"] = {"status": "done", "hash": "sha256:x",
+                               "produced": produced, "attempts": 0}
+    for i in range(failed):
+        sessions[f"bad-{i}"] = {"status": "failed", "hash": "sha256:x",
+                                "attempts": 1, "lastError": "timed out twice"}
+    ledger.save(vault, led)
+
+
 def _age_the_lock(vault: Path, seconds: float) -> None:
     path = ledger.spawn_lock_path(vault)
     when = time.time() - seconds
@@ -67,10 +83,89 @@ def test_a_spawn_that_never_launched_is_reported_too(vault, capsys):
 
 def test_a_completed_run_is_silent(vault, capsys):
     _log_failure(vault)
+    _sweep(vault, done=[2])
     ledger.mark_install_run_done(vault)
 
     assert check_mod._doctor_check_install_backfill(vault) is True
     assert capsys.readouterr().out == ""
+
+
+# --- the sweep that finished, failed, and harvested nothing -----------------
+#
+# Attributable failures (a transcript that times out) are stepped over rather
+# than aborting, one per session up to installCap. Twenty of them is a run
+# that reaches the end, marks itself done, and leaves the vault as empty as it
+# found it. `--retry-failed` is the remedy and nothing names it.
+
+def test_a_sweep_that_produced_nothing_but_failed_is_reported(vault, capsys):
+    _sweep(vault, failed=20)
+    ledger.mark_install_run_done(vault)
+
+    assert check_mod._doctor_check_install_backfill(vault) is False
+    out = capsys.readouterr().out
+    assert "harvested nothing — 20 sessions failed" in out
+    assert "--retry-failed" in out
+
+
+def test_one_failed_session_reads_as_singular(vault, capsys):
+    _sweep(vault, failed=1)
+    ledger.mark_install_run_done(vault)
+
+    assert check_mod._doctor_check_install_backfill(vault) is False
+    assert "1 session failed" in capsys.readouterr().out
+
+
+def test_a_sweep_that_produced_something_is_silent(vault, capsys):
+    """Partial success is success — the vault is no longer empty."""
+    _sweep(vault, done=[1], failed=19)
+    ledger.mark_install_run_done(vault)
+
+    assert check_mod._doctor_check_install_backfill(vault) is True
+    assert capsys.readouterr().out == ""
+
+
+def test_a_sweep_of_quiet_sessions_is_silent(vault, capsys):
+    """Zero produced with zero failures is a correct, complete sweep.
+
+    Sessions below the mutation threshold, or with nothing worth keeping,
+    legitimately yield nothing. Only the *combination* with failures means
+    the user has an empty vault and an unread reason for it.
+    """
+    _sweep(vault, done=[0, 0, 0])
+    ledger.mark_install_run_done(vault)
+
+    assert check_mod._doctor_check_install_backfill(vault) is True
+    assert capsys.readouterr().out == ""
+
+
+def test_a_machine_with_no_history_to_sweep_is_silent(vault, capsys):
+    """The fresh-install case: swept, nothing to harvest, marker set, no records."""
+    ledger.mark_install_run_done(vault)
+
+    assert check_mod._doctor_check_install_backfill(vault) is True
+    assert capsys.readouterr().out == ""
+
+
+def test_a_hand_edited_ledger_stays_quiet(vault, capsys):
+    ledger.save(vault, {"schemaVersion": 1, "sessions": "not a dict",
+                        "installRunDone": True})
+
+    assert check_mod._doctor_check_install_backfill(vault) is True
+    assert capsys.readouterr().out == ""
+
+
+def test_a_barren_sweep_is_reported_without_any_error_log(vault, capsys):
+    """The ledger is the source of truth here, not .errors.log.
+
+    The two fingerprints are independent: this one has to fire on ledger
+    evidence alone, or it would just be the abort check wearing a hat.
+    """
+    _sweep(vault, failed=3)
+    ledger.mark_install_run_done(vault)
+    assert not (vault / err_mod.ERROR_LOG_NAME).exists()
+
+    assert check_mod._doctor_check_install_backfill(vault) is False
+    assert "harvested nothing" in capsys.readouterr().out
 
 
 def test_a_sweep_in_flight_is_silent(vault, capsys):

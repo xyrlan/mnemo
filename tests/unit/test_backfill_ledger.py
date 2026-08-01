@@ -177,3 +177,48 @@ def test_marking_the_install_run_preserves_the_session_records(vault, tmp_path):
 
 def test_a_fresh_ledger_has_no_completed_install_run(vault):
     assert ledger.load(vault)["installRunDone"] is False
+
+
+def test_a_future_dated_lock_is_still_reaped(vault):
+    """A backward clock jump must not wedge the lock forever.
+
+    Signed elapsed time goes negative for a lock dated in the future — an NTP
+    correction, a copied vault, a machine that booted with a bad RTC — and a
+    negative age is permanently below the TTL, so a lock left behind by a
+    killed process could never be stolen and the install backfill would never
+    run again on that vault.
+    """
+    import os
+    import time
+
+    assert ledger.acquire_spawn_lock(vault) is True
+    path = ledger.spawn_lock_path(vault)
+    future = time.time() + ledger.SPAWN_LOCK_TTL_SECONDS + 3600
+    os.utime(path, (future, future))
+
+    assert ledger.acquire_spawn_lock(vault) is True
+
+
+def test_a_slightly_future_dated_lock_is_still_believed(vault):
+    """Small skew is not a licence to steal a running sweep's lock."""
+    import os
+    import time
+
+    assert ledger.acquire_spawn_lock(vault) is True
+    path = ledger.spawn_lock_path(vault)
+    future = time.time() + 60
+    os.utime(path, (future, future))
+
+    assert ledger.acquire_spawn_lock(vault) is False
+
+
+def test_spawn_lock_age_is_never_negative(vault):
+    import os
+    import time
+
+    ledger.acquire_spawn_lock(vault)
+    future = time.time() + 3600
+    os.utime(ledger.spawn_lock_path(vault), (future, future))
+
+    age = ledger.spawn_lock_age(vault)
+    assert age is not None and age >= 0
