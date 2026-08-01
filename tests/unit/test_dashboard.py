@@ -90,13 +90,19 @@ def test_update_home_md_excludes_inbox_drafts(tmp_path: Path) -> None:
     assert "draft" not in text
 
 
-def test_update_home_md_excludes_needs_review(tmp_path: Path) -> None:
+def test_update_home_md_includes_hand_promoted_needs_review(tmp_path: Path) -> None:
+    """Regression (v0.18): the tag is stale once the page is in shared/<type>/.
+
+    The user moved it there; the dashboard must show it. ``topic_tags`` still
+    strips the marker, so it must not appear as a topic heading.
+    """
     _write_page(tmp_path, "feedback", "pending",
                 sources=["a"],
                 tags=["needs-review", "auth"])
     update_home_md(_cfg(tmp_path))
     text = (tmp_path / "HOME.md").read_text()
-    assert "pending" not in text
+    assert "pending" in text
+    assert "#needs-review" not in text
 
 
 def test_update_home_md_excludes_evolving(tmp_path: Path) -> None:

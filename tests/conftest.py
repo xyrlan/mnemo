@@ -8,6 +8,26 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_real_install_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop any test that runs the SessionStart hook from really backfilling.
+
+    ``session_start.main`` schedules ``mnemo backfill --install-run`` as a
+    detached child on a vault that has never had one. The child re-reads the
+    *real* config from the *real* environment, so a test that patches
+    ``paths.vault_root`` in-process does not contain it: it would sweep the
+    developer's actual transcript history and spend real LLM calls doing it.
+    The hook swallows spawn failures by design, so this never surfaces as a
+    test failure — it just quietly happens.
+
+    Tests that want to observe the spawn re-patch this attribute themselves;
+    the ones that exercise the real function bind it at import time.
+    """
+    monkeypatch.setattr(
+        "mnemo.hooks.session_start._spawn_detached_backfill", lambda **_kw: None
+    )
+
+
 @pytest.fixture
 def tmp_vault(tmp_path: Path) -> Path:
     """Create a minimal vault directory tree and return its root.

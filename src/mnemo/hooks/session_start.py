@@ -194,6 +194,90 @@ def _warn_about_duplicate_install(vault) -> None:
     migration.mark_notified(state)
 
 
+def _spawn_detached_backfill(cwd: str | None = None) -> None:
+    """Fire-and-forget background install backfill via subprocess.Popen.
+
+    Invokes ``mnemo backfill --install-run``. Detach semantics match
+    session_end's briefing spawn — see hooks/session_end.py:139.
+
+    ``cwd`` is the session's working directory, and it is not decoration:
+    ``backfill --install-run`` picks the repo to sweep with
+    ``resolve_canonical_agent(os.getcwd())``, and Popen otherwise inherits
+    whatever directory the hook process was launched in. Passed only when it
+    still exists — a stale path would make Popen raise before the child ran.
+    """
+    import subprocess
+
+    from mnemo._selfexec import self_argv
+
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    kwargs["cwd"] = cwd if cwd and os.path.isdir(cwd) else None
+
+    subprocess.Popen(self_argv("backfill", "--install-run"), **kwargs)
+
+
+def _maybe_schedule_install_backfill(
+    cfg: dict, vault_root, cwd: str | None = None
+) -> None:
+    """Spawn the one-time install backfill, at most once per vault.
+
+    Two separate pieces of state, because "we launched something" and "a
+    backfill happened" are different facts and conflating them silently burns
+    the user's only automatic run:
+
+    - ``installRunDone`` says a sweep **finished**. This function only ever
+      reads it; ``cmd_backfill`` writes it, and only on a run that got to the
+      end. So a child that dies on a missing ``claude`` CLI, expired auth or a
+      rate limit — printing its explanation to a ``DEVNULL`` stderr nobody
+      will ever see — leaves the one-shot unspent and the next session tries
+      again. The cost of that retry is one fast failed CLI invocation and no
+      LLM call, which is the right price for not silently abandoning the
+      feature this vault was installed for.
+    - the spawn lock says a sweep is **in flight**, and is what stops two
+      simultaneous sessions from launching two sweeps.
+
+    A ``Popen`` that raises releases the lock immediately: nothing was
+    launched, so nothing should be held.
+    """
+    try:
+        from mnemo.core.backfill import ledger as _ledger
+
+        backfill_cfg = cfg.get("backfill") or {}
+        if not backfill_cfg.get("enabled", True):
+            return
+        if not backfill_cfg.get("autoOnFirstSession", True):
+            return
+
+        if _ledger.load(vault_root).get("installRunDone"):
+            return
+        if not _ledger.acquire_spawn_lock(vault_root):
+            return  # another session is already sweeping
+
+        try:
+            _spawn_detached_backfill(cwd=cwd)
+        except Exception:
+            _ledger.release_spawn_lock(vault_root)
+            raise
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+
+            _e.log_error(vault_root, "session_start.backfill", exc)
+        except Exception:
+            pass
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -258,6 +342,14 @@ def main() -> int:
                 reflex_index.write_index(vault, reflex_index.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.reflex_index", exc)
+
+        # A brand-new vault injects on 0% of prompts until something puts rules
+        # in it. Runs at most once per vault, capped, detached — one LLM call
+        # per session harvested is minutes of work and must not touch the
+        # prompt path. Must stay below `errors.should_run`, which is the kill
+        # switch for every hook; it does not depend on scaffolding, since the
+        # lock and ledger writes create `.mnemo/` themselves.
+        _maybe_schedule_install_backfill(cfg, vault, cwd)
 
         if cfg.get("capture", {}).get("sessionStartEnd", True):
             source = payload.get("source", "startup")

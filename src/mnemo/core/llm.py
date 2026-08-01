@@ -17,8 +17,38 @@ class LLMSubprocessError(Exception):
     """The `claude` subprocess failed, timed out, or was missing."""
 
 
+class LLMTimeoutError(LLMSubprocessError):
+    """The subprocess timed out on both attempts.
+
+    Split out from its parent because a timeout scales with *prompt size* —
+    it is usually a property of the input, not of the machine — whereas the
+    other ``LLMSubprocessError`` causes (missing CLI, failed auth, rate limit)
+    are properties of the environment and identical for every input. Callers
+    that retry over a batch need to tell those apart: retrying the batch fixes
+    an environment problem and merely re-wedges on an oversized input.
+
+    A subclass, so ``except LLMSubprocessError`` keeps catching it.
+    """
+
+
 class LLMParseError(Exception):
     """The subprocess output could not be parsed as JSON."""
+
+
+class LLMEnvelopeError(LLMParseError):
+    """The CLI's own output envelope was not what we expect.
+
+    Distinct from its parent, which callers reasonably read as "the model
+    answered with garbage for this input". These three conditions instead mean
+    the ``claude`` CLI itself did not speak the protocol: it printed a login
+    nag or update notice, a PATH shim intercepted the call, or the
+    ``--output-format json`` shape changed (which has happened before — see the
+    array-vs-dict handling below). All of them need only exit code 0 with
+    unexpected stdout, and all of them are environmental: identical for every
+    input, and unfixable by retrying a different transcript.
+
+    A subclass, so ``except LLMParseError`` keeps catching it.
+    """
 
 
 @dataclass(frozen=True)
@@ -126,7 +156,7 @@ def call(
             if attempts == 1:
                 time.sleep(2.0)
                 continue
-            raise LLMSubprocessError(f"subprocess timed out twice after {timeout}s") from exc
+            raise LLMTimeoutError(f"subprocess timed out twice after {timeout}s") from exc
 
         if result.returncode != 0:
             if _is_rate_limit(result.stderr) and attempts == 1:
@@ -140,7 +170,7 @@ def call(
     try:
         parsed: Any = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise LLMParseError(f"envelope JSON invalid: {exc.msg}") from exc
+        raise LLMEnvelopeError(f"envelope JSON invalid: {exc.msg}") from exc
 
     # Claude Code CLI ≥2.x returns `--output-format json` as an array of events.
     # Older format (single dict envelope) is also supported for test fixtures
@@ -150,7 +180,7 @@ def call(
     elif isinstance(parsed, dict):
         events = [parsed]
     else:
-        raise LLMParseError("envelope is neither a JSON object nor a JSON array")
+        raise LLMEnvelopeError("envelope is neither a JSON object nor a JSON array")
 
     result_event: dict | None = None
     init_event: dict | None = None
@@ -164,7 +194,7 @@ def call(
             init_event = ev
 
     if result_event is None:
-        raise LLMParseError("no result event in response")
+        raise LLMEnvelopeError("no result event in response")
 
     text = result_event.get("result", "")
     usage = result_event.get("usage") or {}

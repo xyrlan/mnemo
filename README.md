@@ -98,6 +98,28 @@ It's opt-in, because plugins can't set a status line:
 /mnemo:statusline
 ```
 
+## Day one isn't empty
+
+A fresh vault has nothing to inject, so mnemo starts from history you already
+have — Claude Code keeps every past session on disk. On your first session it
+sweeps **the repo you're in**, up to 20 sessions, one LLM call each through the
+`claude` CLI you already have. Once per vault, in the background.
+
+Those pages are reconstructed rather than observed, so every rule that comes
+out of them lands in `shared/_inbox/` for you to read — **backfilled material
+is never auto-promoted into `shared/`**. `/mnemo:doctor` lists what's waiting.
+
+Your other projects are one command away:
+
+```bash
+mnemo backfill --all --dry-run    # what it would read, and roughly what that costs
+mnemo backfill --all
+```
+
+Not interested? Set `"backfill": { "autoOnFirstSession": false }` in
+`~/mnemo/mnemo.config.json` before installing. Details in
+[docs/getting-started.md](docs/getting-started.md#backfill).
+
 ## Commands
 
 ```
@@ -113,7 +135,8 @@ It's opt-in, because plugins can't set a status line:
 Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 
 If you installed via npm or pipx, the same commands are `mnemo <name>` in a
-terminal, plus `mnemo init`, `mnemo extract`, and `mnemo autopilot`
+terminal, plus `mnemo init`, `mnemo extract`, `mnemo backfill`, and
+`mnemo autopilot`
 (`mnemo help --all` for the full list).
 
 ## Autopilot

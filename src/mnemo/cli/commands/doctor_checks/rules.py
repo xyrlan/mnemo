@@ -21,8 +21,8 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
       - every source path resolves under the vault
       - body (text after frontmatter) >= _MIN_BODY_CHARS
     Files that the shared filter marks as non-canonical (drafts in
-    ``shared/_inbox/``, ``needs-review``-tagged, ``stability: evolving``) are
-    excluded to avoid noise on transient extraction artefacts.
+    ``shared/_inbox/``, ``stability: evolving``) are excluded to avoid noise
+    on transient extraction artefacts.
     """
     from mnemo.core.filters import is_consumer_visible, parse_frontmatter
     from mnemo.core.mcp.tools import _RETRIEVAL_TYPES, _extract_body
@@ -53,7 +53,7 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
                 continue
 
             if not is_consumer_visible(md_path, fm, vault):
-                continue  # draft / needs-review / evolving — skip integrity
+                continue  # draft / evolving — skip integrity
 
             rel = f"{page_type}/{md_path.name}"
             if not fm.get("type"):
@@ -186,15 +186,49 @@ def _doctor_check_universal_promotion(vault: Path) -> bool:
     return True
 
 
+def _is_backfill_staged(vault: Path, key: str) -> bool:
+    """True when the _inbox file behind a state key carries the backfill stamp.
+
+    Origin lives on disk, not in the state file: the state schema has no
+    ``origin`` field, so reading it back is a one-file read keyed off
+    ``<type>/<slug>`` that needs no migration for vaults written before the
+    backfill feature landed.
+
+    Parses with ``filters.parse_frontmatter`` — the nesting-aware reader —
+    because that is the parser written for the shape mnemo itself writes, and
+    it does not false-positive on an unrelated nested ``origin`` subkey.
+    Whether the stamp is nested or top-level is *not* load-bearing here:
+    :func:`is_backfill_frontmatter` accepts both, so this check cannot drift
+    away from the routing gate the way it did before Task 6c.
+    """
+    from mnemo.core.backfill.origin import is_backfill_frontmatter
+    from mnemo.core.filters import parse_frontmatter
+
+    page_type, _, slug = key.partition("/")
+    if not slug:
+        return False
+    md = vault / "shared" / "_inbox" / page_type / f"{slug}.md"
+    try:
+        fm = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # missing file, unreadable bytes, malformed frontmatter
+        return False
+    return is_backfill_frontmatter(fm)
+
+
 def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
     """Warn when extraction-state has _inbox entries that cross the
     universal threshold but never moved into ``shared/<type>/``.
 
     Diagnoses the v0.15 dogfood gap: ``_union_with_prior_sources`` accrued
     cross-project ``source_files`` but the apply dispatcher had no branch
-    that would promote them. The reconciler in
-    :mod:`mnemo.core.extract` clears the backlog on every extract; if
-    this warning fires, the user is reading doctor between extracts.
+    that would promote them. The reconciler in :mod:`mnemo.core.extract`
+    clears that backlog on every extract, so a live entry sitting above the
+    threshold means the user is reading doctor between extracts.
+
+    Backfill-origin entries are exempt: the origin gate keeps them staged
+    permanently and by design, so they are not a backlog and no amount of
+    ``mnemo extract`` will move them. They are reported separately as a
+    neutral status line.
 
     Always returns True — advisory check, not a gate.
     """
@@ -212,8 +246,15 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
 
     threshold = int(load_config().get("scoping", {}).get("universalThreshold", 2))
     pending: list[str] = []
+    backfill_staged: list[str] = []
     for key, entry in state.entries.items():
         if entry.status != "inbox":
+            continue
+        if _is_backfill_staged(vault, key):
+            # Awaiting human review, not awaiting reconciliation. Counted
+            # regardless of threshold — project-type staged pages are
+            # single-source and never cross it.
+            backfill_staged.append(key)
             continue
         projects = projects_for_rule(list(entry.source_files))
         if is_universal(projects, threshold):
@@ -228,4 +269,22 @@ def _doctor_check_unpromoted_universal_candidates(vault: Path) -> bool:
             print(f"    • {k}")
         if len(pending) > 5:
             print(f"    … {len(pending) - 5} more")
+
+    if backfill_staged:
+        print(
+            f"  {len(backfill_staged)} backfill rule(s) staged in _inbox/ awaiting review "
+            "(reconstructed from old transcripts, so they stage by design):"
+        )
+        for k in sorted(backfill_staged)[:5]:
+            print(f"    • shared/_inbox/{k}.md")
+        if len(backfill_staged) > 5:
+            print(f"    … {len(backfill_staged) - 5} more")
+        print(
+            "    (read each one; move keepers to shared/<same type>/, "
+            "e.g. shared/_inbox/project/ → shared/project/, and delete the rest)"
+        )
+        print(
+            "    (a plain mv is enough — leave the needs-review tag; the move "
+            "is what makes it live, from your next session on)"
+        )
     return True

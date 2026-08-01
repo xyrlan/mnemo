@@ -135,6 +135,58 @@ def test_call_raises_parse_error_on_invalid_envelope(mock_subprocess_run):
         llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
 
 
+# --------------------------------------------------------------------------
+# Failure classification.
+#
+# Batch callers (`mnemo backfill`) must tell failures caused by the machine
+# from failures caused by one input: the first kind must abort a sweep without
+# blaming any transcript, the second must be stepped over. That decision is
+# only correct if these raise sites keep their specific types, so assert them
+# here rather than trusting the base class — the CLI cannot re-derive the
+# distinction once the type is widened.
+# --------------------------------------------------------------------------
+
+def test_double_timeout_raises_the_timeout_subtype(mock_subprocess_run):
+    """Attributable: timeouts scale with prompt size, so usually the input."""
+    mock_subprocess_run([
+        subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
+        subprocess.TimeoutExpired(cmd=["claude"], timeout=60),
+    ])
+    with pytest.raises(llm.LLMTimeoutError, match="timed out twice"):
+        llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+
+
+@pytest.mark.parametrize("stdout,match", [
+    ("Please run /login to authenticate.\n", "envelope JSON invalid"),
+    ('"a bare string"', "neither a JSON object nor a JSON array"),
+    ('[{"type": "assistant", "message": {}}]', "no result event"),
+])
+def test_malformed_cli_envelopes_raise_the_envelope_subtype(
+    mock_subprocess_run, stdout, match
+):
+    """Environmental: exit 0 with stdout the CLI protocol doesn't define.
+
+    A login nag, an update notice, a PATH shim, or an --output-format change.
+    None of these are the transcript's fault, and every input hits them alike.
+    """
+    mock_subprocess_run([MockCompletedProcess(stdout=stdout)])
+    with pytest.raises(llm.LLMEnvelopeError, match=match):
+        llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
+
+
+def test_content_level_parse_failure_is_not_an_envelope_error():
+    """The model answering with garbage IS the input's fault — plain type."""
+    with pytest.raises(llm.LLMParseError) as exc_info:
+        llm._parse_llm_json("I'm afraid I can't do that.")
+    assert not isinstance(exc_info.value, llm.LLMEnvelopeError)
+
+
+def test_new_error_types_subclass_the_old_ones():
+    """So every existing `except LLMParseError` handler keeps working."""
+    assert issubclass(llm.LLMEnvelopeError, llm.LLMParseError)
+    assert issubclass(llm.LLMTimeoutError, llm.LLMSubprocessError)
+
+
 def test_call_builds_expected_argv(mock_subprocess_run):
     mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
     llm.call("prompt text", system="sys text", model="claude-haiku-4-5", timeout=60)

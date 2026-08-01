@@ -24,6 +24,7 @@ from mnemo.core.extract.prompts.templates.few_shot_simple import (
     _FEW_SHOT_REFERENCE,
     _FEW_SHOT_USER,
 )
+from mnemo.core.extract.prompts.templates.harvest import HARVEST_SYSTEM_PROMPT  # noqa: F401  (re-export anchor for the package shim)
 from mnemo.core.extract.prompts.templates.schema import _SCHEMA_EXAMPLE
 from mnemo.core.extract.prompts.vault_tags import _existing_tags_fragment
 from mnemo.core.extract.scanner import MemoryFile
@@ -121,6 +122,22 @@ def build_briefing_prompt(transcript: str) -> str:
         "following Claude Code session transcript. Follow the section "
         "structure from the system prompt exactly. Output markdown only, "
         "no frontmatter, no code fences.\n\n"
+        "=== TRANSCRIPT ===\n"
+        f"{transcript}\n"
+        "=== END TRANSCRIPT ===\n"
+    )
+
+
+def build_harvest_prompt(transcript: str) -> str:
+    """Render a harvest prompt from a pre-flattened transcript string.
+
+    Mirrors :func:`build_briefing_prompt` — same transcript delimiters — but
+    asks for structured memory pages instead of a handoff narrative.
+    """
+    return (
+        "Task: extract durable memory pages from the following archived "
+        "Claude Code session transcript. Follow the JSON schema from the "
+        "system prompt exactly. Output JSON only, no prose, no code fences.\n\n"
         "=== TRANSCRIPT ===\n"
         f"{transcript}\n"
         "=== END TRANSCRIPT ===\n"

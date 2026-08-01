@@ -3,6 +3,127 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — v0.18.0
+
+### Added
+
+- **Cold-start backfill.** A new vault used to inject nothing for weeks,
+  because it had nothing to say. mnemo now reconstructs memory from the
+  session transcripts Claude Code has been keeping all along
+  (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`), which the existing
+  extraction pipeline turns into rules.
+
+  ```bash
+  mnemo backfill                  # this repo
+  mnemo backfill --all            # every project on the machine
+  mnemo backfill --dry-run        # count, projects and a rough token estimate
+  ```
+
+  Also `--project NAME`, `--limit N`, `--yes/-y`, and `--retry-failed`. The
+  command prints what it's about to read and asks before spending. Failures are
+  recorded per transcript and stepped over; an interrupted sweep resumes where
+  it stopped; a transcript that fails three times is retired until
+  `--retry-failed`. Exit codes: `0` done, `1` some sessions failed, `2` aborted,
+  `130` interrupted.
+
+- **Backfilled material always stages for review.** Pages produced from old
+  transcripts are stamped `origin: backfill`, and every rule derived from one
+  is written to `shared/_inbox/<type>/` — never auto-promoted into `shared/`,
+  whatever its source count, and the stamp survives across extraction runs.
+  These are the model's reconstruction of sessions nobody watched; they get a
+  human before they get to influence anything. `mnemo doctor` lists what's
+  staged, and reports a first-run sweep that failed where nobody could see it.
+
+- Config: `backfill.enabled`, `backfill.installCap`,
+  `backfill.minFileMutations`, `backfill.autoOnFirstSession`. See
+  [docs/configuration.md](docs/configuration.md).
+
+### Fixed
+
+- **The dead-rule sweep archived every rule, at any age.** Autopilot's sweep
+  archives rules with no usage signal in the last 180 days, behind an age guard
+  meant to protect new rules. The guard read a `created_at:` frontmatter field
+  that no writer in mnemo has ever emitted — pages carry `extracted_at:` /
+  `promoted_at:` / `extraction_run:` instead — so it parsed to "unknown age"
+  for every page ever written, and it was coded to archive on unknown
+  (`if created is not None and created > cutoff`). It failed open where it had
+  to fail closed. A rule created minutes ago was swept as dead.
+
+  The damage compounded with the promotion bug above: rules that couldn't
+  inject couldn't earn a usage signal, so they looked dead and were swept. The
+  categories that inject least were wiped fastest. On the maintainer's vault
+  that read 942 archived against 113 live, `feedback` fell 15 → 2 in a single
+  session, and 7 hand-promoted rules were archived within hours of promotion.
+
+  Age is now taken from fields pages actually carry — `created_at`,
+  `promoted_at`, `extracted_at`, `extraction_run`, then filesystem mtime — and
+  a page whose age cannot be established is **never** archived. Nothing was
+  deleted: archived rules are in `shared/_archive/` and can be moved back. `mnemo doctor` and the
+  docs both tell you to review a staged page and move it into
+  `shared/<type>/`. Promotion is a plain `mv` — there is no promote command,
+  and nothing rewrites the frontmatter — so the page kept the `needs-review`
+  tag it was written with. The visibility filter read that tag as "still a
+  draft" and hid the page from injection, the MCP tools, the reflex index and
+  the HOME dashboard. Every keeper anyone ever promoted by hand was silently
+  doing nothing; on the maintainer's own vault that was 7 rules.
+
+  **Location is now the only authority on draft-ness**: under
+  `shared/_inbox/` it is a draft, under `shared/<type>/` it is live. The tag
+  is left as a harmless marker (`topic_tags` still strips it, so it never
+  shows up as a topic). `stability: evolving` is unchanged and still hides a
+  page wherever it lives.
+
+  ⚠ **Behaviour change for existing vaults.** Rules you promoted months ago
+  and assumed were live will now actually become live, on the first session
+  after upgrading. If some of them shouldn't be, move them back under
+  `shared/_inbox/<type>/` or delete them — see
+  [docs/troubleshooting.md](docs/troubleshooting.md).
+
+### Removed
+
+- **`extraction.preferAPI`**, a documented config key that nothing has ever
+  read. Every LLM call goes through the `claude` CLI and uses whatever auth
+  that CLI already has; there was no code path the flag could switch. It is
+  gone from the defaults and from the config reference. A config file that
+  still carries the key keeps merging harmlessly — no migration needed.
+
+### ⚠ Upgrade note — this spends LLM calls on your next session
+
+**Read this before upgrading.** The "have we done the first-run sweep?" marker
+defaults to *not done* for every vault that existed before this release. So
+your next session is treated as a first session: mnemo spawns a background
+sweep of **the repo that session is in**, harvesting up to `backfill.installCap`
+(**20**) of its most recent transcripts.
+
+What that costs: **up to 20 calls to the `claude` CLI**, one per session,
+using `extraction.model` (Haiku by default). On a Pro/Max subscription that
+draws on your subscription with no per-token charge; on API-key auth it is
+billed. It happens once per vault — not once per repo, not once per session —
+and only for the repo you happen to be in. Sessions that touched no files are
+skipped without a call.
+
+It runs detached, so it will not slow your session down, and its output goes
+nowhere — `mnemo doctor` is where you find out how it went.
+
+To upgrade without it ever running, put this in
+`~/mnemo/mnemo.config.json` **first**:
+
+```json
+{ "backfill": { "autoOnFirstSession": false } }
+```
+
+`mnemo backfill` still works by hand after that. To disable backfill entirely,
+including the command:
+
+```json
+{ "backfill": { "enabled": false } }
+```
+
+If it already ran and you'd rather it hadn't: the pages it wrote are in
+`bots/<repo>/memory/` alongside the `origin: backfill` stamp, and anything
+extracted from them is sitting in `shared/_inbox/` — not in `shared/` — so
+deleting them is a local, reversible cleanup.
+
 ## [0.17.2] — 2026-08-01
 
 The release that actually ships binaries. 0.17.0 and 0.17.1 were both blocked

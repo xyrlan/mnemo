@@ -17,11 +17,15 @@ from mnemo.core.extract.prompts.render import (  # noqa: F401
     build_briefing_prompt,
     build_consolidation_prompt,
     build_feedback_prompt,
+    build_harvest_prompt,
     build_reference_prompt,
     build_user_prompt,
 )
 from mnemo.core.extract.prompts.templates.briefing import (  # noqa: F401
     BRIEFING_SYSTEM_PROMPT,
+)
+from mnemo.core.extract.prompts.templates.harvest import (  # noqa: F401
+    HARVEST_SYSTEM_PROMPT,
 )
 # The three underscore-private few-shot constants are re-exported because
 # PR F1's schema regression test (tests/unit/test_prompts_few_shot_schema.py)

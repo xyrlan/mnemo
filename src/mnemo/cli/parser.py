@@ -139,6 +139,21 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
+    bf = sub.add_parser("backfill", help="populate the vault from past session transcripts")
+    # Mutually exclusive: they are answers to the same question, and the
+    # implementation can only honour one. Silently letting `--project` win
+    # over an `--all` the user typed is worse than saying so.
+    bf_scope = bf.add_mutually_exclusive_group()
+    bf_scope.add_argument("--all", action="store_true", help="every project, not just this repo")
+    bf.add_argument("--dry-run", action="store_true", help="show what would be harvested, write nothing")
+    bf_scope.add_argument("--project", type=str, default=None, help="limit to one project by name")
+    bf.add_argument("--limit", type=int, default=None, help="cap the number of sessions")
+    bf.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
+    bf.add_argument(
+        "--retry-failed", action="store_true",
+        help="clear previously failed sessions so they are attempted again",
+    )
+    bf.add_argument("--install-run", action="store_true", help=argparse.SUPPRESS)
     # Hidden subparsers: omit ``help=`` entirely so argparse doesn't create a
     # ChoicesPseudoAction for them. Passing ``help=argparse.SUPPRESS`` was the
     # documented way to hide a subparser, but Python 3.14 regressed it: the

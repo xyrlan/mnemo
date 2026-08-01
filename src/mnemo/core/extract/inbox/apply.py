@@ -18,6 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from mnemo.core.backfill.origin import (
+    is_backfill_entry,
+    is_backfill_markdown,
+    is_backfill_page,
+)
 from mnemo.core.extract.inbox.branches.auto_promoted import _apply_auto_promoted
 from mnemo.core.extract.inbox.branches.inbox_flow import _apply_inbox
 from mnemo.core.extract.inbox.branches.universal_promotion import (
@@ -29,7 +34,7 @@ from mnemo.core.extract.inbox.branches.upgrade import _apply_upgrade_proposed
 from mnemo.core.extract.inbox.dedup import _detect_drift_slug, _detect_stem_collision
 from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
-from mnemo.core.extract.scanner import ExtractionState, StateEntry
+from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
 from mnemo.core.rule_activation.index import is_universal
 
 
@@ -54,8 +59,15 @@ def _is_universal_promotion(
       entries gaining a second project keep going through the upgrade branch
       (which writes a ``.update-proposed.md`` sibling for human review rather
       than overwriting the sacred file).
+
+    Backfill-origin pages never qualify. Universal promotion writes into the
+    sacred dir unreviewed, which is exactly what the origin gate exists to
+    prevent; returning False here drops the page through to the inbox
+    fallback row instead.
     """
     if is_auto:
+        return False
+    if is_backfill_page(page):
         return False
     if entry is not None and entry.status == "auto_promoted":
         return False
@@ -161,6 +173,69 @@ _DISPATCH: list[tuple[_Predicate, _Handler]] = [
 ]
 
 
+def _resolve_sticky_origin(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    vault_root: Path,
+) -> None:
+    """Restore a backfill origin the current chunk no longer shows us.
+
+    ``page.origin_backfill`` is derived by ``_parse_pages_from_response`` from
+    the sources present in *this* chunk. A harvested memory file is dirty
+    exactly once, so from the second extract onwards a page re-emitted under
+    the same slug from some live source arrives with the flag already gone —
+    and then walks straight through every gate that reads it.
+
+    Two durable sources of truth, consulted in cost order:
+
+    1. ``StateEntry.origin_backfill`` — free, and set by every branch below;
+    2. the already-staged ``shared/_inbox/<type>/<slug>.md`` — one small read,
+       only when the entry has no answer. This is what heals vaults whose
+       state file predates the field, and it also catches a page staged by a
+       code path that forgot to stamp the entry.
+
+    Mutates the page in place so *every* downstream gate — ``_target_path_for_
+    page``, ``_is_universal_promotion``, ``rendering._render_page`` — sees the
+    same answer. Never clears the flag: origin is sticky by design, because
+    deriving it fresh each run is the bug.
+    """
+    if is_backfill_page(page):
+        return
+    if is_backfill_entry(entry):
+        page.origin_backfill = True
+        return
+    staged = vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+    if is_backfill_markdown(staged):
+        page.origin_backfill = True
+
+
+def _stamp_entry_origin(
+    state: ExtractionState, key: str, page: ExtractedPage,
+) -> None:
+    """Persist a backfill origin onto whatever entry now lives at *key*.
+
+    Runs after dispatch so it covers both the branches that mutate an existing
+    entry and the ones that install a fresh ``StateEntry``; a single write here
+    means no branch has to remember to carry the flag. Only ever sets True, so
+    a later run that no longer sees the origin cannot unstick it.
+
+    Entries at a :data:`SACRED_STATUSES` status are skipped. Stamping those
+    froze **live** pages (Task 9b review): one backfill
+    reconstruction co-citing an auto-promoted page routes through the upgrade
+    branch — which deliberately leaves the sacred file and the entry alone —
+    and a stamp applied there made every later purely-live update take the
+    ``_inbox``/``.proposed.md`` road forever, so the sacred page was never
+    refreshed again. Skipping cannot open a leak: with no staged page under the
+    key, the gate has nothing to keep staged.
+    """
+    if not is_backfill_page(page):
+        return
+    entry = state.entries.get(key)
+    if entry is None or entry.status in SACRED_STATUSES:
+        return
+    entry.origin_backfill = True
+
+
 def apply_pages(
     pages: list[ExtractedPage],
     state: ExtractionState,
@@ -187,6 +262,11 @@ def apply_pages(
 
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
+        # Before anything reads the origin flag: put back the one this chunk
+        # could not tell us about. Must precede _target_path_for_page — that
+        # is the single-source auto-promote door, and it is the first gate a
+        # laundered page reaches.
+        _resolve_sticky_origin(page, entry, vault_root)
         target = _target_path_for_page(page, vault_root)
         is_auto = _is_auto_promoted_target(target, vault_root)
 
@@ -194,6 +274,7 @@ def apply_pages(
         # Stays inline because it's a "do nothing + continue" — registering it
         # as a no-op handler in the table would obscure the loop control flow.
         if entry is not None and entry.source_hash == page.source_hash and not force:
+            _stamp_entry_origin(state, key, page)
             result.unchanged_skipped.append(key)
             continue
 
@@ -204,5 +285,6 @@ def apply_pages(
                     state, run_id, force, result,
                 )
                 break
+        _stamp_entry_origin(state, key, page)
 
     return result
