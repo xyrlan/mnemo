@@ -91,6 +91,27 @@ Then just use Claude Code. mnemo runs in the background: it logs sessions,
 writes a briefing at the end of each one, extracts rules when there's enough
 new material, and injects the most relevant rule on every prompt.
 
+That last part is silent by design — mnemo injects a rule only when one clearly
+beats the rest, and says nothing the rest of the time. To see the decisions
+themselves:
+
+```
+/mnemo:why
+```
+
+```
+09:41:24  injected  mnemo-1.0-roadmap (6.84)
+          ahead of  recall-degrades-with-topic-size (3.45)
+
+09:30:07  silent    recall-degrades-with-topic-size led at 4.21 but needed 5.78
+                    (1.50 x the runner-up's 3.85) to be clearly ahead
+                    recall-degrades-with-topic-size  4.21
+                    mnemo-1.0-roadmap                3.85
+```
+
+Silence with a reason is the difference between "my vault has nothing useful"
+and "my thresholds are a little too tight".
+
 Want the live heartbeat in your status line (`mnemo · 9 topics · 7↓ today`)?
 It's opt-in, because plugins can't set a status line:
 
@@ -125,6 +146,7 @@ Not interested? Set `"backfill": { "autoOnFirstSession": false }` in
 ```
 /mnemo:status       vault state + hook health
 /mnemo:doctor       full diagnostic with actionable fixes
+/mnemo:why          why reflex fired, or didn't, on your last prompts
 /mnemo:open         open the vault
 /mnemo:fix          reset the extraction circuit breaker
 /mnemo:statusline   install the optional status line

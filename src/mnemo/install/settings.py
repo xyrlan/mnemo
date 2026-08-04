@@ -450,6 +450,8 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
 PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
     "status":  {"description": "vault state + hook health", "args": ("status",)},
     "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
+    "why":     {"description": "why reflex fired (or stayed silent) on your last prompts",
+                "args": ("why",)},
     "open":    {"description": "open vault in Obsidian", "args": ("open",)},
     "fix":     {"description": "reset circuit breaker", "args": ("fix",)},
     "help":    {"description": "list commands", "args": ("help",)},

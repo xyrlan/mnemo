@@ -184,6 +184,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project", "--local", dest="project", action="store_true",
         help="remove only the project-local install (<cwd>/.claude/settings.json + <cwd>/.mcp.json)",
     )
+    why = sub.add_parser("why", help="explain the last few reflex decisions (what fired, what nearly did, why not)")
+    why.add_argument("--limit", type=int, default=10, help="how many decisions to show (default 10)")
+    why.add_argument("--all-projects", action="store_true", help="include decisions from every repo, not just this one")
+    why.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")
