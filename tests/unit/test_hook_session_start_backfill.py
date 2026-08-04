@@ -119,6 +119,44 @@ def test_a_finished_run_that_released_its_lock_is_still_not_repeated(vault, monk
     assert len(spawned) == 1
 
 
+def test_a_lock_orphaned_by_a_finished_run_is_reaped(vault, monkeypatch):
+    """A lock left behind after the marker is set gates nothing, so drop it.
+
+    The ``installRunDone`` check returns before ``acquire_spawn_lock`` is ever
+    called, and ``acquire`` is the only code that reaps a lock by TTL. So a
+    lock leaked by a killed child — after its sweep had already marked itself
+    done — is immortal: no future session consults it, nothing removes it, and
+    doctor reports "a backfill started N hours ago and never finished" forever
+    about a sweep that finished. This hook is the lock's only consumer, so it
+    is the only thing that can honestly retire it.
+    """
+    spawned = _recorder(monkeypatch)
+    ledger.acquire_spawn_lock(vault)
+    ledger.mark_install_run_done(vault)
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+
+    assert spawned == []  # still no second sweep
+    assert not ledger.spawn_lock_path(vault).exists()
+
+
+def test_reaping_the_orphan_lock_does_not_need_it_to_be_stale(vault, monkeypatch):
+    """Age is irrelevant once the marker is set — nothing can be in flight.
+
+    ``cmd_backfill`` writes the marker and *then* releases, so a lock that
+    coexists with the marker belongs to a process that is already past its
+    work. Waiting out a six-hour TTL to remove it would only prolong a warning
+    that was never true.
+    """
+    _recorder(monkeypatch)
+    ledger.acquire_spawn_lock(vault)
+    ledger.mark_install_run_done(vault)
+    assert ledger.spawn_lock_age(vault) < ledger.SPAWN_LOCK_TTL_SECONDS
+
+    session_start._maybe_schedule_install_backfill(_cfg(vault), vault, cwd="/repo")
+    assert not ledger.spawn_lock_path(vault).exists()
+
+
 def test_an_aborted_run_that_released_its_lock_is_retried(vault, monkeypatch):
     """The whole point of the split: no marker means try again.
 

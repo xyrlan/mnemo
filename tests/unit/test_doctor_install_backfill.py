@@ -188,14 +188,34 @@ def test_a_killed_sweep_is_reported_once_its_lock_goes_stale(vault, capsys):
     assert "mnemo backfill" in out
 
 
-def test_a_stale_lock_is_reported_even_when_the_run_completed(vault, capsys):
-    """A leaked lock still blocks future sessions; say so regardless."""
+def test_a_stale_lock_on_a_completed_run_is_not_a_failure(vault, capsys):
+    """The marker outranks the lock: that sweep *did* finish.
+
+    Reporting "started N hours ago and never finished" about a run that wrote
+    its completion marker is false on both halves, and the remedy it prints is
+    worse: ``mnemo backfill`` answers "nothing to do — every transcript is
+    already harvested" and never touches the lock, so following the advice
+    changes nothing and the warning returns forever. The leak is real but
+    inert — nothing consults that lock again — and the next session start
+    reaps it.
+    """
+    ledger.mark_install_run_done(vault)
+    ledger.acquire_spawn_lock(vault)
+    _age_the_lock(vault, ledger.SPAWN_LOCK_TTL_SECONDS + 3600)
+
+    assert check_mod._doctor_check_install_backfill(vault) is True
+    assert capsys.readouterr().out == ""
+
+
+def test_a_stale_lock_on_a_completed_run_does_not_mask_a_barren_sweep(vault, capsys):
+    """Deferring to the marker must not skip the checks that live behind it."""
+    _sweep(vault, failed=4)
     ledger.mark_install_run_done(vault)
     ledger.acquire_spawn_lock(vault)
     _age_the_lock(vault, ledger.SPAWN_LOCK_TTL_SECONDS + 3600)
 
     assert check_mod._doctor_check_install_backfill(vault) is False
-    assert "never finished" in capsys.readouterr().out
+    assert "harvested nothing" in capsys.readouterr().out
 
 
 def test_a_vault_that_has_simply_never_run_it_is_silent(vault, capsys):

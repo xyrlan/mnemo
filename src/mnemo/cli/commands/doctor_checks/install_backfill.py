@@ -10,8 +10,11 @@ this is the part that lets a human ever find out it happened.
 Three fingerprints, all meaning "the automatic backfill did not do its job",
 and all read entirely from inside the vault:
 
-- a spawn lock older than the TTL — a sweep started and its process died
-  without ever reaching the ``finally`` that releases it;
+- a spawn lock older than the TTL *and no completion marker* — a sweep
+  started and its process died without ever reaching the ``finally`` that
+  releases it. The marker is checked first: ``cmd_backfill`` writes it before
+  releasing, so a lock that outlives the marker is an inert leak from a run
+  that did finish, and the next session start retires it;
 - errors logged by the backfill while the completion marker is still unset —
   the shape of an environmental abort (``claude`` CLI missing, expired auth,
   rate limit), which releases the lock and records nothing per-session;
@@ -50,6 +53,17 @@ def _doctor_check_install_backfill(vault: Path) -> bool:
         if not (cfg_mod.load_config().get("backfill") or {}).get("enabled", True):
             return True
 
+        # The completion marker outranks the lock. A sweep that wrote the
+        # marker finished, whatever wreckage it left behind, and telling the
+        # user it "never finished" is false on both halves — worse, the remedy
+        # it names does nothing: `mnemo backfill` answers "nothing to do" and
+        # never touches a lock, so the warning would return every run forever.
+        # A lock surviving the marker is a leak, not a fault, and the next
+        # session start retires it.
+        led = ledger.load(vault)
+        if led.get("installRunDone"):
+            return _report_barren_sweep(led)
+
         age = ledger.spawn_lock_age(vault)
         if age is not None and age >= ledger.SPAWN_LOCK_TTL_SECONDS:
             print(f"  ⚠ A first-run backfill started {int(age // 3600)}h ago and "
@@ -58,10 +72,6 @@ def _doctor_check_install_backfill(vault: Path) -> bool:
             print("       → `mnemo backfill` resumes it (harvested sessions are "
                   "skipped)")
             return False
-
-        led = ledger.load(vault)
-        if led.get("installRunDone"):
-            return _report_barren_sweep(led)
         if age is not None:
             return True  # a sweep is in flight right now — say nothing
 

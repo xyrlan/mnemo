@@ -663,6 +663,35 @@ def test_an_install_run_releases_the_spawn_lock_it_was_launched_under(env, monke
     assert not ledger.spawn_lock_path(vault).exists()
 
 
+def test_the_marker_is_written_before_the_lock_is_dropped(env, monkeypatch):
+    """Ordering, not just eventual state — the gap between them costs money.
+
+    ``session_start`` spawns when it sees no marker *and* wins the lock. If the
+    lock goes first, a session starting in that window reads
+    ``installRunDone`` as False, finds the lock gone, and launches a second
+    sweep: ``installCap`` extra LLM calls on the user's account, which is the
+    exact thing the lock exists to prevent. Marking first closes the window —
+    a crash between the two leaks a lock that is provably inert, and the hook
+    reaps it (see test_hook_session_start_backfill.py).
+    """
+    cfg, vault, _, _ = env
+    _recorder(monkeypatch, result=["a.md"])
+    ledger.acquire_spawn_lock(vault)
+
+    seen: list[bool] = []
+    real_release = ledger.release_spawn_lock
+    monkeypatch.setattr(
+        cmd.ledger,
+        "release_spawn_lock",
+        lambda root: (seen.append(bool(ledger.load(root).get("installRunDone"))),
+                      real_release(root))[1],
+    )
+
+    cmd.cmd_backfill(_args(install_run=True))
+
+    assert seen == [True], "the lock was dropped while the marker still read False"
+
+
 def test_an_install_run_that_explodes_still_releases_the_lock(env, monkeypatch):
     """A leaked lock blocks every future session until the TTL reaps it."""
     cfg, vault, _, _ = env

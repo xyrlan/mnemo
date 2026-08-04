@@ -260,6 +260,16 @@ def _maybe_schedule_install_backfill(
             return
 
         if _ledger.load(vault_root).get("installRunDone"):
+            # Retire a lock the finished run leaked. This check returns before
+            # `acquire_spawn_lock`, and `acquire` is the only code that reaps a
+            # lock by TTL — so past this point a leftover lock is immortal: no
+            # session consults it, nothing removes it, and doctor reports a
+            # sweep that finished as one that "never finished", forever. Age
+            # is irrelevant, because `cmd_backfill` marks before it releases:
+            # a lock coexisting with the marker belongs to a process already
+            # past its work. This hook is the lock's only consumer, so it is
+            # the only thing that can honestly retire one.
+            _ledger.release_spawn_lock(vault_root)
             return
         if not _ledger.acquire_spawn_lock(vault_root):
             return  # another session is already sweeping

@@ -126,14 +126,22 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     vault_root = paths.vault_root(cfg)
     try:
         code = _run_backfill(args)
+        if code in (_EXIT_OK, _EXIT_SOME_FAILED) and (cfg.get("backfill") or {}).get(
+            "enabled", True
+        ):
+            # Before the release, not after. `session_start` spawns when it
+            # sees no marker *and* wins the lock, so any gap where the lock is
+            # gone and the marker is still False is a window for a second
+            # sweep — `installCap` more LLM calls, which is the spend the lock
+            # exists to prevent. In the opposite order the overlap is a lock
+            # held slightly too long, which costs nothing.
+            ledger.mark_install_run_done(vault_root)
     finally:
-        # Paired with session_start's acquire. A hard kill skips this and the
-        # lock is reaped by its TTL instead.
+        # Paired with session_start's acquire. A hard kill skips this; the
+        # lock is then reaped by its TTL, or — if the marker got written
+        # first — retired outright by the next session start, since nothing
+        # consults it once the one-shot is spent.
         ledger.release_spawn_lock(vault_root)
-    if code in (_EXIT_OK, _EXIT_SOME_FAILED) and (cfg.get("backfill") or {}).get(
-        "enabled", True
-    ):
-        ledger.mark_install_run_done(vault_root)
     return code
 
 
