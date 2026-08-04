@@ -91,6 +91,15 @@ def test_resolves_real_repo_through_agent_module(projects_root):
     # repo is built under a dedicated, dash-free temp dir via tempfile
     # instead of tmp_path, keeping the round trip honest rather than
     # coincidentally broken by the test harness.
+    if os.name == "nt":
+        pytest.skip(
+            "the round trip cannot be staged on Windows: a real cwd there starts "
+            "with a drive letter, so the encoded directory name contains a colon "
+            "— which NTFS does not allow in a filename. How Claude Code actually "
+            "names those directories on Windows is unverified, and guessing it "
+            "into decode_project_dir would bake the guess into production."
+        )
+
     base = Path(tempfile.mkdtemp(prefix="mnemodiscovertest"))
     try:
         repo = base / "realrepo"
