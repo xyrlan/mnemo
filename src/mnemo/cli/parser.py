@@ -20,6 +20,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {}
 ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "telemetry",
     "recall",
+    "recall-sessions",
     "migrate-worktree-briefings",
     "migrate-plugin",
     "dedup-rules",
@@ -193,6 +194,8 @@ def _build_parser() -> argparse.ArgumentParser:
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")
     recall.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall.add_argument("--no-bootstrap", action="store_true", help="reuse existing cases.json instead of regenerating")
+    recall_sessions = sub.add_parser("recall-sessions", help="recall harness built from extraction sessions (delta detector, not comparable to `recall`)")
+    recall_sessions.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")
     migrate = sub.add_parser(
         "migrate-worktree-briefings",
