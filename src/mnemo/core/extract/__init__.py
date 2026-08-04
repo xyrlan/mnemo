@@ -10,6 +10,11 @@ from datetime import datetime
 from pathlib import Path
 
 from mnemo.core import dashboard, errors, locks, llm, paths
+from mnemo.core.backfill.origin import (
+    is_backfill_entry,
+    is_backfill_frontmatter,
+    is_backfill_markdown,
+)
 from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
@@ -167,7 +172,12 @@ def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
     summary.conflicts.extend(result.upgrade_proposed)
 
 
-def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.ExtractedPage]:
+def _parse_pages_from_response(
+    text: str,
+    default_type: str,
+    *,
+    backfill_sources: frozenset[str] = frozenset(),
+) -> list[inbox.ExtractedPage]:
     payload = llm._parse_llm_json(text)
     raw_pages = payload.get("pages", [])
     if not isinstance(raw_pages, list):
@@ -193,6 +203,11 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
         tags = _sanitize_llm_tags(rp.get("tags"))
         enforce = _sanitize_llm_enforce(rp.get("enforce"))
         activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
+        # ``any``, not ``all``: a page mixing one live source with one
+        # reconstructed source is still partly reconstructed, and under ``all``
+        # it would carry origin_backfill=False, span two projects, and be
+        # universally promoted into the sacred dir unreviewed.
+        origin_backfill = any(s in backfill_sources for s in source_files)
         out.append(inbox.ExtractedPage(
             slug=slug,
             type=str(rp.get("type") or default_type),
@@ -205,6 +220,7 @@ def _parse_pages_from_response(text: str, default_type: str) -> list[inbox.Extra
             tags=tags,
             enforce=enforce,
             activates_on=activates_on,
+            origin_backfill=origin_backfill,
         ))
     return out
 
@@ -274,6 +290,17 @@ def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
     Called only when --force is set, before any cluster extraction runs.
     Wipes slug-drift duplicates from prior force runs (see v0.3.1 spec §3b).
     Intentionally leaves non-cluster subdirs (e.g. _inbox/project/) alone.
+
+    Backfill-stamped pages are exempt, for two reasons that point the same way
+    (ninth bypass, Task 9b review):
+
+    * this wipe runs *before* Phase 2, and the staged page is what
+      ``apply._resolve_sticky_origin`` reads to recover an origin for a vault
+      whose state file predates ``StateEntry.origin_backfill``. Delete it and
+      a legacy vault's staged page is laundered into ``shared/`` by the very
+      next ``--force`` run — no hand-editing, no file deletion required;
+    * a staged page is a review request. Silently deleting one on ``--force``
+      loses work the user was asked to look at, drift duplicate or not.
     """
     inbox_root = vault_root / "shared" / "_inbox"
     if not inbox_root.is_dir():
@@ -283,6 +310,8 @@ def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
         if not type_dir.is_dir():
             continue
         for md in type_dir.glob("*.md"):
+            if is_backfill_markdown(md):
+                continue
             try:
                 md.unlink()
             except OSError:
@@ -384,7 +413,18 @@ def _run_extraction_body(
                 summary.all_calls_subscription = False
 
             try:
-                pages = _parse_pages_from_response(response.text, type_name)
+                # Harvest nests the stamp under ``metadata:`` and
+                # ``scanner.parse_frontmatter`` (a flat key: value reader)
+                # lifts it to the top level; the shared predicate accepts
+                # either spelling so this cannot drift on a parser change.
+                chunk_backfill = frozenset(
+                    source_paths.vault_relative_source(mf.path, vault_root)
+                    for mf in chunk
+                    if is_backfill_frontmatter(mf.frontmatter)
+                )
+                pages = _parse_pages_from_response(
+                    response.text, type_name, backfill_sources=chunk_backfill,
+                )
             except llm.LLMParseError as exc:
                 errors.log_error(vault_root, "extract.parse", exc)
                 summary.failed_chunks += 1
@@ -433,11 +473,11 @@ def _run_extraction_body(
     # runs (even when no cluster pages produced this run) so the backlog
     # discovered during the v0.15 dogfood clears deterministically.
     try:
-        promoted = _reconcile_universal_promotions(state, vault_root, run_id, summary)
+        changed = _reconcile_universal_promotions(state, vault_root, run_id, summary)
     except Exception as exc:  # noqa: BLE001 — reconciler must fail-open
         errors.log_error(vault_root, "extract.reconcile_universal", exc)
-        promoted = 0
-    if promoted:
+        changed = 0
+    if changed:
         try:
             inbox.atomic_write_state(state, state_path)
         except ExtractionIOError as exc:
@@ -459,7 +499,13 @@ def _reconcile_universal_promotions(
     without requiring those source briefings to be re-mined.
 
     Idempotent — entries with status="promoted" are skipped on subsequent
-    runs. Returns the number of slugs successfully promoted.
+    runs.
+
+    Returns the number of state entries this pass changed — promotions plus
+    the origin stamps it back-fills onto entries that predate
+    ``StateEntry.origin_backfill``. Non-zero means the caller must persist the
+    state file; counting the stamps too is what makes the healed origin
+    survive the run it was recovered in.
     """
     from mnemo.core.extract.inbox.branches.universal_promotion import (
         _apply_universal_promotion,
@@ -472,7 +518,7 @@ def _reconcile_universal_promotions(
     from mnemo.core.rule_activation.index import is_universal, projects_for_rule
 
     threshold = _universal_threshold()
-    promoted_count = 0
+    changed_count = 0
     # Snapshot keys: handler mutates state.entries (status flips, key reused).
     keys = [
         key for key, entry in state.entries.items()
@@ -507,7 +553,26 @@ def _reconcile_universal_promotions(
             source_hash=entry.source_hash,
             stability=str(fm.get("stability") or "stable"),
             tags=list(fm.get("tags") or []),
+            # Two durable readings, OR'd: the stamp written top-level by
+            # rendering._render_page (the shared predicate also accepts the
+            # nested spelling, so a hand-edited or future-rendered page cannot
+            # slip past), and the sticky flag on the state entry — which still
+            # answers True if someone stripped the stamp out of the staged
+            # file by hand.
+            origin_backfill=(
+                is_backfill_frontmatter(fm) or is_backfill_entry(entry)
+            ),
         )
+        if page.origin_backfill:
+            # Reconstructed from archived transcripts — the origin gate keeps
+            # it staged until a human reviews it, cross-project or not. Stamp
+            # the entry on the way past so a vault whose state predates the
+            # field carries the answer from here on, even if the user later
+            # edits the stamp out of the staged file.
+            if not entry.origin_backfill:
+                entry.origin_backfill = True
+                changed_count += 1
+            continue
         scratch = ApplyResult()
         target = _inbox_path(vault_root, page)
         try:
@@ -519,9 +584,9 @@ def _reconcile_universal_promotions(
             errors.log_error(vault_root, "extract.reconcile_universal", exc)
             continue
         if scratch.universal_promoted:
-            promoted_count += 1
+            changed_count += 1
         _merge_apply(scratch, summary)
-    return promoted_count
+    return changed_count
 
 
 def _cleanup_legacy_wiki_dirs(vault_root: Path) -> None:

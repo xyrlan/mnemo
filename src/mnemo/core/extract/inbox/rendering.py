@@ -7,6 +7,7 @@ plus a few tests that exercise rendering directly.
 """
 from __future__ import annotations
 
+from mnemo.core.backfill.origin import ORIGIN_LINE, is_backfill_page
 from mnemo.core.extract.inbox.types import ExtractedPage
 from mnemo.core.text_utils import GRAPH_SECTION_MARKER
 
@@ -104,6 +105,12 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         system_marker = "needs-review"
 
     stability = getattr(page, "stability", None) or "stable"
+    # Origin stamp — TOP-LEVEL, not nested under `metadata:`: the one spelling
+    # both frontmatter parsers in this codebase agree on (see
+    # backfill/origin.py). The universal-promotion reconciler and the doctor
+    # advisory both rebuild from these staged files, so the stamp has to
+    # survive the round-trip verbatim.
+    origin_line = ORIGIN_LINE if is_backfill_page(page) else ""
     # Unified tags list: system marker first, then LLM-emitted topic tags.
     # The shared filter (core/filters.py) reads this same list; topic_tags()
     # strips the marker when bucketing by topic in the HOME dashboard.
@@ -155,6 +162,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         f"stability: {stability}\n"
+        f"{origin_line}"
         f"{extras}"
         "sources:\n"
         f"{sources_yaml}\n"

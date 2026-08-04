@@ -139,6 +139,21 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     extract.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
+    bf = sub.add_parser("backfill", help="populate the vault from past session transcripts")
+    # Mutually exclusive: they are answers to the same question, and the
+    # implementation can only honour one. Silently letting `--project` win
+    # over an `--all` the user typed is worse than saying so.
+    bf_scope = bf.add_mutually_exclusive_group()
+    bf_scope.add_argument("--all", action="store_true", help="every project, not just this repo")
+    bf.add_argument("--dry-run", action="store_true", help="show what would be harvested, write nothing")
+    bf_scope.add_argument("--project", type=str, default=None, help="limit to one project by name")
+    bf.add_argument("--limit", type=int, default=None, help="cap the number of sessions")
+    bf.add_argument("--yes", "-y", action="store_true", help="skip the confirmation prompt")
+    bf.add_argument(
+        "--retry-failed", action="store_true",
+        help="clear previously failed sessions so they are attempted again",
+    )
+    bf.add_argument("--install-run", action="store_true", help=argparse.SUPPRESS)
     # Hidden subparsers: omit ``help=`` entirely so argparse doesn't create a
     # ChoicesPseudoAction for them. Passing ``help=argparse.SUPPRESS`` was the
     # documented way to hide a subparser, but Python 3.14 regressed it: the
@@ -169,6 +184,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project", "--local", dest="project", action="store_true",
         help="remove only the project-local install (<cwd>/.claude/settings.json + <cwd>/.mcp.json)",
     )
+    why = sub.add_parser("why", help="explain the last few reflex decisions (what fired, what nearly did, why not)")
+    why.add_argument("--limit", type=int, default=10, help="how many decisions to show (default 10)")
+    why.add_argument("--all-projects", action="store_true", help="include decisions from every repo, not just this one")
+    why.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")

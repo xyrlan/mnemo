@@ -14,6 +14,9 @@ from mnemo.cli.commands.doctor_checks.activation import (  # noqa: F401
 from mnemo.cli.commands.doctor_checks.fidelity import (  # noqa: F401
     _doctor_check_zero_hit,
 )
+from mnemo.cli.commands.doctor_checks.install_backfill import (  # noqa: F401
+    _doctor_check_install_backfill,
+)
 from mnemo.cli.commands.doctor_checks.misc import (  # noqa: F401
     _doctor_check_auto_brain,
     _doctor_check_legacy_wiki_dirs,

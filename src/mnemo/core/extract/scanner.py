@@ -22,6 +22,16 @@ class MemoryFile:
     source_hash: str
 
 
+#: Entry statuses meaning "this page already lives in ``shared/<type>/``".
+#: There is no staged page under these, so the backfill origin gate has
+#: nothing to protect — and making such an entry sticky does active harm:
+#: in the cluster pipeline it freezes the sacred page (every later live
+#: update diverts to a ``.proposed.md``), and in ``promote.py`` it silently
+#: dismisses the page with no artifact anywhere. Consulted by
+#: ``inbox/apply._stamp_entry_origin`` and ``promote.promote_projects``.
+SACRED_STATUSES = frozenset({"auto_promoted", "direct", "promoted"})
+
+
 @dataclass
 class StateEntry:
     source_files: list[str]
@@ -30,6 +40,18 @@ class StateEntry:
     written_at: str
     status: str  # "inbox" | "promoted" | "dismissed" | "direct" | "auto_promoted"
     last_sync: str = ""
+    # Sticky backfill origin. Set the first time a page under this key is seen
+    # to be backfill-origin, and never cleared: the page-level flag is derived
+    # from the chunk currently being processed, so it disappears the run after
+    # the first one (the harvested source is no longer dirty and no longer
+    # appears in any chunk). Without a durable copy, a later extract that
+    # re-emits the same slug from a live source auto-promoted an already-staged
+    # page into the sacred dir, leaving the _inbox copy behind (Task 9b).
+    #
+    # Optional and additive on disk, so it needs no schema bump: an older
+    # mnemo ignores the extra key rather than refusing to load the file, and
+    # a state file written before this field existed loads with False.
+    origin_backfill: bool = False
 
     def mark_written(
         self,

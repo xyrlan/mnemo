@@ -82,25 +82,33 @@ def main() -> int:
 
         # Triple-gate
         doc_tokens_by_slug = _doc_token_sets(index, [slug for slug, _ in scores[:2]])
+        gate_thresholds = {
+            "term_overlap_min": int(thresholds.get("termOverlapMin", 2)),
+            "relative_gap": float(thresholds.get("relativeGap", 1.5)),
+            "absolute_floor": float(thresholds.get("absoluteFloor", 2.0)),
+        }
         result = gates.evaluate_gates(
             scores,
             query_tokens=q_tokens,
             doc_tokens_by_slug=doc_tokens_by_slug,
-            thresholds={
-                "term_overlap_min": int(thresholds.get("termOverlapMin", 2)),
-                "relative_gap": float(thresholds.get("relativeGap", 1.5)),
-                "absolute_floor": float(thresholds.get("absoluteFloor", 2.0)),
-            },
+            thresholds=gate_thresholds,
         )
+        # The receipt: the ranking and the numbers this decision was made on.
+        # Everything past this point had rules scored, so a silence here can be
+        # explained rather than merely named — see `core.reflex.receipts`.
+        receipt = _receipt(scores)
         if not result.accepted_slugs:
-            _log_silence(vault, sid, project, prompt_raw, reason=result.silence_reason or "index_missing")
+            _log_silence(vault, sid, project, prompt_raw,
+                         reason=result.silence_reason or "index_missing",
+                         candidates=receipt, thresholds=gate_thresholds)
             return 0
 
         # Dedupe against injected_cache (day-lifetime)
         cache = session_state.read_injected_cache(vault)
         survivors = [s for s in result.accepted_slugs if s not in cache]
         if not survivors:
-            _log_silence(vault, sid, project, prompt_raw, reason="deduped")
+            _log_silence(vault, sid, project, prompt_raw, reason="deduped",
+                         candidates=receipt, thresholds=gate_thresholds)
             return 0
 
         _emit_reflex_context(index, survivors)
@@ -110,7 +118,8 @@ def main() -> int:
 
         score_map = dict(scores)
         _log_emission(vault, sid, project, prompt_raw, survivors,
-                      scores=[score_map.get(s, 0.0) for s in survivors])
+                      scores=[score_map.get(s, 0.0) for s in survivors],
+                      candidates=receipt)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -161,13 +170,33 @@ def _prompt_hash(prompt: str) -> str:
     return f"sha256:{digest[:12]}"
 
 
-def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str) -> None:
+# How much of the ranking a receipt keeps. The log rotates at 1MB and four
+# other consumers read it (the calibrator, the digest, the dead-rule sweep,
+# `mnemo why`), so every byte added per prompt shortens the window all of them
+# see. Three is what the explanations need: the winner, the runner-up the
+# relative gate is measured against, and one line of context under them.
+_RECEIPT_DEPTH = 3
+
+
+def _receipt(scores: list[tuple[str, float]]) -> list[list]:
+    """The top of the ranking, JSON-shaped and rounded.
+
+    Deliberately a *separate* key from ``emitted``: ``dead_rule_sweep`` reads
+    ``emitted`` as proof a rule is still alive, so writing near-misses there
+    would keep dead rules alive forever on the strength of never firing.
+    """
+    return [[slug, round(float(score), 4)] for slug, score in scores[:_RECEIPT_DEPTH]]
+
+
+def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str,
+                 candidates: list | None = None,
+                 thresholds: dict | None = None) -> None:
     try:
         from mnemo.core.reflex.tokenizer import tokenize_query as _tq
         prompt_tokens_len = len(set(_tq(prompt)))
     except Exception:
         prompt_tokens_len = 0
-    _record_log(vault_root, {
+    entry = {
         "session_id": sid,
         "project": project,
         "prompt_hash": _prompt_hash(prompt),
@@ -175,19 +204,31 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
         "emitted": [],
         "scores": [],
         "silence_reason": reason,
-    })
+    }
+    # Omitted, not empty, when nothing was scored — `below_min_tokens` and
+    # `index_missing` fire before ranking, and an empty list there would read
+    # as "retrieval looked and found nothing" rather than "retrieval never ran".
+    if candidates:
+        entry["candidates"] = candidates
+    if thresholds:
+        entry["thresholds"] = thresholds
+    _record_log(vault_root, entry)
 
 
 def _log_emission(vault_root, sid: str, project: str, prompt: str,
-                  emitted: list[str], *, scores: list[float]) -> None:
-    _record_log(vault_root, {
+                  emitted: list[str], *, scores: list[float],
+                  candidates: list | None = None) -> None:
+    entry = {
         "session_id": sid,
         "project": project,
         "prompt_hash": _prompt_hash(prompt),
         "emitted": emitted,
         "scores": scores,
         "silence_reason": None,
-    })
+    }
+    if candidates:
+        entry["candidates"] = candidates
+    _record_log(vault_root, entry)
 
 
 def _record_log(vault_root, entry: dict) -> None:

@@ -47,8 +47,12 @@ def test_build_index_includes_only_consumer_visible_rules(tmp_vault):
     _write_rule(tmp_vault, "feedback", "keep.md", name="keep")
     # Inbox rule — must be skipped
     _write_rule(tmp_vault, "_inbox/feedback", "draft.md", name="draft")
-    # needs-review — must be skipped
+    # needs-review but hand-promoted into shared/feedback/ — must be KEPT
+    # (v0.18: location is the authority on draft-ness, not the stale tag).
     _write_rule(tmp_vault, "feedback", "review.md", name="review",
+                tags=["needs-review"])
+    # needs-review AND still staged — must be skipped, on location
+    _write_rule(tmp_vault, "_inbox/feedback", "staged.md", name="staged",
                 tags=["needs-review"])
     # evolving — must be skipped
     _write_rule(tmp_vault, "feedback", "evolving.md", name="flaky",
@@ -56,8 +60,7 @@ def test_build_index_includes_only_consumer_visible_rules(tmp_vault):
 
     idx = build_index(tmp_vault, universal_threshold=2)
     slugs = set(idx["docs"].keys())
-    assert "keep" in slugs
-    assert slugs == {"keep"}, f"expected only 'keep', got {slugs}"
+    assert slugs == {"keep", "review"}, f"expected keep+review, got {slugs}"
 
 
 def test_build_index_emits_projects_and_universal_per_doc(tmp_vault):

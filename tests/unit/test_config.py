@@ -62,11 +62,14 @@ def test_extraction_defaults_populated(tmp_path):
     cfg = config.load_config(tmp_path / "nope.json")
     assert cfg["extraction"]["model"] == "claude-haiku-4-5"
     assert cfg["extraction"]["chunkSize"] == 10
-    assert cfg["extraction"]["preferAPI"] is False
     assert cfg["extraction"]["subprocessTimeout"] == 60
     assert cfg["extraction"]["costSoftCap"] is None
     # v0.3.1 removed hintThreshold along with the hint fallback path.
     assert "hintThreshold" not in cfg["extraction"]
+    # preferAPI was a documented switch that nothing ever read: every LLM call
+    # goes through the `claude` CLI, which uses whatever auth it already has.
+    # Advertising a knob that does nothing is worse than not having it.
+    assert "preferAPI" not in cfg["extraction"]
 
 
 def test_extraction_user_override_preserved(tmp_path):

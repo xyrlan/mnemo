@@ -19,7 +19,6 @@ DEFAULTS: dict[str, Any] = {
     "extraction": {
         "model": "claude-haiku-4-5",
         "chunkSize": 10,
-        "preferAPI": False,
         "subprocessTimeout": 60,
         "costSoftCap": None,
         "auto": {
@@ -31,6 +30,12 @@ DEFAULTS: dict[str, Any] = {
     "briefings": {
         "enabled": True,
         "injectLastOnSessionStart": True,
+    },
+    "backfill": {
+        "enabled": True,
+        "installCap": 20,
+        "minFileMutations": 1,
+        "autoOnFirstSession": True,
     },
     "injection": {
         "enabled": True,

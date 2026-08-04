@@ -156,19 +156,95 @@ def test_build_index_includes_project_type_rules(tmp_vault: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_build_index_skips_needs_review_tagged_rules(tmp_vault: Path):
-    """NON-NEGOTIABLE: rules tagged needs-review MUST NOT appear in index."""
+def test_build_index_skips_needs_review_rules_still_in_inbox(tmp_vault: Path):
+    """NON-NEGOTIABLE: staged drafts MUST NOT appear in the index.
+
+    Location is what makes them drafts — the ``needs-review`` tag rides along
+    but is not the gate.
+    """
     _write_rule(
         tmp_vault,
         "bad-rule.md",
         name="bad-rule",
+        subdir="_inbox/feedback",
         tags=["needs-review", "git"],
         enforce="enforce:\n  tool: Bash\n  deny_pattern: some.*pattern\n  reason: bad",
     )
     index = build_index(tmp_vault)
+    assert "bad-rule" not in index["rules"]
     assert not any(rule.get("enforce") for rule in index["rules"].values())
     # Also verify it's not in malformed (it was silently skipped, not errored)
     assert not any("bad-rule.md" in e.get("path", "") for e in index["malformed"])
+
+
+def test_build_index_includes_needs_review_rules_promoted_to_shared(tmp_vault: Path):
+    """Regression (v0.18): a hand-promoted page MUST reach the index.
+
+    Promotion is a manual ``mv`` and nothing strips the tag, so hiding
+    ``needs-review`` pages in ``shared/<type>/`` silently no-op'd the entire
+    manual-review path.
+    """
+    _write_rule(
+        tmp_vault,
+        "reviewed-rule.md",
+        name="reviewed-rule",
+        tags=["needs-review", "git"],
+        enforce="enforce:\n  tool: Bash\n  deny_pattern: some.*pattern\n  reason: bad",
+    )
+    index = build_index(tmp_vault)
+    assert "reviewed-rule" in index["rules"]
+    assert index["rules"]["reviewed-rule"]["enforce"]["deny_patterns"] == ["some.*pattern"]
+    # The system marker must not leak into the topic vocabulary.
+    assert index["rules"]["reviewed-rule"]["topic_tags"] == ["git"]
+
+
+def test_manual_promotion_from_inbox_makes_rule_live(tmp_vault: Path):
+    """Integration: the real writer → real ``mv`` → real index build.
+
+    This is the behaviour users actually care about, and the one the v0.18 bug
+    broke. A unit test of ``is_consumer_visible`` alone would not have caught
+    it, because the staged page is written by ``_render_page`` (which is what
+    stamps ``needs-review`` in the first place) and promoted by a bare
+    ``Path.replace`` that touches no frontmatter.
+    """
+    from mnemo.core.extract.inbox.paths import _inbox_path, _promoted_path
+    from mnemo.core.extract.inbox.rendering import _render_page
+    from mnemo.core.extract.inbox.types import ExtractedPage
+
+    page = ExtractedPage(
+        slug="squash-before-merge",
+        type="feedback",
+        name="squash-before-merge",
+        description="Squash feature branches before merging",
+        body="**Why:** linear history.\n\n**How to apply:** git merge --squash.",
+        source_files=["bots/projA/memory/x.md", "bots/projB/memory/y.md"],
+        source_hash="deadbeef",
+        tags=["git"],
+        enforce={"tool": "Bash", "deny_pattern": "git merge --no-ff", "reason": "squash"},
+    )
+    content = _render_page(page, run_id="2026-08-01T00:00:00", auto_promoted=False)
+    # Sanity: the writer really does stamp needs-review on staged pages.
+    assert "  - needs-review" in content
+
+    staged = _inbox_path(tmp_vault, page)
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(content, encoding="utf-8")
+
+    # While staged, the rule is invisible.
+    assert "squash-before-merge" not in build_index(tmp_vault)["rules"]
+
+    # The user reviews it and moves it, exactly as `mnemo doctor` and
+    # docs/getting-started.md instruct. Nothing rewrites the frontmatter.
+    promoted = _promoted_path(tmp_vault, page)
+    promoted.parent.mkdir(parents=True, exist_ok=True)
+    staged.replace(promoted)
+    assert "  - needs-review" in promoted.read_text(encoding="utf-8")
+
+    index = build_index(tmp_vault)
+    assert "squash-before-merge" in index["rules"]
+    rule = index["rules"]["squash-before-merge"]
+    assert rule["enforce"]["deny_patterns"] == ["git merge --no-ff"]
+    assert rule["topic_tags"] == ["git"]
 
 
 def test_build_index_skips_evolving_stability(tmp_vault: Path):

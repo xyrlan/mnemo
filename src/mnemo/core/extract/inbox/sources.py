@@ -8,6 +8,8 @@ Leaf module — depends only on :mod:`inbox.types` + :mod:`extract.scanner`.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from mnemo.core.extract.inbox.types import ExtractedPage
 from mnemo.core.extract.scanner import StateEntry
 
@@ -23,6 +25,11 @@ def union_with_prior_sources(page: ExtractedPage, entry: StateEntry | None) -> E
 
     Preserves order: prior sources first (so the file's history-of-mention
     stays stable), then any new sources not already present.
+
+    Built with :func:`dataclasses.replace` rather than a field-by-field
+    rebuild: ``source_files`` is the only field that changes, and copying the
+    rest by hand is how ``origin_backfill`` got silently dropped here in the
+    first place (Task 6b). ``replace`` carries any future field automatically.
     """
     if entry is None or not entry.source_files:
         return page
@@ -34,16 +41,4 @@ def union_with_prior_sources(page: ExtractedPage, entry: StateEntry | None) -> E
             merged.append(s)
     if merged == list(page.source_files):
         return page
-    return ExtractedPage(
-        slug=page.slug,
-        type=page.type,
-        name=page.name,
-        description=page.description,
-        body=page.body,
-        source_files=merged,
-        source_hash=page.source_hash,
-        stability=getattr(page, "stability", None) or "stable",
-        tags=list(getattr(page, "tags", None) or []),
-        enforce=getattr(page, "enforce", None),
-        activates_on=getattr(page, "activates_on", None),
-    )
+    return replace(page, source_files=merged)

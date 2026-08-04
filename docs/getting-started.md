@@ -106,6 +106,107 @@ Under the plugin, hook health reads `Hooks (plugin): 4/4`. Under an npm or
 pipx install it names the settings file instead, because that's where the
 hooks live.
 
+## Backfill
+
+A brand-new vault knows nothing, so mnemo has nothing to inject for the first
+few weeks — which is when most people give up on it. Backfill fixes that from
+history you already have: Claude Code stores every session it has ever run at
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, and mnemo can read them.
+
+### What happens on your first session
+
+On the first session after install, mnemo spawns a background sweep of **the
+repo you're sitting in** — newest sessions first, capped at
+`backfill.installCap` (20). Each session costs one call to the `claude` CLI you
+already have, using `extraction.model` (Haiku by default) and retried once if
+it times out. Sessions that touched fewer than `backfill.minFileMutations`
+files are skipped without a call.
+
+What comes back is written into `bots/<repo>/memory/` — the same place live
+capture writes — and the next extraction turns it into rules.
+
+That is the whole automatic budget: it runs **once per vault**, never for your
+other projects, and never again. Everything beyond it is something you type.
+
+The calls go through your existing `claude` CLI on whatever authentication it
+already uses. On a Pro/Max subscription that means no per-token charge; on
+API-key auth it is billed like any other Haiku call.
+
+To never let it run, before you upgrade or install:
+
+```json
+{ "backfill": { "autoOnFirstSession": false } }
+```
+
+### Backfilled pages are always staged for review
+
+This is a guarantee, not a default. A backfilled page is the model's
+*reconstruction* of a session that ended weeks ago — not something mnemo
+watched happen. So every page it produces is stamped `origin: backfill`, and
+every rule extracted from one lands in `shared/_inbox/<type>/`. **Nothing of
+backfill origin is ever auto-promoted into `shared/`**, whatever its source
+count, and the stamp survives across extraction runs.
+
+Review them the way you'd review a pull request:
+
+```bash
+mnemo doctor        # lists what's staged and waiting
+```
+
+Read each file under `shared/_inbox/`. Move the keepers into the matching
+directory (`shared/_inbox/project/foo.md` → `shared/project/foo.md`) and delete
+the rest. Only then do they take part in injection.
+
+Backfill also never overwrites an existing memory file — a page you or a live
+session wrote always wins over a reconstruction of it.
+
+### Running it yourself
+
+```bash
+mnemo backfill                      # this repo, everything not yet harvested
+mnemo backfill --all                # every project on the machine
+mnemo backfill --project mnemo      # one project by name
+mnemo backfill --limit 10           # the 10 most recent of the selection
+mnemo backfill --dry-run            # list what it would harvest, write nothing
+mnemo backfill --yes                # skip the confirmation prompt
+mnemo backfill --retry-failed       # un-retire transcripts that failed 3 times
+```
+
+It prints the session count, the projects involved and a rough input-token
+estimate, then asks before spending anything. The estimate is measured on the
+flattened text actually sent to the model, not on the bytes on disk, but it's
+still an estimate: it counts sessions that the mutation threshold may skip
+without a call, and it says nothing about output tokens.
+
+**Which sessions get picked:**
+
+- `--project NAME` and `--all` answer the same question, so passing both is an
+  error rather than a silent win for one of them. `NAME` is the project name
+  mnemo derives from the repo directory — the same name you see under `bots/`
+  — not a path. Worktrees collapse into their main checkout.
+- With neither flag, the selection is the current repo.
+- `--limit` applies to whatever the above selected, newest first.
+- `--limit 0` selects nothing, deliberately.
+
+**What it survives:**
+
+- A transcript that fails is recorded and stepped over; the sweep continues.
+- Progress is written after every session, so interrupting with `Ctrl-C` and
+  rerunning resumes where it stopped. Already-harvested sessions are skipped.
+- Three failures retire a transcript for good, until `mnemo backfill
+  --retry-failed` clears it.
+- A failure of the *machine* rather than of a transcript — no `claude` CLI,
+  expired auth, a rate limit — stops the sweep immediately and holds nothing
+  against the transcripts it never reached.
+
+Exit codes: `0` done, `1` finished with some sessions failed, `2` aborted on an
+environment failure, `130` interrupted. Answering `n` at the prompt, or having
+nothing to do, is a normal `0`.
+
+`--dry-run` writes nothing at all — no memory files, no LLM calls, no bookkeeping
+— and that holds even beside `--retry-failed`, which under a dry run reports
+how many entries it *would* clear and previews the sweep as if it had.
+
 ## The loop
 
 Everything below is on by default. To disable a piece, set it to `false` in
@@ -133,6 +234,13 @@ $0 on a Claude subscription.
 - **Multi-source** clusters (cross-agent merges, where the model made an
   editorial call) land in `shared/_inbox/<type>/<slug>.md` tagged
   `needs-review`. Review before promoting.
+
+**Promoting is a plain move.** `mv shared/_inbox/feedback/x.md
+shared/feedback/x.md` and you're done — the rule goes live at your next
+session, when the activation index is rebuilt. Leave the `needs-review` tag
+alone if you like; **location** is what decides whether a rule is a draft, not
+the tag. (Before v0.18 the tag also hid the page, which quietly made promotion
+a no-op. See [troubleshooting.md](troubleshooting.md).)
 
 **Your edits win.** If you edit an auto-promoted page and its source later
 changes, the new output is written as `shared/_inbox/<type>/<slug>.proposed.md`
