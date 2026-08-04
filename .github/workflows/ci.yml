@@ -32,18 +32,32 @@ jobs:
       - name: E2E tests
         run: pytest tests/e2e/ -v
       - name: Coverage gate
-        # `coverage erase` first, and list what it found. pytest-cov writes the
-        # parent's data under a parallel name (`.coverage.<host>.<pid>.<rand>`)
-        # and combines at the end, so *any* other data file in the tree joins
-        # that combine — and one written without `branch = true` aborts it with
-        # "Can't combine statement coverage data with branch data", which reads
-        # as a coverage failure even though every test passed. The listing is
-        # what tells us whether such a file is a leftover or is written during
-        # the run.
+        # pytest-cov writes the parent's data under a parallel name
+        # (`.coverage.<host>.<pid>.<rand>`) and combines everything matching
+        # `.coverage.*` at the end. A data file written without `branch = true`
+        # aborts that combine with "Can't combine statement coverage data with
+        # branch data" — reported as a coverage failure even when every test
+        # passed. On py3.8 such a file appears *during* the run (the step used
+        # to confirm the directory was clean beforehand), so a subprocess is
+        # starting its own coverage.
+        #
+        # `branch = true` lives in pyproject.toml, which coverage finds by
+        # walking up from the *current* directory — so a child started with a
+        # different cwd silently falls back to statement-only. COVERAGE_RCFILE
+        # travels through the environment instead, which every child inherits
+        # regardless of where it runs.
+        env:
+          COVERAGE_RCFILE: ${{ github.workspace }}/pyproject.toml
+          COVERAGE_DEBUG: process
+          COVERAGE_DEBUG_FILE: ${{ runner.temp }}/coverage-debug.log
         run: |
-          ls -la .coverage* 2>/dev/null || echo "no coverage data files before the run"
           coverage erase || true
-          pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
+          rc=0
+          pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/ || rc=$?
+          echo "--- processes that started coverage ---"
+          grep -E "New process|cwd is now" "$RUNNER_TEMP/coverage-debug.log" 2>/dev/null \
+            | sort -u | head -40 || echo "(no coverage process log)"
+          exit $rc
 
   npm-wrapper:
     name: npm wrapper (node 20)
