@@ -37,9 +37,10 @@ jobs:
         # `.coverage.*` at the end. A data file written without `branch = true`
         # aborts that combine with "Can't combine statement coverage data with
         # branch data" — reported as a coverage failure even when every test
-        # passed. On py3.8 such a file appears *during* the run (the step used
-        # to confirm the directory was clean beforehand), so a subprocess is
-        # starting its own coverage.
+        # passed. On py3.8 (pytest-cov 5.0.0; 3.9+ resolve a newer one) such a
+        # file appeared *during* the run, with the directory confirmed clean
+        # beforehand — so a subprocess starts its own coverage. Which one is
+        # still unidentified; the fix below does not depend on knowing.
         #
         # `branch = true` lives in pyproject.toml, which coverage finds by
         # walking up from the *current* directory — so a child started with a
@@ -48,16 +49,9 @@ jobs:
         # regardless of where it runs.
         env:
           COVERAGE_RCFILE: ${{ github.workspace }}/pyproject.toml
-          COVERAGE_DEBUG: process
-          COVERAGE_DEBUG_FILE: ${{ runner.temp }}/coverage-debug.log
         run: |
           coverage erase || true
-          rc=0
-          pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/ || rc=$?
-          echo "--- processes that started coverage ---"
-          grep -E "New process|cwd is now" "$RUNNER_TEMP/coverage-debug.log" 2>/dev/null \
-            | sort -u | head -40 || echo "(no coverage process log)"
-          exit $rc
+          pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
 
   npm-wrapper:
     name: npm wrapper (node 20)
