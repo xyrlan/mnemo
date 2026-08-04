@@ -32,7 +32,18 @@ jobs:
       - name: E2E tests
         run: pytest tests/e2e/ -v
       - name: Coverage gate
-        run: pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
+        # `coverage erase` first, and list what it found. pytest-cov writes the
+        # parent's data under a parallel name (`.coverage.<host>.<pid>.<rand>`)
+        # and combines at the end, so *any* other data file in the tree joins
+        # that combine — and one written without `branch = true` aborts it with
+        # "Can't combine statement coverage data with branch data", which reads
+        # as a coverage failure even though every test passed. The listing is
+        # what tells us whether such a file is a leftover or is written during
+        # the run.
+        run: |
+          ls -la .coverage* 2>/dev/null || echo "no coverage data files before the run"
+          coverage erase || true
+          pytest --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
 
   npm-wrapper:
     name: npm wrapper (node 20)
