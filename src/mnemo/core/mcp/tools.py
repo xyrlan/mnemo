@@ -113,12 +113,66 @@ def _find_rule_file_by_slug(
     return None
 
 
+# Gate below which a BM25F hit does not outrank source_count order. The
+# 2026-08-11 prototype (recall-sessions, 322 big-bucket evaluations) measured
+# min_score=1.0 as the best gate: netΔrank +740, primacy@5 18%→31%; pure
+# BM25F (gate 0) sinks high-quality multi-agent rules on lexical misses.
+_RERANK_MIN_SCORE = 1.0
+
+
+def _query_rerank(
+    matches: list[RuleRef],
+    scored: list[tuple[str, float]],
+    *,
+    min_score: float,
+) -> list[RuleRef]:
+    """Gated rerank: hits scoring ≥ ``min_score`` rise (score desc, stable on
+    ties); everything else keeps its existing source_count order below them."""
+    score_by_slug = dict(scored)
+    hits = [m for m in matches if score_by_slug.get(m["slug"], 0.0) >= min_score]
+    hits.sort(key=lambda m: -score_by_slug.get(m["slug"], 0.0))
+    rest = [m for m in matches if score_by_slug.get(m["slug"], 0.0) < min_score]
+    return hits + rest
+
+
+def _rerank_by_query(
+    vault_root: Path,
+    matches: list[RuleRef],
+    query: str,
+) -> list[RuleRef]:
+    """Apply the gated BM25F rerank when the reflex index is available.
+
+    Degrades silently to the incoming order on any gap (no reflex index,
+    query tokenizes to nothing, no candidate scores) — a ``query`` must never
+    break the tool.
+    """
+    from mnemo.core.reflex import bm25
+    from mnemo.core.reflex import index as reflex_index
+    from mnemo.core.reflex.tokenizer import tokenize_query
+
+    idx = reflex_index.load_index(vault_root)
+    if idx is None:
+        return matches
+    q_tokens = tokenize_query(query)
+    if not q_tokens:
+        return matches
+    scored = bm25.score_docs(
+        idx,
+        query_tokens=q_tokens,
+        candidate_slugs=[m["slug"] for m in matches],
+    )
+    if not scored:
+        return matches
+    return _query_rerank(matches, scored, min_score=_RERANK_MIN_SCORE)
+
+
 def list_rules_by_topic(
     vault_root: Path,
     topic: str,
     *,
     scope: str = "project",
     project: str | None = None,
+    query: str | None = None,
 ) -> list[RuleRef]:
     """Return slugs whose topic tags include ``topic``, filtered by scope.
 
@@ -129,7 +183,9 @@ def list_rules_by_topic(
 
     Sorted by ``source_count`` desc, then by recent ``read_mnemo_rule``
     popularity desc (soft tiebreak — see :mod:`mnemo.core.mcp.popularity`),
-    then slug asc.
+    then slug asc. When ``query`` is given, rules whose BM25F score against it
+    clears :data:`_RERANK_MIN_SCORE` rise to the top; the rest keep the order
+    above.
     """
     from mnemo.core import rule_activation
     from mnemo.core.mcp.popularity import load_recent_read_counts
@@ -151,6 +207,8 @@ def list_rules_by_topic(
         matches.sort(
             key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
         )
+        if query:
+            matches = _rerank_by_query(vault_root, matches, query)
         return matches
 
     # Fallback: legacy glob+parse. Universality unavailable; treat all as local.
@@ -183,6 +241,8 @@ def list_rules_by_topic(
     legacy.sort(
         key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
     )
+    if query:
+        legacy = _rerank_by_query(vault_root, legacy, query)
     return legacy
 
 

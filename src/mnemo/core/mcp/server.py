@@ -36,14 +36,21 @@ _TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "List mnemo rules tagged with a given topic. Returns slugs sorted "
             "by source_count desc (multi-agent synthesized rules first). "
-            "Results are scoped to the current project by default. "
-            "Pass scope=\"vault\" to include rules from all projects. "
-            "Call this BEFORE writing code when the task matches a known topic."
+            "Pass query=<the user's task or prompt text> to rerank by textual "
+            "relevance — strongly recommended, it surfaces the right rule in "
+            "large topics. Results are scoped to the current project by "
+            "default. Pass scope=\"vault\" to include rules from all "
+            "projects. Call this BEFORE writing code when the task matches a "
+            "known topic."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "topic": {"type": "string"},
+                "query": {
+                    "type": "string",
+                    "description": "The user's task/prompt text; rules matching it rank first. Omitting it falls back to source_count order.",
+                },
                 "scope": {
                     "type": "string",
                     "enum": ["project", "local-only", "vault"],
@@ -144,9 +151,11 @@ def _handle_tool_call(
     result_count = 0
 
     if name == "list_rules_by_topic":
+        query = args.get("query")
         result = mcp_tools.list_rules_by_topic(
             vault_root, str(args.get("topic", "")),
             scope=scope, project=project,
+            query=str(query) if query else None,
         )
         result_count = len(result)
         hit_slugs = [r["slug"] for r in result]
