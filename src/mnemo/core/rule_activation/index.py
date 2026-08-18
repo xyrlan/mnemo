@@ -11,7 +11,6 @@ the single in-tree consumer (``reflex/index.py``) was updated atomically.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -104,24 +103,17 @@ def is_universal(projects: list[str], threshold: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Atomic write (inlined to avoid circular imports with extract/inbox.py)
+# Atomic write — shared mkstemp writer (core.atomic imports nothing from
+# mnemo, so the circular-import concern that once forced an inline copy here
+# is gone). This index is rebuilt by concurrent SessionStarts, the same race
+# that hit the reflex index's fixed-name tmp.
 # ---------------------------------------------------------------------------
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write *data* to *path* atomically using a .tmp sibling + os.replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
-    except OSError:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        raise
+    from mnemo.core.atomic import atomic_write_bytes
+
+    atomic_write_bytes(path, data)
 
 
 # ---------------------------------------------------------------------------
