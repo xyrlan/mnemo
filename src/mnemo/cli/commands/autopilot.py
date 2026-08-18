@@ -167,6 +167,7 @@ def _tune_reflex(vault: Path, dry_run: bool, project: str | None) -> None:
     from mnemo.autopilot.tuner.reflex_calibrator import (
         analyze_reflex_log,
         calibrate_thresholds,
+        load_reflex_config,
         open_reflex_calibration_pr,
     )
 
@@ -177,7 +178,7 @@ def _tune_reflex(vault: Path, dry_run: bool, project: str | None) -> None:
 
     per_project = {}
     for proj, stats in stats_map.items():
-        cfg = calibrate_thresholds(stats)
+        cfg = calibrate_thresholds(stats, current=load_reflex_config(proj, vault))
         if cfg is None:
             print(f"[reflex-calibrator] {proj}: insufficient data (< 100 prompts) — skipping")
         per_project[proj] = cfg

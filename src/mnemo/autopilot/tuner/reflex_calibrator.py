@@ -185,7 +185,11 @@ def analyze_reflex_log(
 # Threshold calibration
 # ---------------------------------------------------------------------------
 
-def calibrate_thresholds(stats: ReflexStats) -> Optional[ReflexConfig]:
+def calibrate_thresholds(
+    stats: ReflexStats,
+    *,
+    current: Optional[ReflexConfig] = None,
+) -> Optional[ReflexConfig]:
     """Propose calibrated thresholds for a project.
 
     Returns None if:
@@ -195,6 +199,11 @@ def calibrate_thresholds(stats: ReflexStats) -> Optional[ReflexConfig]:
     Otherwise returns a ReflexConfig with thresholds tuned to target
     a 5–10% emit-rate. Uses linear interpolation between the current
     rate and the target midpoint to compute threshold adjustments.
+
+    ``current`` is the project's existing calibration, if any. When the rate
+    is already in the target range it is kept as-is — resetting to defaults
+    there would undo the very calibration that brought the rate into range
+    and oscillate between the two states forever.
     """
     if stats.eligible_prompts < _MIN_ELIGIBLE:
         return None
@@ -211,9 +220,10 @@ def calibrate_thresholds(stats: ReflexStats) -> Optional[ReflexConfig]:
         rel_gap = _REL_GAP_MAX
         abs_floor = _ABS_FLOOR_MAX
     elif _TARGET_LOW <= rate <= _TARGET_HIGH:
-        # Already in target range — return defaults unchanged
-        rel_gap = default.relative_gap
-        abs_floor = default.absolute_floor
+        # In target range — keep whatever produced this rate.
+        keep = current or default
+        rel_gap = keep.relative_gap
+        abs_floor = keep.absolute_floor
     elif rate < _TARGET_LOW:
         # Rate too low → loosen thresholds
         # Linear interpolation: rate=0 → min, rate=TARGET_LOW → default
