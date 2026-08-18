@@ -96,7 +96,7 @@ def _build_injection_payload(
         if universal_topics:
             topic_lines.append(f"universal: [{', '.join(universal_topics)}]")
         topic_lines.append(
-            "Call list_rules_by_topic(topic) then read_mnemo_rule(slug) BEFORE writing code."
+            'Call list_rules_by_topic(topic, query="<your task>") then read_mnemo_rule(slug) BEFORE writing code.'
         )
         topic_lines.append(
             'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
