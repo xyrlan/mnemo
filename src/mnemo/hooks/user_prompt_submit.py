@@ -80,12 +80,19 @@ def main() -> int:
                                  candidate_slugs=candidates,
                                  weights=weights, params=params)
 
-        # Triple-gate
+        # Triple-gate. Per-project calibration (written by the autopilot's
+        # reflex_calibrator) wins over global config, per key.
+        from mnemo.core.reflex.project_config import load_project_thresholds
+
+        overrides = load_project_thresholds(vault, project)
         doc_tokens_by_slug = _doc_token_sets(index, [slug for slug, _ in scores[:2]])
         gate_thresholds = {
-            "term_overlap_min": int(thresholds.get("termOverlapMin", 2)),
-            "relative_gap": float(thresholds.get("relativeGap", 1.5)),
-            "absolute_floor": float(thresholds.get("absoluteFloor", 2.0)),
+            "term_overlap_min": int(overrides.get(
+                "term_overlap_min", thresholds.get("termOverlapMin", 2))),
+            "relative_gap": float(overrides.get(
+                "relative_gap", thresholds.get("relativeGap", 1.5))),
+            "absolute_floor": float(overrides.get(
+                "absolute_floor", thresholds.get("absoluteFloor", 2.0))),
         }
         result = gates.evaluate_gates(
             scores,
@@ -119,7 +126,7 @@ def main() -> int:
         score_map = dict(scores)
         _log_emission(vault, sid, project, prompt_raw, survivors,
                       scores=[score_map.get(s, 0.0) for s in survivors],
-                      candidates=receipt)
+                      candidates=receipt, thresholds=gate_thresholds)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -217,7 +224,8 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
 
 def _log_emission(vault_root, sid: str, project: str, prompt: str,
                   emitted: list[str], *, scores: list[float],
-                  candidates: list | None = None) -> None:
+                  candidates: list | None = None,
+                  thresholds: dict | None = None) -> None:
     entry = {
         "session_id": sid,
         "project": project,
@@ -228,6 +236,10 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
     }
     if candidates:
         entry["candidates"] = candidates
+    # With per-project calibration in play, "which thresholds admitted this"
+    # varies by project — record them on emissions too, not just silences.
+    if thresholds:
+        entry["thresholds"] = thresholds
     _record_log(vault_root, entry)
 
 

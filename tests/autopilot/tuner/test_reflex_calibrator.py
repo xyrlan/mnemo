@@ -164,6 +164,39 @@ class TestCalibrateThresholds:
         assert config.relative_gap >= DEFAULT_REFLEX_CONFIG.relative_gap
         assert config.absolute_floor >= DEFAULT_REFLEX_CONFIG.absolute_floor
 
+    def test_in_range_rate_keeps_current_calibration_instead_of_resetting(self):
+        """The loop must be stable: a loosened config that brought the rate
+        INTO the target range is working — resetting it to defaults would
+        push the rate back out and oscillate forever."""
+        stats = self._stats(200, 14)  # 7% — in target range
+        current = ReflexConfig(
+            project="p", relative_gap=1.33, absolute_floor=1.35, min_tokens=2,
+        )
+        config = calibrate_thresholds(stats, current=current)
+        assert config is not None
+        assert config.relative_gap == 1.33
+        assert config.absolute_floor == 1.35
+
+    def test_in_range_rate_without_current_returns_defaults(self):
+        stats = self._stats(200, 14)  # 7%
+        config = calibrate_thresholds(stats, current=None)
+        assert config is not None
+        from mnemo.autopilot.tuner.reflex_calibrator import DEFAULT_REFLEX_CONFIG
+        assert config.relative_gap == DEFAULT_REFLEX_CONFIG.relative_gap
+        assert config.absolute_floor == DEFAULT_REFLEX_CONFIG.absolute_floor
+
+    def test_out_of_range_rate_recalibrates_even_with_current(self):
+        """`current` only pins the in-range branch — a rate outside the band
+        still recalibrates from scratch."""
+        stats = self._stats(500, 5)  # 1% — too low
+        current = ReflexConfig(
+            project="p", relative_gap=1.5, absolute_floor=2.0, min_tokens=2,
+        )
+        config = calibrate_thresholds(stats, current=current)
+        assert config is not None
+        assert config.relative_gap < 1.5
+        assert config.absolute_floor < 2.0
+
     def test_project_name_preserved(self):
         stats = self._stats(200, 14, project="my-project")
         config = calibrate_thresholds(stats)
