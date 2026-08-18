@@ -27,7 +27,6 @@ Schema v1:
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -146,12 +145,17 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
 
 
 def write_index(vault_root: Path, index: dict) -> None:
-    """Atomic write. Never raises during test runs; callers should still try/except."""
+    """Atomic write. Never raises during test runs; callers should still try/except.
+
+    Goes through the shared mkstemp writer: concurrent SessionStarts rebuild
+    this index at once, and the old fixed ``.tmp`` sibling let one writer's
+    ``os.replace`` consume the other's tmp file (FileNotFoundError, four
+    occurrences in the 2026-08 window).
+    """
+    from mnemo.core.atomic import atomic_write_bytes
+
     path = vault_root / ".mnemo" / INDEX_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(json.dumps(index, indent=2).encode("utf-8"))
-    os.replace(tmp, path)
+    atomic_write_bytes(path, json.dumps(index, indent=2).encode("utf-8"))
 
 
 def load_index(vault_root: Path) -> dict | None:
