@@ -10,7 +10,7 @@ def test_defaults_have_backfill_block():
     assert bf["enabled"] is True
     assert bf["installCap"] == 20
     assert bf["minFileMutations"] == 1
-    assert bf["autoOnFirstSession"] is True
+    assert bf["autoOnFirstSession"] is False
 
 
 def test_load_config_merges_backfill(tmp_path, monkeypatch):

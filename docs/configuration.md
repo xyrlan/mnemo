@@ -20,7 +20,7 @@ turn off:
 | `briefings.enabled` | `true` | No per-session briefings. Extraction gets much thinner input |
 | `injection.enabled` | `true` | Claude is no longer told about the MCP tools at session start (the tools still work) |
 | `reflex.enabled` | `true` | No automatic rule injection on prompts |
-| `backfill.autoOnFirstSession` | `true` | No automatic one-time sweep of your old transcripts on the first session. `mnemo backfill` still works by hand |
+| `backfill.autoOnFirstSession` | `false` | No automatic one-time sweep of your old transcripts on the first session. `mnemo backfill` still works by hand |
 
 ```json
 {
@@ -71,7 +71,7 @@ for what it does and how to review the result.
 | `backfill.enabled` | `true` | Master switch. `false` makes `mnemo backfill` a no-op that says so, and stops the automatic sweep |
 | `backfill.installCap` | `20` | Most sessions the automatic first-run sweep will harvest — newest first, current repo only. Ignored by an explicit `mnemo backfill`, which uses `--limit` |
 | `backfill.minFileMutations` | `1` | Sessions that touched fewer files than this are skipped without an LLM call |
-| `backfill.autoOnFirstSession` | `true` | Run that capped sweep once, in the background, on the first session after install |
+| `backfill.autoOnFirstSession` | `false` | Run the one-time backfill automatically on the first session (off: the first session shows a one-line invitation instead) |
 
 The automatic sweep runs **once per vault**, and only after it finishes: a
 sweep that dies because the `claude` CLI is unreachable leaves the one-shot
@@ -154,6 +154,12 @@ inbox.
 |---|---|---|
 | `scoping.universalThreshold` | `2` | Projects a rule must appear in before it's promoted to universal |
 | `doctor.skipStatuslineDrift` | `false` | Silence the statusLine drift check — useful if you manage `settings.json` by hand |
+
+### `autopilot` — what may leave the machine
+
+| Key | Default | Meaning |
+|---|---|---|
+| `autopilot.network.enabled` | `false` | Allow the autopilot to call `gh` (digest issues, self-fix PRs, outcome polling). Everything local runs regardless. |
 
 ## Maintenance commands
 
