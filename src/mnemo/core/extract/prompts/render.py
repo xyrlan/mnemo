@@ -109,6 +109,30 @@ def build_reference_prompt(
 _USER_TURN_MAX_CHARS = 600
 
 
+def _render_user_turn(index: int, turn: str) -> str:
+    """One numbered turn, with any truncation marker kept off the quotable line.
+
+    A quote is verified by substring match against the real turn, so the
+    shown line must contain nothing the user did not type. An over-long
+    turn is cut at a word boundary and the "continues" note goes on its
+    own following line, where it cannot be quoted by mistake.
+    """
+    if len(turn) <= _USER_TURN_MAX_CHARS:
+        return f"[{index}] {turn}"
+    head = turn[:_USER_TURN_MAX_CHARS]
+    cut = head.rstrip()
+    space = cut.rfind(" ")
+    if space > 0:
+        cut = cut[:space].rstrip()
+    if not cut:  # no whitespace to break on — fall back to a hard cut
+        cut = head
+    return (
+        f"[{index}] {cut}\n"
+        f"    (turn continues — {len(turn)} chars total; "
+        "quote only the text shown above)"
+    )
+
+
 def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = None) -> str:
     """Render a briefing prompt from a pre-flattened transcript string.
 
@@ -125,10 +149,7 @@ def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = Non
     """
     turns_block = ""
     if user_turns:
-        lines = []
-        for i, turn in enumerate(user_turns, 1):
-            t = turn if len(turn) <= _USER_TURN_MAX_CHARS else turn[:_USER_TURN_MAX_CHARS] + "…"
-            lines.append(f"[{i}] {t}")
+        lines = [_render_user_turn(i, turn) for i, turn in enumerate(user_turns, 1)]
         turns_block = (
             "=== USER TURNS (verbatim, numbered — quote these for Corrections) ===\n"
             + "\n".join(lines)

@@ -164,15 +164,27 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
     body = (response.text or "").strip() or "*(empty briefing — LLM returned no content)*"
 
     vault_root = paths.vault_root(cfg)
-    proposed = corrections_mod.parse_section(body)
-    kept, rejected = corrections_mod.verify(proposed, turns)
-    body = corrections_mod.replace_section(body, kept)
-    if rejected:
-        errors_mod.log_error(
-            vault_root,
-            "briefing.corrections_rejected",
-            ValueError(f"{len(rejected)} correction quote(s) not found in user turns; dropped"),
-        )
+    # Corrections are a bonus on top of the briefing — never lose the whole
+    # briefing to a parsing failure. On error, drop the section and move on.
+    try:
+        proposed = corrections_mod.parse_section(body)
+        kept, rejected = corrections_mod.verify(proposed, turns)
+        body = corrections_mod.replace_section(body, kept)
+        if rejected:
+            errors_mod.log_error(
+                vault_root,
+                "briefing.corrections_rejected",
+                ValueError(
+                    f"{len(rejected)} correction quote(s) not found in user turns; dropped"
+                ),
+            )
+    except Exception as exc:
+        kept = []
+        try:
+            body = corrections_mod.strip_section(body)
+        except Exception:
+            pass  # leave the body as-is rather than lose the briefing
+        errors_mod.log_error(vault_root, "briefing.corrections", exc)
 
     session_id = jsonl_path.stem
     duration_minutes = _compute_duration_minutes(events)
