@@ -124,11 +124,11 @@ hand-tuned values with measured ones.
 Every extracted page carries these keys; they are written by mnemo, not
 configured.
 
-| Key | Values | Meaning |
+| Frontmatter key | Values | Meaning |
 |---|---|---|
-| `confidence` | `verified` / `inferred` | `verified` means the rule cites a quote the user actually typed (see `evidence`). Everything else is `inferred`. |
-| `evidence` | `{quote, source}` | The verbatim user quote a feedback rule was built from and the briefing it comes from. Only `verified` feedback pages carry one. The reflex scores this quote as its own field. |
-| `demoted_from` | `feedback` | The page was extracted as feedback but had no verifiable quote, so it was staged as a `reference` page in `shared/_inbox/reference/` for review. |
+| **confidence** | `verified` / `inferred` | `verified` means the rule cites a quote the user actually typed (see `evidence`). Everything else is `inferred`. |
+| **evidence** | `{quote, source}` | The verbatim user quote a feedback rule was built from and the briefing it comes from. Only `verified` feedback pages carry one. The reflex scores this quote as its own field. |
+| **demoted_from** | `feedback` | The page was extracted as feedback but had no verifiable quote, so it was staged as a `reference` page in `shared/_inbox/reference/` for review. |
 
 A feedback rule reaches `shared/feedback/` only when its quote verifies
 against the `## Corrections` section of one of its own source briefings — a
