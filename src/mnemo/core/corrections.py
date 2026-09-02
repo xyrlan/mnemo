@@ -47,6 +47,43 @@ def quote_matches_turn(quote: str, turn: str) -> bool:
     return len(q) >= MIN_QUOTE_CHARS and q in normalize(turn)
 
 
+# A keep quote needs at least this many non-stopword tokens to count as
+# evidence of a rule rather than an approval (#119).
+MIN_CONTENT_TOKENS = 6
+
+# Words that carry no rule content on their own. Portuguese and English:
+# articles, pronouns, prepositions, auxiliaries, and the generic imperatives a
+# user types to approve or nudge ("implementa os fixes", "yes do it").
+# ``vamo`` (colloquial "let's") is deliberately absent: the calibration keep
+# "vamo mudar o env do app para prod e subir" has exactly six content words
+# only with it counted, and real quotes at this length are all near the bar.
+_STOPWORDS = frozenset("""
+a o os as um uma uns umas de do da dos das em no na nos nas por para pra pro com sem
+e ou mas que se não nao sim ok okay ja já isso isto aqui ali lá la ele ela eles elas
+eu tu voce você nós nos vc me te lhe meu minha seu sua
+é e ser esta está estão estao foi era tem têm ter vai vão vamos bora
+pode podem poder deve devem faz faça fazer fez implementa implementar implemente
+aplica aplicar aplique testa testar teste roda rodar rode
+the a an and or but if so to of in on at for with by from as is are was were be been
+do does did done it its this that these those i you we they he she me my your our
+yes no ok okay please just go run apply implement test try let lets let's
+""".split())
+
+
+def quote_is_specific(quote: str) -> bool:
+    """True when the quote has enough content words to establish a rule (#119).
+
+    ``quote_matches_turn`` proves the user typed the words; it does not prove
+    the words say anything. A one-line approval passes the substring check
+    for every rule extracted from that session. Requiring ``MIN_CONTENT_TOKENS``
+    non-stopword tokens rejects those without a cross-language lexical match
+    against the rule (quotes are Portuguese, rules are English).
+    """
+    tokens = re.findall(r"\w+", normalize(quote))
+    content = [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
+    return len(content) >= MIN_CONTENT_TOKENS
+
+
 def _section_span(markdown: str) -> tuple[int, int] | None:
     m = _SECTION_RE.search(markdown)
     if m is None:
