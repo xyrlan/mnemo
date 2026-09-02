@@ -203,10 +203,12 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
         return dest
 
     def _rel(p: Path) -> str:
+        # Manifest paths are POSIX so a manifest written on Windows restores on
+        # any OS (and vice versa); Path() accepts "/" everywhere when reading.
         try:
-            return str(p.relative_to(vault_root))
+            return p.relative_to(vault_root).as_posix()
         except ValueError:
-            return str(p)
+            return p.as_posix()
 
     for v in plan_obj.verdicts:
         resolved = _resolve(v.slug, getattr(v, "path", None))
