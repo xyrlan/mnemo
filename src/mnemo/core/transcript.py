@@ -92,7 +92,7 @@ def plain_user_text(content: Any) -> Optional[str]:
     return text or None
 
 
-def user_turns(events: list) -> list[str]:
+def user_turns(events: list[dict]) -> list[str]:
     """The user's own turns, verbatim and in order.
 
     Everything the harness replays as a ``user`` message (task notifications,
@@ -107,7 +107,7 @@ def user_turns(events: list) -> list[str]:
         if not isinstance(msg, dict):
             continue
         text = plain_user_text(msg.get("content"))
-        if text is None or SYNTHETIC_TURN.search(text):
+        if not text or SYNTHETIC_TURN.search(text):
             continue
         out.append(text)
     return out

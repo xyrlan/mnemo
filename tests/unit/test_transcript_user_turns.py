@@ -38,3 +38,7 @@ def test_recall_sessions_reuses_transcript_filter():
     from mnemo.core.mcp import recall_sessions
     assert recall_sessions._SYNTHETIC is transcript.SYNTHETIC_TURN
     assert recall_sessions._plain_text is transcript.plain_user_text
+
+
+def test_user_turns_drops_blank_and_empty_content():
+    assert transcript.user_turns([_user("   "), _user(""), _user([])]) == []
