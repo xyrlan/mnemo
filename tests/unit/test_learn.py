@@ -201,14 +201,14 @@ def test_learn_promotes_a_verified_rule_from_a_zero_mutation_session(
     assert report.hint == ""
 
     # The reflex index was rebuilt, so the new rule is retrievable on the very
-    # next prompt. Its doc key is the page's ``name`` (``derive_rule_slug``
-    # prefers frontmatter name over the filesystem stem), and the evidence
-    # quote is indexed as its own field.
+    # next prompt. Its doc key is the page's ``slug`` — the same identifier
+    # ``report.learned`` carries, now that rendered pages write ``slug:``
+    # explicitly (#114) — and the evidence quote is indexed as its own field.
     index = json.loads((vault / ".mnemo" / "reflex-index.json").read_text(encoding="utf-8"))
-    assert "Retry only on 5xx" in index["docs"]
-    assert index["docs"]["Retry only on 5xx"]["projects"] == ["proj"]
+    assert "retry-5xx-only" in index["docs"]
+    assert index["docs"]["retry-5xx-only"]["projects"] == ["proj"]
     assert any(
-        e["slug"] == "Retry only on 5xx" and e["tf"]["evidence"] > 0
+        e["slug"] == "retry-5xx-only" and e["tf"]["evidence"] > 0
         for e in index["postings"].get("retry", [])
     )
 

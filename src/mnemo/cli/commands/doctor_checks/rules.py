@@ -83,6 +83,25 @@ def _doctor_check_rule_integrity(vault: Path) -> bool:
     return ok
 
 
+def _doctor_check_missing_slugs(vault: Path) -> bool:
+    """#114: pages without ``slug:`` are keyed by display name until migrated.
+
+    Dry-run only — doctor reports, the next session start or ``mnemo extract``
+    stamps. Always advisory.
+    """
+    from mnemo.core.migrations import slugs as _slugs
+
+    rep = _slugs.stamp_slugs(vault, dry_run=True)
+    if rep.stamped == 0:
+        print("  \u2713 every rule page carries slug:")
+        return True
+    print(
+        f"  \u26a0 {rep.stamped} page(s) missing slug: \u2014 the next session start "
+        "or `mnemo extract` migrates them"
+    )
+    return True
+
+
 def _doctor_check_bare_deny_command(vault: Path) -> bool:
     """Warn when the activation index contains rules rejected for bare deny_command.
 

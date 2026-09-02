@@ -501,6 +501,19 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.mirror", e)
 
+        # #114: legacy pages carry name: but no slug:, which keyed every index
+        # by display name. Stamp once (marker short-circuits the scan on every
+        # later start; it is written only when nothing was left unstamped),
+        # then the rebuilds below key by slug.
+        try:
+            from mnemo.core.migrations import slugs as _slugs
+            if not _slugs.marker_present(vault):
+                rep = _slugs.stamp_slugs(vault)
+                if not rep.skipped:
+                    _slugs.write_marker(vault)
+        except Exception as exc:
+            errors.log_error(vault, "session_start.slug_migration", exc)
+
         # Rebuild rule-activation index when any of the three consumers needs it:
         # enforcement (PreToolUse deny), enrichment (PreToolUse context), or
         # injection (SessionStart topic list). Reflex is NOT a consumer of this

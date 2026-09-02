@@ -170,6 +170,10 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     return (
         "---\n"
         f"name: {_yaml_scalar(page.name)}\n"
+        # Explicit identity (#114): the file stem is this same slug, but
+        # derive_rule_slug prefers frontmatter and used to fall through to
+        # the display name, so indexes and the learned ledger disagreed.
+        f"slug: {_yaml_scalar(page.slug)}\n"
         f"description: {_yaml_scalar(page.description)}\n"
         f"type: {page.type}\n"
         f"extracted_at: {run_id}\n"
