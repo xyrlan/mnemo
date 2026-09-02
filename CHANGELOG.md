@@ -3,9 +3,41 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] — v0.18.0
+## [1.0.0] — 2026-09-01
+
+The 1.0 gate was never code quality — the plugin distribution, four-platform
+binaries, ~2000 tests and the autopilot have been in place for months. What
+blocked it was not having an honest number for "does this work?". This release
+is the one where that number exists: a 14-day measured window (2026-08-04 →
+08-18) plus 14 more days on the fixes below, with every figure produced by
+commands that ship in the box (`mnemo recall`, `mnemo recall-sessions`,
+`mnemo why`, `mnemo doctor`). The reflex injects on ~7–8% of prompts with the
+default thresholds; ranking inside a topic bucket was the weak point and is the
+headline change here.
 
 ### Added
+
+- **Query-aware ranking in `list_rules_by_topic`.** The tool takes an optional
+  `query` — the agent's task text — and reranks the topic bucket with the
+  reflex's BM25F scorer: rules that score ≥ 1.0 against the query rise by
+  score, everything else keeps its `source_count` order as a floor. Without
+  `query` the output is byte-identical to before. The SessionStart injection
+  now tells agents to pass their task, so the feature is live end-to-end
+  without any configuration.
+
+  Why: in buckets past ~20 rules almost everything ties at `source_count=1`
+  (46 of 48 in the largest), so the tiebreak degenerated into alphabetical
+  noise and the relevant rule sank to rank ~40. Measured on the real code path
+  over big buckets (530 evaluations, 84 cases): primacy@5 16% → 31%,
+  primacy@3 10% → 23%.
+
+- **`mnemo recall-sessions`.** A second recall harness, built from the sessions
+  each rule was extracted from rather than from the access log. `mnemo recall`
+  tops out at the number of `read_mnemo_rule` calls in the log; this one has a
+  case for every session that produced a rule, so a ranking change can be told
+  apart from noise. It is a delta detector — its absolute numbers are not
+  comparable to `mnemo recall`, and the command says so on every run.
+
 
 - **Cold-start backfill.** A new vault used to inject nothing for weeks,
   because it had nothing to say. mnemo now reconstructs memory from the
@@ -39,6 +71,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   [docs/configuration.md](docs/configuration.md).
 
 ### Fixed
+
+- **Per-project reflex calibration never reached the hook.** The autopilot
+  has written `.mnemo/reflex-config.<project>.json` since 0.17 — and nothing
+  on the prompt path ever read it. Every prompt ran on the 1.5/2.0 defaults,
+  including projects the calibrator had tuned. The hook now merges the project
+  file over the global config per key (file > global > defaults; a missing or
+  corrupt file changes nothing). The calibrator also used to hand back the
+  *defaults* whenever a project's emit rate was inside the 3–12% band, which
+  with live wiring would have undone a working calibration the moment it
+  worked; it now keeps the current thresholds when in band. Emission receipts
+  record the thresholds that admitted them, so `mnemo why` shows the real
+  arithmetic per project.
+
+- **Concurrent SessionStarts could crash on the index files.** Both the reflex
+  index and the rule-activation index staged writes through a fixed
+  `<file>.tmp` sibling, so two sessions starting at once raced: one process's
+  rename consumed the other's temp file and the loser raised
+  `FileNotFoundError`. Both writers now go through `core/atomic.py` — a unique
+  temp file per call, plus retries — the same pattern the session cache
+  already used.
+
+- **Autopilot self-fix PRs never carried a diff.** Three stacked defects:
+  the branch was cut with `git checkout -b` in the live checkout (stealing
+  `HEAD` from whoever was working there), nothing ever committed, and the
+  repository was resolved from the process cwd rather than from the vault.
+  PRs are now built in a throwaway `git worktree`, committed, and anchored on
+  the repository that holds the edited files. Telemetry findings, which change
+  no files, are filed as issues instead.
 
 - **The dead-rule sweep archived every rule, at any age.** Autopilot's sweep
   archives rules with no usage signal in the last 180 days, behind an age guard
