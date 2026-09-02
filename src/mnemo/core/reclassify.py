@@ -14,14 +14,17 @@ to an LLM, :func:`apply` never does. The maintainer reviews the JSON in between.
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
 from mnemo.core import corrections, llm, transcript
+# ``_normalize_slug`` is private to the scanner but is the canonical slug
+# normalizer the extractor itself uses — collect_rules must agree with it
+# exactly or apply() would resolve a different file than plan() graded.
 from mnemo.core.extract.scanner import _normalize_slug
+from mnemo.core.extract.inbox.dedup import _name_tokens
 from mnemo.core.filters import derive_rule_slug
 from mnemo.core.reclassify_apply import apply, undo  # noqa: F401 — public API
 from mnemo.core.reclassify_types import (
@@ -41,6 +44,7 @@ _MAX_TURN_CHARS = 300
 _MAX_DECISIONS_CHARS = 1500
 _MAX_BODY_CHARS = 500
 _MAX_MEMORY_CHARS = 400
+_MAX_OTHER_KNOWN_SLUGS = 150
 
 RECLASSIFY_SYSTEM_PROMPT = (
     "You grade rules that were auto-extracted from coding sessions. "
@@ -51,7 +55,8 @@ RECLASSIFY_SYSTEM_PROMPT = (
     "- demote: real, reusable project knowledge (a config value, a deploy step, an API gotcha) "
     "but no user quote establishes it as a correction.\n"
     "- merge: states the same rule as another slug in this batch or in the known-slugs list; "
-    "put that slug in `target`.\n"
+    "put that slug in `target`. A merge target MUST be one of the slugs listed under "
+    "'Known slugs' — any other target is discarded.\n"
     "- archive: generic best practice any engineer knows, session narrative, a one-off decision, "
     "or text that reads like tool instructions rather than a rule.\n"
     'Output JSON only: {"verdicts": [{"slug": ..., "verdict": ..., "target": ..., "quote": ..., '
@@ -97,6 +102,13 @@ def _default_projects_root() -> Path:
     return Path.home() / ".claude" / "projects"
 
 
+# session_id -> turns, so the transcript for one briefing is globbed and parsed
+# once per process. ``plan`` reads every rule's turns to build context and the
+# CLI reads them again to count unreachable keeps; without this that is two full
+# passes over ~1400 sessions.
+_TURNS_CACHE: dict = {}
+
+
 def transcript_turns(vault_root: Path, briefing_rel: str, *, projects_root=None) -> list[str]:
     """The user's own turns from the jsonl session behind *briefing_rel*.
 
@@ -108,6 +120,10 @@ def transcript_turns(vault_root: Path, briefing_rel: str, *, projects_root=None)
     session_id = Path(briefing_rel).stem
     if not session_id or not root.is_dir():
         return []
+    cache_key = (str(root), session_id)
+    cached = _TURNS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     events: list[dict] = []
     for jsonl in sorted(root.glob(f"*/{session_id}.jsonl")):
         try:
@@ -125,7 +141,9 @@ def transcript_turns(vault_root: Path, briefing_rel: str, *, projects_root=None)
             if isinstance(ev, dict):
                 events.append(ev)
     turns = transcript.user_turns(events)
-    return [t[:_MAX_TURN_CHARS] for t in turns[:_MAX_TURNS]]
+    out = [t[:_MAX_TURN_CHARS] for t in turns[:_MAX_TURNS]]
+    _TURNS_CACHE[cache_key] = out
+    return out
 
 
 def _section(markdown: str, header: str, limit: Optional[int] = None) -> str:
@@ -176,6 +194,33 @@ def context_for(rule: RuleDoc, vault_root: Path, *, projects_root=None) -> str:
 # ------------------------------------------------------------------- prompt
 
 
+def known_slugs_for(batch: list[RuleDoc], rules: list[RuleDoc]) -> list[str]:
+    """The batch's own slugs plus the *related* rules a merge could target.
+
+    The whole vault is ~1400 rules; listing every slug cost ~20k tokens on every
+    single call. A merge target is only ever plausible when the two rules talk
+    about the same thing, so the list is the batch itself plus up to
+    ``_MAX_OTHER_KNOWN_SLUGS`` other rules sharing at least one stemmed name
+    token with some rule in the batch, most-overlapping first.
+    """
+    batch_slugs = [r.slug for r in batch]
+    seen = set(batch_slugs)
+    batch_tokens: set = set()
+    for r in batch:
+        batch_tokens |= _name_tokens(r.name)
+    if not batch_tokens:
+        return batch_slugs
+    scored: list = []
+    for r in rules:
+        if r.slug in seen:
+            continue
+        overlap = len(_name_tokens(r.name) & batch_tokens)
+        if overlap:
+            scored.append((overlap, r.slug))
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    return batch_slugs + [slug for _n, slug in scored[:_MAX_OTHER_KNOWN_SLUGS]]
+
+
 def build_prompt(batch: list[RuleDoc], contexts: dict, known_slugs: list) -> str:
     lines: list[str] = ["Grade each of these rules.", ""]
     for rule in batch:
@@ -205,7 +250,7 @@ def parse_verdicts(text: str) -> list[Verdict]:
             slug=slug,
             verdict=str(item.get("verdict") or "").strip().lower(),
             target=(str(item["target"]).strip() or None) if item.get("target") else None,
-            quote=(str(item["quote"]) or None) if item.get("quote") else None,
+            quote=(str(item["quote"]).strip() or None) if item.get("quote") else None,
             source=(str(item["source"]).strip() or None) if item.get("source") else None,
             reason=str(item.get("reason") or ""),
         ))
@@ -217,6 +262,19 @@ def parse_verdicts(text: str) -> list[Verdict]:
 
 def _briefing_sources(rule: RuleDoc) -> list[str]:
     return [s for s in rule.sources if BRIEFING_MARKER in str(s).replace("\\", "/")]
+
+
+def has_transcript(vault_root: Path, rule: RuleDoc, *, projects_root=None) -> bool:
+    """Whether any of *rule*'s briefing sources still has user turns on disk.
+
+    A ``keep`` needs a verbatim user quote verified against a transcript, so a
+    rule whose sessions are all gone can never be kept. Reads go through the
+    memoized ``transcript_turns``, so calling this after ``plan`` costs nothing.
+    """
+    return any(
+        transcript_turns(vault_root, src, projects_root=projects_root)
+        for src in _briefing_sources(rule)
+    )
 
 
 def _verify_quote(
@@ -291,7 +349,6 @@ def plan(
     if limit is not None:
         rules = rules[:limit]
     rules_by_slug = {r.slug: r for r in rules}
-    known_slugs = [r.slug for r in rules]
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     llm_calls = 0
@@ -302,7 +359,7 @@ def plan(
         contexts = {
             r.slug: context_for(r, vault_root, projects_root=projects_root) for r in batch
         }
-        prompt = build_prompt(batch, contexts, known_slugs)
+        prompt = build_prompt(batch, contexts, known_slugs_for(batch, rules))
         try:
             response = call(
                 prompt, system=RECLASSIFY_SYSTEM_PROMPT, model=model, timeout=timeout,
@@ -320,14 +377,20 @@ def plan(
 
     validated = validate(collected, rules_by_slug, vault_root, projects_root=projects_root)
 
-    # Exactly one verdict per input slug, in input order.
+    # Exactly one verdict per input slug, in input order, each carrying the
+    # vault-relative path of the file it grades so ``apply`` never has to guess
+    # a filename from the (frontmatter-derived) slug.
     first: dict = {}
     for v in validated:
         first.setdefault(v.slug, v)
-    final = [
-        first.get(r.slug) or Verdict(slug=r.slug, verdict="demote", reason="no-verdict")
-        for r in rules
-    ]
+    final: list[Verdict] = []
+    for r in rules:
+        v = first.get(r.slug) or Verdict(slug=r.slug, verdict="demote", reason="no-verdict")
+        try:
+            v.path = str(r.path.relative_to(vault_root)).replace("\\", "/")
+        except ValueError:
+            v.path = None
+        final.append(v)
     return Plan(run_id=run_id, llm_calls=llm_calls, verdicts=final)
 
 
@@ -342,7 +405,36 @@ def save_plan(vault_root: Path, plan_obj: Plan) -> Path:
     return path
 
 
+def _check_slug(field: str, value) -> Optional[str]:
+    """A slug/target names one file in ``shared/``, never a path. Reject both."""
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    if "/" in text or "\\" in text or ".." in text:
+        raise ValueError(
+            f"reclassify plan: illegal {field} {text!r} — must not contain a path separator or '..'"
+        )
+    return text
+
+
+def _check_path(value) -> Optional[str]:
+    """A verdict ``path`` is vault-relative, so '/' is legal but escaping is not."""
+    if value is None:
+        return None
+    text = str(value).replace("\\", "/")
+    if not text:
+        return None
+    if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+        raise ValueError(f"reclassify plan: illegal path {text!r} — must be vault-relative")
+    if any(seg == ".." for seg in text.split("/")):
+        raise ValueError(f"reclassify plan: illegal path {text!r} — '..' segments are not allowed")
+    return text
+
+
 def load_plan(vault_root: Path) -> Optional[Plan]:
+    """Read the saved plan. Raises ``ValueError`` if a hand edit made it unsafe."""
     path = _plan_path(vault_root)
     if not path.exists():
         return None
@@ -352,12 +444,13 @@ def load_plan(vault_root: Path) -> Optional[Plan]:
         return None
     verdicts = [
         Verdict(
-            slug=str(d.get("slug") or ""),
+            slug=_check_slug("slug", d.get("slug")) or "",
             verdict=str(d.get("verdict") or ""),
-            target=d.get("target"),
+            target=_check_slug("target", d.get("target")),
             quote=d.get("quote"),
             source=d.get("source"),
             reason=str(d.get("reason") or ""),
+            path=_check_path(d.get("path")),
         )
         for d in payload.get("verdicts") or []
         if isinstance(d, dict)

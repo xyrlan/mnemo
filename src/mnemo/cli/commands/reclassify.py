@@ -47,16 +47,27 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "apply", False):
-        plan = R.load_plan(vault)
+        try:
+            plan = R.load_plan(vault)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
         if plan is None:
             print("no saved plan — run `mnemo reclassify` first")
             return 1
-        report = R.apply(vault, plan)
+        try:
+            report = R.apply(vault, plan)
+        except RuntimeError as exc:
+            print(str(exc))
+            return 1
         for note in report.notes:
             print(f"  note: {note}")
+        for item in report.skipped:
+            print(f"  skipped: {item.get('slug')} · {item.get('reason')}")
         print(
             f"kept {report.kept} · demoted {report.demoted} · "
-            f"merged {report.merged} · archived {report.archived}"
+            f"merged {report.merged} · archived {report.archived} · "
+            f"skipped {len(report.skipped)}"
         )
         print(f"undo with: mnemo reclassify --undo {plan.run_id}")
         return 0
@@ -85,6 +96,8 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
     )
     R.save_plan(vault, plan)
 
+    no_transcript = sum(1 for r in rules if not R.has_transcript(vault, r))
+
     counts = {v: 0 for v in R.VERDICTS}
     for verdict in plan.verdicts:
         print(_fmt(verdict))
@@ -95,5 +108,13 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
         f"merge {counts['merge']} · archive {counts['archive']} "
         f"({plan.llm_calls} LLM call(s))"
     )
+    # `keep` needs a verifiable user quote, which needs a transcript on disk.
+    # Most legacy briefings no longer have one, so say so rather than letting
+    # the maintainer read a wall of `demote` as a grading failure.
+    if no_transcript:
+        print(
+            f"{no_transcript} rule(s) have no recoverable transcript — keep is "
+            "impossible for them; expect demote/archive"
+        )
     print("plan saved — review, then `mnemo reclassify --apply`")
     return 0

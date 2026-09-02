@@ -25,7 +25,7 @@ def _rule(root: Path, slug: str, name: str, body: str = "Body.\n\n**Why:** w\n\n
     d = root / "shared" / "feedback"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{slug}.md"
-    p.write_text(f"---\nname: {name}\ndescription: {name}\ntype: feedback\nstability: stable\n"
+    p.write_text(f"---\nslug: {slug}\nname: {name}\ndescription: {name}\ntype: feedback\nstability: stable\n"
                  f"sources:\n  - bots/proj/briefings/sessions/s1.md\ntags:\n  - auto-promoted\n  - x\n---\n{body}\n")
     return p
 
@@ -133,3 +133,142 @@ def test_transcript_turns_found_by_session_id(vault, tmp_path):
         {"type": "user", "message": {"role": "user", "content": "use yarn not npm in this repo"}}) + "\n")
     turns = R.transcript_turns(vault, "bots/proj/briefings/sessions/s1.md", projects_root=tmp_path / "projects")
     assert turns == ["use yarn not npm in this repo"]
+
+
+def test_apply_resolves_files_by_frontmatter_slug_not_filename(vault):
+    """97% of the real vault has ``slug != path.stem`` — apply must not guess."""
+    d = vault / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    odd = d / "Some File.md"
+    odd.write_text("---\nname: Use yarn\ndescription: Use yarn\ntype: feedback\n"
+                   "sources:\n  - bots/proj/briefings/sessions/s1.md\n---\nBody.\n")
+    assert [r.slug for r in R.collect_rules(vault)] == ["use-yarn"]
+
+    # path=None forces the slug -> path fallback map.
+    plan = R.Plan(run_id="20260902T000000", llm_calls=0, verdicts=[
+        R.Verdict(slug="use-yarn", verdict="demote"),
+        R.Verdict(slug="ghost-rule", verdict="archive"),
+    ])
+    report = R.apply(vault, plan, rebuild_indexes=False)
+
+    assert report.demoted == 1 and report.archived == 0
+    assert not odd.exists()
+    assert (vault / "shared" / "reference" / "use-yarn.md").exists()
+    assert report.skipped == [{"slug": "ghost-rule", "reason": "rule file not found"}]
+    arch = vault / "shared" / "_archive" / "reclassify-20260902T000000"
+    manifest = json.loads((arch / "manifest.json").read_text())
+    assert manifest["skipped"] == [{"slug": "ghost-rule", "reason": "rule file not found"}]
+
+    R.undo(vault, "20260902T000000")
+    assert odd.exists() and "name: Use yarn" in odd.read_text()
+
+
+def test_plan_records_vault_relative_path_for_each_verdict(vault, tmp_path):
+    d = vault / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Some File.md").write_text("---\nname: Use yarn\ntype: feedback\n---\nBody.\n")
+
+    def fake_call(prompt, *, system, model, timeout):
+        from mnemo.core.llm import LLMResponse
+        payload = {"verdicts": [{"slug": "use-yarn", "verdict": "archive"}]}
+        return LLMResponse(text=json.dumps(payload), total_cost_usd=0.0, input_tokens=1,
+                           output_tokens=1, api_key_source="none", raw={})
+
+    plan = R.plan(vault, model="m", timeout=5, projects_root=tmp_path / "none", call=fake_call)
+    assert [v.path for v in plan.verdicts] == ["shared/feedback/Some File.md"]
+
+    R.save_plan(vault, plan)
+    assert R.load_plan(vault).verdicts[0].path == "shared/feedback/Some File.md"
+
+
+def test_apply_refuses_to_run_twice_with_same_run_id(vault):
+    junk = _rule(vault, "generic", "Generic tip")
+    original = junk.read_bytes()
+    plan = R.Plan(run_id="20260902T111111", llm_calls=0,
+                  verdicts=[R.Verdict(slug="generic", verdict="archive")])
+    assert R.apply(vault, plan, rebuild_indexes=False).archived == 1
+
+    with pytest.raises(RuntimeError, match="already applied"):
+        R.apply(vault, plan, rebuild_indexes=False)
+
+    assert R.undo(vault, "20260902T111111") >= 1
+    assert junk.read_bytes() == original
+
+
+def test_load_plan_rejects_path_traversal(vault):
+    plan_path = vault / ".mnemo" / R.PLAN_FILENAME
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plan_path.write_text(json.dumps({"run_id": "r", "llm_calls": 0, "verdicts": [
+        {"slug": "../../evil", "verdict": "archive"}]}))
+    with pytest.raises(ValueError, match="illegal slug"):
+        R.load_plan(vault)
+
+    plan_path.write_text(json.dumps({"run_id": "r", "llm_calls": 0, "verdicts": [
+        {"slug": "ok", "verdict": "merge", "target": "../evil"}]}))
+    with pytest.raises(ValueError, match="illegal target"):
+        R.load_plan(vault)
+
+    plan_path.write_text(json.dumps({"run_id": "r", "llm_calls": 0, "verdicts": [
+        {"slug": "ok", "verdict": "archive", "path": "shared/../../etc/passwd"}]}))
+    with pytest.raises(ValueError, match="illegal path"):
+        R.load_plan(vault)
+
+    plan_path.write_text(json.dumps({"run_id": "r", "llm_calls": 0, "verdicts": [
+        {"slug": "ok", "verdict": "archive", "path": "/etc/passwd"}]}))
+    with pytest.raises(ValueError, match="illegal path"):
+        R.load_plan(vault)
+
+
+def test_known_slugs_are_bounded(vault, tmp_path):
+    for i in range(300):
+        _rule(vault, f"cache-rule-{i}", f"Cache rule {i}")
+    rules = R.collect_rules(vault)
+    batch = rules[:10]
+    known = R.known_slugs_for(batch, rules)
+    assert len(known) <= 10 + 150
+    assert set(r.slug for r in batch) <= set(known)
+
+    prompt = R.build_prompt(batch, {}, known)
+    listed = prompt.rsplit("Known slugs: ", 1)[1].split(", ")
+    assert len(listed) <= 160
+
+
+def test_demoted_entry_keeps_origin_backfill_and_keep_creates_missing_entry(vault):
+    _rule(vault, "use-yarn", "Use yarn")
+    _rule(vault, "project-fact", "Deploy needs VPN")
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    state = json.loads(state_path.read_text())
+    # A backfilled rule: the flag must survive the demote.
+    state["entries"]["feedback/project-fact"] = {
+        "source_files": [], "source_hash": "h", "written_hash": "w",
+        "written_at": "r", "status": "auto_promoted", "origin_backfill": True}
+    # ...and `use-yarn` has no entry at all, so `keep` must create one.
+    state["entries"].pop("feedback/use-yarn", None)
+    state_path.write_text(json.dumps(state))
+
+    plan = R.Plan(run_id="20260902T222222", llm_calls=0, verdicts=[
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
+                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="project-fact", verdict="demote"),
+    ])
+    R.apply(vault, plan, rebuild_indexes=False)
+
+    entries = json.loads(state_path.read_text())["entries"]
+    assert entries["reference/project-fact"]["origin_backfill"] is True
+    assert entries["reference/project-fact"]["source_hash"] == "h"
+    assert entries["reference/project-fact"]["written_at"].startswith("20")
+    assert "T" in entries["reference/project-fact"]["last_sync"]
+    kept = entries["feedback/use-yarn"]
+    assert kept["written_hash"]
+
+
+def test_has_transcript_flags_rules_whose_sessions_are_gone(vault, tmp_path):
+    _rule(vault, "use-yarn", "Use yarn")
+    rule = R.collect_rules(vault)[0]
+    assert R.has_transcript(vault, rule, projects_root=tmp_path / "none") is False
+    projects = tmp_path / "projects" / "-Users-x-proj"
+    projects.mkdir(parents=True)
+    (projects / "s1.jsonl").write_text(json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "use yarn not npm"}}) + "\n")
+    assert R.has_transcript(vault, rule, projects_root=tmp_path / "projects") is True

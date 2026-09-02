@@ -20,6 +20,10 @@ from mnemo.core.extract.inbox.rendering import _render_nested_block
 from mnemo.core.reclassify_types import ApplyReport, Plan, split_frontmatter
 
 
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
 # ------------------------------------------------------- frontmatter surgery
 
 
@@ -118,16 +122,33 @@ def _entry_for(state: dict, key: str, sources: list) -> dict:
     if entry is None:
         entry = {
             "source_files": list(sources), "source_hash": "", "written_hash": "",
-            "written_at": "", "status": "auto_promoted",
+            "written_at": _now(), "status": "auto_promoted",
         }
         state["entries"][key] = entry
     return entry
+
+
+def _slug_to_path(vault_root: Path) -> dict:
+    """slug -> rule file, built the same way ``plan`` derived the slugs.
+
+    ``collect_rules`` takes the slug from frontmatter (``derive_rule_slug``), so
+    on the real vault the filename and the slug disagree for ~97% of rules. This
+    map is the fallback for plans written before verdicts carried a ``path``;
+    a path is NEVER reconstructed as ``shared/feedback/{slug}.md``.
+    """
+    from mnemo.core.reclassify import collect_rules
+
+    return {r.slug: r.path for r in collect_rules(vault_root)}
 
 
 def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> ApplyReport:
     """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`."""
     vault_root = Path(vault_root)
     arch = vault_root / "shared" / "_archive" / f"reclassify-{plan_obj.run_id}"
+    # Applying the same run twice would re-copy already-modified files over the
+    # pristine originals and overwrite the manifest, silently destroying undo.
+    if (arch / "manifest.json").exists():
+        raise RuntimeError(f"run {plan_obj.run_id} already applied; undo it first")
     originals = arch / "originals"
     merged_dir = arch / "merged"
     archived_dir = arch / "archived"
@@ -151,6 +172,23 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
 
     report = ApplyReport(archive_dir=arch)
     moves: list[dict] = []
+    skipped: list[dict] = []
+    # Built lazily: only plans that predate ``Verdict.path`` need it, and
+    # collect_rules re-reads every rule file.
+    fallback_map: Optional[dict] = None
+
+    def _resolve(slug: Optional[str], rel: Optional[str]) -> Optional[Path]:
+        nonlocal fallback_map
+        if rel:
+            candidate = vault_root / rel
+            if candidate.exists():
+                return candidate
+        if not slug:
+            return None
+        if fallback_map is None:
+            fallback_map = _slug_to_path(vault_root)
+        candidate = fallback_map.get(slug)
+        return candidate if candidate is not None and candidate.exists() else None
     # Every slug whose pristine bytes already sit in originals/. A slug can be
     # reached twice — once as its own verdict, once as another rule's merge
     # target — and the second copy must never overwrite the first, or undo
@@ -171,9 +209,11 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             return str(p)
 
     for v in plan_obj.verdicts:
-        src_path = vault_root / "shared" / "feedback" / f"{v.slug}.md"
-        if not src_path.exists():
+        resolved = _resolve(v.slug, getattr(v, "path", None))
+        if resolved is None:
+            skipped.append({"slug": v.slug, "reason": "rule file not found"})
             continue
+        src_path = resolved
         text = src_path.read_text(encoding="utf-8")
         fm, _body = split_frontmatter(text)
         fm_sources = fm.get("sources") or []
@@ -187,17 +227,17 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
         target_original: Optional[str] = None
         to_path: Optional[Path] = None
 
+        target_path: Optional[Path] = None
         if verdict == "merge":
-            target_path = vault_root / "shared" / "feedback" / f"{v.target}.md"
-            if not v.target or not target_path.exists():
+            target_path = _resolve(v.target, None) if v.target else None
+            if target_path is None:
                 report.notes.append(f"{v.slug}: merge target missing → demoted")
                 verdict = "demote"
 
         if verdict == "keep":
             src_path.write_text(_rewrite_keep(text, v.quote, v.source), encoding="utf-8")
-            entry = state["entries"].get(f"feedback/{v.slug}")
-            if entry is not None:
-                entry["written_hash"] = content_hash(src_path)
+            entry = _entry_for(state, f"feedback/{v.slug}", fm_sources)
+            entry["written_hash"] = content_hash(src_path)
             to_path = src_path
             report.kept += 1
 
@@ -209,20 +249,24 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
                 shutil.copy2(dest, clash)
             dest.write_text(_rewrite_demote(text), encoding="utf-8")
             src_path.unlink()
-            old = state["entries"].pop(f"feedback/{v.slug}", None)
+            old = state["entries"].pop(f"feedback/{v.slug}", None) or {}
+            now = _now()
             state["entries"][f"reference/{v.slug}"] = {
                 "source_files": fm_sources,
-                "source_hash": (old or {}).get("source_hash", "") or "",
+                "source_hash": old.get("source_hash", "") or "",
                 "written_hash": content_hash(dest),
-                "written_at": plan_obj.run_id,
+                "written_at": now,
                 "status": "auto_promoted",
-                "last_sync": plan_obj.run_id,
+                "last_sync": now,
+                # Sticky: a rule reconstructed from an archived transcript stays
+                # behind the origin gate after it is demoted to reference.
+                "origin_backfill": old.get("origin_backfill", False),
             }
             to_path = dest
             report.demoted += 1
 
         elif verdict == "merge":
-            target_path = vault_root / "shared" / "feedback" / f"{v.target}.md"
+            assert target_path is not None  # resolved in the pre-check above
             target_original = _rel(_back_up(target_path, v.target))
             target_path.write_text(
                 _append_sources(target_path.read_text(encoding="utf-8"), fm_sources),
@@ -253,10 +297,12 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             "target_original": target_original,
         })
 
+    report.skipped = skipped
     (arch / "manifest.json").write_text(json.dumps({
         "run_id": plan_obj.run_id,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "moves": moves,
+        "skipped": skipped,
         "state_backup": state_backup,
     }, indent=2), encoding="utf-8")
 
