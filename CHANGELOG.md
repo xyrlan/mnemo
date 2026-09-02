@@ -3,7 +3,21 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] — 2026-09-02
+
+The corrections release. 1.0 proved mnemo could measure itself; the post-1.0
+audit then showed what it was measuring: a vault where 98% of rules had a
+single source, ~40% were textbook advice the model already knew, and the
+top-ranked rule was the extractor's own prompt echoed back. The root cause
+was that the extractor never saw the user's words. This release makes
+mnemo the corrections layer it claimed to be: briefings quote you verbatim
+and verify the quote against the transcript, feedback rules need that quote
+to be promoted, re-learned rules reinforce the existing page instead of
+minting a duplicate, nothing leaves the machine or spends an LLM call
+without opt-in, every learned rule is announced with a one-line veto, and
+`mnemo learn` closes the loop inside a single session. The README now says
+only what `mnemo status` can print.
+
 
 ### Changed
 
