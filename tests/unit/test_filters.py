@@ -399,3 +399,33 @@ def test_parse_frontmatter_dequotes_scalars_and_lists() -> None:
     assert fm["enforce"]["deny_pattern"] == "x"
     # quoted block list item
     assert fm["activates_on"]["path_globs"] == ["x"]
+
+
+# --- iter_shared_pages (#120) ---------------------------------------------
+
+from mnemo.core.filters import iter_shared_pages  # noqa: E402
+
+
+def _touch(p):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nname: x\n---\nbody\n", encoding="utf-8")
+    return p
+
+
+def test_iter_shared_pages_skips_archive_at_any_depth(tmp_path):
+    live = _touch(tmp_path / "shared" / "feedback" / "a.md")
+    inbox = _touch(tmp_path / "shared" / "_inbox" / "feedback" / "b.md")
+    _touch(tmp_path / "shared" / "_archive" / "reclassify-x" / "originals" / "feedback" / "c.md")
+    _touch(tmp_path / "shared" / "_archive" / "d.md")
+    got = list(iter_shared_pages(tmp_path))
+    assert got == sorted([live, inbox])
+
+
+def test_iter_shared_pages_can_exclude_inbox(tmp_path):
+    live = _touch(tmp_path / "shared" / "feedback" / "a.md")
+    _touch(tmp_path / "shared" / "_inbox" / "feedback" / "b.md")
+    assert list(iter_shared_pages(tmp_path, include_inbox=False)) == [live]
+
+
+def test_iter_shared_pages_missing_shared_dir(tmp_path):
+    assert list(iter_shared_pages(tmp_path)) == []

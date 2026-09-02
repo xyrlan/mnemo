@@ -7,14 +7,14 @@ from pathlib import Path
 
 from mnemo.cli.parser import command
 from mnemo.core import config, paths
-from mnemo.core.filters import derive_rule_slug, parse_frontmatter
+from mnemo.core.filters import derive_rule_slug, iter_shared_pages, parse_frontmatter
 
 
 def _find_rule_file(vault_root: Path, slug: str) -> Path | None:
     shared = vault_root / "shared"
     if not shared.is_dir():
         return None
-    for md in shared.rglob("*.md"):
+    for md in iter_shared_pages(vault_root):
         # Match by filesystem stem first (most reliable for slug-as-filename)
         if md.stem == slug:
             return md

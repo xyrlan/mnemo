@@ -50,3 +50,20 @@ def test_disable_rule_idempotent(tmp_path: Path):
     rc = dr.run_disable_rule(vault, slug="x")
     assert rc == 0
     assert rule.read_text().count("runtime: false") == 1
+
+
+def test_disable_rule_ignores_archive(tmp_path: Path, capsys):
+    """#120: a slug that only survives as a reclassify original is 'not found'."""
+    vault = tmp_path / "vault"
+    archived = vault / "shared" / "_archive" / "reclassify-r" / "originals" / "feedback" / "old-rule.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text(
+        "---\nname: old-rule\ndescription: x\ntype: feedback\n"
+        "sources:\n  - bots/a/memory/b.md\ntags:\n  - t\n---\nBody\n",
+        encoding="utf-8",
+    )
+    rc = dr.run_disable_rule(vault, slug="old-rule")
+    assert rc != 0
+    assert "runtime: false" not in archived.read_text(encoding="utf-8")
+    captured = capsys.readouterr()
+    assert "not found" in (captured.out + captured.err).lower()

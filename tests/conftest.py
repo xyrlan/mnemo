@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
+
+# Captured at import, before any fixture can patch it. This is the one place
+# the suite is allowed to know where the developer's real vault lives -- and
+# only so it can prove nothing touched it (#117).
+_REAL_HOME = Path(os.environ.get("HOME") or os.path.expanduser("~")).resolve()
+_REAL_VAULT = _REAL_HOME / "mnemo"
 
 
 @pytest.fixture(autouse=True)
@@ -72,14 +79,87 @@ def tmp_vault(tmp_path: Path) -> Path:
     return root
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect HOME to a temp dir so ~/.claude and ~/mnemo are isolated."""
+    """Every test runs under a throwaway HOME.
+
+    ``config.load_config`` falls back to ``~/mnemo/mnemo.config.json`` and
+    ``paths.vault_root`` expands ``~``, so any hook ``main()`` called without
+    an explicit config ran against the developer's vault -- and wrote to its
+    ``.errors.log``, tripping the real circuit breaker for an hour after a
+    noisy run (#117). Redirecting HOME closes that path for every test.
+
+    ``MNEMO_CONFIG_PATH`` is always pointed at a (non-existent) file under the
+    temp home: ``load_config`` returns defaults for a missing path, and those
+    defaults resolve the vault under the temp HOME. Autouse fixtures run
+    first, so a value already in the environment can only be the developer's
+    shell exporting the real config -- exactly what must be overridden. A
+    test's own ``monkeypatch.setenv`` runs later and still wins.
+    """
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(home / "mnemo" / "mnemo.config.json"))
     return home
+
+
+@pytest.fixture
+def real_home() -> Path:
+    """The developer's real HOME, as it was before ``tmp_home`` redirected it.
+
+    Only for asserting that isolation holds; never build paths under it.
+    """
+    return _REAL_HOME
+
+
+def _vault_fingerprint() -> tuple:
+    """``(size, mtime_ns)`` of the three real-vault paths a leaky test would hit.
+
+    Directory entries are shallow: a directory's mtime moves when an entry is
+    created or removed inside it. Missing paths are ``None``.
+
+    ``~/mnemo/.mnemo/`` is deliberately *not* watched. The developer's own
+    Claude Code session keeps firing real hooks while the suite runs, and
+    those atomically replace files there on every MCP call and every
+    reflex/enrich emission (``core/mcp/session_state.py``) and rename both
+    index files on SessionStart -- each bumping the directory's mtime. The
+    harm #117 names is ``.errors.log`` (the circuit breaker); watching
+    ``.mnemo/`` would only add false positives.
+    """
+    def st(p: Path):
+        try:
+            s = p.stat()
+            return (s.st_size, s.st_mtime_ns)
+        except OSError:
+            return None
+    return (
+        st(_REAL_VAULT / ".errors.log"),
+        st(_REAL_VAULT / "shared"),
+        st(_REAL_HOME / ".claude" / "projects"),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _real_vault_guard(request: pytest.FixtureRequest):
+    """Fail any test that changes the real vault or ``~/.claude/projects``.
+
+    Three ``stat`` calls before and after. Tests marked ``recall`` run against
+    the real vault on purpose and are exempt.
+    """
+    if request.node.get_closest_marker("recall"):
+        yield
+        return
+    before = _vault_fingerprint()
+    yield
+    after = _vault_fingerprint()
+    if before != after:
+        pytest.fail(
+            f"test touched the real vault at {_REAL_VAULT} "
+            f"(before={before}, after={after}); build a tmp vault and set "
+            "MNEMO_CONFIG_PATH instead (see tests/unit/test_hook_session_start_backfill.py::_run_hook)"
+        )
 
 
 @pytest.fixture

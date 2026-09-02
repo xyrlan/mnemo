@@ -6,14 +6,11 @@ from pathlib import Path
 
 from mnemo.cli.parser import command
 from mnemo.core import config, paths
-from mnemo.core.filters import parse_frontmatter
+from mnemo.core.filters import iter_shared_pages, parse_frontmatter
 
 
 def _iter_enforced(vault_root: Path):
-    shared = vault_root / "shared"
-    if not shared.is_dir():
-        return
-    for md in sorted(shared.rglob("*.md")):
+    for md in iter_shared_pages(vault_root, include_inbox=False):
         try:
             text = md.read_text()
         except OSError:

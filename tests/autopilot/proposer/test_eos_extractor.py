@@ -116,6 +116,19 @@ def test_load_vault_slugs_empty_when_no_shared(tmp_path: Path):
     assert slugs == set()
 
 
+def test_load_vault_slugs_ignores_archive(tmp_path: Path):
+    """#120: reclassify originals under shared/_archive are not live rules."""
+    live = tmp_path / "shared" / "rules"
+    live.mkdir(parents=True)
+    (live / "rule1.md").write_text("---\nslug: fix-nan-price\n---\nbody", encoding="utf-8")
+    arch = tmp_path / "shared" / "_archive" / "reclassify-r" / "originals" / "rules"
+    arch.mkdir(parents=True)
+    (arch / "old.md").write_text("---\nslug: archived-slug\n---\nbody", encoding="utf-8")
+    slugs = _load_vault_slugs(tmp_path)
+    assert "fix-nan-price" in slugs
+    assert "archived-slug" not in slugs
+
+
 # --- _is_duplicate ---
 
 def test_is_duplicate_exact_match():

@@ -119,12 +119,10 @@ def _doctor_check_stripped_enforce(vault: Path, idx: object = None) -> bool:
     A human must review the rule and re-add the enforce block manually if the
     pattern is safe. Always returns True — advisory check, not a pass/fail gate.
     """
-    shared = vault / "shared"
-    if not shared.is_dir():
-        return True
+    from mnemo.core.filters import iter_shared_pages
 
     stripped_paths = []
-    for md in (vault / "shared").rglob("*.md"):
+    for md in iter_shared_pages(vault, include_inbox=False):
         try:
             text = md.read_text(encoding="utf-8", errors="replace")
             if "promoted_without_enforce: true" in text.split("---", 2)[1]:

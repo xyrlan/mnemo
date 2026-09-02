@@ -16,7 +16,7 @@ See ``project_mnemo_v0.4_direction.md`` → "Shared filter specification".
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 MANAGED_TAGS: frozenset[str] = frozenset(
     {"needs-review", "auto-promoted", "home", "dashboard", "wiki", "index"}
@@ -35,6 +35,31 @@ def derive_rule_slug(frontmatter: dict[str, Any], stem: str) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate
     return stem
+
+
+ARCHIVE_DIR = "_archive"
+INBOX_DIR = "_inbox"
+
+
+def iter_shared_pages(vault_root: Path, *, include_inbox: bool = True) -> Iterator[Path]:
+    """Every rule page under ``shared/``, in sorted order.
+
+    ``shared/_archive/**`` is always skipped: it holds reclassify originals
+    (``_archive/reclassify-<run>/originals/<type>/<slug>.md``), which are not
+    live rules — the indexes and ``collect_rules`` already ignore them and
+    every other walker must agree, or ``doctor`` lists 1.4k dead copies.
+    ``_inbox`` is skipped only on request; staged pages are still rules.
+    """
+    shared = Path(vault_root) / "shared"
+    if not shared.is_dir():
+        return
+    for md in sorted(shared.rglob("*.md")):
+        rel_parts = md.relative_to(shared).parts[:-1]
+        if ARCHIVE_DIR in rel_parts:
+            continue
+        if not include_inbox and INBOX_DIR in rel_parts:
+            continue
+        yield md
 
 
 def is_consumer_visible(

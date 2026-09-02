@@ -123,6 +123,23 @@ main() {
     version="$(plugin_version)"
     [ -n "$version" ] || { log "cannot read the plugin version; skipping"; return 0; }
 
+    # Developer checkout (#118). Opened as a project rather than a plugin,
+    # Claude Code leaves CLAUDE_PLUGIN_ROOT unset; .mcp.json then spawns
+    # `bash ${CLAUDE_PLUGIN_ROOT:-.}/bin/launch` from the repo root (this
+    # script directly, since a shell-less spawn of the shebang-less mnemo.cmd
+    # is ENOEXEC), which lands here. A plugin install is a clone of this same
+    # repo, so src/ alone proves nothing; the gitignored egg-info from
+    # `pip install -e .` (or MNEMO_DEV=1) is what marks a dev tree.
+    if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ] && {
+        [ "${MNEMO_DEV:-}" = 1 ] || [ -d "$PLUGIN_ROOT/src/mnemo_claude.egg-info" ]; }
+    then
+        local py="${MNEMO_PYTHON:-python3}"
+        if command -v "$py" >/dev/null 2>&1; then
+            PYTHONPATH="$PLUGIN_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m mnemo "$@"
+        fi
+        log "source checkout but no python3 on PATH; falling back to the release binary"
+    fi
+
     target="$(detect_target)" || {
         log "unsupported platform ($(uname -s 2>/dev/null) $(uname -m 2>/dev/null))."
         log "Install from source instead: pipx install mnemo-claude && mnemo init"
