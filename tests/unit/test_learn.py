@@ -315,7 +315,8 @@ def test_learn_extracts_only_this_sessions_briefing(
     # that prompt carries this session's briefing, not the stale one.
     assert len(prompts_seen) == 2
     consolidation = prompts_seen[1]
-    assert f"bots/proj/briefings/sessions/{SESSION_ID}.md" in consolidation
+    # The prompt embeds the OS-native path; compare in POSIX form so Windows passes.
+    assert f"bots/proj/briefings/sessions/{SESSION_ID}.md" in consolidation.replace("\\", "/")
     assert "sess-old" not in consolidation
 
 
