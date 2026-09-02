@@ -25,7 +25,6 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "migrate-plugin",
     "dedup-rules",
     "reclassify",
-    "disable-rule",
     "list-enforced",
     "regen-graph-edges",
 })

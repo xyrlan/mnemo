@@ -343,6 +343,76 @@ def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
         return ""
 
 
+#: Bullets per session. This block rides on the session-start prompt, so the
+#: cap is a budget, not a preference; the tail line points at `mnemo status`
+#: for the overflow rather than spending more of the prompt on it.
+_LEARNED_MAX = 5
+#: Evidence quotes are one line of a bullet, not a paragraph.
+_QUOTE_MAX = 80
+
+
+def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
+    """What extraction promoted since this project last looked, each with its undo.
+
+    Extraction has always written rules silently. That is fine while the user
+    reads the vault and wrong the moment mnemo is trusted to inject rules on
+    its own: a rule nobody knows exists is a rule nobody can correct, so the
+    bad ones accrue. This block is the disclosure half of that trade, and the
+    ``veto:`` suffix is the reason it can stay one line — the correction is
+    right there, not three commands away in a vault the user has never opened.
+
+    Only a ``verified`` rule shows the sentence it was learned from. An
+    ``inferred`` one has no quote to show, and manufacturing a plausible one
+    would make the evidence worthless everywhere it *is* real.
+
+    Announcing marks announced, so the same rule never appears twice — even
+    when the render below is truncated at ``_LEARNED_MAX``: the overflow is
+    still on disk and ``mnemo status`` still lists it.
+
+    Fail-silent, like everything else on the session-start path.
+    """
+    try:
+        from mnemo.core import learned
+
+        threshold = int((cfg.get("scoping") or {}).get("universalThreshold", 2))
+        entries = learned.pending(
+            vault_root, project, limit=_LEARNED_MAX, universal_threshold=threshold
+        )
+        if not entries:
+            return ""
+        total = learned.pending_count(
+            vault_root, project, universal_threshold=threshold
+        )
+
+        lines = ["[mnemo learned since your last session]"]
+        for e in entries:
+            slug = e.get("slug") or ""
+            name = e.get("name") or slug
+            quote = e.get("quote")
+            evidence = ""
+            if e.get("confidence") == "verified" and quote:
+                quote = str(quote).strip().replace("\n", " ")
+                if len(quote) > _QUOTE_MAX:
+                    quote = quote[:_QUOTE_MAX] + "…"
+                evidence = f' (verified from: "{quote}")'
+            lines.append(
+                f"• {slug} — {name}{evidence} · veto: mnemo disable-rule {slug}"
+            )
+        if total > len(entries):
+            lines.append(f"({total - len(entries)} more — mnemo status)")
+        lines.append("[/mnemo learned]")
+
+        learned.mark_announced(vault_root, project)
+        return "\n".join(lines)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.learned", exc)
+        except Exception:
+            pass
+        return ""
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -450,6 +520,14 @@ def main() -> int:
                 if notice:
                     payload_text = (
                         payload_text + "\n\n" + notice if payload_text else notice
+                    )
+                # Same rule as the notice: a vault whose only news is a rule it
+                # just learned still has news worth sending.
+                learned_block = _learned_block(vault, cfg, canonical_name)
+                if learned_block:
+                    payload_text = (
+                        payload_text + "\n\n" + learned_block
+                        if payload_text else learned_block
                     )
                 if payload_text:
                     _emit_injection(payload_text)
