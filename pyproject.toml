@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemo-claude"
-version = "1.0.0"
+version = "1.1.0"
 description = "The Obsidian that populates itself so your Claude never forgets."
 readme = "README.md"
 requires-python = ">=3.8"
