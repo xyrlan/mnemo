@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import time as _time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -304,3 +304,98 @@ def pick_latest_briefing(vault_root: Path, agent_name: str) -> BriefingRecord | 
         return None
     records.sort(key=lambda kv: kv[0], reverse=True)
     return records[0][1]
+
+
+# ---------------------------------------------------------------------------
+# Retention (#116)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PruneReport:
+    scanned: int = 0
+    agents: int = 0
+    bytes: int = 0
+    protected_by_sources: int = 0
+    kept_recent: int = 0
+    kept_min: int = 0
+    deleted: list = field(default_factory=list)
+
+
+def _protected_briefings(vault_root: Path) -> set[str]:
+    """Vault-relative POSIX paths named in ``sources:`` of any live page."""
+    from mnemo.core.filters import iter_shared_pages, parse_frontmatter
+
+    out: set[str] = set()
+    for md in iter_shared_pages(vault_root, include_inbox=True):
+        try:
+            fm = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        for s in fm.get("sources") or []:
+            if isinstance(s, str):
+                out.add(s.strip().replace("\\", "/"))
+    return out
+
+
+def prune(
+    vault_root: Path,
+    cfg: dict,
+    *,
+    now: float | None = None,
+    dry_run: bool = False,
+) -> PruneReport:
+    """Delete briefings older than ``briefings.retentionDays`` (#116).
+
+    Per agent the newest ``briefings.keepPerAgent`` always survive, and any
+    briefing a live rule cites in ``sources:`` is never deleted — it is the
+    evidence trail for that rule. ``retentionDays`` of 0 disables pruning
+    (the report is still computed, for ``mnemo status``). Age is file mtime:
+    briefings are written once and carry no trustworthy date of their own.
+    """
+    bcfg = cfg.get("briefings") or {}
+    retention_days = int(bcfg.get("retentionDays", 180) or 0)
+    keep_n = max(0, int(bcfg.get("keepPerAgent", 20)))
+    now = _time.time() if now is None else now
+    cutoff = now - retention_days * 86400
+    rep = PruneReport()
+    vault_root = Path(vault_root)
+    bots = vault_root / "bots"
+    if not bots.is_dir():
+        return rep
+    protected = _protected_briefings(vault_root)
+    for agent_dir in sorted(p for p in bots.iterdir() if p.is_dir()):
+        sessions = agent_dir / "briefings" / "sessions"
+        if not sessions.is_dir():
+            continue
+        files = []
+        for md in sessions.glob("*.md"):
+            try:
+                st = md.stat()
+            except OSError:
+                continue
+            files.append((st.st_mtime, st.st_size, md))
+        if not files:
+            continue
+        rep.agents += 1
+        files.sort(key=lambda t: -t[0])
+        for i, (mtime, size, md) in enumerate(files):
+            rep.scanned += 1
+            rep.bytes += size
+            rel = md.relative_to(vault_root).as_posix()
+            if rel in protected:
+                rep.protected_by_sources += 1
+                continue
+            if i < keep_n:
+                rep.kept_min += 1
+                continue
+            if retention_days <= 0 or mtime >= cutoff:
+                rep.kept_recent += 1
+                continue
+            rep.deleted.append(md)
+            if not dry_run:
+                try:
+                    md.unlink()
+                except OSError:
+                    pass
+    return rep
