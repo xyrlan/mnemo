@@ -13,9 +13,11 @@ Two stages, in order, because the second reads what the first writes:
    ``min_mutations=0``. A session whose only product is a correction touches
    no files, and the default threshold would skip exactly the session a user
    runs this on. The briefing carries the verified ``## Corrections`` section.
-2. :func:`mnemo.core.extract.run_extraction`, which processes dirty files —
-   the fresh briefing is what is dirty — runs the evidence gate, rebuilds the
-   rule-activation and reflex indexes, and records the learned ledger.
+2. :func:`mnemo.core.extract.run_extraction`, scoped with ``only=`` to the
+   briefing stage 1 just wrote. Vault-wide it would consolidate every dirty
+   file in the vault — hundreds, on a maintainer's — and bill the user for
+   LLM calls on other projects' backlogs. It runs the evidence gate, rebuilds
+   the rule-activation and reflex indexes, and records the learned ledger.
 
 Errors are returned in :class:`LearnReport`, not raised: this is a CLI verb
 whose failure modes ("no transcript here yet", "another extraction is already
@@ -36,6 +38,13 @@ NO_TRANSCRIPT = (
     "no transcript for this directory yet — start a Claude Code session here first"
 )
 LOCK_HELD = "another extraction is in progress"
+#: What the user sees when the lock is held. The condition is benign — the
+#: running extraction sweeps every dirty file, this session's briefing
+#: included — so the message says so and names the one action worth taking.
+LOCK_HELD_MESSAGE = (
+    "another extraction is already running — it will pick up this session's "
+    "briefing; run `mnemo learn` again in a minute to see what it learned."
+)
 NOTHING_NEW_HINT = (
     "nothing new: no corrections found in this session. A correction is you "
     "telling Claude to stop, change, prefer, or never/always do something — "
@@ -121,23 +130,36 @@ def learn(
     # `mnemo learn` is the one where the user only *said* something.
     from mnemo.core import briefing as briefing_mod
 
-    report.briefing = briefing_mod.generate_session_briefing(
-        path, project, cfg, min_mutations=0
-    )
+    # `generate_session_briefing` raises on LLM or I/O failure — a CLI verb
+    # reports, never traces, and a failed stage 1 leaves nothing for stage 2
+    # to consolidate, so return before the ledger is read.
+    try:
+        report.briefing = briefing_mod.generate_session_briefing(
+            path, project, cfg, min_mutations=0
+        )
+    except Exception as exc:  # noqa: BLE001 — a CLI verb reports, never traces
+        report.error = f"briefing failed: {exc}"
+        return report
     if report.briefing is not None:
         report.corrections = _count_corrections(report.briefing)
 
-    # Stage 2 — extraction over the dirty files, which now include the
-    # briefing just written. The lock is the one expected failure: another
-    # extraction (typically the SessionEnd hook's) is already running, and
-    # its own pass will pick this briefing up.
+    # Stage 2 — extraction, scoped to the briefing just written. Vault-wide
+    # would sweep every other project's dirty pages into unrequested LLM
+    # calls; `only` keeps the five-minute loop about this session. The lock is
+    # the one expected failure: another extraction (typically the SessionEnd
+    # hook's) is already running, and its own pass will pick this briefing up.
     from mnemo.core.extract import run_extraction
+    from mnemo.core.extract import scanner as scanner_mod
+
+    only = f"feedback/{scanner_mod._normalize_slug('briefing-' + path.stem)}"
 
     try:
-        summary = run_extraction(cfg)
+        summary = run_extraction(cfg, only=only)
     except Exception as exc:  # noqa: BLE001 — a CLI verb reports, never traces
         message = str(exc)
-        report.error = message if LOCK_HELD in message else f"extraction failed: {message}"
+        report.error = (
+            LOCK_HELD_MESSAGE if LOCK_HELD in message else f"extraction failed: {message}"
+        )
         return report
 
     report.staged = getattr(summary, "demoted_unverified", 0) or 0

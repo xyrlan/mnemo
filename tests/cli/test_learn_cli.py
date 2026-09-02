@@ -132,14 +132,14 @@ def test_briefing_line_is_omitted_when_no_briefing_was_written(tmp_path, monkeyp
 
 
 def test_lock_error_exits_one_and_tells_the_user_to_retry(monkeypatch, capsys):
-    _install(monkeypatch, LearnReport(error=learn_mod.LOCK_HELD))
+    _install(monkeypatch, LearnReport(error=learn_mod.LOCK_HELD_MESSAGE))
 
     rc = cmd_mod.cmd_learn(_args())
 
     captured = capsys.readouterr()
     assert rc == 1
     assert captured.err.splitlines() == [
-        f"error: {learn_mod.LOCK_HELD}",
+        f"error: {learn_mod.LOCK_HELD_MESSAGE}",
         "wait a minute and run `mnemo learn` again",
     ]
     assert captured.out == ""

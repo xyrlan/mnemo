@@ -255,9 +255,89 @@ def test_learn_reports_a_held_lock_and_writes_no_pages(
         two_call_llm(BRIEFING_BODY, [])
         report = learn_mod.learn(_cfg(vault), cwd="/repo")
 
-    assert "another extraction is in progress" in report.error
+    # The message names the benign outcome (the running pass takes this
+    # briefing) and the one action worth taking, not the internal lock text.
+    assert report.error == learn_mod.LOCK_HELD_MESSAGE
+    assert "run `mnemo learn` again" in report.error
     assert report.learned == []
     assert not (vault / "shared" / "feedback").exists()
+
+
+def test_learn_reports_a_failed_briefing_and_touches_nothing(
+    vault: Path, cwd_project, found, monkeypatch,
+):
+    """Stage 1 raises on LLM/IO failure; `learn` never lets it escape."""
+    def boom(*a, **k):
+        raise llm_mod.LLMSubprocessError("claude exited 1")
+
+    monkeypatch.setattr(llm_mod, "call", boom)
+
+    report = learn_mod.learn(_cfg(vault), cwd="/repo")
+
+    assert report.error.startswith("briefing failed:")
+    assert "claude exited 1" in report.error
+    assert report.briefing is None
+    assert report.learned == []
+    # No briefing was written, and the ledger was never touched.
+    assert list((vault / "shared").iterdir()) == []
+
+
+def test_learn_extracts_only_this_sessions_briefing(
+    vault: Path, cwd_project, found, transcript: Path, monkeypatch,
+):
+    """A backlog of other briefings must not be swept into this run.
+
+    Every dirty file in a maintainer's vault would otherwise become an
+    unrequested (and billed) consolidation call.
+    """
+    stale = vault / "bots" / "other" / "briefings" / "sessions" / "sess-old.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(
+        "---\ntype: briefing\n---\n\n## Corrections\n- \"always use tabs\" → Tabs\n",
+        encoding="utf-8",
+    )
+
+    prompts_seen: list[str] = []
+    queue = [_resp(BRIEFING_BODY), _resp(_extraction_json([]))]
+
+    def fake_call(prompt, *, system, model, timeout):
+        prompts_seen.append(prompt)
+        if not queue:
+            raise AssertionError("unexpected extra LLM call")
+        return queue.pop(0)
+
+    monkeypatch.setattr(llm_mod, "call", fake_call)
+
+    report = learn_mod.learn(_cfg(vault), cwd="/repo")
+
+    assert report.error == ""
+    # Exactly two calls: the briefing, then one consolidation prompt — and
+    # that prompt carries this session's briefing, not the stale one.
+    assert len(prompts_seen) == 2
+    consolidation = prompts_seen[1]
+    assert f"bots/proj/briefings/sessions/{SESSION_ID}.md" in consolidation
+    assert "sess-old" not in consolidation
+
+
+def test_run_extraction_with_only_skips_project_promotion(
+    vault: Path, monkeypatch,
+):
+    """`only` must not let the zero-LLM project phase rewrite the vault."""
+    from mnemo.core import extract as extract_mod
+
+    project = vault / "bots" / "proj" / "memory" / "project_thing.md"
+    project.parent.mkdir(parents=True)
+    project.write_text("---\ntype: project\n---\nabout the thing\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        llm_mod, "call",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no LLM expected")),
+    )
+
+    summary = extract_mod.run_extraction(_cfg(vault), only="feedback/nothing-matches")
+
+    assert summary.projects_promoted == 0
+    assert not (vault / "shared" / "project").exists()
 
 
 def test_learn_errors_when_there_is_no_transcript(vault: Path, cwd_project, found):

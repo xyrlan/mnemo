@@ -53,7 +53,10 @@ def cmd_learn(args: argparse.Namespace) -> int:
 
     if report.error:
         print(f"error: {report.error}", file=sys.stderr)
-        if learn_mod.LOCK_HELD in report.error:
+        if (
+            learn_mod.LOCK_HELD in report.error
+            or report.error == learn_mod.LOCK_HELD_MESSAGE
+        ):
             print("wait a minute and run `mnemo learn` again", file=sys.stderr)
         return 1
 

@@ -431,6 +431,7 @@ def _run_extraction_body(
     run_id: str,
     dry_run: bool,
     force: bool,
+    only: str | None = None,
 ) -> None:
     # The existing-rules prompt fragment caches its vault scan; a fresh run
     # must not inherit another run's view of the vault. Invariant: the cache is
@@ -444,6 +445,19 @@ def _run_extraction_body(
     state = inbox.load_state(state_path)
     scan_result = scanner.scan(vault_root, state)
 
+    # `only` scopes this run to a single scanner key ("<type>/<slug>"). It is
+    # what `mnemo learn` passes so the five-minute loop consolidates *this*
+    # session's briefing and nothing else: a maintainer's vault can carry
+    # hundreds of dirty files from other projects, and each one would be an
+    # unrequested LLM call the user did not ask for and has to pay for.
+    if only is not None:
+        scan_result = replace(
+            scan_result,
+            dirty_files=[
+                f for f in scan_result.dirty_files if f"{f.type}/{f.slug}" == only
+            ],
+        )
+
     if dry_run:
         _print_estimate(scan_result, cfg)
         return
@@ -451,17 +465,20 @@ def _run_extraction_body(
     if force:
         _force_clear_inbox_cluster_dirs(vault_root)
 
-    # Phase 1: projects (zero LLM, fastest, cannot fail from network)
-    project_files = scan_result.by_type.get("project", [])
-    project_result = promote.promote_projects(
-        project_files, state, vault_root, run_id=run_id, force=force,
-    )
-    summary.projects_promoted += len(project_result.written_fresh) + len(project_result.overwrite_safe)
-    _merge_apply(project_result, summary)
-    _record_learned(
-        vault_root, run_id,
-        _learned_entries_for_projects(project_files, project_result.written_fresh),
-    )
+    # Phase 1: projects (zero LLM, fastest, cannot fail from network). Skipped
+    # under `only`: it is zero-LLM but still rewrites every project page in the
+    # vault, which a scoped run has no business touching.
+    if only is None:
+        project_files = scan_result.by_type.get("project", [])
+        project_result = promote.promote_projects(
+            project_files, state, vault_root, run_id=run_id, force=force,
+        )
+        summary.projects_promoted += len(project_result.written_fresh) + len(project_result.overwrite_safe)
+        _merge_apply(project_result, summary)
+        _record_learned(
+            vault_root, run_id,
+            _learned_entries_for_projects(project_files, project_result.written_fresh),
+        )
     state.last_run = run_id
     try:
         inbox.atomic_write_state(state, state_path)
@@ -484,8 +501,10 @@ def _run_extraction_body(
         if not files:
             continue
 
-        # Filter to dirty only unless force
-        if not force:
+        # Filter to dirty only unless force. A scoped run always filters:
+        # `only` already narrowed dirty_files to the one key, and force must
+        # not widen it back to the whole vault.
+        if not force or only is not None:
             dirty_set = set(id(f) for f in scan_result.dirty_files)
             files = [f for f in files if id(f) in dirty_set]
         if not files:
@@ -786,7 +805,15 @@ def run_extraction(
     dry_run: bool = False,
     force: bool = False,
     background: bool = False,
+    only: str | None = None,
 ) -> ExtractionSummary:
+    """Consolidate the vault's dirty memory files into rule pages.
+
+    ``only`` narrows the consolidation to a single scanner key
+    (``"<type>/<slug>"``, e.g. ``"feedback/briefing-<session-id>"``) and skips
+    the project-promotion phase. Index rebuilds stay vault-wide either way —
+    they are cheap, local, and a partial index is worse than none.
+    """
     start = time.monotonic()
     vault_root = paths.vault_root(cfg)
     state_path = vault_root / ".mnemo" / "extraction-state.json"
@@ -809,7 +836,7 @@ def run_extraction(
         try:
             _run_extraction_body(
                 cfg, vault_root, state_path, summary,
-                run_id=run_id, dry_run=dry_run, force=force,
+                run_id=run_id, dry_run=dry_run, force=force, only=only,
             )
         except (llm.LLMSubprocessError, llm.LLMParseError, ExtractionIOError) as exc:
             caught_error = exc
