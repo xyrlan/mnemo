@@ -229,25 +229,42 @@ def _detect_drift_slug(
 # accumulated and why source_count never grew past 1.
 # ---------------------------------------------------------------------------
 
-# Calibrated 2026-09-02 against the real dogfood vault (1436 feedback pages,
-# 1,030,330 unordered pairs). The original 0.5 threshold NEVER fired: the
-# best-match score distribution over that vault is p50 0.198, p90 0.275,
-# p99 0.361, max 0.377 — zero pairs reach 0.5. Known duplicate families sit at
-# 0.32-0.36, and the single highest-scoring pair in the whole vault (0.377,
-# tri-layered-ui-state-consistency vs default-filter-state-centralized-constant)
-# is a FALSE match that shares only the stem "state". Weighted score alone
-# therefore cannot separate duplicates from coincidence at any cutoff, which is
-# why the redirect needs a second, independent signal below.
+# Calibrated 2026-09-02 against the real dogfood vault: all 1436 feedback pages,
+# all 1,030,330 unordered pairs (not a sample — an earlier 200-page sample put
+# the ceiling at 0.377, which is wrong and understated the top of the range).
+#
+# The original 0.5 threshold never fired: the whole-vault maximum weighted score
+# is 0.4978. Known duplicate families sit at 0.32-0.36, so weighted score alone
+# has no cutoff that separates them from coincidence — the top of the range is
+# a mix of both. Ranked by weighted score, the top pairs are:
+#
+#   1. 0.4978  toast-z-index-above-overlays / toast-z-index-layering   (TRUE)
+#   2. 0.4452  css-test-file-isolation / test-artifacts-must-not-...   (false)
+#   3. 0.4367  webview-multiple-windows-... / webview-session-...      (false)
+#   4. 0.4227  managed-workflow-native-... / version-management-...    (false)
+#   8. 0.3767  tri-layered-ui-state-... / default-filter-state-...     (false)
+#
+# Hence the second, independent signal below. The name gate is what removes
+# those false pairs — all four above are name-gate rejects.
 SIMILARITY_THRESHOLD = 0.32
 
 # Second signal: Jaccard over the SET of stop-word-stripped stemmed NAME tokens.
-# The false 0.377 pair scores 0.20 here; six of the eight known duplicate
-# families score 0.27-1.00. Two real families (pdf-generation-chrome-headless
-# 0.167, e2e-auth-ratelimit-isolation 0.125) fall BELOW the false pair on this
-# axis too, so no axis-aligned cutoff admits all eight while rejecting the false
-# one. Per review, we take the conservative side: 0.27 is the tightest gate that
-# excludes the false pair, and it costs those two families (they stay separate
-# pages) rather than risking a wrong merge. 38 pairs vault-wide would redirect.
+#
+# The honest tradeoff: this gate earns its place by rejecting the false pairs
+# listed above, but it also rejects real duplicates whose two names are
+# asymmetric — the highest-scoring TRUE pair in the vault (toast-z-index, 0.4978
+# at name overlap 0.25) is rejected, as are pdf-generation-chrome-headless
+# (0.167) and e2e-auth-ratelimit-isolation (0.125). Long or lopsided names
+# dilute set Jaccard, and the stemmer splits some shared concepts
+# (isolation/isolat, rate/rate-limit). No axis-aligned cutoff on these two
+# signals admits every true family while excluding every false one, so we take
+# the conservative side: missing a merge leaves two pages, a wrong merge
+# destroys one.
+#
+# At 0.32/0.27, 38 pairs vault-wide would redirect. Two of those 38 are judged
+# false on inspection:
+#   dialog-zindex-above-drawer / toast-z-index-above-overlays
+#   migration-before-code-deploy / tight-deployment-window-schema-rename
 NAME_OVERLAP_MIN = 0.27
 
 # Stripped before the name-overlap comparison: these carry no topical signal and
@@ -260,11 +277,12 @@ _NAME_STOP_WORDS = frozenset({
 
 _NAME_WEIGHT, _DESC_WEIGHT, _BODY_WEIGHT = 3, 2, 1
 
-# Measured 2026-09-02 on the 1436-page vault: index build 0.15s, ``find`` 0.029s
-# per page (a full linear scan of every profile). The review quoted 4.5s / 0.57s;
-# neither reproduced here, but both are fine either way — this runs inside a
-# background extract job. No inverted index yet; revisit if the vault or the
-# per-run page count grows by an order of magnitude.
+# Measured 2026-09-02 end-to-end on the 1436-page vault (file IO + frontmatter
+# parse included): index build 0.50s, ``find`` 0.15s per page. ``find`` is a full
+# linear scan of every profile, so a run costs O(pages_in_run x vault_size) —
+# quadratic in run size. Acceptable for a background extract job at this scale;
+# no inverted index yet, revisit if the vault or the per-run page count grows by
+# an order of magnitude.
 
 
 def _weighted_profile(name: str, description: str, body: str) -> dict[str, int]:
@@ -275,7 +293,7 @@ def _weighted_profile(name: str, description: str, body: str) -> dict[str, int]:
     ``why`` / ``how`` / ``to`` / ``apply`` rather than punctuation noise. Those
     scaffolding words are shared by every extracted page, which nudges every
     pair's score upward by a constant, which is precisely why the measured
-    ceiling on real pages is 0.377 rather than anything near 1.0. See the
+    ceiling on real pages is 0.4978 rather than anything near 1.0. See the
     calibration note on :data:`SIMILARITY_THRESHOLD`.
     """
     from mnemo.core.reflex.tokenizer import tokenize
@@ -405,8 +423,10 @@ class SimilarityIndex:
                 continue
             # Deterministic tie-break: on an equal score prefer the
             # lexicographically smaller slug, so the result does not depend on
-            # state-file insertion order.
-            if score > best or (score == best and best_slug is not None and slug < best_slug):
+            # state-file insertion order. No ``best_slug is not None`` guard is
+            # needed: score >= cutoff > 0.0 == the initial ``best``, so the first
+            # candidate to reach here always takes the ``score > best`` branch.
+            if score > best or (score == best and slug < best_slug):
                 best_slug, best = slug, score
         return best_slug
 

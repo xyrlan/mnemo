@@ -318,7 +318,9 @@ def apply_pages(
         # that says the same thing redirects onto it — but only if this page
         # actually landed. A page dropped as dismissed_skipped wrote nothing, so
         # registering it would let a later similar page redirect onto a slug
-        # that is not there, and be dropped in turn.
+        # that is not there, and be dropped in turn. Upgrade-proposed pages
+        # (which write only a ``.proposed.md`` sibling) are still indexed, which
+        # is benign: the slug itself does exist on disk.
         if len(result.dismissed_skipped) == dismissed_before:
             _sim_index(page.type).add(page)
 
