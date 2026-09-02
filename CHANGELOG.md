@@ -3,7 +3,18 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] — 2026-09-02
+
+The follow-ups release. The corrections-layer reviews left seven findings;
+this closes all of them. Rule pages now carry `slug:`, so the indexes, the
+MCP tools, `disable-rule` and `mnemo learn` finally agree on one identifier
+(the migration runs itself on the next session start). A tripped circuit
+breaker says so instead of going silent. Briefings get a retention policy
+that never deletes the evidence behind a live rule. `mnemo reclassify` only
+keeps a rule for a quote that actually says something. And two things the
+reviews did not expect: the plugin's MCP server could never spawn on
+macOS/Linux (shell-less spawn of a shebang-less launcher), fixed here, and
+the test suite used to write into the developer's real vault, now isolated.
 
 ### Changed
 
