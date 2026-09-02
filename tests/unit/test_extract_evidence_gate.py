@@ -61,6 +61,16 @@ def test_unverified_when_quote_missing_or_source_absent(tmp_path):
         assert p.evidence is None
 
 
+def test_unverified_when_quote_cites_a_briefing_that_is_not_a_source(tmp_path):
+    """A page may only inherit verification from a briefing it was built from."""
+    root = _vault(tmp_path)
+    p = evidence.verify_page(_page(
+        source_files=["bots/other/briefings/sessions/s2.md"],
+        evidence={"quote": "never retry on 4xx, only on 5xx",
+                  "source": "bots/proj/briefings/sessions/s1.md"}), root)
+    assert p.type == "reference" and p.unverified_feedback
+
+
 def test_non_feedback_types_pass_through_untouched(tmp_path):
     root = _vault(tmp_path)
     p = evidence.verify_page(_page(type="reference"), root)

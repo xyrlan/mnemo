@@ -1,11 +1,11 @@
 """The promotion gate for feedback pages.
 
 A feedback rule may only enter ``shared/feedback/`` when it cites a user quote
-that the source briefing's ``## Corrections`` section actually carries. That
-section is itself verified against the transcript when the briefing is
-written (core/corrections.py), so a verified page traces back to words the
-person typed. Anything else is real-but-inferred knowledge and is staged as a
-``reference`` page for review.
+that one of its own ``source_files`` carries in its ``## Corrections``
+section. That section is itself verified against the transcript when the
+briefing is written (core/corrections.py), so a verified page traces back to
+words the person typed. Anything else is real-but-inferred knowledge and is
+staged as a ``reference`` page for review.
 """
 from __future__ import annotations
 
@@ -46,7 +46,11 @@ def verify_page(page: ExtractedPage, vault_root: Path) -> ExtractedPage:
     """Return the page marked verified, or demoted to a staged reference page."""
     if page.type != "feedback":
         return page
-    if quote_verified(page.evidence, vault_root):
+    # The quote must come from a briefing this page was actually built from.
+    # Without this a page can cite any briefing in the vault and inherit its
+    # verification, laundering one project's correction into another's rule.
+    cited = page.evidence.get("source") if isinstance(page.evidence, dict) else None
+    if cited in page.source_files and quote_verified(page.evidence, vault_root):
         return replace(page, confidence="verified", unverified_feedback=False)
     return replace(
         page,

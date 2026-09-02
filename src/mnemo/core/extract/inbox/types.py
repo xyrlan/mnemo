@@ -57,7 +57,7 @@ class ExtractedPage:
     # ``confidence``.
     evidence: dict | None = None
     # "verified" when the evidence quote was found in the cited briefing;
-    # "inferred" otherwise (the default, and the only value for non-feedback).
+    # "inferred" otherwise, which is the default every page starts at.
     confidence: str = "inferred"
     # True when a feedback page failed verification and was coerced to
     # ``type: reference`` — such pages always stage in ``_inbox`` and never

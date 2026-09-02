@@ -42,9 +42,7 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
     ``shared/<type>/<slug>.md`` shape lives in exactly one place
     (kills D1 inline target construction in PR I).
     """
-    if page.unverified_feedback:
-        return _inbox_path(vault_root, page)
-    if is_backfill_page(page):
+    if page.unverified_feedback or is_backfill_page(page):
         return _inbox_path(vault_root, page)
     if len(page.source_files) == 1:
         return _promoted_path(vault_root, page)

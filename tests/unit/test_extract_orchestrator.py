@@ -677,3 +677,63 @@ def test_run_extraction_manual_does_not_write_last_auto_run_json(tmp_path):
 
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     assert not last_run_path.exists(), "manual runs must not write last-auto-run.json"
+
+
+def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
+    populated_vault: Path, stub_llm,
+):
+    """End-to-end proof that _run_extraction_body runs the evidence gate.
+
+    Two feedback pages off one briefing: the one quoting its ``## Corrections``
+    section reaches the sacred dir verified, the one citing nothing is demoted
+    to a staged reference page. Without the ``evidence.verify_page`` call in
+    ``_run_extraction_body`` both would land in ``shared/feedback/``.
+    """
+    briefing = populated_vault / "bots" / "proj" / "briefings" / "sessions" / "s1.md"
+    briefing.parent.mkdir(parents=True)
+    briefing.write_text(
+        "---\n"
+        "type: briefing\n"
+        "agent: proj\n"
+        "session_id: s1\n"
+        "---\n"
+        "\n"
+        "# Briefing — proj — s1\n"
+        "\n"
+        "## Corrections\n"
+        '- "never retry on 4xx, only on 5xx" → Retry only on 5xx\n',
+        encoding="utf-8",
+    )
+    src = "bots/proj/briefings/sessions/s1.md"
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "retry-5xx-only",
+                "name": "Retry only on 5xx",
+                "description": "d",
+                "type": "feedback",
+                "body": "Retry only 5xx.",
+                "source_files": [src],
+                "evidence": {"quote": "never retry on 4xx, only on 5xx", "source": src},
+            },
+            {
+                "slug": "write-clean-code",
+                "name": "Write clean code",
+                "description": "d",
+                "type": "feedback",
+                "body": "Keep functions small.",
+                "source_files": [src],
+            },
+        ]),
+    ])
+
+    run_extraction(_make_cfg(populated_vault))
+
+    promoted = populated_vault / "shared" / "feedback" / "retry-5xx-only.md"
+    assert promoted.exists(), "a verified quote must reach the sacred dir"
+    assert "confidence: verified" in promoted.read_text()
+
+    demoted = populated_vault / "shared" / "_inbox" / "reference" / "write-clean-code.md"
+    assert demoted.exists(), "unevidenced feedback must stage as a reference page"
+    assert "demoted_from: feedback" in demoted.read_text()
+    assert not (populated_vault / "shared" / "feedback" / "write-clean-code.md").exists()
