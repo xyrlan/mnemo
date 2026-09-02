@@ -114,10 +114,13 @@ def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
 
 
 def marker_present(vault_root: Path) -> bool:
+    """True once a run stamped every page; session start then skips the scan."""
     return (Path(vault_root) / MARKER_REL).exists()
 
 
 def write_marker(vault_root: Path) -> None:
+    """Record a complete migration. Only written when nothing was skipped, so a
+    page that could not be parsed keeps the scan alive until it is fixed."""
     m = Path(vault_root) / MARKER_REL
     m.parent.mkdir(parents=True, exist_ok=True)
     m.write_text("1\n", encoding="utf-8")

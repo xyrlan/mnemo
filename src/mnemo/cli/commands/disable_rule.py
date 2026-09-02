@@ -47,7 +47,7 @@ def run_disable_rule(vault_root: Path, *, slug: str) -> int:
     if md is None:
         print(f"error: rule not found for slug {slug!r}", file=sys.stderr)
         return 2
-    text = md.read_text()
+    text = md.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         print(f"error: {md} has no frontmatter", file=sys.stderr)
         return 2
@@ -63,7 +63,7 @@ def run_disable_rule(vault_root: Path, *, slug: str) -> int:
     fm_lines = [ln for ln in fm_block.splitlines() if ln.strip() != "runtime: true"]
     fm_lines.append("runtime: false")
     new_text = "---\n" + "\n".join(fm_lines) + "\n---\n" + body
-    md.write_text(new_text)
+    md.write_text(new_text, encoding="utf-8")
     print(f"disabled: {md.relative_to(vault_root)}")
     return 0
 

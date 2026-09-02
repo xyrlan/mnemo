@@ -5,6 +5,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Rule pages carry `slug:`.** Pages were written under the normalized LLM
+  slug but only carried `name:` (the display name), so the reflex and
+  activation indexes, `disable-rule`, `read_mnemo_rule`, `list_rules_by_topic`
+  and `mnemo why` keyed by display name while the learned ledger and
+  `mnemo learn` used the slug. New pages get `slug:` right after `name:`;
+  existing pages are stamped once at the next session start (or
+  `mnemo extract`) and both indexes are rebuilt in the same step. Project
+  pages keep their composite `<agent>__<slug>` stem, which is what the ledger
+  already used. `disable-rule` still accepts a display name. Old rows in the
+  activation activity log keep their display-name keys. `mnemo doctor`
+  reports pages still missing `slug:`. Live vault: 1659 pages, all stamped
+  with their existing file stem, no identifier changes. (#114)
+
 ### Added
 
 - **The circuit breaker says so when it trips.** SessionStart now emits one
