@@ -77,3 +77,14 @@ def test_replace_section_appends_when_no_decisions_header():
     body = "## TL;DR\nx\n"
     out = C.replace_section(body, [C.Correction(quote="use yarn not npm", rule="Use yarn")])
     assert out.rstrip().endswith('- "use yarn not npm" → Use yarn')
+
+
+def test_section_header_must_be_a_whole_line():
+    body = "## TL;DR\nsee the ## Corrections section below\n\n## Dead ends\n- x\n"
+    assert C.parse_section(body) == []
+    assert C.strip_section(body) == body
+
+
+def test_longer_header_is_not_the_section():
+    body = '## Corrections to the plan\n- "use yarn not npm" → Use yarn\n'
+    assert C.parse_section(body) == []

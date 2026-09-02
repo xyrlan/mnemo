@@ -18,6 +18,7 @@ ARROW = "→"
 MIN_QUOTE_CHARS = 12
 
 _HEADER_RE = re.compile(r"^## ", re.M)
+_SECTION_RE = re.compile(r"^## Corrections[ \t]*$", re.M)
 _ITEM_RE = re.compile(
     r"""^\s*[-*]\s+["“](?P<quote>.+?)["”]\s*(?:→|->)\s*(?P<rule>.+?)\s*$"""
 )
@@ -31,7 +32,13 @@ class Correction:
 
 
 def normalize(text: str) -> str:
-    """Whitespace-collapsed, dequoted, lower-cased form used for matching."""
+    """Whitespace-collapsed, dequoted, lower-cased form used for matching.
+
+    ``.strip(_QUOTE_CHARS)`` only trims the ends on purpose: interior quotes
+    are preserved, and both sides of a comparison go through this same
+    normalisation so they line up regardless of which quote characters they
+    were typed or rendered with.
+    """
     return re.sub(r"\s+", " ", text).strip().strip(_QUOTE_CHARS).strip().lower()
 
 
@@ -41,11 +48,12 @@ def quote_matches_turn(quote: str, turn: str) -> bool:
 
 
 def _section_span(markdown: str) -> tuple[int, int] | None:
-    start = markdown.find(SECTION_HEADER)
-    if start == -1:
+    m = _SECTION_RE.search(markdown)
+    if m is None:
         return None
+    start = m.start()
     # Section runs until the next "## " header or end of text.
-    nxt = _HEADER_RE.search(markdown, start + len(SECTION_HEADER))
+    nxt = _HEADER_RE.search(markdown, m.end())
     end = nxt.start() if nxt else len(markdown)
     return start, end
 
