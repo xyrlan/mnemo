@@ -462,6 +462,16 @@ def _run_extraction_body(
         _print_estimate(scan_result, cfg)
         return
 
+    # #114: stamp slug: into legacy pages before this run writes or indexes
+    # anything, so a vault that never sees a session start (CI) is migrated
+    # too. Once per run, not per chunk; no marker check — extraction is rare
+    # and one frontmatter scan is cheap next to an LLM call.
+    try:
+        from mnemo.core.migrations import slugs as _slugs
+        _slugs.stamp_slugs(vault_root)
+    except Exception as exc:  # noqa: BLE001 — fail-open by design
+        errors.log_error(vault_root, "extract.slug_migration", exc)
+
     # Scoped runs never clear the whole inbox: `only` narrows this pass to one
     # file, and wiping every staged cluster page for it would destroy work the
     # user did not ask this run to touch.
