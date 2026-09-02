@@ -39,6 +39,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   repo. Restore the old behaviour with
   `{"backfill": {"autoOnFirstSession": true}}`.
 
+- **Self-fix works on Windows.** The perimeter guard compared backslash
+  paths against `shared/`-style prefixes, so every autopilot self-fix PR on
+  Windows aborted with a perimeter violation. Paths are now compared in POSIX
+  form.
+
 ### Added
 
 - `mnemo reclassify` — grades the existing feedback vault under the same rules
