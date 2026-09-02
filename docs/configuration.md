@@ -83,6 +83,17 @@ To upgrade without it ever running:
 { "backfill": { "autoOnFirstSession": false } }
 ```
 
+**The first-run notice.** With `backfill.autoOnFirstSession` left at its
+default `false`, nothing is swept automatically. Instead, the first session in
+a repo that has harvestable transcripts prints one line telling you how many
+past sessions are available, what `mnemo backfill` would cost in Haiku calls
+(capped by `backfill.installCap`), and that `mnemo backfill --dry-run` shows
+the exact figure. The invitation is shown **once per repo**, not once per
+vault: the backfill ledger records `firstRunNoticeShown` per project, so
+adding mnemo to a second repo invites you there too, and neither repo nags
+after the first time. A repo with no harvestable transcripts is never shown
+the notice at all.
+
 ### `briefings` — the per-session summary
 
 | Key | Default | Meaning |
@@ -160,6 +171,52 @@ inbox.
 | Key | Default | Meaning |
 |---|---|---|
 | `autopilot.network.enabled` | `false` | Allow the autopilot to call `gh` (digest issues, self-fix PRs, outcome polling). Everything local runs regardless. |
+
+With the switch off, the autopilot still does its local work: self-fix cures
+are applied in place in your vault and every run is logged to
+`.mnemo/autopilot-runs.log`, so you can read exactly what it changed. What
+stops is anything that talks to GitHub — no digest issues are filed, no
+self-fix PRs are opened, no outcomes are polled. Set
+`autopilot.network.enabled` to `true` to get those back:
+
+```json
+{ "autopilot": { "network": { "enabled": true } } }
+```
+
+## What mnemo tells the agent at session start
+
+At `SessionStart` mnemo hands the agent a block of context. Everything in it
+is disclosure — you can read exactly what mnemo is telling the agent on your
+behalf, and each part can be switched off. At most three pieces appear:
+
+1. **The topic envelope** — the list of memory topics available for this
+   project, so the agent knows what it can ask for. Controlled by
+   `injection.enabled` and `injection.maxTopicsPerScope`.
+
+2. **The first-run notice** — a single line beginning `[mnemo] first run …`,
+   shown once per repo when past transcripts are available to backfill and
+   `backfill.autoOnFirstSession` is off. See the `backfill` section above.
+
+3. **The learned-rule announcement** — what extraction promoted since this
+   project last looked, opened by `[mnemo learned since your last session]`
+   and closed by `[/mnemo learned]`. One bullet per rule, each ending in its
+   undo: `veto: mnemo disable-rule <slug>`. A rule marked `verified` also
+   shows the sentence it was learned from; an `inferred` one shows none,
+   because there is no real quote behind it. At most 5 bullets ride on the
+   prompt — the rest are counted on a trailing line and listed in full by
+   `mnemo status` under **Recently learned**.
+
+A rule mnemo wrote silently is a rule you cannot correct, which is why the
+announcement exists at all: extraction writes into the vault on its own, so
+the veto has to be one line away rather than three commands deep in a
+directory you have never opened.
+
+Two files under the vault's `.mnemo/` back the third block:
+
+- `.mnemo/learned.jsonl` — the append-only ledger, one line per promoted rule.
+- `.mnemo/announced.json` — the per-project high-water mark, so a rule is
+  announced exactly once per project. Deleting it re-announces the backlog;
+  deleting the ledger loses the history without breaking anything.
 
 ## Maintenance commands
 
