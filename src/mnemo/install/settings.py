@@ -429,12 +429,10 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
                           "args": ("init", "--project")},
     "status":            {"description": "vault state + hook health",
                           "args": ("status",)},
+    "why":               {"description": "why the per-prompt recall fired, or stayed silent, on your last prompts",
+                          "args": ("why",)},
     "doctor":            {"description": "full diagnostic",
                           "args": ("doctor",)},
-    "open":              {"description": "open vault in Obsidian",
-                          "args": ("open",)},
-    "fix":               {"description": "reset circuit breaker",
-                          "args": ("fix",)},
     "uninstall":         {"description": "remove hooks (global; keeps vault)",
                           "args": ("uninstall",)},
     "uninstall-project": {"description": "remove hooks (project-scoped; keeps vault)",
@@ -448,21 +446,20 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
 # The subset that makes sense under the plugin. init/uninstall are absent by
 # design: the plugin declares its own hooks and MCP server, so there is nothing
 # for them to wire or unwire — `/plugin uninstall mnemo` is the uninstall.
-# migrate-plugin is plugin-only, for users who ran `mnemo init` beforehand.
+#
+# Deliberately five. A slash menu of nine made the rare commands (open, fix,
+# statusline, migrate) as prominent as the daily loop, and none of them is
+# something a user reaches for more than once; they stay available as CLI
+# subcommands (`mnemo open`, `mnemo fix`, `mnemo statusline --install`,
+# `mnemo migrate-plugin`) and `mnemo help` still lists them.
 PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
     "status":  {"description": "vault state + hook health", "args": ("status",)},
-    "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
-    "why":     {"description": "why reflex fired (or stayed silent) on your last prompts",
+    "why":     {"description": "why the per-prompt recall fired, or stayed silent, on your last prompts",
                 "args": ("why",)},
+    "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
     "learn":   {"description": "learn from this session now: briefing + extraction, then the rule fires on your next prompt",
                 "args": ("learn",)},
-    "open":    {"description": "open vault in Obsidian", "args": ("open",)},
-    "fix":     {"description": "reset circuit breaker", "args": ("fix",)},
     "help":    {"description": "list commands", "args": ("help",)},
-    "migrate": {"description": "remove a pre-plugin install so hooks stop firing twice",
-                "args": ("migrate-plugin",)},
-    "statusline": {"description": "install the optional mnemo status line",
-                   "args": ("statusline", "--install")},
 }
 
 

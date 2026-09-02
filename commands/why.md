@@ -1,5 +1,5 @@
 ---
-description: why reflex fired (or stayed silent) on your last prompts
+description: why the per-prompt recall fired, or stayed silent, on your last prompts
 allowed-tools: Bash
 disable-model-invocation: true
 ---

@@ -67,7 +67,7 @@ what `mnemo init` writes and how to undo it.
 
 **Already installed mnemo the old way?** Installing the plugin on top means
 both sets of hooks fire and everything happens twice. mnemo tells you when it
-sees this — run `/mnemo:migrate` to clear the old install. Your vault is
+sees this — run `mnemo migrate-plugin` to clear the old install. Your vault is
 untouched.
 
 </details>
@@ -115,8 +115,8 @@ and "my thresholds are a little too tight".
 Want the live heartbeat in your status line (`mnemo · 9 topics · 7↓ today`)?
 It's opt-in, because plugins can't set a status line:
 
-```
-/mnemo:statusline
+```bash
+mnemo statusline --install
 ```
 
 ## Day one isn't empty
@@ -144,15 +144,15 @@ Not interested? Set `"backfill": { "autoOnFirstSession": false }` in
 ## Commands
 
 ```
-/mnemo:status       vault state + hook health
-/mnemo:doctor       full diagnostic with actionable fixes
-/mnemo:why          why reflex fired, or didn't, on your last prompts
-/mnemo:open         open the vault
-/mnemo:fix          reset the extraction circuit breaker
-/mnemo:statusline   install the optional status line
-/mnemo:migrate      remove a pre-plugin install
-/mnemo:help         list commands
+/mnemo:status   vault state + hook health
+/mnemo:why      why the per-prompt recall fired, or didn't, on your last prompts
+/mnemo:doctor   full diagnostic with actionable fixes
+/mnemo:learn    learn from this session now
+/mnemo:help     list commands
 ```
+
+The rarer ones are CLI subcommands — `mnemo open`, `mnemo fix`,
+`mnemo statusline --install`, `mnemo migrate-plugin`. `mnemo help` lists them all.
 
 Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 

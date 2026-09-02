@@ -58,8 +58,8 @@ Installing the plugin on top of an existing `mnemo init` leaves **both** sets
 of hooks live, so every session gets doubled capture, injection, and
 enforcement. mnemo detects this and says so once at session start.
 
-```
-/mnemo:migrate
+```bash
+mnemo migrate-plugin
 ```
 
 That strips the hooks the old install wrote, leaving a timestamped backup
@@ -363,7 +363,8 @@ mnemo extract   # manual extraction (also rebuilds the HOME dashboard)
 mnemo fix       # reset the extraction circuit breaker after repeated failures
 ```
 
-Under the plugin, use the `/mnemo:` forms of the first four.
+`mnemo status` and `mnemo doctor` also have slash forms under the plugin
+(`/mnemo:status`, `/mnemo:doctor`); `open`, `fix` and `extract` are CLI-only.
 
 Detailed errors land in `~/mnemo/.errors.log` under `where=extract.bg.*`. If
 `mnemo doctor` warns about `statusLine` drift, you hand-edited
