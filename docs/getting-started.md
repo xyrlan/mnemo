@@ -377,6 +377,30 @@ mnemo extract --dry-run   # show what would run without calling the LLM
 mnemo extract --force     # reprocess entries previously dismissed or promoted
 ```
 
+## Working on mnemo itself
+
+The repo is also the plugin, so it ships a `.mcp.json`. Under a plugin
+install Claude Code sets `CLAUDE_PLUGIN_ROOT` and the entry resolves to the
+plugin's own `bin/launch`. Opened as a project that variable is unset, so the
+entry falls back to `./bin/launch` (relative to the directory you launched
+`claude` from — start it at the repo root) and the launcher runs your
+editable install (`pip install -e .`) as `python3 -m mnemo` instead of
+fetching a release binary. It recognises a dev tree by the gitignored
+`src/mnemo_claude.egg-info` that `pip install -e .` leaves behind, or by
+`MNEMO_DEV=1`; set `MNEMO_PYTHON` to pick the interpreter. The version it
+reports comes from that egg-info, so re-run `pip install -e .` after a
+version bump.
+
+The entry is `bash bin/launch`, not `bin/mnemo.cmd`, because Claude Code
+spawns stdio MCP servers directly (no shell) and the polyglot `.cmd` has no
+shebang. Nested defaults such as `${CLAUDE_PLUGIN_ROOT:-${CLAUDE_PROJECT_DIR}}`
+are not expanded by Claude Code, hence the plain `.` fallback.
+
+If you would rather keep using your global `mnemo` registration inside the
+repo, add `"disabledMcpjsonServers": ["mnemo"]` to
+`.claude/settings.local.json`. The user-vs-project "conflicting scopes"
+notice from `claude mcp list` is expected while both exist.
+
 ## Uninstalling
 
 Plugin: `/plugin uninstall mnemo`.

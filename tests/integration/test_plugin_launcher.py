@@ -163,3 +163,48 @@ def test_refuses_to_install_without_a_checksum_tool(plugin_root: Path, tmp_path:
     assert not (tmp_path / "data" / "bin" / "9.9.9").is_dir() or not list(
         (tmp_path / "data" / "bin" / "9.9.9").rglob("mnemo")
     ), "must not have installed an unverified binary"
+
+
+def test_source_checkout_runs_python_when_plugin_root_unset(tmp_path: Path):
+    """#118: opened as a project (no CLAUDE_PLUGIN_ROOT), the launcher runs the
+    editable source tree instead of fetching a release binary."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"version": "9.9.9"}')
+    (root / "bin").mkdir()
+    shutil.copy(LAUNCH, root / "bin" / "launch")
+    (root / "src" / "mnemo").mkdir(parents=True)
+    (root / "src" / "mnemo" / "__init__.py").write_text("")
+    (root / "src" / "mnemo" / "__main__.py").write_text(
+        "import sys; print('SOURCE-TREE', sys.argv[1:])\n"
+    )
+    (root / "src" / "mnemo_claude.egg-info").mkdir()
+    env = {**os.environ}
+    env.pop("CLAUDE_PLUGIN_ROOT", None)
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "data")
+    env["MNEMO_PYTHON"] = sys.executable
+    r = subprocess.run(
+        ["bash", str(root / "bin" / "launch"), "mcp-server"],
+        capture_output=True, text=True, env=env, timeout=30, input="{}",
+    )
+    assert r.returncode == 0
+    assert "SOURCE-TREE ['mcp-server']" in r.stdout
+    assert not (tmp_path / "data").exists(), "no download may be attempted"
+
+
+def test_plugin_root_set_ignores_source_tree(plugin_root: Path, tmp_path: Path):
+    """A plugin clone also has src/; only the unset env var opens the dev path."""
+    (plugin_root / "src" / "mnemo").mkdir(parents=True)
+    (plugin_root / "src" / "mnemo" / "__init__.py").write_text("")
+    (plugin_root / "src" / "mnemo" / "__main__.py").write_text(
+        "print('SOURCE-TREE')\n"
+    )
+    (plugin_root / "src" / "mnemo_claude.egg-info").mkdir()
+    data = tmp_path / "data"
+    install_fake_binary(data)
+
+    r = run(plugin_root, data, "--version")
+
+    assert r.returncode == 0
+    assert "SOURCE-TREE" not in r.stdout
+    assert "STUB ARGS: --version" in r.stdout
