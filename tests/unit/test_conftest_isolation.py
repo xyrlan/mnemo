@@ -9,18 +9,31 @@ from mnemo.core import config, paths
 pytest_plugins = ["pytester"]
 
 
+def _under(path: Path, root: Path) -> bool:
+    """``Path.is_relative_to`` is 3.9+; the suite still runs on 3.8."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def test_home_is_isolated_by_default(real_home):
     home = Path(os.environ["HOME"])
     assert home != real_home
     assert Path.home() == home
     assert os.environ["USERPROFILE"] == str(home)
-    assert Path(os.environ["MNEMO_CONFIG_PATH"]).is_relative_to(home)
+    assert _under(Path(os.environ["MNEMO_CONFIG_PATH"]), home)
 
 
 def test_default_vault_root_is_under_tmp_home(real_home):
     cfg = config.load_config()
-    assert Path(paths.vault_root(cfg)).is_relative_to(Path.home())
-    assert not Path(paths.vault_root(cfg)).is_relative_to(real_home)
+    vault = Path(paths.vault_root(cfg))
+    assert _under(vault, Path.home())
+    # On Windows (and some CI images) pytest's tmp dir itself lives under the
+    # real home, so "not under real_home" would be false there. The property
+    # that matters is that the default vault is not the developer's vault.
+    assert vault.resolve() != (real_home / "mnemo").resolve()
 
 
 def test_tests_that_set_their_own_config_path_keep_it(monkeypatch, tmp_path):
