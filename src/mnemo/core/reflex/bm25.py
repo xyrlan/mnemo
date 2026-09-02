@@ -28,6 +28,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "aliases": 2.5,
     "description": 2.0,
     "body": 1.0,
+    "evidence": 2.5,
 }
 
 DEFAULT_PARAMS = {"k1": 1.5, "b": 0.75}

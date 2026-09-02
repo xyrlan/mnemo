@@ -88,6 +88,7 @@ DEFAULTS: dict[str, Any] = {
                 "aliases": 2.5,
                 "description": 2.0,
                 "body": 1.0,
+                "evidence": 2.5,
             },
         },
     },

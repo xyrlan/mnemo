@@ -10,7 +10,7 @@ Schema v1:
     {
       "schema_version": 1,
       "generated_at": "YYYY-MM-DDTHH:MM:SSZ",
-      "avg_field_length": {name, topic_tags, aliases, description, body},
+      "avg_field_length": {name, topic_tags, aliases, description, body, evidence},
       "doc_count": int,
       "postings": { term: [{"slug": ..., "tf": {field: count}}, ...] },
       "docs": {
@@ -23,6 +23,10 @@ Schema v1:
         },
       },
     }
+
+The evidence quote is the user's own words from a feedback correction — it is
+the best lexical bridge to how they phrase the same complaint again, so it is
+indexed and scored as its own field.
 """
 from __future__ import annotations
 
@@ -39,7 +43,7 @@ from mnemo.core.text_utils import body_preview, strip_graph_section
 SCHEMA_VERSION = 1
 INDEX_FILENAME = "reflex-index.json"
 
-_FIELD_NAMES = ("name", "topic_tags", "aliases", "description", "body")
+_FIELD_NAMES = ("name", "topic_tags", "aliases", "description", "body", "evidence")
 _SYSTEM_TAGS: frozenset[str] = frozenset({"auto-promoted", "needs-review"})
 
 
@@ -51,6 +55,8 @@ def _field_tokens(fm: dict, body_text: str, slug: str) -> dict[str, list[str]]:
     aliases_raw = fm.get("aliases") or []
     aliases = [a for a in aliases_raw if isinstance(a, str)]
     description = fm.get("description") or ""
+    evidence = fm.get("evidence")
+    quote = str(evidence.get("quote") or "") if isinstance(evidence, dict) else ""
 
     return {
         "name": tokenize(str(name)),
@@ -58,6 +64,7 @@ def _field_tokens(fm: dict, body_text: str, slug: str) -> dict[str, list[str]]:
         "aliases": [t for alias in aliases for t in tokenize(alias)],
         "description": tokenize(str(description)),
         "body": tokenize(body_text),
+        "evidence": tokenize(quote),
     }
 
 
