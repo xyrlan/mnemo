@@ -66,6 +66,83 @@ That strips the hooks the old install wrote, leaving a timestamped backup
 beside each settings file. The plugin's own hooks are unaffected, and your
 vault is never touched.
 
+## Five minutes
+
+The shortest path from "installed" to "it remembered something I said". Four
+steps, one of them typing.
+
+**1. Correct Claude, in your own words.** In any repo, in a normal session,
+say the thing you'd say anyway:
+
+```
+never use npm in this repo, always yarn
+```
+
+No special syntax. mnemo is looking for you telling Claude to stop, change,
+prefer, or never/always do something — phrased however you'd phrase it.
+
+**2. Run `mnemo learn`** (or `/mnemo:learn` inside Claude Code). This is the
+same briefing-and-extraction the `SessionEnd` hook runs on its own, except in
+the foreground, on this session, right now — you don't have to end the session
+and wait out the debounce to see whether the correction landed.
+
+**3. Read the output.** It is the whole feature:
+
+```
+read: ~/.claude/projects/-Users-you-github-app/3f2a….jsonl
+briefing: bots/app/briefings/sessions/3f2a….md (1 correction(s))
+learned: use-yarn-not-npm — Use yarn, never npm (evidence: "never use npm in this repo, always yarn")
+next prompt about this will surface it — check with `mnemo why`
+```
+
+Line by line: the transcript it read, the briefing it wrote and how many
+corrections verified against that transcript, and then one `learned:` line per
+rule that reached the vault — carrying **your own sentence** back to you as the
+evidence. A rule with a quote is a rule mnemo can prove you asked for. If some
+pages were held back you'll also see `staged for review: N
+(shared/_inbox/reference/)`; if nothing was learned you get a hint saying so
+rather than silence.
+
+**4. Type your next prompt about packages.** The rule is already live. It
+arrives on the `UserPromptSubmit` hook under the reflex's own
+`reflex context:` header, and `/mnemo:why` shows the arithmetic — which rules
+were scored, what they scored, and why the winner beat the threshold (or why
+nothing fired).
+
+That's the loop. Everything else in this document is that loop with more
+knobs.
+
+### What `mnemo learn` does not do
+
+- **It doesn't extract your whole vault.** Stage 2 is scoped with `only=` to
+  the briefing stage 1 just wrote. Any other dirty pages — other projects'
+  backlogs — wait for the normal end-of-session run rather than being swept
+  into LLM calls you didn't ask for.
+- **It never opens a PR and never touches the network.** No `gh`, no issues,
+  no self-fix branch. The only outbound calls are the LLM calls extraction
+  already makes through your existing `claude` CLI.
+- **It won't run while another extraction holds the lock.** If the
+  `SessionEnd` hook's pass (or another `mnemo learn`) is already running, this
+  one stops and says so: *another extraction is already running — it will pick
+  up this session's briefing; run `mnemo learn` again in a minute to see what
+  it learned.* The condition is benign — that running pass sweeps every dirty
+  file, this briefing included.
+
+### GIF storyboard
+
+For the maintainer recording the README asset. Three frames, about 20 seconds,
+no narration and no cuts mid-frame — the point is that a reader who never
+scrolls past the image still understands the loop.
+
+| # | Frame | Roughly |
+|---|---|---|
+| 1 | The correction. A normal Claude Code session; the user types `never use npm in this repo, always yarn` and Claude answers normally. Nothing mnemo-shaped happens on screen. | 6s |
+| 2 | `mnemo learn`. The four output lines land, with the `learned:` line — and its `evidence:` quote — on screen long enough to read. | 8s |
+| 3 | The next prompt. A fresh prompt about installing a package; the injected rule is visible in the context mnemo added, and Claude reaches for yarn. | 6s |
+
+Record at a readable terminal size, don't speed it up, and let frame 2 sit —
+the quote is the thing people need time to notice.
+
 ## What `mnemo init` actually does
 
 Only relevant for options B and C — the plugin declares all of this itself.

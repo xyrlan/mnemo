@@ -27,6 +27,24 @@ def _touch_memory(vault, agent, name, mtime_offset=0):
         os.utime(path, (atime, mtime))
 
 
+def _set_mtime(path, iso):
+    """Pin a file's mtime to a wall-clock instant the debounce can compare."""
+    from datetime import datetime
+
+    ts = datetime.fromisoformat(iso).timestamp()
+    os.utime(path, (ts, ts))
+
+
+def _touch_briefing(vault, agent, name, mtime_offset=0):
+    path = vault / "bots" / agent / "briefings" / "sessions" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\ntype: briefing\n---\nbody\n", encoding="utf-8")
+    if mtime_offset:
+        atime = path.stat().st_atime
+        mtime = path.stat().st_mtime + mtime_offset
+        os.utime(path, (atime, mtime))
+
+
 def test_debounce_passes_when_count_and_time_both_ok(tmp_path):
     from datetime import datetime
 
@@ -94,6 +112,89 @@ def test_debounce_passes_when_last_run_is_none(tmp_path):
 
     # No prior run → elapsed is infinite → passes time gate
     assert session_end._debounce_passes(state_path, vault, cfg, now=now) is True
+
+
+def test_debounce_passes_on_a_never_extracted_vault(tmp_path):
+    """The first extraction is never debounced.
+
+    A fresh vault has zero memory files, so the count gate would hold it back
+    forever — and that first pass is the one that shows the user mnemo works.
+    """
+    from datetime import datetime
+
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    _write_state(state_path, None)
+    _touch_briefing(vault, "agent_a", "sess-1.md")
+
+    cfg = {"extraction": {"auto": {"minNewMemories": 5, "minIntervalMinutes": 60}}}
+    now = datetime.fromisoformat("2026-04-13T12:00:00")
+
+    assert session_end._debounce_passes(state_path, vault, cfg, now=now) is True
+
+
+def test_debounce_fails_when_a_new_briefing_arrives_inside_the_interval(tmp_path):
+    """New material does not buy a pass through the time gate."""
+    from datetime import datetime
+
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    _write_state(state_path, "2026-04-13T11:50:00")
+    _touch_briefing(vault, "agent_a", "sess-1.md")
+    _set_mtime(vault / "bots" / "agent_a" / "briefings" / "sessions" / "sess-1.md",
+               "2026-04-13T11:55:00")
+
+    cfg = {"extraction": {"auto": {"minNewMemories": 1, "minIntervalMinutes": 60}}}
+    now = datetime.fromisoformat("2026-04-13T12:00:00")  # 10 min after
+
+    assert session_end._debounce_passes(state_path, vault, cfg, now=now) is False
+
+
+def test_debounce_passes_when_only_a_briefing_is_new(tmp_path):
+    """A session that wrote no memory file still has a briefing to consolidate."""
+    from datetime import datetime
+
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    _write_state(state_path, "2026-04-13T10:00:00")
+    _touch_briefing(vault, "agent_a", "sess-1.md")
+    _set_mtime(vault / "bots" / "agent_a" / "briefings" / "sessions" / "sess-1.md",
+               "2026-04-13T11:00:00")
+
+    cfg = {"extraction": {"auto": {"minNewMemories": 1, "minIntervalMinutes": 60}}}
+    now = datetime.fromisoformat("2026-04-13T12:00:00")  # 2 h after
+
+    assert session_end._debounce_passes(state_path, vault, cfg, now=now) is True
+
+
+def test_debounce_fails_when_nothing_is_new(tmp_path):
+    """Time alone is not a reason to spend an LLM call."""
+    from datetime import datetime
+
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    _write_state(state_path, "2026-04-13T10:00:00")
+    # Both files predate last_run, so neither counts as new material.
+    _touch_briefing(vault, "agent_a", "sess-old.md")
+    _touch_memory(vault, "agent_a", "feedback_old.md")
+    for p in (
+        vault / "bots" / "agent_a" / "briefings" / "sessions" / "sess-old.md",
+        vault / "bots" / "agent_a" / "memory" / "feedback_old.md",
+    ):
+        _set_mtime(p, "2026-04-13T09:00:00")
+
+    cfg = {"extraction": {"auto": {"minNewMemories": 1, "minIntervalMinutes": 60}}}
+    now = datetime.fromisoformat("2026-04-13T12:00:00")  # 2 h after
+
+    assert session_end._debounce_passes(state_path, vault, cfg, now=now) is False
 
 
 def test_lock_held_false_when_dir_absent(tmp_path):

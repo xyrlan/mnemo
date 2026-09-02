@@ -19,6 +19,17 @@ def _debounce_passes(
 
     Returns True when both minNewMemories and minIntervalMinutes conditions
     are satisfied.  Any exception results in False (fail-closed).
+
+    Two exceptions to the arithmetic:
+
+    - No ``last_run`` means the vault has never been extracted. That first
+      pass is the one that turns a freshly-installed mnemo into something the
+      user can see working, so it is never debounced — a brand-new vault has
+      no memory files yet and would otherwise fail the count gate forever.
+    - Session briefings count as new material. They are the primary input to
+      consolidation (``scanner`` routes them through the feedback cluster),
+      and a user whose sessions produce briefings but no memory files would
+      never trip the count gate.
     """
     from datetime import datetime, timedelta
     try:
@@ -33,6 +44,10 @@ def _debounce_passes(
                 last_run = payload.get("last_run")
             except (OSError, json.JSONDecodeError):
                 last_run = None
+
+        # The vault has never been extracted: run, unconditionally.
+        if not last_run:
+            return True
 
         now_dt = now or datetime.now()
 
@@ -59,16 +74,27 @@ def _debounce_passes(
         if bots_root.is_dir():
             for agent_dir in bots_root.iterdir():
                 memory_dir = agent_dir / "memory"
-                if not memory_dir.is_dir():
-                    continue
-                for p in memory_dir.glob("*.md"):
-                    if p.name == "MEMORY.md":
-                        continue
-                    try:
-                        if p.stat().st_mtime > last_run_ts:
-                            count += 1
-                    except OSError:
-                        continue
+                if memory_dir.is_dir():
+                    for p in memory_dir.glob("*.md"):
+                        if p.name == "MEMORY.md":
+                            continue
+                        try:
+                            if p.stat().st_mtime > last_run_ts:
+                                count += 1
+                        except OSError:
+                            continue
+
+                # Briefings are new material too — scanner feeds them through
+                # the feedback cluster, so a session that produced only a
+                # briefing still gives the extractor something to consolidate.
+                briefings_dir = agent_dir / "briefings" / "sessions"
+                if briefings_dir.is_dir():
+                    for p in briefings_dir.glob("*.md"):
+                        try:
+                            if p.stat().st_mtime > last_run_ts:
+                                count += 1
+                        except OSError:
+                            continue
 
         return count >= min_new
     except Exception:

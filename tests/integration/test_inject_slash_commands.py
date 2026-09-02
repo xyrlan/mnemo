@@ -5,11 +5,11 @@ from mnemo.install import settings as inj
 
 EXPECTED_NAMES = {
     "init", "init-project", "status", "doctor",
-    "open", "fix", "uninstall", "uninstall-project", "help",
+    "open", "fix", "uninstall", "uninstall-project", "learn", "help",
 }
 
 
-def test_inject_slash_commands_writes_all_nine_commands(tmp_path: Path):
+def test_inject_slash_commands_writes_all_commands(tmp_path: Path):
     commands_dir = tmp_path / "commands"
     inj.inject_slash_commands(commands_dir)
 

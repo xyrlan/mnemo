@@ -62,3 +62,24 @@ def test_rendered_body_keeps_the_ownership_tag_and_frontmatter(as_package):
     assert body.startswith(settings.SLASH_COMMAND_TAG)
     assert "allowed-tools: Bash" in body
     assert "disable-model-invocation: true" in body
+
+
+def test_learn_is_offered_by_both_install_paths():
+    """The five-minute loop's verb has to be reachable from a slash command."""
+    for table in (settings.SLASH_COMMANDS, settings.PLUGIN_COMMANDS):
+        assert table["learn"]["args"] == ("learn",)
+        assert "fires on your next prompt" in table["learn"]["description"]
+
+
+def test_learn_renders_with_the_ownership_tag_and_its_description(as_package):
+    body = settings._render_slash_command("learn", settings.SLASH_COMMANDS["learn"])
+
+    assert body.startswith(settings.SLASH_COMMAND_TAG)
+    assert "description: learn from this session now" in body
+    assert "!`/opt/venv/bin/python3 -m mnemo learn`" in body
+
+
+def test_learn_renders_for_the_plugin_through_the_launcher():
+    body = settings.render_plugin_command(settings.PLUGIN_COMMANDS["learn"])
+
+    assert '!`"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd" learn`' in body

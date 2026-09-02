@@ -7,6 +7,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The first extraction of a vault is never debounced.** A fresh vault has no
+  extracted pages, and only an extraction produces the pages the count gate
+  counts, so `extraction.auto.minNewMemories` held new installs back forever.
+  A missing last-run marker now runs immediately — that first pass is what
+  shows a new user mnemo works at all.
+- **Session briefings count as new material** toward the automatic-extraction
+  count gate, alongside memory files. A session whose only product is a
+  correction mutates no files but does write a briefing, which is exactly what
+  consolidation reads. The time gate is untouched: new material does not buy a
+  pass through `extraction.auto.minIntervalMinutes`.
+- `generate_session_briefing` gained a `min_mutations` keyword (default `1`,
+  unchanged behaviour) so a caller can brief a session that touched no files.
+  `mnemo learn` passes `0`.
 - **Feedback rules now require evidence.** The session briefing carries a
   `## Corrections` section quoting the user verbatim; each quote is checked
   mechanically against the transcript and fabricated ones are dropped. A
@@ -46,6 +59,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`mnemo learn` / `/mnemo:learn` — teach the vault from this session, now.**
+  Correct Claude in your own words, run it, and the rule is live on your next
+  prompt. It runs the two stages the `SessionEnd` hook runs, but synchronously
+  and in the foreground: a session briefing (with `min_mutations=0`, because
+  the session that earns a `mnemo learn` is one where you only *said*
+  something) carrying the verified `## Corrections`, then extraction **scoped
+  to that briefing alone** — other projects' dirty pages wait for the normal
+  end-of-session run rather than being swept into LLM calls you didn't ask
+  for. It prints what it read, the briefing and its correction count, and one
+  `learned:` line per rule with your own sentence quoted back as the evidence.
+  It never opens a PR and never touches the network beyond the LLM calls
+  extraction already makes. If another extraction holds the lock it stops and
+  says so — that run will pick up this briefing anyway. `--session <id>` learns
+  from an earlier session, `--dry-run` names the transcript it would read.
+  See [Five minutes](docs/getting-started.md#five-minutes).
 - `mnemo reclassify` — grades the existing feedback vault under the same rules
   (keep / demote / merge / archive) with a saved plan, `--apply` (no LLM
   calls), `--limit`, and a byte-exact `--undo`.
