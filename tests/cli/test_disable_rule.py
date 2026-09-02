@@ -67,3 +67,46 @@ def test_disable_rule_ignores_archive(tmp_path: Path, capsys):
     assert "runtime: false" not in archived.read_text(encoding="utf-8")
     captured = capsys.readouterr()
     assert "not found" in (captured.out + captured.err).lower()
+
+
+def test_disable_rule_resolves_display_name_after_slug_migration(tmp_path: Path, capsys):
+    """#114: a migrated page carries ``slug:``, so ``derive_rule_slug`` yields
+    the kebab slug — the display name must still resolve for muscle memory."""
+    vault = tmp_path
+    rule = vault / "shared" / "feedback" / "use-yarn.md"
+    rule.parent.mkdir(parents=True)
+    page = (
+        "---\n"
+        "name: Use Yarn\n"
+        "slug: use-yarn\n"
+        "type: feedback\n"
+        "---\n"
+        "body\n"
+    )
+    rule.write_text(page, encoding="utf-8")
+
+    assert dr._find_rule_file(vault, "use-yarn") == rule
+    assert dr._find_rule_file(vault, "Use Yarn") == rule
+
+    rc = dr.run_disable_rule(vault, slug="Use Yarn")
+    assert rc == 0
+    assert "runtime: false" in rule.read_text(encoding="utf-8")
+    assert "disabled: shared/feedback/use-yarn.md" in capsys.readouterr().out
+
+
+def test_disable_rule_exact_slug_wins_over_name_collision(tmp_path: Path):
+    """A page whose display name equals another page's slug must lose to the
+    exact stem/slug hit, regardless of walk order."""
+    vault = tmp_path
+    fb = vault / "shared" / "feedback"
+    fb.mkdir(parents=True)
+    # Sorted first, but only matches by name.
+    (fb / "aaa.md").write_text(
+        "---\nname: use-yarn\nslug: aaa\ntype: feedback\n---\nbody\n", encoding="utf-8"
+    )
+    real = fb / "use-yarn.md"
+    real.write_text(
+        "---\nname: Use Yarn\nslug: use-yarn\ntype: feedback\n---\nbody\n", encoding="utf-8"
+    )
+
+    assert dr._find_rule_file(vault, "use-yarn") == real

@@ -11,22 +11,35 @@ from mnemo.core.filters import derive_rule_slug, iter_shared_pages, parse_frontm
 
 
 def _find_rule_file(vault_root: Path, slug: str) -> Path | None:
+    """Resolve ``slug`` to a live rule page.
+
+    Accepts, in order: the file stem, ``derive_rule_slug`` (the ``slug:``
+    field once #114 has stamped it, else ``name:``/stem), or the exact
+    display ``name:``. The name fallback keeps a migrated vault answering to
+    muscle memory — after migration ``derive_rule_slug`` is the kebab slug,
+    so ``mnemo disable-rule "Use Yarn"`` would otherwise match nothing. All
+    pages are walked for stem/slug hits before any name hit is honoured, so
+    an exact slug always beats a page whose display name collides with it.
+    """
     shared = vault_root / "shared"
     if not shared.is_dir():
         return None
+    by_name: Path | None = None
     for md in iter_shared_pages(vault_root):
-        # Match by filesystem stem first (most reliable for slug-as-filename)
         if md.stem == slug:
             return md
-        # Also match by derive_rule_slug in case frontmatter slug/name matches
         try:
-            text = md.read_text()
-        except OSError:
+            text = md.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
         fm = parse_frontmatter(text)
-        if fm and derive_rule_slug(fm, md.stem) == slug:
+        if not fm:
+            continue
+        if derive_rule_slug(fm, md.stem) == slug:
             return md
-    return None
+        if by_name is None and fm.get("name") == slug:
+            by_name = md
+    return by_name
 
 
 def run_disable_rule(vault_root: Path, *, slug: str) -> int:
