@@ -630,6 +630,9 @@ def _run_extraction_body(
     # files whose state entries already cross universalThreshold. Always
     # runs (even when no cluster pages produced this run) so the backlog
     # discovered during the v0.15 dogfood clears deterministically.
+    # Deliberately not recorded in the learned ledger: these promotions drain a
+    # legacy backlog, not something the session just taught mnemo, and
+    # announcing them would read as "newly learned" months after the fact.
     try:
         changed = _reconcile_universal_promotions(state, vault_root, run_id, summary)
     except Exception as exc:  # noqa: BLE001 — reconciler must fail-open

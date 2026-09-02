@@ -12,9 +12,10 @@ Ordering runs on ``seq``, a monotonically increasing integer stamped at record
 time, not on ``ts``: every entry of one ``record`` call shares a timestamp to
 the microsecond on a fast filesystem, and a timestamp marker would then either
 re-announce that whole batch forever or swallow all but the last of it. ``seq``
-is derived as (max seq currently in the file) + 1, so it needs no side file and
-survives rotation — rotation keeps the tail, and the tail holds the largest
-seqs.
+is derived as (the largest seq either file has seen) + 1, so it needs no side
+file and survives rotation — rotation keeps the tail, and the tail holds the
+largest seqs. The markers are consulted too, because they outlive a
+``learned.jsonl`` that a user deletes or truncates by hand.
 
 Every reader here is called from a hook, so ``pending``, ``pending_count`` and
 ``mark_announced`` swallow I/O and parse failures and return an empty answer;
@@ -49,15 +50,20 @@ def _read(vault_root: Path) -> list[dict]:
     """Parse the ledger, skipping anything unreadable. Never raises.
 
     A line missing ``seq`` (hand-written, or from a pre-``seq`` ledger) is
-    assigned its line index, which keeps such a file monotonic and orderable
-    without a migration.
+    assigned ``previous_seq + 1``, which keeps such a file monotonic and
+    orderable without a migration. The line *index* would not: a file whose
+    real seqs already run past its line count (rotation keeps the tail, so
+    line 0 can hold seq 3000) would give every hand-written line a seq far
+    below the ones around it, sorting it to the front and re-announcing it
+    under every live marker.
     """
     try:
         raw = _ledger_path(vault_root).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
     out: list[dict] = []
-    for idx, line in enumerate(raw.splitlines()):
+    prev_seq = 0
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -69,7 +75,8 @@ def _read(vault_root: Path) -> list[dict]:
             continue
         seq = entry.get("seq")
         if not isinstance(seq, int) or isinstance(seq, bool):
-            entry["seq"] = idx
+            entry["seq"] = prev_seq + 1
+        prev_seq = entry["seq"]
         projects = entry.get("projects")
         if not isinstance(projects, list):
             entry["projects"] = []
@@ -107,13 +114,37 @@ def _rotate_if_needed(vault_root: Path) -> None:
     atomic_write_bytes(path, body.encode("utf-8"))
 
 
+def _ends_without_newline(path: Path) -> bool:
+    """True when the file exists, is non-empty, and its last byte is not ``\\n``.
+
+    A previous append that died mid-write leaves a torn last line. Appending
+    straight onto it would glue the next entry to the fragment, and the parser
+    would then drop *both*: the fragment is not valid JSON, and the entry that
+    was welded to it is no longer on a line of its own.
+    """
+    try:
+        size = path.stat().st_size
+        if size <= 0:
+            return False
+        with open(path, "rb") as fh:
+            fh.seek(-1, 2)
+            return fh.read(1) != b"\n"
+    except OSError:
+        return False
+
+
 def record(vault_root: Path, *, run_id: str, entries: list[dict]) -> None:
     """Append one line per entry. Called from extraction, which logs failures."""
     if not entries:
         return
     path = _ledger_path(vault_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    base = _max_seq(_read(vault_root))
+    # The ledger is not the only record of how far seqs have run: a hand-deleted
+    # or truncated learned.jsonl leaves announced.json holding markers above
+    # every seq we would then hand out, and the new entries pend for nobody,
+    # forever. Take the base from whichever of the two is further along.
+    markers = _read_markers(vault_root)
+    base = max([_max_seq(_read(vault_root)), 0, *markers.values()])
     ts = datetime.now().isoformat(timespec="seconds")
     lines = []
     for i, entry in enumerate(entries, start=1):
@@ -129,12 +160,17 @@ def record(vault_root: Path, *, run_id: str, entries: list[dict]) -> None:
             "confidence": entry.get("confidence"),
             "quote": entry.get("quote"),
         }, ensure_ascii=False))
+    body = "\n".join(lines) + "\n"
+    if _ends_without_newline(path):
+        body = "\n" + body
     with open(path, "a", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+        fh.write(body)
     _rotate_if_needed(vault_root)
 
 
-def _pending_entries(vault_root: Path, project: str) -> list[dict]:
+def _pending_entries(
+    vault_root: Path, project: str, universal_threshold: int = 2
+) -> list[dict]:
     try:
         entries = _read(vault_root)
         if not entries:
@@ -145,26 +181,40 @@ def _pending_entries(vault_root: Path, project: str) -> list[dict]:
             if e["seq"] <= floor:
                 continue
             projects = e["projects"]
-            # A rule with two or more projects is universal: it applies
-            # everywhere, so it pends for every project, not just its sources'.
-            if project in projects or len(projects) >= 2:
+            # A rule with at least ``universal_threshold`` projects is
+            # universal: it applies everywhere, so it pends for every project,
+            # not just its sources'.
+            if project in projects or len(projects) >= universal_threshold:
                 out.append(e)
         return out
     except Exception:  # noqa: BLE001 — runs inside a hook
         return []
 
 
-def pending(vault_root: Path, project: str, *, limit: int | None = None) -> list[dict]:
-    """Entries this project has not been shown yet, oldest first. Never raises."""
-    out = _pending_entries(vault_root, project)
+def pending(
+    vault_root: Path,
+    project: str,
+    *,
+    limit: int | None = None,
+    universal_threshold: int = 2,
+) -> list[dict]:
+    """Entries this project has not been shown yet, oldest first. Never raises.
+
+    ``universal_threshold`` mirrors ``scoping.universalThreshold``, but is
+    passed in rather than read here: every caller is on a hook path, and the
+    hook already holds the loaded config.
+    """
+    out = _pending_entries(vault_root, project, universal_threshold)
     if limit is not None:
         out = out[:limit]
     return out
 
 
-def pending_count(vault_root: Path, project: str) -> int:
+def pending_count(
+    vault_root: Path, project: str, *, universal_threshold: int = 2
+) -> int:
     """How many entries ``pending`` would return unlimited. Never raises."""
-    return len(_pending_entries(vault_root, project))
+    return len(_pending_entries(vault_root, project, universal_threshold))
 
 
 def mark_announced(vault_root: Path, project: str) -> None:

@@ -4,6 +4,7 @@ Ordering is the load-bearing property: entries recorded in one ``record`` call
 share a timestamp, so ``pending`` compares against the per-project marker on a
 monotonic integer ``seq`` rather than on ``ts``.
 """
+import json
 from pathlib import Path
 
 from mnemo.core import learned
@@ -76,3 +77,57 @@ def test_marker_survives_later_records(tmp_path: Path):
     learned.mark_announced(tmp_path, "p")
     learned.record(tmp_path, run_id="r3", entries=[_e("d", ["p"])])
     assert [e["slug"] for e in learned.pending(tmp_path, "p")] == ["d"]
+
+
+# --- surviving a ledger that was damaged between runs -----------------------
+
+def test_a_torn_last_line_does_not_swallow_the_next_entry(tmp_path: Path):
+    """A crashed append leaves a fragment with no newline; the next one must not glue to it."""
+    ledger = tmp_path / ".mnemo" / "learned.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps({"seq": 1, "slug": "done", "projects": ["p"]}) + "\n"
+        + '{"seq": 2, "slug": "tor',  # torn mid-write, no trailing newline
+        encoding="utf-8",
+    )
+
+    learned.record(tmp_path, run_id="r2", entries=[_e("after-the-tear", ["p"])])
+
+    assert [e["slug"] for e in learned.pending(tmp_path, "p")] == ["done", "after-the-tear"]
+
+
+def test_a_marker_above_every_live_seq_does_not_block_new_entries(tmp_path: Path):
+    """learned.jsonl deleted by hand, announced.json survived — seqs must clear the marker."""
+    (tmp_path / ".mnemo").mkdir()
+    (tmp_path / ".mnemo" / "announced.json").write_text(
+        json.dumps({"p": 999}), encoding="utf-8")
+
+    learned.record(tmp_path, run_id="r1", entries=[_e("fresh", ["p"])])
+
+    assert [e["slug"] for e in learned.pending(tmp_path, "p")] == ["fresh"]
+
+
+def test_a_hand_written_line_gets_the_seq_after_its_neighbour(tmp_path: Path):
+    """Not the line index: a rotated tail starts at a seq far above its line count."""
+    ledger = tmp_path / ".mnemo" / "learned.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps({"seq": 500, "slug": "rotated", "projects": ["p"]}) + "\n"
+        + json.dumps({"slug": "handwritten", "projects": ["p"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    got = learned.pending(tmp_path, "p")
+
+    assert [(e["slug"], e["seq"]) for e in got] == [("rotated", 500), ("handwritten", 501)]
+
+
+# --- the universal threshold is the caller's, not a constant ---------------
+
+def test_universal_threshold_is_a_parameter(tmp_path: Path):
+    """scoping.universalThreshold=3 means a two-project rule is still local."""
+    learned.record(tmp_path, run_id="r1", entries=[_e("two", ["a", "b"])])
+
+    assert learned.pending(tmp_path, "zzz", universal_threshold=3) == []
+    assert learned.pending_count(tmp_path, "zzz", universal_threshold=3) == 0
+    assert [e["slug"] for e in learned.pending(tmp_path, "zzz")] == ["two"]
