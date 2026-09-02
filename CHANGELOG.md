@@ -3,6 +3,39 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Feedback rules now require evidence.** The session briefing carries a
+  `## Corrections` section quoting the user verbatim; each quote is checked
+  mechanically against the transcript and fabricated ones are dropped. A
+  feedback page reaches `shared/feedback/` only when it cites one of those
+  quotes as `evidence:` from one of its own source briefings
+  (`confidence: verified`). Everything else is staged as an inferred
+  `reference` page in `shared/_inbox/reference/` with `demoted_from: feedback`
+  — including feedback-typed pages from Claude Code's own auto-memory, which
+  carry no user quote.
+- **Extraction reinforces existing rules instead of minting duplicates.** The
+  consolidation prompt lists the vault's existing slugs, and a similarity pass
+  (weighted Jaccard ≥ 0.32 on stemmed name/description/body AND name-stem
+  overlap ≥ 0.27, calibrated on a 1,436-page vault: 38 redirects, 2 judged
+  false) redirects a page onto an existing slug when it states the same rule,
+  so `source_count` accrues and universal promotion can fire. Never redirects
+  onto a dismissed slug.
+- The reflex scores the evidence quote as its own BM25F field
+  (`reflex.bm25f.fieldWeights.evidence`, default 2.5).
+
+### Added
+
+- `mnemo reclassify` — grades the existing feedback vault under the same rules
+  (keep / demote / merge / archive) with a saved plan, `--apply` (no LLM
+  calls), `--limit`, and a byte-exact `--undo`.
+- Prompt-echo guard: pages that repeat the extractor's own instructions are
+  staged as reference pages instead of being promoted. E-mails, API tokens and
+  32-character hex ids are redacted from rule name, description and body
+  before writing (RFC 2606 example domains and `git@` remotes are left alone).
+
 ## [1.0.0] — 2026-09-01
 
 The 1.0 gate was never code quality — the plugin distribution, four-platform

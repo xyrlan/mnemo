@@ -113,11 +113,28 @@ when it clears all three thresholds.
 | `reflex.thresholds.absoluteFloor` | `2.0` | Minimum score to inject at all |
 | `reflex.thresholds.minQueryTokens` | `3` | Prompts shorter than this are skipped |
 | `reflex.bm25f.k1`, `reflex.bm25f.b` | `1.5`, `0.75` | Standard BM25 parameters |
-| `reflex.bm25f.fieldWeights.*` | see note | `name` 3.0, `topic_tags` 3.0, `aliases` 2.5, `description` 2.0, `body` 1.0 |
+| `reflex.bm25f.fieldWeights.*` | see note | `name` 3.0, `topic_tags` 3.0, `aliases` 2.5, `evidence` 2.5, `description` 2.0, `body` 1.0 |
 
 **Leave the BM25F values alone unless you're experimenting.** The autopilot
 grid-searches them against your own recall hit/miss log and will overwrite
 hand-tuned values with measured ones.
+
+### Rule frontmatter written by extraction
+
+Every extracted page carries these keys; they are written by mnemo, not
+configured.
+
+| Key | Values | Meaning |
+|---|---|---|
+| `confidence` | `verified` / `inferred` | `verified` means the rule cites a quote the user actually typed (see `evidence`). Everything else is `inferred`. |
+| `evidence` | `{quote, source}` | The verbatim user quote a feedback rule was built from and the briefing it comes from. Only `verified` feedback pages carry one. The reflex scores this quote as its own field. |
+| `demoted_from` | `feedback` | The page was extracted as feedback but had no verifiable quote, so it was staged as a `reference` page in `shared/_inbox/reference/` for review. |
+
+A feedback rule reaches `shared/feedback/` only when its quote verifies
+against the `## Corrections` section of one of its own source briefings — a
+section the briefing writer itself checks against the transcript. Rules that
+mnemo cannot trace back to your words never auto-promote; they wait in the
+inbox.
 
 ### `enforcement` and `enrichment` — the `PreToolUse` hook
 
@@ -137,6 +154,29 @@ hand-tuned values with measured ones.
 |---|---|---|
 | `scoping.universalThreshold` | `2` | Projects a rule must appear in before it's promoted to universal |
 | `doctor.skipStatuslineDrift` | `false` | Silence the statusLine drift check — useful if you manage `settings.json` by hand |
+
+## Maintenance commands
+
+### `mnemo reclassify`
+
+Grades every live rule in `shared/feedback/` under the evidence rules above,
+one Haiku call per ten rules. Verdicts: `keep` (a user quote supports it —
+the page gains `confidence: verified` and an `evidence` block), `demote`
+(real knowledge, no correction — moved to `shared/reference/`), `merge`
+(same rule as another slug — sources folded into it), `archive` (generic
+advice, narrative, or the extractor's own instructions echoed back).
+
+```bash
+mnemo reclassify --limit 30     # trial: grade 30 rules, save the plan, change nothing
+mnemo reclassify                # full plan (~1 call per 10 rules), saved to .mnemo/reclassify-plan.json
+mnemo reclassify --apply        # execute the saved plan — no LLM calls
+mnemo reclassify --undo <RUN_ID>  # restore every touched file byte-for-byte
+```
+
+Every file the run touches is copied first into
+`shared/_archive/reclassify-<RUN_ID>/originals/`, and a `manifest.json`
+records each move, so `--undo` is exact. The archive directory is left in
+place as the audit trail.
 
 ## Environment overrides
 
