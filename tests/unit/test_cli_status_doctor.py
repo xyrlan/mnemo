@@ -828,3 +828,110 @@ def test_status_caps_the_learned_section_at_ten(tmp_home: Path, capsys: pytest.C
     assert out.count("[verified]") == 10
     assert "• s13 — S13 [verified]" in out
     assert "• s3 — S3 [verified]" not in out
+
+
+# ── Numbers section (WS-D Task 1) ───────────────────────────────────────────
+
+def _seed_numbers_sources(
+    vault: Path, *, reflex: bool = True, recall: bool = True
+) -> None:
+    """Write the two files the Numbers section reads."""
+    from datetime import datetime, timedelta, timezone
+
+    mnemo_dir = vault / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    if reflex:
+        now = datetime.now(timezone.utc)
+        rows = []
+        for i in range(1000):
+            ts = (now - timedelta(hours=1 + i % 24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rows.append({"ts": ts, "emitted": ["r"] if i < 78 else [], "project": "p"})
+        # One row far outside the window so the section proves it windows.
+        rows.append({"ts": (now - timedelta(days=40)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     "emitted": ["old"], "project": "p"})
+        (mnemo_dir / "reflex-log.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    if recall:
+        (mnemo_dir / "recall-report.json").write_text(json.dumps({
+            "generated_at": "2026-09-01T09:15:00Z",
+            "report": {"cases": 72, "primacy_rate_at_5": 0.4167},
+            "results": [],
+        }), encoding="utf-8")
+
+
+def test_status_prints_the_numbers_section(tmp_home: Path, capsys: pytest.CaptureFixture):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    _seed_numbers_sources(tmp_home / "v")
+    capsys.readouterr()
+
+    rc = cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Numbers (last 14 days):" in out
+    assert "  reflex: injected on 78 of 1000 prompts (7.8%)" in out
+    assert "  recall: primacy@5 41.7% over 72 cases (mnemo recall, 2026-09-01)" in out
+
+
+def test_status_omits_the_numbers_section_without_sources(
+    tmp_home: Path, capsys: pytest.CaptureFixture
+):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    capsys.readouterr()
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Numbers (last 14 days):" not in out
+    assert "primacy@5" not in out
+
+
+def test_status_prints_only_the_reflex_line_without_a_recall_report(
+    tmp_home: Path, capsys: pytest.CaptureFixture
+):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    _seed_numbers_sources(tmp_home / "v", recall=False)
+    capsys.readouterr()
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Numbers (last 14 days):" in out
+    assert "reflex: injected on 78 of 1000 prompts (7.8%)" in out
+    assert "primacy@5" not in out
+
+
+def test_status_prints_only_the_recall_line_without_a_reflex_log(
+    tmp_home: Path, capsys: pytest.CaptureFixture
+):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    _seed_numbers_sources(tmp_home / "v", reflex=False)
+    capsys.readouterr()
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Numbers (last 14 days):" in out
+    assert "recall: primacy@5 41.7% over 72 cases (mnemo recall, 2026-09-01)" in out
+    assert "reflex: injected on" not in out
+
+
+def test_status_numbers_section_follows_the_reflex_line(
+    tmp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    """The Numbers block sits directly under Reflex:, not at the end."""
+    vault = tmp_home / "v"
+    cli.main(["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"])
+    _seed_numbers_sources(vault)
+    cfg = vault / "mnemo.config.json"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["reflex"] = {"enabled": True}
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg))
+    capsys.readouterr()
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert "Reflex: enabled" in out
+    assert out.index("Reflex: enabled") < out.index("Numbers (last 14 days):")

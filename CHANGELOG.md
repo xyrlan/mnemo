@@ -94,6 +94,41 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   session-start block points at.
 - `mnemo disable-rule` is now a public command rather than an internal one,
   since the session-start announcement hands it to users by name.
+- **`mnemo status` prints a `Numbers (last 14 days)` section** — the reflex
+  emit rate (from `.mnemo/reflex-log.jsonl`) and `primacy@5` (from the last
+  `mnemo recall` run, `.mnemo/recall-report.json`), in the same shape the
+  README quotes them:
+
+  ```
+  Numbers (last 14 days):
+    reflex: injected on 90 of 1041 prompts (8.7%)
+    recall: primacy@5 41.7% over 72 cases (mnemo recall, 2026-09-01)
+  ```
+
+  Either line — or the whole section — is omitted when its source file is
+  missing or holds no row inside the window: a number the tool cannot measure
+  is a number the README may not claim, so "no data" is never rendered as
+  "0%". New `mnemo.core.numbers` module backs both readers and is fail-safe by
+  construction (a missing, truncated, or hand-edited file yields `None`, never
+  an exception).
+
+### Changed
+
+- **Plugin slash commands are down to five: `status`, `why`, `doctor`,
+  `learn`, `help`.** `/mnemo:open`, `/mnemo:fix`, `/mnemo:statusline` and
+  `/mnemo:migrate` are removed — each was a thin wrapper around a CLI command
+  that's just as easy to type: `mnemo open`, `mnemo fix`,
+  `mnemo statusline --install`, `mnemo migrate-plugin`. The five that remain
+  are the ones worth a slash: read state, or teach the vault, without leaving
+  the conversation. `mnemo help` (and `/mnemo:help`) still lists every
+  command, including the ones that lost their slash.
+- **README rewritten** around the corrections layer, an honest comparison to
+  plain Claude Code memory and to Obsidian-backed note vaults, the dated
+  `Numbers (last 14 days)` figures above in place of prior claims, and the
+  opt-in defaults shipped in WS-B (network, backfill) stated as opt-in rather
+  than implied always-on. The **"zero network calls" claim is gone** — mnemo
+  calls the `claude` CLI for extraction and briefings by design; what's opt-in
+  is the autopilot's own network use (`gh`), not LLM calls.
 
 ## [1.0.0] — 2026-09-01
 

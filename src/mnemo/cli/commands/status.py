@@ -102,6 +102,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_auto_brain_status(vault)
     _print_activation_status(vault)
     _print_reflex_status(vault)
+    _print_numbers_status(vault)
     _print_learned_status(vault)
     return 0
 
@@ -152,6 +153,35 @@ def _print_reflex_status(vault: Path) -> None:
     emissions = read_today_emissions(vault)
     suffix = "emission" if emissions == 1 else "emissions"
     print(f"\nReflex: enabled ({emissions} {suffix} today)")
+
+
+def _print_numbers_status(vault: Path) -> None:
+    """The two figures the README quotes, measured on *this* vault.
+
+    Printed only where there is something to measure: a line whose source file
+    is missing is omitted rather than shown as 0%, and the header disappears
+    when neither figure exists. A number the tool cannot print is a number the
+    README may not claim.
+    """
+    from mnemo.core import numbers
+
+    rate = numbers.reflex_emit_rate(vault)
+    recall = numbers.recall_primacy(vault)
+    if rate is None and recall is None:
+        return
+
+    print("\nNumbers (last 14 days):")
+    if rate is not None:
+        emitted, total = rate
+        pct = (emitted / total * 100) if total else 0.0
+        print(f"  reflex: injected on {emitted} of {total} prompts ({pct:.1f}%)")
+    if recall is not None:
+        primacy, cases, date = recall
+        measured = f", {date}" if date else ""
+        print(
+            f"  recall: primacy@5 {primacy * 100:.1f}% over {cases} cases "
+            f"(mnemo recall{measured})"
+        )
 
 
 def _print_auto_brain_status(vault: Path) -> None:

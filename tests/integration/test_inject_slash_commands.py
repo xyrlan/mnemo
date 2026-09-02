@@ -4,8 +4,8 @@ from mnemo.install import settings as inj
 
 
 EXPECTED_NAMES = {
-    "init", "init-project", "status", "doctor",
-    "open", "fix", "uninstall", "uninstall-project", "learn", "help",
+    "init", "init-project", "uninstall", "uninstall-project",
+    "status", "why", "doctor", "learn", "help",
 }
 
 
@@ -14,7 +14,7 @@ def test_inject_slash_commands_writes_all_commands(tmp_path: Path):
     inj.inject_slash_commands(commands_dir)
 
     files = {p.stem for p in commands_dir.glob("*.md")}
-    assert EXPECTED_NAMES.issubset(files)
+    assert files == EXPECTED_NAMES
 
 
 def test_inject_slash_commands_idempotent(tmp_path: Path):

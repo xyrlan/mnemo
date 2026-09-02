@@ -1,6 +1,6 @@
 """Slash-command bodies must invoke the mnemo that is actually installed.
 
-The nine slash commands hardcoded ``python3 -m mnemo <cmd>``. That is wrong in
+The slash commands hardcoded ``python3 -m mnemo <cmd>``. That is wrong in
 two directions: it ignores a venv install that isn't first on PATH, and under a
 frozen build there is no importable ``mnemo`` module for ``-m`` to find, so
 every slash command would fail.
@@ -83,3 +83,25 @@ def test_learn_renders_for_the_plugin_through_the_launcher():
     body = settings.render_plugin_command(settings.PLUGIN_COMMANDS["learn"])
 
     assert '!`"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd" learn`' in body
+
+
+def test_the_plugin_offers_exactly_the_four_verbs_plus_help():
+    """A slash menu is a menu: nine entries made the daily loop invisible.
+
+    open/fix/statusline/migrate are once-in-a-lifetime commands and stay
+    reachable as CLI subcommands, which `mnemo help` lists.
+    """
+    assert set(settings.PLUGIN_COMMANDS) == {"status", "why", "doctor", "learn", "help"}
+
+
+def test_the_non_plugin_set_adds_only_what_needs_a_terminal_install():
+    """init/uninstall exist only where mnemo wired the hooks itself."""
+    assert set(settings.SLASH_COMMANDS) == {
+        "status", "why", "doctor", "learn", "help",
+        "init", "init-project", "uninstall", "uninstall-project",
+    }
+
+
+def test_why_is_offered_by_both_install_paths():
+    for table in (settings.SLASH_COMMANDS, settings.PLUGIN_COMMANDS):
+        assert table["why"]["args"] == ("why",)

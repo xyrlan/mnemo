@@ -48,11 +48,11 @@ def test_sync_generates_the_plugin_command_files(tmp_path: Path):
 
     commands = tmp_path / "commands"
     names = {p.stem for p in commands.glob("*.md")}
-    assert {"status", "doctor", "migrate", "statusline"} <= names
+    # Exactly the plugin surface — the generated directory IS the slash menu,
+    # so an extra file here is an extra entry a user has to read past.
     # init/uninstall have no meaning under a plugin: it declares its own hooks
     # and MCP server, and `/plugin uninstall mnemo` is the uninstall.
-    assert "init" not in names
-    assert "uninstall" not in names
+    assert names == {"status", "why", "doctor", "learn", "help"}
 
 
 def test_generated_commands_go_through_the_launcher(tmp_path: Path):

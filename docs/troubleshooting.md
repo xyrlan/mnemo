@@ -37,8 +37,8 @@ it forces a clean refetch.
 Duplicated log lines, rules injected twice: you have both a plugin install and
 an older `mnemo init` install, and both sets of hooks fire.
 
-```
-/mnemo:migrate
+```bash
+mnemo migrate-plugin
 ```
 
 That removes the older one, leaving a timestamped backup of each settings file.
@@ -56,8 +56,8 @@ tail ~/mnemo/.errors.log
 
 Once the underlying issue is fixed:
 
-```
-/mnemo:fix
+```bash
+mnemo fix
 ```
 
 ## The daily log isn't growing
