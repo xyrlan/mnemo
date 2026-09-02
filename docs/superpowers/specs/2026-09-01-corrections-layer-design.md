@@ -54,7 +54,9 @@ Two layers, both in the feedback/user/reference paths.
 
 ### A5. `mnemo reclassify` (one-time, opt-in)
 
-Reads every live page in `shared/feedback/`, batches ten per Haiku call together with the `corrections:` frontmatter and `## Decisions made` section of each cited source briefing that exists, and asks for one verdict per rule:
+Reads every live page in `shared/feedback/`, batches ten per Haiku call and asks for one verdict per rule. Each rule is sent with its cited source briefings' `## Decisions made` section and, because briefings written before this change carry no `corrections:` frontmatter, with the verbatim user turns of the original transcript when it is still on disk: the briefing's `session_id` is looked up as `~/.claude/projects/*/<session_id>.jsonl` and filtered with `transcript.user_turns`, capped at 40 turns of 300 characters. A `keep` verdict must cite a quote that verifies against those turns; when the transcript is gone the rule cannot be verified and the best available verdict is `demote`.
+
+Verdicts:
 
 - `keep` — a user quote in the sources supports it; emit `evidence` and it becomes `verified`.
 - `demote` — real project knowledge, no user correction → move to `shared/reference/`, `confidence: inferred`.
