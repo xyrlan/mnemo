@@ -229,8 +229,42 @@ def _detect_drift_slug(
 # accumulated and why source_count never grew past 1.
 # ---------------------------------------------------------------------------
 
-SIMILARITY_THRESHOLD = 0.5
+# Calibrated 2026-09-02 against the real dogfood vault (1436 feedback pages,
+# 1,030,330 unordered pairs). The original 0.5 threshold NEVER fired: the
+# best-match score distribution over that vault is p50 0.198, p90 0.275,
+# p99 0.361, max 0.377 — zero pairs reach 0.5. Known duplicate families sit at
+# 0.32-0.36, and the single highest-scoring pair in the whole vault (0.377,
+# tri-layered-ui-state-consistency vs default-filter-state-centralized-constant)
+# is a FALSE match that shares only the stem "state". Weighted score alone
+# therefore cannot separate duplicates from coincidence at any cutoff, which is
+# why the redirect needs a second, independent signal below.
+SIMILARITY_THRESHOLD = 0.32
+
+# Second signal: Jaccard over the SET of stop-word-stripped stemmed NAME tokens.
+# The false 0.377 pair scores 0.20 here; six of the eight known duplicate
+# families score 0.27-1.00. Two real families (pdf-generation-chrome-headless
+# 0.167, e2e-auth-ratelimit-isolation 0.125) fall BELOW the false pair on this
+# axis too, so no axis-aligned cutoff admits all eight while rejecting the false
+# one. Per review, we take the conservative side: 0.27 is the tightest gate that
+# excludes the false pair, and it costs those two families (they stay separate
+# pages) rather than risking a wrong merge. 38 pairs vault-wide would redirect.
+NAME_OVERLAP_MIN = 0.27
+
+# Stripped before the name-overlap comparison: these carry no topical signal and
+# their presence/absence is pure LLM phrasing noise across re-learned rules.
+_NAME_STOP_WORDS = frozenset({
+    "a", "an", "the", "of", "for", "in", "on", "to", "and", "or", "with",
+    "vs", "via", "over", "not", "no", "never", "always", "use", "prefer",
+    "when", "before", "after", "from", "by", "at", "is", "are", "be",
+})
+
 _NAME_WEIGHT, _DESC_WEIGHT, _BODY_WEIGHT = 3, 2, 1
+
+# Measured 2026-09-02 on the 1436-page vault: index build 0.15s, ``find`` 0.029s
+# per page (a full linear scan of every profile). The review quoted 4.5s / 0.57s;
+# neither reproduced here, but both are fine either way — this runs inside a
+# background extract job. No inverted index yet; revisit if the vault or the
+# per-run page count grows by an order of magnitude.
 
 
 def _weighted_profile(name: str, description: str, body: str) -> dict[str, int]:
@@ -240,8 +274,9 @@ def _weighted_profile(name: str, description: str, body: str) -> dict[str, int]:
     ``**Why:**`` / ``**How to apply:**`` scaffolding contribute the bare words
     ``why`` / ``how`` / ``to`` / ``apply`` rather than punctuation noise. Those
     scaffolding words are shared by every extracted page, which nudges every
-    pair's score upward by a constant — the threshold is calibrated against
-    real page text, not against stripped bodies.
+    pair's score upward by a constant, which is precisely why the measured
+    ceiling on real pages is 0.377 rather than anything near 1.0. See the
+    calibration note on :data:`SIMILARITY_THRESHOLD`.
     """
     from mnemo.core.reflex.tokenizer import tokenize
 
@@ -263,6 +298,32 @@ def weighted_jaccard(a: dict[str, int], b: dict[str, int]) -> float:
     return inter / union if union else 0.0
 
 
+def _name_tokens(name: str) -> set[str]:
+    """Stop-word-stripped stemmed token SET for a page name.
+
+    A set, not a multiset: names are short enough that a repeated word says
+    nothing, and set Jaccard is what the 2026-09-02 calibration measured.
+    """
+    from mnemo.core.reflex.tokenizer import tokenize
+
+    out: set[str] = set()
+    for tok in tokenize(name or ""):
+        if tok in _NAME_STOP_WORDS:
+            continue
+        stem = _stem_word(tok)
+        if stem in _NAME_STOP_WORDS:
+            continue
+        out.add(stem)
+    return out
+
+
+def name_overlap(a: set[str], b: set[str]) -> float:
+    """Plain set Jaccard over two name-token sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 class SimilarityIndex:
     """Profiles of every on-disk page of one type, built once per apply run."""
 
@@ -271,8 +332,15 @@ class SimilarityIndex:
         from mnemo.core.text_utils import strip_graph_section
 
         self._profiles: dict[str, dict[str, int]] = {}
-        for key in list(state.entries):
+        self._names: dict[str, set[str]] = {}
+        for key, entry in list(state.entries.items()):
             if not key.startswith(f"{page_type}/"):
+                continue
+            # Never redirect onto a dismissed slug. Both apply branches bail
+            # early on status="dismissed" (``dismissed_skipped``, nothing
+            # written), so a redirect there silently DESTROYS the new page
+            # instead of reinforcing anything.
+            if entry.status == "dismissed":
                 continue
             slug = key.split("/", 1)[1]
             target = _existing_target(vault_root, page_type, slug)
@@ -283,31 +351,64 @@ class SimilarityIndex:
             except OSError:
                 continue
             fm = parse_frontmatter(text)
+            name = str(fm.get("name") or slug)
             # Strip the appended "## Sources" wikilink block before profiling:
             # its file-path tokens are shared by every page written from the
             # same briefing tree and would inflate every pairwise score.
             self._profiles[slug] = _weighted_profile(
-                str(fm.get("name") or slug),
+                name,
                 str(fm.get("description") or ""),
                 _extract_body(strip_graph_section(text)),
             )
+            self._names[slug] = _name_tokens(name)
+
+    def add(self, page: ExtractedPage) -> None:
+        """Register a page written earlier in this same ``apply_pages`` run.
+
+        The index is otherwise a snapshot of the state at loop start, so two
+        mutually-similar NEW pages in one batch (different slugs, so
+        ``dedupe_by_slug`` does not merge them) would both be written. Adding
+        each page as it is handled makes the second one redirect onto the
+        first — exactly the intended outcome.
+        """
+        if not page.slug:
+            return
+        self._profiles[page.slug] = _weighted_profile(
+            page.name, page.description, page.body,
+        )
+        self._names[page.slug] = _name_tokens(page.name)
 
     def find(self, page: ExtractedPage, threshold: float | None = None) -> str | None:
-        """Return the most similar existing slug at or above the threshold.
+        """Return the most similar existing slug passing BOTH gates, or None.
 
-        Reads the module-level ``SIMILARITY_THRESHOLD`` at call time (not at
-        import or construction) so the knob stays patchable in one place.
+        Two independent signals must agree (see the calibration note on
+        :data:`SIMILARITY_THRESHOLD`): the weighted body/description/name
+        Jaccard at or above the threshold, AND the name-token overlap at or
+        above :data:`NAME_OVERLAP_MIN`. Weighted score alone cannot separate
+        real duplicates from coincidence on the measured vault.
+
+        Both knobs are read from module scope at call time (not bound as
+        default arguments) so they stay patchable in one place.
         """
         cutoff = SIMILARITY_THRESHOLD if threshold is None else threshold
+        name_cutoff = NAME_OVERLAP_MIN
         probe = _weighted_profile(page.name, page.description, page.body)
+        probe_name = _name_tokens(page.name)
         best_slug, best = None, 0.0
         for slug, profile in self._profiles.items():
             if slug == page.slug:
                 continue
             score = weighted_jaccard(probe, profile)
-            if score > best:
+            if score < cutoff:
+                continue
+            if name_overlap(probe_name, self._names.get(slug, set())) < name_cutoff:
+                continue
+            # Deterministic tie-break: on an equal score prefer the
+            # lexicographically smaller slug, so the result does not depend on
+            # state-file insertion order.
+            if score > best or (score == best and best_slug is not None and slug < best_slug):
                 best_slug, best = slug, score
-        return best_slug if best_slug is not None and best >= cutoff else None
+        return best_slug
 
 
 def _detect_similar_existing(page: ExtractedPage, index: SimilarityIndex) -> str | None:

@@ -255,10 +255,18 @@ def apply_pages(
     result = ApplyResult()
 
     # Built lazily, one per page type, from the state as it stands at loop
-    # start. Pages written earlier in this same loop are therefore not in it —
-    # acceptable, because ``dedupe_by_slug`` has already merged same-slug pages
-    # within the batch and the next run's index picks up whatever this run wrote.
+    # start, then kept current: every handled page is fed back in via
+    # ``SimilarityIndex.add`` so that two mutually-similar NEW pages in one
+    # batch (different slugs, so ``dedupe_by_slug`` does not merge them) end up
+    # as one page rather than two. Without that, the index is a snapshot and
+    # same-batch duplicates both get written.
     sim_indexes: dict[str, SimilarityIndex] = {}
+
+    def _sim_index(page_type: str) -> SimilarityIndex:
+        if page_type not in sim_indexes:
+            sim_indexes[page_type] = SimilarityIndex(state, vault_root, page_type)
+        return sim_indexes[page_type]
+
     for page in pages:
         # Anti-drift guardrail: if the LLM chose a new slug for what is clearly
         # a rewrite of an existing page (same sources + similar body), redirect
@@ -275,9 +283,7 @@ def apply_pages(
                 # Third layer: neither the sources nor the slug line up, but the
                 # page says what an existing page of this type already says.
                 # Redirecting here is what makes source_count accrue.
-                if page.type not in sim_indexes:
-                    sim_indexes[page.type] = SimilarityIndex(state, vault_root, page.type)
-                similar = _detect_similar_existing(page, sim_indexes[page.type])
+                similar = _detect_similar_existing(page, _sim_index(page.type))
                 if similar is not None:
                     page.slug = similar
 
@@ -307,5 +313,11 @@ def apply_pages(
                 )
                 break
         _stamp_entry_origin(state, key, page)
+        # Feed the page back into the index so a later page in this same batch
+        # that says the same thing redirects onto it. Registered
+        # unconditionally: a redirect onto a slug this run just wrote is the
+        # desired outcome, and re-registering a slug that was itself a redirect
+        # target simply refreshes that slug's profile with the newer text.
+        _sim_index(page.type).add(page)
 
     return result
