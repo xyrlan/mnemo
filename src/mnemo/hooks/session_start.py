@@ -15,6 +15,7 @@ or resumed conversation.
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 from dataclasses import asdict
@@ -349,6 +350,20 @@ def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
 _LEARNED_MAX = 5
 #: Evidence quotes are one line of a bullet, not a paragraph.
 _QUOTE_MAX = 80
+_NAME_MAX = 80
+_SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _one_line(value: object, limit: int) -> str:
+    """Collapse any whitespace (incl. CR/LF) to one space and cap the length.
+
+    Rule names and quotes are LLM-written or user-typed text injected into the
+    agent's context. Without this, a newline inside a name could end the
+    ``[/mnemo learned]`` fence early and put text outside any mnemo-attributed
+    block.
+    """
+    s = " ".join(str(value or "").split())
+    return s if len(s) <= limit else s[:limit] + "…"
 
 
 def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
@@ -386,18 +401,16 @@ def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
 
         lines = ["[mnemo learned since your last session]"]
         for e in entries:
-            slug = e.get("slug") or ""
-            name = e.get("name") or slug
+            slug = _one_line(e.get("slug"), _NAME_MAX)
+            name = _one_line(e.get("name"), _NAME_MAX) or slug
             quote = e.get("quote")
             evidence = ""
             if e.get("confidence") == "verified" and quote:
-                quote = str(quote).strip().replace("\n", " ")
-                if len(quote) > _QUOTE_MAX:
-                    quote = quote[:_QUOTE_MAX] + "…"
-                evidence = f' (verified from: "{quote}")'
-            lines.append(
-                f"• {slug} — {name}{evidence} · veto: mnemo disable-rule {slug}"
-            )
+                evidence = f' (verified from: "{_one_line(quote, _QUOTE_MAX)}")'
+            # The veto is a command the user may paste into a shell: only
+            # advertise it for a slug that is a plain token.
+            veto = f" · veto: mnemo disable-rule {slug}" if _SLUG_OK.match(slug) else ""
+            lines.append(f"• {slug} — {name}{evidence}{veto}")
         if total > len(entries):
             lines.append(f"({total - len(entries)} more — mnemo status)")
         lines.append("[/mnemo learned]")
