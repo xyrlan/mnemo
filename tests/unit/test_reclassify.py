@@ -1,0 +1,135 @@
+"""core/reclassify: verdict validation, apply with manifest, byte-exact undo."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from mnemo.core import reclassify as R
+
+BRIEF = """---
+type: briefing
+agent: proj
+session_id: s1
+---
+## Decisions made
+- used yarn
+
+## Corrections
+- "use yarn not npm in this repo" → Use yarn
+"""
+
+
+def _rule(root: Path, slug: str, name: str, body: str = "Body.\n\n**Why:** w\n\n**How to apply:** h"):
+    d = root / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{slug}.md"
+    p.write_text(f"---\nname: {name}\ndescription: {name}\ntype: feedback\nstability: stable\n"
+                 f"sources:\n  - bots/proj/briefings/sessions/s1.md\ntags:\n  - auto-promoted\n  - x\n---\n{body}\n")
+    return p
+
+
+@pytest.fixture
+def vault(tmp_path: Path) -> Path:
+    root = tmp_path / "vault"
+    b = root / "bots" / "proj" / "briefings" / "sessions" / "s1.md"
+    b.parent.mkdir(parents=True)
+    b.write_text(BRIEF)
+    (root / ".mnemo").mkdir()
+    (root / ".mnemo" / "extraction-state.json").write_text(json.dumps({
+        "schema_version": 3, "last_run": None, "entries": {
+            "feedback/use-yarn": {"source_files": ["bots/proj/briefings/sessions/s1.md"], "source_hash": "a",
+                                   "written_hash": "b", "written_at": "r", "status": "auto_promoted"}}}))
+    return root
+
+
+def test_collect_rules_reads_live_feedback_only(vault):
+    _rule(vault, "use-yarn", "Use yarn")
+    (vault / "shared" / "feedback" / "x.proposed.md").write_text("---\nname: p\n---\n")
+    assert [r.slug for r in R.collect_rules(vault)] == ["use-yarn"]
+
+
+def test_validate_downgrades_bad_merge_and_unverifiable_keep(vault, tmp_path):
+    _rule(vault, "use-yarn", "Use yarn")
+    _rule(vault, "generic", "Generic tip")
+    rules = {r.slug: r for r in R.collect_rules(vault)}
+    verdicts = [
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
+                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="generic", verdict="keep", quote="words nobody typed here"),
+        R.Verdict(slug="generic", verdict="merge", target="does-not-exist"),
+        R.Verdict(slug="generic", verdict="banana"),
+    ]
+    out = R.validate(verdicts, rules, vault, projects_root=tmp_path / "none")
+    assert [(v.slug, v.verdict) for v in out] == [
+        ("use-yarn", "keep"), ("generic", "demote"), ("generic", "demote"), ("generic", "archive")]
+
+
+def test_apply_moves_files_writes_manifest_and_undo_restores_bytes(vault, tmp_path):
+    keep = _rule(vault, "use-yarn", "Use yarn")
+    demote = _rule(vault, "project-fact", "Deploy needs VPN")
+    dup = _rule(vault, "use-yarn-dup", "Use yarn (dup)")
+    junk = _rule(vault, "generic", "Generic tip")
+    originals = {p: p.read_bytes() for p in (keep, demote, dup, junk)}
+    state_before = (vault / ".mnemo" / "extraction-state.json").read_bytes()
+
+    plan = R.Plan(run_id="20260901T000000", llm_calls=0, verdicts=[
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
+                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="project-fact", verdict="demote"),
+        R.Verdict(slug="use-yarn-dup", verdict="merge", target="use-yarn"),
+        R.Verdict(slug="generic", verdict="archive"),
+    ])
+    report = R.apply(vault, plan, rebuild_indexes=False)
+
+    kept_text = keep.read_text()
+    assert "confidence: verified" in kept_text and "use yarn not npm in this repo" in kept_text
+    assert not demote.exists()
+    demoted = vault / "shared" / "reference" / "project-fact.md"
+    assert demoted.exists() and "type: reference" in demoted.read_text() and "demoted_from: feedback" in demoted.read_text()
+    assert not dup.exists() and not junk.exists()
+    arch = vault / "shared" / "_archive" / "reclassify-20260901T000000"
+    assert (arch / "merged" / "use-yarn-dup.md").exists() and (arch / "archived" / "generic.md").exists()
+    manifest = json.loads((arch / "manifest.json").read_text())
+    assert {m["verdict"] for m in manifest["moves"]} == {"keep", "demote", "merge", "archive"}
+    assert report.kept == 1 and report.demoted == 1 and report.merged == 1 and report.archived == 1
+    state = json.loads((vault / ".mnemo" / "extraction-state.json").read_text())
+    assert "reference/project-fact" in state["entries"]
+    assert state["entries"]["feedback/use-yarn-dup"]["status"] == "dismissed"
+
+    restored = R.undo(vault, "20260901T000000")
+    assert restored >= 4
+    for p, data in originals.items():
+        assert p.read_bytes() == data
+    assert not demoted.exists()
+    assert (vault / ".mnemo" / "extraction-state.json").read_bytes() == state_before
+
+
+def test_plan_batches_and_parses_llm_verdicts(vault, tmp_path):
+    for i in range(12):
+        _rule(vault, f"r{i}", f"Rule {i}")
+    calls = []
+
+    def fake_call(prompt, *, system, model, timeout):
+        calls.append(prompt)
+        slugs = [l.split(":", 1)[0].strip("- ") for l in prompt.splitlines() if l.startswith("- r")]
+        payload = {"verdicts": [{"slug": s, "verdict": "archive", "reason": "generic"} for s in slugs]}
+        from mnemo.core.llm import LLMResponse
+        return LLMResponse(text=json.dumps(payload), total_cost_usd=0.0, input_tokens=1,
+                           output_tokens=1, api_key_source="none", raw={})
+
+    plan = R.plan(vault, model="m", timeout=5, batch_size=10, projects_root=tmp_path / "none", call=fake_call)
+    assert plan.llm_calls == 2 and len(plan.verdicts) == 12
+    assert all(v.verdict == "archive" for v in plan.verdicts)
+    R.save_plan(vault, plan)
+    assert R.load_plan(vault).run_id == plan.run_id
+
+
+def test_transcript_turns_found_by_session_id(vault, tmp_path):
+    projects = tmp_path / "projects" / "-Users-x-proj"
+    projects.mkdir(parents=True)
+    (projects / "s1.jsonl").write_text(json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "use yarn not npm in this repo"}}) + "\n")
+    turns = R.transcript_turns(vault, "bots/proj/briefings/sessions/s1.md", projects_root=tmp_path / "projects")
+    assert turns == ["use yarn not npm in this repo"]
