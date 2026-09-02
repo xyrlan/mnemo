@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from mnemo.autopilot.core import network
 from mnemo.autopilot.insights._formatters import (
     fmt_pct,
     fmt_delta_pp,
@@ -201,7 +202,15 @@ def post_digest_issue(
     *_run* is injectable for testing; defaults to ``subprocess.run``.
     Returns None when gh is unavailable, the command fails, or the
     output doesn't contain an issue URL.
+
+    Returns None without running anything when ``autopilot.network.enabled``
+    is off — the gate precedes *_run* resolution, so an injected runner is
+    never called either.
     """
+    if not network.enabled():
+        print(network.OFF_MESSAGE)
+        return None
+
     if _run is None:
         import subprocess
         _run = subprocess.run

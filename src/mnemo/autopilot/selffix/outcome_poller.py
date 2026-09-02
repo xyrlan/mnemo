@@ -15,7 +15,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from mnemo.autopilot.core import pr_budget
+from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 
 # Map GitHub GraphQL PR states to our internal outcome strings
@@ -50,8 +50,13 @@ def _gh_json(cmd: list) -> list:
 def poll_outcomes(*, vault_root: Path) -> int:
     """Query closed self-fix PRs and issues and record their outcomes.
 
-    Returns the number of outcomes recorded.
+    Returns the number of outcomes recorded, or 0 without contacting GitHub
+    when ``autopilot.network.enabled`` is off.
     """
+    if not network.enabled():
+        print(network.OFF_MESSAGE)
+        return 0
+
     prs = _gh_json([
         "gh", "pr", "list",
         "--label", SELF_FIX_LABEL,

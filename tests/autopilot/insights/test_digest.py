@@ -14,6 +14,19 @@ from mnemo.autopilot.insights.digest import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _network_on(monkeypatch):
+    """These tests exercise the network path, which is off by default.
+
+    ``autopilot.network.enabled`` gates every ``gh`` call site; turning it on
+    here keeps this module testing what it was written to test. The gate's own
+    coverage lives in ``tests/unit/test_autopilot_network_gate.py``.
+    """
+    from mnemo.autopilot.core import network
+
+    monkeypatch.setattr(network, "enabled", lambda cfg=None: True)
+
+
 _MNemo = ".mnemo"
 
 

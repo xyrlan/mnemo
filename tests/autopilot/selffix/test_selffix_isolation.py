@@ -24,6 +24,19 @@ from mnemo.autopilot.selffix.doctor_fixer import DoctorWarning, open_doctor_fix_
 from mnemo.autopilot.selffix.telemetry_doctor import TelemetryAnomaly, open_telemetry_fix_pr
 
 
+@pytest.fixture(autouse=True)
+def _network_on(monkeypatch):
+    """These tests exercise the network path, which is off by default.
+
+    ``autopilot.network.enabled`` gates every ``gh`` call site; turning it on
+    here keeps this module testing what it was written to test. The gate's own
+    coverage lives in ``tests/unit/test_autopilot_network_gate.py``.
+    """
+    from mnemo.autopilot.core import network
+
+    monkeypatch.setattr(network, "enabled", lambda cfg=None: True)
+
+
 def _git(*args: str, cwd: Path) -> str:
     result = subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
