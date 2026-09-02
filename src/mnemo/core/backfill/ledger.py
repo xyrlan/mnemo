@@ -8,12 +8,15 @@ transcript filename stem) with the file's content hash, so:
 - a transcript that grew on disk is harvested again,
 - a transcript that fails three times is skipped for good.
 
-Two vault-wide fields sit beside the per-session map:
+Vault-wide fields sit beside the per-session map:
 
 - ``installRunDone`` — a first-run sweep **completed**. Written by
   ``cmd_backfill`` on an install run that actually got to the end, never by
   the hook that launches it, so an environmental abort (missing ``claude``
   CLI, expired auth, rate limit) leaves the one-shot unspent.
+- ``firstRunNoticeShown`` — the session-start invitation to run `mnemo
+  backfill` has been shown once. A message, not a sweep: it never implies any
+  transcript was read, and never spends ``installRunDone``.
 - the spawn lock, a separate file — "a first-run sweep is in flight". See
   :func:`acquire_spawn_lock`.
 
@@ -135,6 +138,24 @@ def mark_install_run_done(vault_root: Path) -> None:
     save(vault_root, led)
 
 
+def notice_shown(led: dict[str, Any]) -> bool:
+    """True when the first-run backfill invitation has already been shown."""
+    return bool(led.get("firstRunNoticeShown", False))
+
+
+def mark_notice_shown(vault_root: Path) -> None:
+    """Record that the first-run invitation was shown. Read-modify-write.
+
+    Separate from ``installRunDone``: the notice is a *message*, the marker is
+    a *sweep*. Someone who reads the invitation and never runs `mnemo backfill`
+    must not be pestered every session, and must not have their unspent sweep
+    look spent to the CLI.
+    """
+    led = load(vault_root)
+    led["firstRunNoticeShown"] = True
+    save(vault_root, led)
+
+
 def transcript_hash(path: Path) -> str:
     """Content hash of a transcript, or ``""`` when unreadable."""
     h = hashlib.sha256()
@@ -155,9 +176,15 @@ def load(vault_root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("sessions"), dict):
-        return {"schemaVersion": SCHEMA_VERSION, "sessions": {}, "installRunDone": False}
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "sessions": {},
+            "installRunDone": False,
+            "firstRunNoticeShown": False,
+        }
     data.setdefault("schemaVersion", SCHEMA_VERSION)
     data.setdefault("installRunDone", False)
+    data.setdefault("firstRunNoticeShown", False)
     return data
 
 

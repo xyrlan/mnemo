@@ -288,6 +288,50 @@ def _maybe_schedule_install_backfill(
             pass
 
 
+def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
+    """One line, once per vault, instead of spending LLM calls unasked.
+
+    ``backfill.autoOnFirstSession`` now defaults to False, so a fresh install
+    no longer harvests the user's transcript history the moment it is
+    installed. That is the right default only if they are told the history is
+    *there* — otherwise the feature they installed mnemo for is invisible and
+    the change reads as removing it. This is the invitation.
+
+    The one-shot is spent on a notice actually worth showing:
+
+    - a completed sweep (``installRunDone``) has nothing left to invite,
+    - zero transcripts leaves the flag unset, so a repo that accumulates
+      history later still gets its invitation rather than having burned it
+      while empty.
+
+    Fail-silent, like everything else on the session-start path.
+    """
+    try:
+        from mnemo.core.backfill import discover, ledger as _ledger
+
+        backfill_cfg = cfg.get("backfill") or {}
+        if not backfill_cfg.get("enabled", True):
+            return ""
+        led = _ledger.load(vault_root)
+        if led.get("installRunDone") or _ledger.notice_shown(led):
+            return ""
+        n = len(discover.find_transcripts(project=project))
+        if n == 0:
+            return ""
+        _ledger.mark_notice_shown(vault_root)
+        return (
+            f"[mnemo] first run: {n} past session(s) for this repo can be learned "
+            f"with `mnemo backfill` (opt-in, about {n} Haiku calls)."
+        )
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.first_run_notice", exc)
+        except Exception:
+            pass
+        return ""
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -388,6 +432,14 @@ def main() -> int:
                     current_project=canonical_name,
                     inject_briefing=inject_briefing,
                 )
+                # The notice stands on its own: a brand-new vault has no
+                # topics and no briefing, so the payload it would ride along
+                # with is empty on exactly the session the notice exists for.
+                notice = _first_run_notice(vault, cfg, canonical_name)
+                if notice:
+                    payload_text = (
+                        payload_text + "\n\n" + notice if payload_text else notice
+                    )
                 if payload_text:
                     _emit_injection(payload_text)
                     try:
