@@ -16,9 +16,11 @@ from mnemo.core.backfill.origin import (
     is_backfill_markdown,
 )
 from mnemo.core.extract import evidence, inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract.guards import is_prompt_echo
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
 from mnemo.core.filters import MANAGED_TAGS
+from mnemo.core.redact import redact
 
 
 def _sanitize_llm_tags(raw: object) -> list[str]:
@@ -174,6 +176,8 @@ class ExtractionSummary:
     sibling_bounced: int = 0
     upgrade_proposed: int = 0
     universal_promoted: int = 0
+    echo_rejected: int = 0
+    redactions: int = 0
     mode: str = "manual"
 
 
@@ -460,8 +464,22 @@ def _run_extraction_body(
                 summary.failed_chunks += 1
                 continue
 
-            pages = [evidence.verify_page(p, vault_root) for p in pages]
-            all_pages.extend(pages)
+            kept: list[inbox.ExtractedPage] = []
+            for p in pages:
+                if is_prompt_echo(p):
+                    summary.echo_rejected += 1
+                    errors.log_error(vault_root, "extract.prompt_echo",
+                                     ValueError(f"rejected prompt-echo page {p.type}/{p.slug}"))
+                    continue
+                p = evidence.verify_page(p, vault_root)
+                # Redaction runs AFTER verification on purpose: the evidence
+                # quote is left untouched so it still matches the briefing (a
+                # quote containing PII is the user's own words).
+                p.body, n_body = redact(p.body)
+                p.description, n_desc = redact(p.description)
+                summary.redactions += n_body + n_desc
+                kept.append(p)
+            all_pages.extend(kept)
             processed_files.extend(chunk)
 
         if all_pages:
