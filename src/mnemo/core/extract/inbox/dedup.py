@@ -219,3 +219,96 @@ def _detect_drift_slug(
         if _bodies_similar(page.body, existing_body):
             return existing_slug
     return None
+
+
+# ---------------------------------------------------------------------------
+# Third-layer guardrail: content similarity against EVERY existing page of the
+# same type, no source-set requirement. Stem collision and drift both require
+# the slugs or sources to line up; a rule re-learned in another project under
+# fresh wording matches neither, which is how families of 5-10 near-duplicates
+# accumulated and why source_count never grew past 1.
+# ---------------------------------------------------------------------------
+
+SIMILARITY_THRESHOLD = 0.5
+_NAME_WEIGHT, _DESC_WEIGHT, _BODY_WEIGHT = 3, 2, 1
+
+
+def _weighted_profile(name: str, description: str, body: str) -> dict[str, int]:
+    """Stem-folded token counts, weighted by which field the token came from.
+
+    ``tokenize`` splits on ``[^a-z0-9_-]+``, so Markdown emphasis and the
+    ``**Why:**`` / ``**How to apply:**`` scaffolding contribute the bare words
+    ``why`` / ``how`` / ``to`` / ``apply`` rather than punctuation noise. Those
+    scaffolding words are shared by every extracted page, which nudges every
+    pair's score upward by a constant — the threshold is calibrated against
+    real page text, not against stripped bodies.
+    """
+    from mnemo.core.reflex.tokenizer import tokenize
+
+    profile: dict[str, int] = {}
+    for text, weight in ((name, _NAME_WEIGHT), (description, _DESC_WEIGHT), (body, _BODY_WEIGHT)):
+        for tok in tokenize(text or ""):
+            stem = _stem_word(tok)
+            profile[stem] = profile.get(stem, 0) + weight
+    return profile
+
+
+def weighted_jaccard(a: dict[str, int], b: dict[str, int]) -> float:
+    """Multiset Jaccard: sum of per-stem minima over sum of per-stem maxima."""
+    if not a or not b:
+        return 0.0
+    keys = set(a) | set(b)
+    inter = sum(min(a.get(k, 0), b.get(k, 0)) for k in keys)
+    union = sum(max(a.get(k, 0), b.get(k, 0)) for k in keys)
+    return inter / union if union else 0.0
+
+
+class SimilarityIndex:
+    """Profiles of every on-disk page of one type, built once per apply run."""
+
+    def __init__(self, state: ExtractionState, vault_root: Path, page_type: str) -> None:
+        from mnemo.core.filters import parse_frontmatter
+        from mnemo.core.text_utils import strip_graph_section
+
+        self._profiles: dict[str, dict[str, int]] = {}
+        for key in list(state.entries):
+            if not key.startswith(f"{page_type}/"):
+                continue
+            slug = key.split("/", 1)[1]
+            target = _existing_target(vault_root, page_type, slug)
+            if target is None:
+                continue
+            try:
+                text = target.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = parse_frontmatter(text)
+            # Strip the appended "## Sources" wikilink block before profiling:
+            # its file-path tokens are shared by every page written from the
+            # same briefing tree and would inflate every pairwise score.
+            self._profiles[slug] = _weighted_profile(
+                str(fm.get("name") or slug),
+                str(fm.get("description") or ""),
+                _extract_body(strip_graph_section(text)),
+            )
+
+    def find(self, page: ExtractedPage, threshold: float | None = None) -> str | None:
+        """Return the most similar existing slug at or above the threshold.
+
+        Reads the module-level ``SIMILARITY_THRESHOLD`` at call time (not at
+        import or construction) so the knob stays patchable in one place.
+        """
+        cutoff = SIMILARITY_THRESHOLD if threshold is None else threshold
+        probe = _weighted_profile(page.name, page.description, page.body)
+        best_slug, best = None, 0.0
+        for slug, profile in self._profiles.items():
+            if slug == page.slug:
+                continue
+            score = weighted_jaccard(probe, profile)
+            if score > best:
+                best_slug, best = slug, score
+        return best_slug if best_slug is not None and best >= cutoff else None
+
+
+def _detect_similar_existing(page: ExtractedPage, index: SimilarityIndex) -> str | None:
+    return index.find(page)

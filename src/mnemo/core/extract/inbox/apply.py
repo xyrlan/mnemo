@@ -31,7 +31,12 @@ from mnemo.core.extract.inbox.branches.universal_promotion import (
     merged_projects_for,
 )
 from mnemo.core.extract.inbox.branches.upgrade import _apply_upgrade_proposed
-from mnemo.core.extract.inbox.dedup import _detect_drift_slug, _detect_stem_collision
+from mnemo.core.extract.inbox.dedup import (
+    SimilarityIndex,
+    _detect_drift_slug,
+    _detect_similar_existing,
+    _detect_stem_collision,
+)
 from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
@@ -249,6 +254,11 @@ def apply_pages(
     run_id = run_id or datetime.now().isoformat(timespec="seconds")
     result = ApplyResult()
 
+    # Built lazily, one per page type, from the state as it stands at loop
+    # start. Pages written earlier in this same loop are therefore not in it —
+    # acceptable, because ``dedupe_by_slug`` has already merged same-slug pages
+    # within the batch and the next run's index picks up whatever this run wrote.
+    sim_indexes: dict[str, SimilarityIndex] = {}
     for page in pages:
         # Anti-drift guardrail: if the LLM chose a new slug for what is clearly
         # a rewrite of an existing page (same sources + similar body), redirect
@@ -261,6 +271,15 @@ def apply_pages(
             stem_target = _detect_stem_collision(page, state, vault_root)
             if stem_target is not None:
                 page.slug = stem_target
+            else:
+                # Third layer: neither the sources nor the slug line up, but the
+                # page says what an existing page of this type already says.
+                # Redirecting here is what makes source_count accrue.
+                if page.type not in sim_indexes:
+                    sim_indexes[page.type] = SimilarityIndex(state, vault_root, page.type)
+                similar = _detect_similar_existing(page, sim_indexes[page.type])
+                if similar is not None:
+                    page.slug = similar
 
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
