@@ -94,6 +94,10 @@ def _render_project_page(
     return (
         "---\n"
         f"name: {file.frontmatter.get('name', file.slug)}\n"
+        # #114: the composite is the state key, the ledger slug and the file
+        # stem; writing it here keeps derive_rule_slug from falling through
+        # to the display name for the reflex/activation indexes.
+        f"slug: {_project_slug(file)}\n"
         f"description: {file.frontmatter.get('description', '')}\n"
         "type: project\n"
         "runtime: false\n"

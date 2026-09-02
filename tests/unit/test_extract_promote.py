@@ -116,3 +116,18 @@ def test_project_page_includes_runtime_false_marker(tmp_vault: Path):
     )
     rendered = _render_project_page(file, run_id="2026-04-18T00:00:00")
     assert "runtime: false" in rendered
+
+
+def test_project_page_carries_composite_slug_after_name(tmp_vault: Path):
+    # #114: the slug is the ``<agent>__<slug>`` composite the ledger and the
+    # state key already use, written right after ``name:`` so
+    # derive_rule_slug stops falling through to the display name.
+    from mnemo.core.extract.promote import _render_project_page
+    from mnemo.core.filters import parse_frontmatter
+
+    file = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal_decisions")
+    rendered = _render_project_page(file, run_id="2026-04-18T00:00:00")
+    lines = rendered.splitlines()
+    assert lines[1].startswith("name: ")
+    assert lines[2] == "slug: sg-imports__china-portal-decisions"
+    assert parse_frontmatter(rendered)["slug"] == "sg-imports__china-portal-decisions"

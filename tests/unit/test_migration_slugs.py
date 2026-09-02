@@ -55,3 +55,19 @@ def test_marker_roundtrip(tmp_path):
     slugs.write_marker(tmp_path)
     assert slugs.marker_present(tmp_path)
     assert (tmp_path / slugs.MARKER_REL).read_text(encoding="utf-8") == "1\n"
+
+
+def test_project_pages_keep_their_composite_stem(tmp_path):
+    # ``promote._project_slug`` builds ``<agent>__<slug>`` and the learned
+    # ledger records that composite verbatim; normalising ``__`` to ``-``
+    # would recreate the ledger-vs-index mismatch the migration exists to fix.
+    plain = _page(tmp_path, "shared/project/bingx-robot__ai-pm.md")
+    proposed = _page(tmp_path, "shared/project/x__y.proposed.md")
+    staged = _page(tmp_path, "shared/_inbox/project/a__b.md")
+    feedback = _page(tmp_path, "shared/feedback/Use_Yarn.md")
+    rep = slugs.stamp_slugs(tmp_path)
+    assert rep.stamped == 4
+    assert parse_frontmatter(plain.read_text(encoding="utf-8"))["slug"] == "bingx-robot__ai-pm"
+    assert parse_frontmatter(proposed.read_text(encoding="utf-8"))["slug"] == "x__y.proposed"
+    assert parse_frontmatter(staged.read_text(encoding="utf-8"))["slug"] == "a__b"
+    assert parse_frontmatter(feedback.read_text(encoding="utf-8"))["slug"] == "use-yarn"

@@ -7,6 +7,15 @@ the reflex/activation indexes, ``disable-rule`` and the MCP tools by the
 display name, and the learned ledger by the slug. Writing the slug down makes
 the priority chain pick the same identifier everywhere. Idempotent; the
 caller rebuilds both indexes in the same step.
+
+The stamped value is ``_normalize_slug(stem)`` for feedback/reference/user
+pages (normalisation is the identity for every stem those types write) but
+the stem *verbatim* for ``shared/project/`` and ``shared/_inbox/project/``:
+those stems are the composite ``<agent>__<slug>`` that ``promote._project_slug``
+builds and that ``_learned_entries_for_projects`` records in the ledger as the
+rule's ``slug``. Normalising would turn ``__`` into ``-`` and recreate the
+ledger-vs-index mismatch this migration exists to close (225 pages on the
+real vault, 2026-09-02).
 """
 from __future__ import annotations
 
@@ -63,11 +72,27 @@ def _stamp(text: str, slug: str) -> str:
     return text[:start] + "\n".join(out) + "\n" + text[close:]
 
 
+_PROJECT_TYPE = "project"
+
+
+def _slug_for(md: Path, shared: Path) -> str:
+    """Canonical slug for the page at ``md``: composite stem verbatim for
+    project pages, normalized stem for everything else (see module doc)."""
+    parts = md.relative_to(shared).parts[:-1]
+    if parts and parts[0] == "_inbox":
+        parts = parts[1:]
+    if parts and parts[0] == _PROJECT_TYPE:
+        return md.stem
+    return _normalize_slug(md.stem)
+
+
 def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
     """Stamp every live page (``_inbox`` included, ``_archive`` excluded) that
-    lacks a non-empty string ``slug``. The slug is the normalized file stem,
-    which is what every page was written under in the first place."""
+    lacks a non-empty string ``slug``. The slug is the file stem — normalized
+    for cluster pages, verbatim for project pages — which is what every page
+    was written under in the first place."""
     rep = SlugReport()
+    shared = Path(vault_root) / "shared"
     for md in iter_shared_pages(Path(vault_root), include_inbox=True):
         rep.scanned += 1
         try:
@@ -81,7 +106,7 @@ def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
         existing = parse_frontmatter(text).get("slug")
         if isinstance(existing, str) and existing.strip():
             continue
-        new = _stamp(text, _normalize_slug(md.stem))
+        new = _stamp(text, _slug_for(md, shared))
         rep.stamped += 1
         if not dry_run:
             atomic_write_bytes(md, new.encode("utf-8"))
