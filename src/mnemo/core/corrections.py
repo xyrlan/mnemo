@@ -48,20 +48,20 @@ def quote_matches_turn(quote: str, turn: str) -> bool:
 
 
 # A keep quote needs at least this many non-stopword tokens to count as
-# evidence of a rule rather than an approval (#119).
-MIN_CONTENT_TOKENS = 6
+# evidence of a rule rather than an approval (#119). Calibrated on the 61 keep
+# verdicts of the saved real-vault plan: 54 survive at 5, 51 at 6, and the
+# generic approvals the issue names are demoted at both. The spec allows 5
+# and never lower.
+MIN_CONTENT_TOKENS = 5
 
 # Words that carry no rule content on their own. Portuguese and English:
 # articles, pronouns, prepositions, auxiliaries, and the generic imperatives a
 # user types to approve or nudge ("implementa os fixes", "yes do it").
-# ``vamo`` (colloquial "let's") is deliberately absent: the calibration keep
-# "vamo mudar o env do app para prod e subir" has exactly six content words
-# only with it counted, and real quotes at this length are all near the bar.
 _STOPWORDS = frozenset("""
 a o os as um uma uns umas de do da dos das em no na nos nas por para pra pro com sem
 e ou mas que se não nao sim ok okay ja já isso isto aqui ali lá la ele ela eles elas
 eu tu voce você nós nos vc me te lhe meu minha seu sua
-é e ser esta está estão estao foi era tem têm ter vai vão vamos bora
+é e ser esta está estão estao foi era tem têm ter vai vão vamos vamo bora
 pode podem poder deve devem faz faça fazer fez implementa implementar implemente
 aplica aplicar aplique testa testar teste roda rodar rode
 the a an and or but if so to of in on at for with by from as is are was were be been
