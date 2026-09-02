@@ -129,6 +129,19 @@ def _sanitize_llm_activates_on(raw: object) -> dict | None:
     return {"tools": tools, "path_globs": globs}
 
 
+def _sanitize_llm_evidence(raw: object) -> dict | None:
+    """Accept ``{"quote": non-empty str, "source": non-empty str}``; else None."""
+    if not isinstance(raw, dict):
+        return None
+    quote = raw.get("quote")
+    source = raw.get("source")
+    if not isinstance(quote, str) or not quote.strip():
+        return None
+    if not isinstance(source, str) or not source.strip():
+        return None
+    return {"quote": quote.strip(), "source": source.strip()}
+
+
 @dataclass
 class ExtractionSummary:
     projects_promoted: int = 0
@@ -203,6 +216,7 @@ def _parse_pages_from_response(
         tags = _sanitize_llm_tags(rp.get("tags"))
         enforce = _sanitize_llm_enforce(rp.get("enforce"))
         activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
+        evidence = _sanitize_llm_evidence(rp.get("evidence"))
         # ``any``, not ``all``: a page mixing one live source with one
         # reconstructed source is still partly reconstructed, and under ``all``
         # it would carry origin_backfill=False, span two projects, and be
@@ -221,6 +235,7 @@ def _parse_pages_from_response(
             enforce=enforce,
             activates_on=activates_on,
             origin_backfill=origin_backfill,
+            evidence=evidence,
         ))
     return out
 

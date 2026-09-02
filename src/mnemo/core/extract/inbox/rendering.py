@@ -127,6 +127,15 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     if isinstance(page.activates_on, dict) and page.activates_on:
         activates_on_block = _render_nested_block("activates_on", page.activates_on)
 
+    confidence = getattr(page, "confidence", None) or "inferred"
+    evidence_block = ""
+    if isinstance(page.evidence, dict) and page.evidence.get("quote"):
+        evidence_block = _render_nested_block("evidence", {
+            "quote": str(page.evidence.get("quote") or ""),
+            "source": str(page.evidence.get("source") or ""),
+        })
+    demoted_line = "demoted_from: feedback\n" if getattr(page, "unverified_feedback", False) else ""
+
     body_prefix = ""
     if enforce_stripped:
         body_prefix = (
@@ -162,6 +171,8 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         f"stability: {stability}\n"
+        f"confidence: {confidence}\n"
+        f"{demoted_line}"
         f"{origin_line}"
         f"{extras}"
         "sources:\n"
@@ -170,6 +181,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{tags_yaml}\n"
         f"{enforce_block}"
         f"{activates_on_block}"
+        f"{evidence_block}"
         "---\n\n"
         f"{body_prefix}{page.body}\n"
         f"{sources_section}"

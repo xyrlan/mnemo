@@ -50,6 +50,18 @@ class ExtractedPage:
     # (Task 9b). Set this field directly only when you know the origin; ask
     # ``backfill.origin.is_backfill_page`` when you want to read it.
     origin_backfill: bool = False
+    # The user quote this rule was built from, as ``{"quote": str, "source":
+    # "<vault-relative briefing path>"}``. Only feedback pages carry one.
+    # ``extract/evidence.verify_page`` checks it against the source briefing's
+    # ``## Corrections`` section and sets ``confidence``.
+    evidence: dict | None = None
+    # "verified" when the evidence quote was found in the cited briefing;
+    # "inferred" otherwise (the default, and the only value for non-feedback).
+    confidence: str = "inferred"
+    # True when a feedback page failed verification and was coerced to
+    # ``type: reference`` — such pages always stage in ``_inbox`` and never
+    # universally promote (see inbox/paths.py and inbox/apply.py).
+    unverified_feedback: bool = False
 
 
 @dataclass
