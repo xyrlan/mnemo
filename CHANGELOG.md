@@ -5,6 +5,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The circuit breaker says so when it trips.** SessionStart now emits one
+  line — `[mnemo] paused: circuit breaker open (N errors in the last hour,
+  most from <where>) … run `mnemo fix` to reset` — instead of going silent;
+  `mnemo status` and `mnemo doctor` show the count, the top error source,
+  and the remedy. The other hooks stay quiet on purpose. (#115)
+- **Briefings have a retention policy.** `briefings.retentionDays` (180; 0
+  disables) and `briefings.keepPerAgent` (20 newest, always kept). Any
+  briefing a live rule cites in `sources:` is never deleted. Runs from
+  SessionStart at most once a week, or on demand with
+  `mnemo briefing --prune [--dry-run]`; `mnemo status` shows
+  `Briefings: N across M agents (X MB) — K prunable`. On the live vault
+  today: 299 briefings, 293 protected, 0 prunable. (#116)
+
 ### Fixed
 
 - **The plugin's MCP server could not spawn on macOS/Linux.** `.mcp.json`
