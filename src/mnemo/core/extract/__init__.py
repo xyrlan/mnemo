@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
-from mnemo.core import dashboard, errors, locks, llm, paths
+from mnemo.core import dashboard, errors, learned, locks, llm, paths
 from mnemo.core.backfill.origin import (
     is_backfill_entry,
     is_backfill_frontmatter,
@@ -350,6 +350,78 @@ def _force_clear_inbox_cluster_dirs(vault_root: Path) -> None:
                 continue
 
 
+def _record_learned(
+    vault_root: Path, run_id: str, entries: list[dict],
+) -> None:
+    """Append promoted pages to the learned ledger. Never aborts extraction.
+
+    The ledger is what SessionStart announces to the user; a failure here
+    costs one announcement, never a run, so it is logged and swallowed.
+    """
+    if not entries:
+        return
+    try:
+        learned.record(vault_root, run_id=run_id, entries=entries)
+    except Exception as exc:  # noqa: BLE001 — the ledger is never load-bearing
+        errors.log_error(vault_root, "extract.learned", exc)
+
+
+def _learned_entries_for_pages(
+    pages: list[inbox.ExtractedPage], keys: list[str],
+) -> list[dict]:
+    """Ledger entries for the ``<type>/<slug>`` keys that landed live this run.
+
+    ``keys`` are the ``auto_promoted`` / ``universal_promoted`` lists, which
+    name pages by the same key ``dedupe_by_slug`` produced them under, so the
+    lookup is exact rather than by slug alone (two types can share a slug).
+    """
+    from mnemo.core.rule_activation import projects_for_rule
+
+    by_key = {f"{p.type}/{p.slug}": p for p in pages}
+    entries: list[dict] = []
+    for key in keys:
+        page = by_key.get(key)
+        if page is None:
+            continue
+        entries.append({
+            "slug": page.slug,
+            "type": page.type,
+            "name": page.name,
+            "projects": projects_for_rule(page.source_files),
+            "confidence": page.confidence,
+            "quote": (page.evidence or {}).get("quote"),
+        })
+    return entries
+
+
+def _learned_entries_for_projects(
+    project_files: list[scanner.MemoryFile], keys: list[str],
+) -> list[dict]:
+    """Ledger entries for freshly-written ``project/<slug>`` pages.
+
+    ``promote.promote_projects`` keys its result by ``project/<agent>__<slug>``
+    (see ``promote._project_slug``), so the memory files are indexed under the
+    same composite rather than under ``file.slug``. A project page has no
+    evidence quote and no source_files list to mine, so its project is the
+    agent that owns it.
+    """
+    by_key = {f"project/{mf.agent}__{mf.slug}": mf for mf in project_files}
+    entries: list[dict] = []
+    for key in keys:
+        mf = by_key.get(key)
+        if mf is None:
+            continue
+        entries.append({
+            "slug": key.split("/", 1)[1],
+            "type": "project",
+            "name": mf.slug,
+            "projects": [mf.agent] if mf.agent else [],
+            "confidence": "inferred",
+            "quote": None,
+        })
+    return entries
+
+
 def _run_extraction_body(
     cfg: dict,
     vault_root: Path,
@@ -386,6 +458,10 @@ def _run_extraction_body(
     )
     summary.projects_promoted += len(project_result.written_fresh) + len(project_result.overwrite_safe)
     _merge_apply(project_result, summary)
+    _record_learned(
+        vault_root, run_id,
+        _learned_entries_for_projects(project_files, project_result.written_fresh),
+    )
     state.last_run = run_id
     try:
         inbox.atomic_write_state(state, state_path)
@@ -511,6 +587,13 @@ def _run_extraction_body(
                 deduped, state, vault_root, run_id=run_id, force=force,
             )
             _merge_apply(apply_result, summary)
+            _record_learned(
+                vault_root, run_id,
+                _learned_entries_for_pages(
+                    deduped,
+                    apply_result.auto_promoted + apply_result.universal_promoted,
+                ),
+            )
             # Pages just landed in the vault; the next kind's prompt must see
             # them so it can reinforce rather than mint a near-duplicate.
             prompts.existing_rules.clear_cache()

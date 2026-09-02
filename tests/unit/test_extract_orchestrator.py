@@ -740,3 +740,12 @@ def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
     # The demotion is reported, not silent: one page staged, no echo involved.
     assert summary.demoted_unverified == 1
     assert summary.echo_rejected == 0
+
+    # Only what actually landed live is offered for announcement: the verified
+    # page with its quote, never the one that was demoted into _inbox.
+    from mnemo.core import learned
+
+    pend = learned.pending(populated_vault, "proj")
+    assert [e["slug"] for e in pend] == ["retry-5xx-only"]
+    assert pend[0]["confidence"] == "verified"
+    assert pend[0]["quote"] == "never retry on 4xx, only on 5xx"
