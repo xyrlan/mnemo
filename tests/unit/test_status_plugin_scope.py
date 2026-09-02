@@ -74,8 +74,11 @@ def test_does_not_claim_a_plugin_install_when_there_is_none(vault: Path, monkeyp
 
     hook_lines = [ln for ln in out.splitlines() if ln.startswith("Hooks")]
     assert hook_lines, "status must still report hook health"
-    assert all("plugin" not in ln.lower() for ln in hook_lines)
-    assert any("settings.json" in ln for ln in hook_lines)
+    # Judge the label, not the path after the dash: the tmp home lives under a
+    # directory named after this test, which itself contains "plugin".
+    labels = [ln.split(" — ")[0] for ln in hook_lines]
+    assert all("plugin" not in label.lower() for label in labels)
+    assert any("settings.json" in label for label in labels)
 
 
 def test_a_plugin_with_an_unreadable_hooks_file_is_not_a_crash(

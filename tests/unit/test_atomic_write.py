@@ -56,10 +56,12 @@ def test_each_call_uses_its_own_tmp_file(tmp_path, monkeypatch):
 
 
 def test_no_tmp_files_left_behind(tmp_path):
-    target = tmp_path / "out.json"
+    work = tmp_path / "work"
+    work.mkdir()
+    target = work / "out.json"
     for i in range(3):
         atomic_write_bytes(target, str(i).encode())
-    assert [p.name for p in tmp_path.iterdir()] == ["out.json"]
+    assert [p.name for p in work.iterdir()] == ["out.json"]
 
 
 def test_concurrent_writers_never_raise(tmp_path):
@@ -92,7 +94,9 @@ def test_failed_replace_cleans_tmp_and_raises(tmp_path, monkeypatch):
         raise PermissionError("locked")
 
     monkeypatch.setattr(os, "replace", boom)
-    target = tmp_path / "out.json"
+    work = tmp_path / "work"
+    work.mkdir()
+    target = work / "out.json"
     with pytest.raises(OSError):
         atomic_write_bytes(target, b"x")
-    assert list(tmp_path.iterdir()) == []
+    assert list(work.iterdir()) == []

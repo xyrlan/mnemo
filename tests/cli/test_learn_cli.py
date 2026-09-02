@@ -9,7 +9,6 @@ only care that a :class:`LearnReport` becomes the right stdout and exit code.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import pytest
 
@@ -48,10 +47,9 @@ def _install(monkeypatch, report: LearnReport) -> dict:
     return seen
 
 
-def test_prints_read_briefing_and_one_line_per_learned_rule(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("HOME", "/Users/dev")
+def test_prints_read_briefing_and_one_line_per_learned_rule(tmp_path, tmp_home, monkeypatch, capsys):
     report = LearnReport(
-        transcript=Path("/Users/dev/.claude/projects/-repo/abc.jsonl"),
+        transcript=tmp_home / ".claude" / "projects" / "-repo" / "abc.jsonl",
         briefing=tmp_path / "bots" / "repo" / "briefings" / "sessions" / "abc.md",
         corrections=2,
         learned=[
@@ -156,9 +154,8 @@ def test_missing_transcript_error_exits_one_without_the_wait_line(monkeypatch, c
     assert "wait a minute" not in captured.err
 
 
-def test_dry_run_reports_what_it_would_read_and_stops(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("HOME", "/Users/dev")
-    path = Path("/Users/dev/.claude/projects/-repo/abc.jsonl")
+def test_dry_run_reports_what_it_would_read_and_stops(tmp_path, tmp_home, monkeypatch, capsys):
+    path = tmp_home / ".claude" / "projects" / "-repo" / "abc.jsonl"
     seen = _install(monkeypatch, LearnReport(transcript=path, would_read=path))
 
     rc = cmd_mod.cmd_learn(_args(dry_run=True))

@@ -218,6 +218,9 @@ def test_resolve_vault_prefers_local_config(tmp_home: Path, monkeypatch: pytest.
     cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
 
     from mnemo.core import config as cfg_mod
+    # The env var (set by the autouse home fixture) short-circuits the lookup;
+    # this test is about the fallback order beneath it: local beats global.
+    monkeypatch.delenv("MNEMO_CONFIG_PATH", raising=False)
     cfg = cfg_mod.load_config()
     assert Path(cfg["vaultRoot"]) == proj / ".mnemo"
 
