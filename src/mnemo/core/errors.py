@@ -45,6 +45,19 @@ def log_error(vault_root: Path, where: str, exc: BaseException) -> None:
         return  # never propagate
 
 
+def _breaker_relevant(entry: dict, cutoff: datetime) -> bool:
+    """True when a log entry counts toward the breaker.
+
+    Background extraction and the session-end scheduler are excluded: their
+    failures are already reported elsewhere and must not silence the hooks.
+    Raises on a malformed entry; callers skip those.
+    """
+    where = entry.get("where", "")
+    if where.startswith("extract.") or where.startswith("session_end.schedule"):
+        return False
+    return datetime.fromisoformat(entry["timestamp"]) >= cutoff
+
+
 def should_run(vault_root: Path) -> bool:
     """Return False if circuit breaker is open."""
     try:
@@ -56,14 +69,7 @@ def should_run(vault_root: Path) -> bool:
         with open(log_path, "rb") as fh:
             for raw in fh:
                 try:
-                    entry = json.loads(raw.decode("utf-8"))
-                    ts = datetime.fromisoformat(entry["timestamp"])
-                    where = entry.get("where", "")
-                    if where.startswith("extract."):
-                        continue
-                    if where.startswith("session_end.schedule"):
-                        continue
-                    if ts >= cutoff:
+                    if _breaker_relevant(json.loads(raw.decode("utf-8")), cutoff):
                         recent += 1
                 except Exception:
                     continue
@@ -72,6 +78,43 @@ def should_run(vault_root: Path) -> bool:
         return recent <= THRESHOLD_PER_HOUR
     except Exception:
         return True  # fail-open: never block hooks because the breaker is broken
+
+
+def recent_summary(vault_root: Path) -> tuple[int, list[tuple[str, int]]]:
+    """(errors counted by the breaker in the last hour, ``where`` buckets by count desc).
+
+    Same exclusions as :func:`should_run`; fail-open to ``(0, [])``.
+    """
+    try:
+        log_path = _log_path(vault_root)
+        if not log_path.exists():
+            return 0, []
+        cutoff = datetime.now() - timedelta(hours=1)
+        buckets: dict[str, int] = {}
+        with open(log_path, "rb") as fh:
+            for raw in fh:
+                try:
+                    entry = json.loads(raw.decode("utf-8"))
+                    if _breaker_relevant(entry, cutoff):
+                        where = entry.get("where", "?")
+                        buckets[where] = buckets.get(where, 0) + 1
+                except Exception:
+                    continue
+        ordered = sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0]))
+        return sum(buckets.values()), ordered
+    except Exception:
+        return 0, []
+
+
+def remedy_line(vault_root: Path) -> str:
+    """One sentence for status/doctor/session-start when the breaker is open."""
+    count, buckets = recent_summary(vault_root)
+    top = f", most from {buckets[0][0]}" if buckets else ""
+    return (
+        f"circuit breaker open ({count} errors in the last hour{top}). "
+        "Hooks are off until it cools down (1h) — run `mnemo fix` to reset now, "
+        "`mnemo doctor` to see the errors."
+    )
 
 
 def reset(vault_root: Path) -> None:
