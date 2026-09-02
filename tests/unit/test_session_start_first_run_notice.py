@@ -5,9 +5,12 @@ no longer spends ~20 Haiku calls on the user's account before they have agreed
 to anything. That trade is only honest if the user is *told* the history is
 there — otherwise the feature they installed mnemo for is simply invisible.
 
-So: one line, once per vault, appended to the injection envelope.
+So: one line, once per project, appended to the injection envelope.
 
-- Once per vault, tracked by ``firstRunNoticeShown`` in the ledger.
+- Once per project, tracked by ``firstRunNoticeShown`` in the ledger (a dict
+  keyed by canonical project name — a second repo sharing this vault gets its
+  own invitation). A legacy ``True`` bool from before this was per-project
+  means shown everywhere.
 - Never when a real sweep already finished (``installRunDone``) — there is
   nothing left to invite them to.
 - Never when there are zero transcripts, and in that case the flag stays
@@ -66,16 +69,50 @@ def test_first_run_offers_the_backfill_and_says_what_it_costs(vault, monkeypatch
 
     assert notice == (
         "[mnemo] first run: 3 past session(s) for this repo can be learned "
-        "with `mnemo backfill` (opt-in, about 3 Haiku calls)."
+        "with `mnemo backfill` (opt-in, up to 3 Haiku calls; "
+        "`mnemo backfill --dry-run` shows the exact cost)."
     )
-    assert ledger.load(vault)["firstRunNoticeShown"] is True
+    assert ledger.load(vault)["firstRunNoticeShown"] == {"theproject": True}
 
 
-def test_the_notice_is_shown_only_once_per_vault(vault, monkeypatch):
+def test_the_call_estimate_is_capped_at_installcap(vault, monkeypatch):
+    """backfill only ever spends up to installCap calls on an install run."""
+    _patch_transcripts(monkeypatch, 50)
+
+    notice = session_start._first_run_notice(
+        vault, _cfg(backfill={"installCap": 20}), "theproject"
+    )
+
+    assert notice == (
+        "[mnemo] first run: 50 past session(s) for this repo can be learned "
+        "with `mnemo backfill` (opt-in, up to 20 Haiku calls; "
+        "`mnemo backfill --dry-run` shows the exact cost)."
+    )
+
+
+def test_the_notice_is_shown_only_once_per_project(vault, monkeypatch):
     _patch_transcripts(monkeypatch, 3)
 
     assert session_start._first_run_notice(vault, _cfg(), "theproject")
     assert session_start._first_run_notice(vault, _cfg(), "theproject") == ""
+
+
+def test_a_second_project_in_the_same_vault_gets_its_own_notice(vault, monkeypatch):
+    """'for this repo' is per project — a second repo has its own history."""
+    _patch_transcripts(monkeypatch, 3)
+
+    assert session_start._first_run_notice(vault, _cfg(), "projectone")
+    second = session_start._first_run_notice(vault, _cfg(), "projecttwo")
+
+    assert second == (
+        "[mnemo] first run: 3 past session(s) for this repo can be learned "
+        "with `mnemo backfill` (opt-in, up to 3 Haiku calls; "
+        "`mnemo backfill --dry-run` shows the exact cost)."
+    )
+    assert ledger.load(vault)["firstRunNoticeShown"] == {
+        "projectone": True,
+        "projecttwo": True,
+    }
 
 
 def test_a_completed_sweep_is_not_invited_to_run_again(vault, monkeypatch):
@@ -91,7 +128,7 @@ def test_backfill_disabled_says_nothing(vault, monkeypatch):
 
     cfg = _cfg(backfill={"enabled": False})
     assert session_start._first_run_notice(vault, cfg, "theproject") == ""
-    assert ledger.load(vault)["firstRunNoticeShown"] is False
+    assert ledger.load(vault)["firstRunNoticeShown"] == {}
 
 
 def test_a_repo_with_no_history_keeps_its_invitation_for_later(vault, monkeypatch):
@@ -104,7 +141,31 @@ def test_a_repo_with_no_history_keeps_its_invitation_for_later(vault, monkeypatc
     _patch_transcripts(monkeypatch, 0)
 
     assert session_start._first_run_notice(vault, _cfg(), "theproject") == ""
-    assert ledger.load(vault)["firstRunNoticeShown"] is False
+    assert ledger.load(vault)["firstRunNoticeShown"] == {}
+
+
+def test_legacy_true_bool_suppresses_the_notice_for_every_project(vault, monkeypatch):
+    """Pre-migration vaults stored a bare bool; it must mean shown everywhere."""
+    _patch_transcripts(monkeypatch, 3)
+    led = ledger.load(vault)
+    led["firstRunNoticeShown"] = True
+    ledger.save(vault, led)
+
+    assert session_start._first_run_notice(vault, _cfg(), "projectone") == ""
+    assert session_start._first_run_notice(vault, _cfg(), "projecttwo") == ""
+    assert ledger.load(vault)["firstRunNoticeShown"] is True
+
+
+def test_legacy_false_bool_is_upgraded_to_a_dict_on_first_mark(vault, monkeypatch):
+    """A ledger written before this was per-project starts as ``False``."""
+    _patch_transcripts(monkeypatch, 3)
+    led = ledger.load(vault)
+    led["firstRunNoticeShown"] = False
+    ledger.save(vault, led)
+
+    assert session_start._first_run_notice(vault, _cfg(), "theproject")
+
+    assert ledger.load(vault)["firstRunNoticeShown"] == {"theproject": True}
 
 
 def test_a_broken_discovery_is_logged_and_never_reaches_the_session(vault, monkeypatch):
@@ -166,6 +227,7 @@ def test_the_notice_alone_is_a_valid_envelope(monkeypatch, tmp_path, tmp_home, c
     envelope = json.loads(capsys.readouterr().out)
     assert envelope["hookSpecificOutput"]["additionalContext"] == (
         "[mnemo] first run: 4 past session(s) for this repo can be learned "
-        "with `mnemo backfill` (opt-in, about 4 Haiku calls)."
+        "with `mnemo backfill` (opt-in, up to 4 Haiku calls; "
+        "`mnemo backfill --dry-run` shows the exact cost)."
     )
     assert spawned == [], "the notice replaces the automatic sweep, it does not join it"

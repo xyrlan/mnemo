@@ -289,7 +289,7 @@ def _maybe_schedule_install_backfill(
 
 
 def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
-    """One line, once per vault, instead of spending LLM calls unasked.
+    """One line, once per project, instead of spending LLM calls unasked.
 
     ``backfill.autoOnFirstSession`` now defaults to False, so a fresh install
     no longer harvests the user's transcript history the moment it is
@@ -304,24 +304,35 @@ def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
       history later still gets its invitation rather than having burned it
       while empty.
 
+    Shown once per *project*, not once per vault: "for this repo" is per
+    project, and a second repo sharing this vault has its own history to
+    invite. The call estimate is capped at ``backfill.installCap`` (20) —
+    the actual run also skips already-harvested sessions and ones with no
+    file mutations, so the true cost is usually lower than even this bound;
+    the notice says so and points at ``--dry-run`` for the exact number.
+
     Fail-silent, like everything else on the session-start path.
     """
     try:
-        from mnemo.core.backfill import discover, ledger as _ledger
+        from mnemo.core.backfill import discover as _discover
+        from mnemo.core.backfill import ledger as _ledger
 
         backfill_cfg = cfg.get("backfill") or {}
         if not backfill_cfg.get("enabled", True):
             return ""
         led = _ledger.load(vault_root)
-        if led.get("installRunDone") or _ledger.notice_shown(led):
+        if led.get("installRunDone") or _ledger.notice_shown(led, project):
             return ""
-        n = len(discover.find_transcripts(project=project))
+        n = len(_discover.find_transcripts(project=project))
         if n == 0:
             return ""
-        _ledger.mark_notice_shown(vault_root)
+        _ledger.mark_notice_shown(vault_root, project)
+        cap = int(backfill_cfg.get("installCap", 20))
+        calls = min(n, cap)
         return (
             f"[mnemo] first run: {n} past session(s) for this repo can be learned "
-            f"with `mnemo backfill` (opt-in, about {n} Haiku calls)."
+            f"with `mnemo backfill` (opt-in, up to {calls} Haiku calls; "
+            f"`mnemo backfill --dry-run` shows the exact cost)."
         )
     except Exception as exc:
         try:
