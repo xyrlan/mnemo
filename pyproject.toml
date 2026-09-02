@@ -40,6 +40,7 @@ testpaths = ["tests"]
 addopts = "-ra -m 'not recall'"
 markers = [
     "recall: live retrieval regression suite (opt-in; runs against a real vault)",
+    "real_spawn: the test exercises a detached-spawn function itself (opts out of the autouse no-spawn guard)",
 ]
 
 [tool.coverage.run]

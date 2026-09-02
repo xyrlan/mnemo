@@ -89,6 +89,7 @@ def test_run_inline_swallows_exception(tmp_path: Path):
     assert "boom" in data["runs"]["x"]["last_error"]
 
 
+@pytest.mark.real_spawn
 def test_run_detached_records_attempt(tmp_path: Path, monkeypatch):
     set_state(vault_root=tmp_path, state="on")
     spawned = {}
@@ -110,6 +111,7 @@ def test_run_detached_records_attempt(tmp_path: Path, monkeypatch):
     assert "last_error" not in data["runs"]["bg"]
 
 
+@pytest.mark.real_spawn
 def test_run_detached_swallows_oserror(tmp_path: Path, monkeypatch):
     set_state(vault_root=tmp_path, state="on")
 

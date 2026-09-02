@@ -28,6 +28,36 @@ def _no_real_install_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let a test launch a real detached mnemo process.
+
+    ``session_start.main`` runs ``run_due_jobs``, and a fresh tmp vault makes
+    every autopilot job "due", so ``triggers.run_detached`` spawned a real
+    ``mnemo autopilot tune bm25`` (and doctor/sweep/telemetry/reflex jobs)
+    per hook test. Each child re-reads the developer's real config and vault
+    and runs a 30–60 minute grid search; 2026-09-02 a test-heavy day left 46
+    of them alive and the machine unusable. ``session_end.main`` likewise
+    spawns real ``mnemo extract`` / ``mnemo briefing`` children — the latter
+    calls the LLM.
+
+    The stubs keep the bookkeeping the callers rely on (``mark_run``) and do
+    nothing else. Tests that exercise a spawn function itself opt out with
+    ``@pytest.mark.real_spawn`` and patch ``subprocess.Popen`` themselves.
+    """
+    if request.node.get_closest_marker("real_spawn"):
+        return
+    from mnemo.autopilot.core import triggers as _triggers
+
+    def _fake_run_detached(*, vault_root, name, argv):  # noqa: ARG001
+        _triggers.mark_run(vault_root=vault_root, name=name, success=True)
+
+    monkeypatch.setattr("mnemo.autopilot.core.triggers.run_detached", _fake_run_detached)
+    monkeypatch.setattr("mnemo.autopilot.core.scheduler.run_detached", _fake_run_detached, raising=False)
+    monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_extraction", lambda *a, **k: None)
+    monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_briefing", lambda *a, **k: None)
+
+
 @pytest.fixture
 def tmp_vault(tmp_path: Path) -> Path:
     """Create a minimal vault directory tree and return its root.
