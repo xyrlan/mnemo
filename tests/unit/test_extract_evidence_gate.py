@@ -53,7 +53,9 @@ def test_verified_when_quote_is_in_source_corrections(tmp_path):
 def test_unverified_when_quote_missing_or_source_absent(tmp_path):
     root = _vault(tmp_path)
     for ev in (None,
-               {"quote": "invented words here", "source": "bots/proj/briefings/sessions/s1.md"},
+               # specific enough to pass the content-word gate, absent from Corrections
+               {"quote": "always deploy the staging branch before merging release tags",
+                "source": "bots/proj/briefings/sessions/s1.md"},
                {"quote": "never retry on 4xx, only on 5xx", "source": "bots/proj/briefings/sessions/nope.md"},
                {"quote": "never retry on 4xx, only on 5xx", "source": "../../etc/passwd"}):
         p = evidence.verify_page(_page(evidence=ev), root)

@@ -7,6 +7,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **`mnemo reclassify` keeps a rule only for a quote that says something.**
+  A `keep` now needs a user quote with at least five content words (after
+  Portuguese and English stopwords) and a `link` sentence from the grader
+  stating what in the quote establishes the rule; bare approvals
+  ("implementa os fixes", "vamos testar a opcao A?") demote. The same
+  specificity bar applies to the extraction-time evidence check. `link` is
+  written into the kept page's `evidence:` block and shown in the plan
+  printout. Calibrated on the live vault's saved plan: of 61 keeps, 54
+  survive, and the 7 demoted are all approvals or questions
+  (`tools/calibrate_keep_bar.py` replays any saved plan). (#119)
 - **Rule pages carry `slug:`.** Pages were written under the normalized LLM
   slug but only carried `name:` (the display name), so the reflex and
   activation indexes, `disable-rule`, `read_mnemo_rule`, `list_rules_by_topic`

@@ -28,6 +28,8 @@ def _source_path(vault_root: Path, rel: str) -> Path | None:
 
 
 def quote_verified(evidence: dict | None, vault_root: Path) -> bool:
+    """True when the quote is specific enough to establish a rule AND appears
+    verbatim in the cited briefing's ``## Corrections`` section."""
     if not isinstance(evidence, dict):
         return False
     quote = str(evidence.get("quote") or "")
@@ -48,7 +50,12 @@ def quote_verified(evidence: dict | None, vault_root: Path) -> bool:
 
 
 def verify_page(page: ExtractedPage, vault_root: Path) -> ExtractedPage:
-    """Return the page marked verified, or demoted to a staged reference page."""
+    """Return the page marked verified, or demoted to a staged reference page.
+
+    Verification needs a quote that passes :func:`quote_verified` — at least
+    ``corrections.MIN_CONTENT_TOKENS`` content words, found in the Corrections
+    of one of the page's own source briefings.
+    """
     if page.type != "feedback":
         return page
     # The quote must come from a briefing this page was actually built from.

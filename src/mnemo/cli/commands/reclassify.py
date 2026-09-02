@@ -28,7 +28,8 @@ def _fmt(v) -> str:
         # The grader's one-sentence justification (#119): a keep is only
         # reviewable if the maintainer can see why the quote was accepted.
         if v.link:
-            line += f"\n           link: {v.link.strip()}"
+            link = " ".join(v.link.split())
+            line += f"\n           link: {link}"
         return line
     reason = f" · {v.reason}" if v.reason else ""
     return f"  {v.verdict:<8} {v.slug}{reason}"
