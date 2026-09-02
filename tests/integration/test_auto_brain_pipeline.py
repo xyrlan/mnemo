@@ -4,6 +4,42 @@ from __future__ import annotations
 import json
 
 
+# A feedback page only reaches shared/feedback/ when its ``evidence`` quotes the
+# ``## Corrections`` section of a briefing it was actually built from (the
+# evidence gate, src/mnemo/core/extract/evidence.py). These tests are about the
+# routing that happens *after* that gate, so their pages are made verifiable:
+# a briefing on disk, cited as the page's source, quoted verbatim.
+_QUOTES = {
+    "clubinho": "always use yarn, never npm install",
+    "central": "never commit without asking me first",
+}
+
+
+def _briefing_path(agent: str) -> str:
+    return f"bots/{agent}/briefings/sessions/s1.md"
+
+
+def _write_briefing(vault, agent, rule="Follow the correction"):
+    path = vault / "bots" / agent / "briefings" / "sessions" / "s1.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "type: briefing\n"
+        f"agent: {agent}\n"
+        "session_id: s1\n"
+        "---\n\n"
+        f"# Briefing — {agent} — s1\n\n"
+        "## Corrections\n"
+        f'- "{_QUOTES[agent]}" → {rule}\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def _evidence(agent: str) -> dict:
+    return {"quote": _QUOTES[agent], "source": _briefing_path(agent)}
+
+
 def _write_memory(vault, agent, stem, type_, content_suffix=""):
     path = vault / "bots" / agent / "memory" / f"{stem}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +76,8 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback")
     _write_memory(vault, "central", "feedback_no_commits", "feedback")
     _write_memory(vault, "clubinho", "feedback_no_commit_without_permission", "feedback")
+    _write_briefing(vault, "clubinho", rule="Use yarn")
+    _write_briefing(vault, "central", rule="Ask before committing")
 
     def fake_call(prompt, *, system, model, timeout):
         return _mock_llm_response([
@@ -49,7 +87,10 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn.",
-                "source_files": ["bots/clubinho/memory/feedback_use_yarn.md"],
+                # One source, so the single-source auto-promote door; the
+                # source is the briefing the evidence quote comes from.
+                "source_files": [_briefing_path("clubinho")],
+                "evidence": _evidence("clubinho"),
             },
             {
                 "slug": "no-commits",
@@ -58,9 +99,10 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
                 "description": "",
                 "body": "Do not commit without permission.",
                 "source_files": [
-                    "bots/central/memory/feedback_no_commits.md",
+                    _briefing_path("central"),
                     "bots/clubinho/memory/feedback_no_commit_without_permission.md",
                 ],
+                "evidence": _evidence("central"),
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call)
@@ -146,6 +188,9 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
 
     vault = tmp_path / "vault"
     _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback")
+    # The sibling bounce is only reachable once the page is in the sacred dir,
+    # so the page has to clear the evidence gate: one briefing source, quoted.
+    _write_briefing(vault, "clubinho", rule="Use yarn")
 
     def fake_call_v1(prompt, *, system, model, timeout):
         return _mock_llm_response([
@@ -155,7 +200,8 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn.",
-                "source_files": ["bots/clubinho/memory/feedback_use_yarn.md"],
+                "source_files": [_briefing_path("clubinho")],
+                "evidence": _evidence("clubinho"),
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call_v1)
@@ -178,7 +224,8 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn. Updated.",
-                "source_files": ["bots/clubinho/memory/feedback_use_yarn.md"],
+                "source_files": [_briefing_path("clubinho")],
+                "evidence": _evidence("clubinho"),
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call_v2)

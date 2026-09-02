@@ -252,7 +252,13 @@ def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
     assert cli.main(["extract"]) == 0
 
     shared = vault / "shared"
-    assert (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").exists()
+    # The harvested feedback page cites no ``## Corrections`` quote (its source
+    # is a memory file, which cannot carry one), so the evidence gate demotes
+    # it to a staged ``reference`` page. Where it stages is what this test is
+    # about; that it stages under ``reference`` rather than ``feedback`` is the
+    # gate's business, tested in tests/unit/test_extract_evidence_gate.py.
+    assert (shared / "_inbox" / "reference" / "run-pytest-before-push.md").exists()
+    assert not (shared / "reference" / "run-pytest-before-push.md").exists()
     assert not (shared / "feedback" / "run-pytest-before-push.md").exists()
     # promote.py names project pages "<agent>__<slug>".
     assert (shared / "_inbox" / "project" / "repo__layout.md").exists()
@@ -260,7 +266,7 @@ def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
 
     # The staged pages carry the stamp forward, so a later extract (or a
     # reader like doctor) can still tell what they are.
-    staged = (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").read_text(
+    staged = (shared / "_inbox" / "reference" / "run-pytest-before-push.md").read_text(
         encoding="utf-8"
     )
     assert "origin: backfill" in staged
@@ -287,7 +293,7 @@ def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "staged in _inbox/ awaiting review" in out
-    assert "feedback/run-pytest-before-push" in out
+    assert "reference/run-pytest-before-push" in out
     assert "project/repo__layout" in out
     # ...and does not misfile them as a reconciliation backlog.
     assert "cross universalThreshold but remain in _inbox/" not in out
@@ -356,10 +362,14 @@ def test_a_backfilled_source_gates_a_page_that_a_live_sibling_would_promote(
     assert cli.main(["extract"]) == 0
 
     shared = vault / "shared"
-    assert not (shared / "feedback" / "run-pytest-before-push.md").exists(), (
+    # Unevidenced feedback is demoted to ``reference`` by the evidence gate, so
+    # the sacred dir this test guards is ``shared/reference/``; assert on both
+    # so the check cannot pass merely because the type changed.
+    assert not (shared / "reference" / "run-pytest-before-push.md").exists(), (
         "a mixed-origin page was universally promoted into the sacred dir"
     )
-    assert (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").exists()
+    assert not (shared / "feedback" / "run-pytest-before-push.md").exists()
+    assert (shared / "_inbox" / "reference" / "run-pytest-before-push.md").exists()
 
 
 # --------------------------------------------------------------------------
@@ -444,7 +454,9 @@ def test_a_later_extract_must_not_launder_an_already_staged_page(
     assert _run_session_start(monkeypatch, repo) == [0], _errors_log(vault)
     assert cli.main(["extract"]) == 0
     shared = vault / "shared"
-    assert (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").exists()
+    # Demoted to ``reference`` by the evidence gate — see the note in test 1.
+    assert (shared / "_inbox" / "reference" / "run-pytest-before-push.md").exists()
+    assert not (shared / "reference" / "run-pytest-before-push.md").exists()
     assert not (shared / "feedback" / "run-pytest-before-push.md").exists()
 
     # Weeks later: a live session in another project teaches the same lesson.
@@ -465,11 +477,12 @@ def test_a_later_extract_must_not_launder_an_already_staged_page(
     }]
     assert cli.main(["extract"]) == 0
 
-    assert not (shared / "feedback" / "run-pytest-before-push.md").exists(), (
+    assert not (shared / "reference" / "run-pytest-before-push.md").exists(), (
         "a page staged for review was laundered into the sacred dir by a "
         "later extract that no longer saw its backfill source"
     )
+    assert not (shared / "feedback" / "run-pytest-before-push.md").exists()
     # Both halves, always: the routing door leaves the staged copy behind
     # while the universal door consumes it, so asserting only that shared/ is
     # clean would pass against a fix that closed just one of them.
-    assert (shared / "_inbox" / "feedback" / "run-pytest-before-push.md").exists()
+    assert (shared / "_inbox" / "reference" / "run-pytest-before-push.md").exists()

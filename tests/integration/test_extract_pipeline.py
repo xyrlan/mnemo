@@ -24,6 +24,42 @@ def _cfg(vault: Path, chunk_size: int = 10) -> dict:
     }
 
 
+# A ``feedback`` page reaches shared/feedback/ only when its ``evidence`` quotes
+# the ``## Corrections`` section of a briefing listed in its own
+# ``source_files`` (src/mnemo/core/extract/evidence.py). These tests are about
+# what the pipeline does with a promotable feedback page, so their pages are
+# made verifiable: a briefing on disk, cited as a source, quoted verbatim.
+_QUOTES = {
+    "agent-a": "always use yarn, never npm install",
+    "agent-b": "never commit without asking me first",
+}
+
+
+def _briefing_path(agent: str) -> str:
+    return f"bots/{agent}/briefings/sessions/s1.md"
+
+
+def _write_briefing(vault: Path, agent: str, rule: str = "Follow the correction") -> Path:
+    path = vault / "bots" / agent / "briefings" / "sessions" / "s1.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "type: briefing\n"
+        f"agent: {agent}\n"
+        "session_id: s1\n"
+        "---\n\n"
+        f"# Briefing — {agent} — s1\n\n"
+        "## Corrections\n"
+        f'- "{_QUOTES[agent]}" → {rule}\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def _evidence(agent: str) -> dict:
+    return {"quote": _QUOTES[agent], "source": _briefing_path(agent)}
+
+
 def _resp(pages: list[dict]) -> llm_mod.LLMResponse:
     text = json.dumps({"pages": pages})
     return llm_mod.LLMResponse(
@@ -56,16 +92,20 @@ def stub_llm_integration(monkeypatch):
 
 
 def test_full_first_run_produces_expected_layout(populated_vault, stub_llm_integration):
+    _write_briefing(populated_vault, "agent-a", rule="Use yarn")
+    _write_briefing(populated_vault, "agent-b", rule="Ask before committing")
     stub_llm_integration([
         _resp([
             {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
-             "body": "yarn b", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
+             "body": "yarn b", "source_files": [_briefing_path("agent-a")],
+             "evidence": _evidence("agent-a")},
             {"slug": "no-commits-without-permission", "name": "No commits", "description": "d",
              "type": "feedback", "body": "nc b",
              "source_files": [
-                 "bots/agent-b/memory/feedback_no_commits.md",
+                 _briefing_path("agent-b"),
                  "bots/agent-b/memory/feedback_no_commit_without_permission.md",
-             ]},
+             ],
+             "evidence": _evidence("agent-b")},
         ]),
     ])
 
@@ -137,10 +177,14 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
     """
     from mnemo.core import rule_activation
 
+    _write_briefing(populated_vault, "agent-a", rule="No Co-Authored-By trailers")
+    _write_briefing(populated_vault, "agent-b", rule="Use the HeroUI Drawer")
     stub_llm_integration([
         _resp([
             # Single-source page → auto-promoted to shared/feedback/ so it
-            # passes is_consumer_visible and ends up in the index.
+            # passes is_consumer_visible and ends up in the index. The source
+            # is the briefing its evidence quote comes from, so it also clears
+            # the evidence gate.
             {
                 "slug": "no-coauthored",
                 "name": "No Co-Authored-By trailers",
@@ -148,8 +192,9 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
                 "type": "feedback",
                 "body": "rule body",
                 "source_files": [
-                    "bots/agent-a/memory/feedback_use_yarn.md",
+                    _briefing_path("agent-a"),
                 ],
+                "evidence": _evidence("agent-a"),
                 "stability": "stable",
                 "tags": ["git"],
                 "enforce": {
@@ -165,8 +210,9 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
                 "type": "feedback",
                 "body": "HeroUI v3 drawer pattern",
                 "source_files": [
-                    "bots/agent-b/memory/feedback_no_commits.md",
+                    _briefing_path("agent-b"),
                 ],
+                "evidence": _evidence("agent-b"),
                 "stability": "stable",
                 "tags": ["heroui"],
                 "activates_on": {
@@ -231,13 +277,18 @@ def test_conflict_flow_sibling_bounced(populated_vault, stub_llm_integration):
     # Single-source page is auto-promoted to shared/feedback/; when user edits
     # the sacred file and source changes, v0.3 writes a .proposed.md sibling
     # INTO _inbox/ rather than next to the sacred file.
+    # The bounce is only reachable once the page is in the sacred dir, so the
+    # page has to clear the evidence gate: one briefing source, quoted.
+    _write_briefing(populated_vault, "agent-a", rule="Use yarn")
     r1 = _resp([
         {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
-         "body": "v1", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
+         "body": "v1", "source_files": [_briefing_path("agent-a")],
+         "evidence": _evidence("agent-a")},
     ])
     r2 = _resp([
         {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
-         "body": "v2 upstream", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
+         "body": "v2 upstream", "source_files": [_briefing_path("agent-a")],
+         "evidence": _evidence("agent-a")},
     ])
     stub_llm_integration([r1, r2])
 
