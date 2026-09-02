@@ -5,8 +5,14 @@
 Monday, in your app repo, you tell Claude: *"never use npm in this repo, always
 yarn."* You run `mnemo learn` — or you just end the session and let it happen.
 Thursday, a new session, you ask Claude to add a dependency: that rule is
-injected before Claude answers. One line, about 80 tokens, and only when it
-clearly applies.
+injected before Claude answers. One or two short lines, about 150 tokens, and
+only when it clearly applies.
+
+What gets injected is a 300-character preview plus a pointer:
+`mnemo reflex context: • [[use-yarn-not-npm]]: Use yarn, never npm …`. mnemo
+also registers an MCP server so Claude can call `read_mnemo_rule` for the full
+text when the preview is not enough; the plugin sets it up, and `/mnemo:doctor`
+tells you if it is not connected.
 
 A rule that recurs in two different repos is promoted to universal and follows
 you everywhere.
@@ -28,14 +34,15 @@ own numbers: `mnemo status`.
 **CLAUDE.md** — you write it and prune it by hand, and it is loaded whole,
 every session, whether or not any of it is relevant to what you're doing.
 
-**Claude Code auto memory** — Claude writes it for you, but the first 200 lines
-load every session and the rest is silently dropped. Nothing is ranked against
-the prompt in front of you.
+**Claude Code auto memory** — Claude writes it for you, but only the head of
+the index loads every session (200 lines as of 2026-09) and the rest is
+silently dropped. Nothing is ranked against the prompt in front of you.
 
 **mnemo** — learns from your corrections and keeps a verifiable quote of what
 you actually said. Rules it can't verify stay staged for your review instead of
-entering the vault. Then it injects at most one rule per prompt, chosen by
-BM25F against the prompt text. No database, no daemon, no per-prompt LLM call.
+entering the vault. Then it injects at most two rules per prompt — usually
+one — chosen by BM25F against the prompt text. No database, no daemon, no
+per-prompt LLM call.
 
 ## Install
 
@@ -206,7 +213,9 @@ No third-party Python dependencies. Every piece of telemetry
 (`.mnemo/*.jsonl`) stays on disk.
 
 LLM calls go through the `claude` CLI you already have — one per session for
-the briefing, a few per extraction — and never on the prompt path. The one
+the briefing, and one per ten new files at extraction time — never on the
+prompt path. Logs are capped at 1 MB; briefings accumulate, one file per
+session. The one
 other outbound call is the plugin downloading its binary from GitHub Releases
 on first use (checksum-verified). Read the [source](src/mnemo).
 
