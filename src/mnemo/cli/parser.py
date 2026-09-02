@@ -161,8 +161,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # listing still appears with the literal "==SUPPRESS==" string as the help
     # column. Skipping ``help=`` works on every supported Python version.
     briefing = sub.add_parser("briefing")
-    briefing.add_argument("jsonl_path", type=str)
-    briefing.add_argument("agent", type=str)
+    # Positionals are optional so `mnemo briefing --prune` parses; the
+    # command itself rejects a call that has neither (#116).
+    briefing.add_argument("jsonl_path", type=str, nargs="?")
+    briefing.add_argument("agent", type=str, nargs="?")
+    briefing.add_argument("--prune", action="store_true")
+    briefing.add_argument("--dry-run", action="store_true")
     # Wired into settings.json by standalone installs, which have no
     # `python -m mnemo.hooks.<event>` module path to invoke. Choices come from
     # the same table that defines what gets installed, so the two cannot drift.
