@@ -37,7 +37,9 @@ def _fm_span(text: str) -> Optional[tuple[int, int]]:
     return 4, end + 1
 
 
-def _rewrite_keep(text: str, quote: Optional[str], source: Optional[str]) -> str:
+def _rewrite_keep(
+    text: str, quote: Optional[str], source: Optional[str], link: Optional[str] = None,
+) -> str:
     span = _fm_span(text)
     if span is None:
         return text
@@ -63,7 +65,9 @@ def _rewrite_keep(text: str, quote: Optional[str], source: Optional[str]) -> str
         out.append(line)
     if not inserted:
         out.append("confidence: verified")
-    evidence = _render_nested_block("evidence", {"quote": quote or "", "source": source or ""})
+    evidence = _render_nested_block(
+        "evidence", {"quote": quote or "", "source": source or "", "link": link or ""},
+    )
     out.append(evidence.rstrip("\n"))
     return text[:start] + "\n".join(out) + "\n" + text[close:]
 
@@ -238,7 +242,7 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
                 verdict = "demote"
 
         if verdict == "keep":
-            src_path.write_text(_rewrite_keep(text, v.quote, v.source), encoding="utf-8")
+            src_path.write_text(_rewrite_keep(text, v.quote, v.source, v.link), encoding="utf-8")
             entry = _entry_for(state, f"feedback/{v.slug}", fm_sources)
             entry["written_hash"] = content_hash(src_path)
             to_path = src_path

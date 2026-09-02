@@ -50,8 +50,10 @@ RECLASSIFY_SYSTEM_PROMPT = (
     "You grade rules that were auto-extracted from coding sessions. "
     "For each rule decide ONE verdict:\n"
     "- keep: a USER QUOTE in the provided context supports this rule as something the user "
-    "told the assistant to do or not do. You MUST copy that quote verbatim into `quote` and "
-    "name its briefing path in `source`.\n"
+    "told the assistant to do or not do. You MUST copy that quote verbatim into `quote`, "
+    "name its briefing path in `source`, and write in `link` one sentence saying what in "
+    "the quote establishes this rule. A quote that is a bare approval (\"do it\", "
+    "\"implementa\") is not evidence.\n"
     "- demote: real, reusable project knowledge (a config value, a deploy step, an API gotcha) "
     "but no user quote establishes it as a correction.\n"
     "- merge: states the same rule as another slug in this batch or in the known-slugs list; "
@@ -60,7 +62,7 @@ RECLASSIFY_SYSTEM_PROMPT = (
     "- archive: generic best practice any engineer knows, session narrative, a one-off decision, "
     "or text that reads like tool instructions rather than a rule.\n"
     'Output JSON only: {"verdicts": [{"slug": ..., "verdict": ..., "target": ..., "quote": ..., '
-    '"source": ..., "reason": ...}]} with one entry per input slug.'
+    '"source": ..., "link": ..., "reason": ...}]} with one entry per input slug.'
 )
 
 
@@ -253,6 +255,7 @@ def parse_verdicts(text: str) -> list[Verdict]:
             quote=(str(item["quote"]).strip() or None) if item.get("quote") else None,
             source=(str(item["source"]).strip() or None) if item.get("source") else None,
             reason=str(item.get("reason") or ""),
+            link=(str(item["link"]).strip() or None) if item.get("link") else None,
         ))
     return out
 
@@ -304,7 +307,9 @@ def validate(
 
     The LLM is never trusted about a quote: a ``keep`` survives only when the
     quote really appears in a correction or a user turn of one of the rule's own
-    briefing sources — the same bar :mod:`mnemo.core.corrections` sets.
+    briefing sources — the same bar :mod:`mnemo.core.corrections` sets — *and*
+    the quote is specific enough to say something (``quote_is_specific``) *and*
+    the grader stated in ``link`` what in it establishes the rule (#119).
     """
     out: list[Verdict] = []
     for v in verdicts:
@@ -322,11 +327,15 @@ def validate(
                 matched = _verify_quote(v.quote or "", rule, vault_root, projects_root=projects_root)
             if matched is None:
                 verdict, reason = "demote", reason or "quote-unverified"
+            elif not corrections.quote_is_specific(v.quote or ""):
+                verdict, reason = "demote", "quote-generic"
+            elif not (v.link or "").strip():
+                verdict, reason = "demote", "link-missing"
             elif not source:
                 source = matched
         out.append(Verdict(
             slug=v.slug, verdict=verdict, target=target,
-            quote=v.quote, source=source, reason=reason,
+            quote=v.quote, source=source, reason=reason, link=v.link,
         ))
     return out
 
@@ -450,6 +459,7 @@ def load_plan(vault_root: Path) -> Optional[Plan]:
             quote=d.get("quote"),
             source=d.get("source"),
             reason=str(d.get("reason") or ""),
+            link=(str(d["link"]).strip() or None) if d.get("link") else None,
             path=_check_path(d.get("path")),
         )
         for d in payload.get("verdicts") or []

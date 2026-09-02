@@ -30,6 +30,10 @@ class Verdict:
     quote: Optional[str] = None
     source: Optional[str] = None
     reason: str = ""
+    # One sentence from the grader saying what in ``quote`` establishes the
+    # rule (#119). Required for a ``keep``; recorded as ``evidence.link`` so a
+    # human can audit why the quote was accepted.
+    link: Optional[str] = None
     # Vault-relative path of the rule file this verdict grades. Populated by
     # ``plan()`` from the RuleDoc, because the slug is derived from frontmatter
     # (``derive_rule_slug``) and on the real vault 97% of rules have a slug that

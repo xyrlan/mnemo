@@ -17,7 +17,7 @@ session_id: s1
 - used yarn
 
 ## Corrections
-- "use yarn not npm in this repo" → Use yarn
+- "use yarn not npm in this repo, never mix package managers" → Use yarn
 """
 
 
@@ -55,8 +55,8 @@ def test_validate_downgrades_bad_merge_and_unverifiable_keep(vault, tmp_path):
     _rule(vault, "generic", "Generic tip")
     rules = {r.slug: r for r in R.collect_rules(vault)}
     verdicts = [
-        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
-                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo, never mix package managers",
+                  source="bots/proj/briefings/sessions/s1.md", link="user forbade npm in favour of yarn"),
         R.Verdict(slug="generic", verdict="keep", quote="words nobody typed here"),
         R.Verdict(slug="generic", verdict="merge", target="does-not-exist"),
         R.Verdict(slug="generic", verdict="banana"),
@@ -75,8 +75,8 @@ def test_apply_moves_files_writes_manifest_and_undo_restores_bytes(vault, tmp_pa
     state_before = (vault / ".mnemo" / "extraction-state.json").read_bytes()
 
     plan = R.Plan(run_id="20260901T000000", llm_calls=0, verdicts=[
-        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
-                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo, never mix package managers",
+                  source="bots/proj/briefings/sessions/s1.md", link="user forbade npm in favour of yarn"),
         R.Verdict(slug="project-fact", verdict="demote"),
         R.Verdict(slug="use-yarn-dup", verdict="merge", target="use-yarn"),
         R.Verdict(slug="generic", verdict="archive"),
@@ -84,7 +84,8 @@ def test_apply_moves_files_writes_manifest_and_undo_restores_bytes(vault, tmp_pa
     report = R.apply(vault, plan, rebuild_indexes=False)
 
     kept_text = keep.read_text(encoding="utf-8")
-    assert "confidence: verified" in kept_text and "use yarn not npm in this repo" in kept_text
+    assert "confidence: verified" in kept_text and "use yarn not npm in this repo, never mix package managers" in kept_text
+    assert "link: user forbade npm in favour of yarn" in kept_text
     assert not demote.exists()
     demoted = vault / "shared" / "reference" / "project-fact.md"
     assert demoted.exists() and "type: reference" in demoted.read_text(encoding="utf-8") and "demoted_from: feedback" in demoted.read_text(encoding="utf-8")
@@ -248,8 +249,8 @@ def test_demoted_entry_keeps_origin_backfill_and_keep_creates_missing_entry(vaul
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     plan = R.Plan(run_id="20260902T222222", llm_calls=0, verdicts=[
-        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo",
-                  source="bots/proj/briefings/sessions/s1.md"),
+        R.Verdict(slug="use-yarn", verdict="keep", quote="use yarn not npm in this repo, never mix package managers",
+                  source="bots/proj/briefings/sessions/s1.md", link="user forbade npm in favour of yarn"),
         R.Verdict(slug="project-fact", verdict="demote"),
     ])
     R.apply(vault, plan, rebuild_indexes=False)
