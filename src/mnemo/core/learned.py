@@ -217,6 +217,41 @@ def pending_count(
     return len(_pending_entries(vault_root, project, universal_threshold))
 
 
+def recent(
+    vault_root: Path,
+    project: str | None,
+    *,
+    limit: int = 10,
+    universal_threshold: int = 2,
+) -> list[dict]:
+    """The newest entries relevant to ``project``, newest first. Never raises.
+
+    Same project/universal filter as ``pending``, but blind to the announced
+    markers: this is the "what have I learned lately" view, and an entry the
+    session-start block already showed is exactly what a user comes here to
+    look up again. ``project=None`` means the whole vault, for the case where
+    ``status`` cannot resolve a project name.
+    """
+    try:
+        entries = _read(vault_root)
+        if not entries:
+            return []
+        out = []
+        for e in entries:
+            if project is None:
+                out.append(e)
+                continue
+            projects = e["projects"]
+            if project in projects or len(projects) >= universal_threshold:
+                out.append(e)
+        out.reverse()
+        if limit is not None:
+            out = out[:limit]
+        return out
+    except Exception:  # noqa: BLE001 — mirrors the fail-silent readers above
+        return []
+
+
 def mark_announced(vault_root: Path, project: str) -> None:
     """Advance this project's high-water mark to the whole ledger. Never raises."""
     try:

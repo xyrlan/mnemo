@@ -769,3 +769,62 @@ def test_doctor_silent_when_no_promotion_candidates(
     out = capsys.readouterr().out
     assert "Universal promotion health" in out
     assert "promotion candidate" not in out
+
+
+# --- the learned ledger's tail, the overflow `(N more — mnemo status)` points at ---
+
+def _seed_learned(vault: Path, entries: list[dict]) -> None:
+    from mnemo.core import learned
+    learned.record(vault, run_id="r1", entries=entries)
+
+
+def test_status_lists_recently_learned_rules(tmp_home: Path, capsys: pytest.CaptureFixture):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    # Two projects each ⇒ universal, so the section shows whatever project the
+    # test's cwd happens to resolve to.
+    _seed_learned(tmp_home / "v", [
+        {"slug": "use-yarn", "type": "feedback", "name": "Use yarn",
+         "projects": ["a", "b"], "confidence": "verified", "quote": "use yarn"},
+        {"slug": "no-emoji", "type": "feedback", "name": "No emoji",
+         "projects": ["a", "b"], "confidence": None, "quote": None},
+    ])
+    capsys.readouterr()
+
+    rc = cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "Recently learned" in out
+    assert "• no-emoji — No emoji [inferred]" in out
+    assert "• use-yarn — Use yarn [verified]" in out
+    # Newest first.
+    assert out.index("no-emoji") < out.index("use-yarn")
+    assert ".mnemo/learned.jsonl" in out
+
+
+def test_status_omits_the_learned_section_with_an_empty_ledger(
+    tmp_home: Path, capsys: pytest.CaptureFixture
+):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    capsys.readouterr()
+
+    cli.main(["status"])
+
+    assert "Recently learned" not in capsys.readouterr().out
+
+
+def test_status_caps_the_learned_section_at_ten(tmp_home: Path, capsys: pytest.CaptureFixture):
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
+    _seed_learned(tmp_home / "v", [
+        {"slug": f"s{i}", "type": "feedback", "name": f"S{i}", "projects": ["a", "b"],
+         "confidence": "verified", "quote": "q"}
+        for i in range(14)
+    ])
+    capsys.readouterr()
+
+    cli.main(["status"])
+    out = capsys.readouterr().out
+
+    assert out.count("[verified]") == 10
+    assert "• s13 — S13 [verified]" in out
+    assert "• s3 — S3 [verified]" not in out

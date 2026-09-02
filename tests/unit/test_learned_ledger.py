@@ -131,3 +131,45 @@ def test_universal_threshold_is_a_parameter(tmp_path: Path):
     assert learned.pending(tmp_path, "zzz", universal_threshold=3) == []
     assert learned.pending_count(tmp_path, "zzz", universal_threshold=3) == 0
     assert [e["slug"] for e in learned.pending(tmp_path, "zzz")] == ["two"]
+
+
+# --- `mnemo status` view: the tail, announced or not ------------------------
+
+def test_recent_is_newest_first_and_ignores_the_marker(tmp_path: Path):
+    """status lists what was already announced — that is the point of looking."""
+    learned.record(tmp_path, run_id="r1", entries=[_e("a", ["p"]), _e("b", ["p"])])
+    learned.mark_announced(tmp_path, "p")
+    learned.record(tmp_path, run_id="r2", entries=[_e("c", ["p"])])
+
+    assert [e["slug"] for e in learned.pending(tmp_path, "p")] == ["c"]  # marker is live
+    assert [e["slug"] for e in learned.recent(tmp_path, "p")] == ["c", "b", "a"]
+
+
+def test_recent_respects_limit_and_the_project_filter(tmp_path: Path):
+    learned.record(tmp_path, run_id="r1", entries=[_e(f"s{i}", ["p"]) for i in range(12)])
+    learned.record(tmp_path, run_id="r2", entries=[_e("elsewhere", ["zzz"])])
+
+    got = learned.recent(tmp_path, "p", limit=3)
+
+    assert [e["slug"] for e in got] == ["s11", "s10", "s9"]
+    assert "elsewhere" not in [e["slug"] for e in learned.recent(tmp_path, "p", limit=50)]
+
+
+def test_recent_with_no_project_is_vault_wide(tmp_path: Path):
+    learned.record(tmp_path, run_id="r1", entries=[_e("mine", ["p"]), _e("theirs", ["zzz"])])
+
+    assert [e["slug"] for e in learned.recent(tmp_path, None)] == ["theirs", "mine"]
+
+
+def test_recent_honours_the_universal_threshold(tmp_path: Path):
+    learned.record(tmp_path, run_id="r1", entries=[_e("two", ["a", "b"])])
+
+    assert [e["slug"] for e in learned.recent(tmp_path, "zzz")] == ["two"]
+    assert learned.recent(tmp_path, "zzz", universal_threshold=3) == []
+
+
+def test_recent_never_raises_on_a_broken_vault(tmp_path: Path):
+    ledger = tmp_path / ".mnemo" / "learned.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.mkdir()
+    assert learned.recent(tmp_path, "p") == []

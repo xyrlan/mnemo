@@ -102,7 +102,43 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_auto_brain_status(vault)
     _print_activation_status(vault)
     _print_reflex_status(vault)
+    _print_learned_status(vault)
     return 0
+
+
+def _current_project() -> str | None:
+    """The project name status is reporting on, or None when it cannot tell."""
+    import os as _os
+    try:
+        from mnemo.core.agent import resolve_agent
+        return resolve_agent(_os.getcwd()).name or None
+    except Exception:  # noqa: BLE001 — a status line is not worth a traceback
+        return None
+
+
+def _print_learned_status(vault: Path) -> None:
+    """The tail of the learned ledger — the overflow the session-start block
+    points at with ``(N more — mnemo status)``, plus everything already
+    announced, so a rule the user half-remembers is one command away."""
+    from mnemo.core import learned
+    from mnemo.core import config as cfg_mod
+
+    project = _current_project()
+    try:
+        threshold = int((cfg_mod.load_config().get("scoping") or {}).get(
+            "universalThreshold", 2))
+    except Exception:  # noqa: BLE001
+        threshold = 2
+    entries = learned.recent(vault, project, limit=10, universal_threshold=threshold)
+    if not entries:
+        return
+    print(f"\nRecently learned ({project or 'all projects'}):")
+    for e in entries:
+        slug = e.get("slug") or ""
+        name = e.get("name") or slug
+        confidence = "verified" if e.get("confidence") == "verified" else "inferred"
+        print(f"  • {slug} — {name} [{confidence}]")
+    print(f"  (ledger: {learned.LEDGER_REL})")
 
 
 def _print_reflex_status(vault: Path) -> None:
