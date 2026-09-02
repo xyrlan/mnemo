@@ -53,10 +53,9 @@ def cmd_learn(args: argparse.Namespace) -> int:
 
     if report.error:
         print(f"error: {report.error}", file=sys.stderr)
-        if (
-            learn_mod.LOCK_HELD in report.error
-            or report.error == learn_mod.LOCK_HELD_MESSAGE
-        ):
+        # LOCK_HELD_MESSAGE starts with the LOCK_HELD token, so this one
+        # check covers both the message and the raw exception text.
+        if learn_mod.LOCK_HELD in report.error:
             print("wait a minute and run `mnemo learn` again", file=sys.stderr)
         return 1
 

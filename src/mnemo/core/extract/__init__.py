@@ -462,7 +462,10 @@ def _run_extraction_body(
         _print_estimate(scan_result, cfg)
         return
 
-    if force:
+    # Scoped runs never clear the whole inbox: `only` narrows this pass to one
+    # file, and wiping every staged cluster page for it would destroy work the
+    # user did not ask this run to touch.
+    if force and only is None:
         _force_clear_inbox_cluster_dirs(vault_root)
 
     # Phase 1: projects (zero LLM, fastest, cannot fail from network). Skipped
@@ -479,7 +482,13 @@ def _run_extraction_body(
             vault_root, run_id,
             _learned_entries_for_projects(project_files, project_result.written_fresh),
         )
-    state.last_run = run_id
+    # `last_run` is the *vault-wide* watermark the SessionEnd debounce reads
+    # (`hooks.session_end._debounce_passes`). A scoped run consolidated one
+    # file, not the vault, so advancing it would push the next automatic
+    # extraction back a full interval every time the user typed `mnemo learn`.
+    # The per-file state entries below still record what this run did see.
+    if only is None:
+        state.last_run = run_id
     try:
         inbox.atomic_write_state(state, state_path)
     except ExtractionIOError as exc:
@@ -638,7 +647,8 @@ def _run_extraction_body(
                 entry.source_hash = mf.source_hash
 
         if processed_files:
-            state.last_run = run_id
+            if only is None:
+                state.last_run = run_id
             try:
                 inbox.atomic_write_state(state, state_path)
             except ExtractionIOError as exc:
@@ -880,7 +890,10 @@ def run_extraction(
 
         summary.wall_time_s = time.monotonic() - start
 
-        if background and not dry_run:
+        # A scoped run is not an auto run: `last-auto-run.json` feeds
+        # `mnemo status`'s "last run" line, which reports the vault-wide
+        # sweep, not a one-file `mnemo learn`.
+        if background and not dry_run and only is None:
             exit_code = 0
             if summary.failed_chunks > 0:
                 exit_code = 1

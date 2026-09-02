@@ -41,15 +41,31 @@ LOCK_HELD = "another extraction is in progress"
 #: What the user sees when the lock is held. The condition is benign — the
 #: running extraction sweeps every dirty file, this session's briefing
 #: included — so the message says so and names the one action worth taking.
+#: Opens with the ``LOCK_HELD`` token so a single ``LOCK_HELD in error`` test
+#: recognises both the raw exception text and this message.
 LOCK_HELD_MESSAGE = (
-    "another extraction is already running — it will pick up this session's "
-    "briefing; run `mnemo learn` again in a minute to see what it learned."
+    f"{LOCK_HELD} — it will pick up this session's briefing; "
+    "run `mnemo learn` again in a minute to see what it learned."
 )
 NOTHING_NEW_HINT = (
     "nothing new: no corrections found in this session. A correction is you "
     "telling Claude to stop, change, prefer, or never/always do something — "
     "say it in your own words and run `mnemo learn` again."
 )
+
+
+def _already_learned_hint(corrections: int) -> str:
+    """What a *second* ``learn`` on the same session says.
+
+    The first run consolidated this session's corrections; the second finds
+    nothing new because there *is* nothing new, not because the user failed to
+    correct anything. Saying "nothing new: no corrections found" there reads
+    as the feature not working.
+    """
+    return (
+        f"already learned: this session's {corrections} correction(s) were "
+        "consolidated on an earlier run — see `mnemo status`"
+    )
 
 
 @dataclass
@@ -134,8 +150,12 @@ def learn(
     # reports, never traces, and a failed stage 1 leaves nothing for stage 2
     # to consolidate, so return before the ledger is read.
     try:
+        # reuse_unchanged: a second `learn` on the same transcript reuses the
+        # briefing it already wrote. Regenerating it would spend an LLM call
+        # on an equivalent body whose text differs enough to re-dirty the
+        # file, so the run would re-consolidate work it already did.
         report.briefing = briefing_mod.generate_session_briefing(
-            path, project, cfg, min_mutations=0
+            path, project, cfg, min_mutations=0, reuse_unchanged=True
         )
     except Exception as exc:  # noqa: BLE001 — a CLI verb reports, never traces
         report.error = f"briefing failed: {exc}"
@@ -172,7 +192,11 @@ def learn(
     ]
 
     if not report.learned:
-        report.hint = NOTHING_NEW_HINT
+        report.hint = (
+            _already_learned_hint(report.corrections)
+            if report.corrections > 0
+            else NOTHING_NEW_HINT
+        )
     return report
 
 

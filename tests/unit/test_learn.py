@@ -365,3 +365,153 @@ def test_generate_session_briefing_still_skips_zero_mutation_sessions_by_default
     assert briefing_mod.generate_session_briefing(
         transcript, "proj", {"extraction": {}}, min_mutations=0
     ) is not None
+
+
+# --- second learn on the same session ---------------------------------------
+
+def test_second_learn_on_the_same_session_says_already_learned(
+    vault: Path, cwd_project, found, transcript: Path, monkeypatch,
+):
+    """Run twice, unchanged transcript: stage 1 is skipped, the hint says so.
+
+    The first run consolidated the correction. The second must not regenerate
+    the briefing (an LLM call whose different-but-equivalent body would
+    re-dirty the file), and must not tell the user "nothing new: no
+    corrections found" — there *were* corrections, they are already learned.
+    """
+    src = f"bots/proj/briefings/sessions/{SESSION_ID}.md"
+    page = {
+        "slug": "retry-5xx-only",
+        "name": "Retry only on 5xx",
+        "description": "d",
+        "type": "feedback",
+        "body": "Retry only 5xx.",
+        "source_files": [src],
+        "evidence": {"quote": QUOTE, "source": src},
+    }
+    queue = [_resp(BRIEFING_BODY), _resp(_extraction_json([page]))]
+    calls: list[str] = []
+
+    def fake_call(prompt, *, system, model, timeout):
+        calls.append(system)
+        if not queue:
+            raise AssertionError("unexpected extra LLM call")
+        return queue.pop(0)
+
+    monkeypatch.setattr(llm_mod, "call", fake_call)
+
+    first = learn_mod.learn(_cfg(vault), cwd="/repo")
+    assert first.error == ""
+    assert [e["slug"] for e in first.learned] == ["retry-5xx-only"]
+    assert len(calls) == 2
+
+    second = learn_mod.learn(_cfg(vault), cwd="/repo")
+
+    assert second.error == ""
+    assert second.learned == []
+    assert second.corrections == 1
+    assert second.hint.startswith("already learned:")
+    assert "1 correction(s)" in second.hint
+    assert "mnemo status" in second.hint
+    # Stage 1 was reused, not regenerated: no third LLM call.
+    assert len(calls) == 2
+
+
+def test_changed_transcript_regenerates_the_briefing(
+    vault: Path, cwd_project, found, transcript: Path, monkeypatch,
+):
+    """The reuse is keyed on content: append to the transcript and it rebuilds."""
+    from mnemo.core import briefing as briefing_mod
+
+    bodies = [BRIEFING_BODY, BRIEFING_BODY.replace("Retry helper.", "Retry helper v2.")]
+
+    def fake_call(prompt, *, system, model, timeout):
+        return _resp(bodies.pop(0) if bodies else BRIEFING_BODY)
+
+    monkeypatch.setattr(llm_mod, "call", fake_call)
+
+    cfg = _cfg(vault)
+    out = briefing_mod.generate_session_briefing(
+        transcript, "proj", cfg, min_mutations=0, reuse_unchanged=True
+    )
+    assert out is not None
+    first_text = out.read_text(encoding="utf-8")
+    assert "transcript_sha256: " in first_text
+
+    # Unchanged: reused byte-for-byte.
+    again = briefing_mod.generate_session_briefing(
+        transcript, "proj", cfg, min_mutations=0, reuse_unchanged=True
+    )
+    assert again == out
+    assert out.read_text(encoding="utf-8") == first_text
+
+    # Changed: regenerated, and the stamp moves with it.
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "type": "user", "timestamp": "2026-09-01T10:05:00.000Z",
+            "message": {"role": "user", "content": "and one more thing"},
+        }) + "\n")
+
+    third = briefing_mod.generate_session_briefing(
+        transcript, "proj", cfg, min_mutations=0, reuse_unchanged=True
+    )
+    assert third == out
+    new_text = out.read_text(encoding="utf-8")
+    assert new_text != first_text
+    assert "Retry helper v2." in new_text
+
+
+# --- scoped runs and the SessionEnd debounce --------------------------------
+
+def test_scoped_run_leaves_last_run_alone(vault: Path, monkeypatch):
+    """`only` must not push back the SessionEnd debounce watermark.
+
+    `hooks.session_end._debounce_passes` reads `last_run`; if every `mnemo
+    learn` advanced it, the automatic pass would be deferred a full interval
+    each time the user used the five-minute loop.
+    """
+    import json as _json
+
+    from mnemo.core import extract as extract_mod
+
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    state_path.write_text(
+        _json.dumps({"schema_version": 2, "last_run": "2026-01-01T00:00:00",
+                     "entries": {}}),
+        encoding="utf-8",
+    )
+
+    src = f"bots/proj/briefings/sessions/{SESSION_ID}.md"
+    briefing = vault / src
+    briefing.parent.mkdir(parents=True)
+    briefing.write_text(
+        "---\ntype: briefing\n---\n\n## Corrections\n"
+        f'- "{QUOTE}" → Retry only on 5xx\n',
+        encoding="utf-8",
+    )
+
+    from mnemo.core.extract import scanner as scanner_mod
+
+    key = f"feedback/{scanner_mod._normalize_slug('briefing-' + SESSION_ID)}"
+
+    monkeypatch.setattr(
+        llm_mod, "call",
+        lambda *a, **k: _resp(_extraction_json([{
+            "slug": "retry-5xx-only", "name": "Retry only on 5xx",
+            "description": "d", "type": "feedback", "body": "b",
+            "source_files": [src],
+            "evidence": {"quote": QUOTE, "source": src},
+        }])),
+    )
+
+    extract_mod.run_extraction(_cfg(vault), only=key)
+
+    after = _json.loads(state_path.read_text(encoding="utf-8"))
+    assert after["last_run"] == "2026-01-01T00:00:00"
+    # The per-file entry still advanced, so the next scan sees it as clean.
+    assert key in after["entries"]
+
+    # An unscoped run does advance it.
+    extract_mod.run_extraction(_cfg(vault))
+    unscoped = _json.loads(state_path.read_text(encoding="utf-8"))
+    assert unscoped["last_run"] != "2026-01-01T00:00:00"

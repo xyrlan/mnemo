@@ -6,6 +6,7 @@ shift-handoff markdown body, and writes it under
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time as _time
@@ -95,6 +96,19 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def transcript_sha256(jsonl_path: Path) -> str:
+    """Content hash of a transcript file, or ``""`` when it cannot be read.
+
+    Stamped into the briefing frontmatter so a second ``mnemo learn`` on an
+    unchanged session can reuse the briefing it already wrote instead of
+    paying for an identical LLM call.
+    """
+    try:
+        return hashlib.sha256(jsonl_path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def _render_briefing(
     *,
     agent: str,
@@ -103,8 +117,10 @@ def _render_briefing(
     duration_minutes: int,
     corrections: int,
     body: str,
+    source_sha256: str = "",
 ) -> str:
     header = f"# Briefing — {agent} — {session_id}\n"
+    sha_line = f"transcript_sha256: {source_sha256}\n" if source_sha256 else ""
     return (
         "---\n"
         "type: briefing\n"
@@ -113,6 +129,7 @@ def _render_briefing(
         f"date: {date}\n"
         f"duration_minutes: {duration_minutes}\n"
         f"corrections: {corrections}\n"
+        f"{sha_line}"
         "---\n\n"
         f"{header}\n"
         f"{body.strip()}\n"
@@ -120,7 +137,12 @@ def _render_briefing(
 
 
 def generate_session_briefing(
-    jsonl_path: Path, agent: str, cfg: dict, *, min_mutations: int = 1
+    jsonl_path: Path,
+    agent: str,
+    cfg: dict,
+    *,
+    min_mutations: int = 1,
+    reuse_unchanged: bool = False,
 ) -> Path | None:
     """Produce a briefing markdown file for one Claude Code session.
 
@@ -138,6 +160,25 @@ def generate_session_briefing(
 
     if _count_file_mutations(events) < min_mutations:
         return None
+
+    session_id = jsonl_path.stem
+    vault_root = paths.vault_root(cfg)
+    out_path = (
+        vault_root / "bots" / agent / "briefings" / "sessions" / f"{session_id}.md"
+    )
+    source_sha = transcript_sha256(jsonl_path)
+
+    # An unchanged transcript already has its briefing on disk. Regenerating
+    # it would spend an LLM call to produce a different-but-equivalent body,
+    # which re-dirties the file and makes the *second* `mnemo learn` on a
+    # session look like fresh material. Reuse it instead.
+    if reuse_unchanged and source_sha and out_path.exists():
+        try:
+            existing_fm, _ = _parse_fm(out_path.read_text(encoding="utf-8"))
+        except OSError:
+            existing_fm = {}
+        if str(existing_fm.get("transcript_sha256") or "") == source_sha:
+            return out_path
 
     extraction_cfg = cfg.get("extraction") or {}
     model = extraction_cfg.get("model") or "claude-haiku-4-5"
@@ -169,7 +210,6 @@ def generate_session_briefing(
         pass  # telemetry must never break the briefing
     body = (response.text or "").strip() or "*(empty briefing — LLM returned no content)*"
 
-    vault_root = paths.vault_root(cfg)
     # Corrections are a bonus on top of the briefing — never lose the whole
     # briefing to a parsing failure. On error, drop the section and move on.
     try:
@@ -192,7 +232,6 @@ def generate_session_briefing(
             pass  # leave the body as-is rather than lose the briefing
         errors_mod.log_error(vault_root, "briefing.corrections", exc)
 
-    session_id = jsonl_path.stem
     duration_minutes = _compute_duration_minutes(events)
 
     timestamps = [_parse_timestamp(ev.get("timestamp")) for ev in events]
@@ -202,8 +241,6 @@ def generate_session_briefing(
     else:
         date_str = datetime.now().date().isoformat()
 
-    out_path = vault_root / "bots" / agent / "briefings" / "sessions" / f"{session_id}.md"
-
     content = _render_briefing(
         agent=agent,
         session_id=session_id,
@@ -211,6 +248,7 @@ def generate_session_briefing(
         duration_minutes=duration_minutes,
         corrections=len(kept),
         body=body,
+        source_sha256=source_sha,
     )
     _atomic_write(out_path, content)
     return out_path
