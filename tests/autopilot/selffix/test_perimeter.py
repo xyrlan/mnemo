@@ -116,3 +116,16 @@ def test_vault_path_forbidden_subdir_still_raises(tmp_path: Path) -> None:
     diff = [vault / "secrets" / "leak.md"]
     with pytest.raises(PerimeterViolation):
         assert_perimeter(diff, repo_root=repo, vault_root=vault)
+
+
+def test_windows_native_paths_match_posix_prefixes():
+    """On Windows relative_to() yields backslashes; the perimeter must still match."""
+    from pathlib import PureWindowsPath
+
+    from mnemo.autopilot.selffix._perimeter import assert_perimeter, is_within_perimeter
+
+    root = PureWindowsPath("C:/repo")
+    assert is_within_perimeter(PureWindowsPath("C:/repo/shared/_archive/dead.md"), repo_root=root)
+    assert not is_within_perimeter(PureWindowsPath("C:/repo/src/evil.py"), repo_root=root)
+    assert_perimeter([PureWindowsPath("C:/repo/.mnemo/state.json")], repo_root=root)
+

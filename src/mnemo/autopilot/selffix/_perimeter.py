@@ -22,10 +22,12 @@ class PerimeterViolation(ValueError):
 
 
 def _relative_str(path: Path, repo_root: Path) -> str:
+    # POSIX form on every OS: the allowed prefixes are written with "/", and
+    # a Windows-native "shared\\x.md" must still match "shared/".
     try:
-        return str(path.relative_to(repo_root))
+        return path.relative_to(repo_root).as_posix()
     except ValueError:
-        return str(path)
+        return path.as_posix()
 
 
 def _candidate_rels(path: Path, roots: list[Path]) -> list[str]:
@@ -33,7 +35,7 @@ def _candidate_rels(path: Path, roots: list[Path]) -> list[str]:
     rels: list[str] = []
     for root in roots:
         try:
-            rels.append(str(path.relative_to(root)))
+            rels.append(path.relative_to(root).as_posix())
         except ValueError:
             continue
     return rels
@@ -49,7 +51,7 @@ def is_within_perimeter(
         roots.append(vault_root)
     rels = _candidate_rels(path, roots)
     if not rels:
-        rels = [str(path)]
+        rels = [path.as_posix()]
     for rel in rels:
         for prefix in ALLOWED_PATHS:
             if rel == prefix.rstrip("/") or rel.startswith(prefix):
