@@ -119,18 +119,24 @@ def _render_briefing(
     )
 
 
-def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path | None:
+def generate_session_briefing(
+    jsonl_path: Path, agent: str, cfg: dict, *, min_mutations: int = 1
+) -> Path | None:
     """Produce a briefing markdown file for one Claude Code session.
 
     Returns the filesystem path of the written briefing, or ``None`` when
-    the session produced no file mutations and was therefore skipped (the
-    signal threshold: at least one Edit/Write/MultiEdit/NotebookEdit
-    tool_use in the transcript). Raises on I/O or LLM failure — callers
-    that want fire-and-forget semantics should wrap this in a try/except.
+    the session produced fewer than ``min_mutations`` file mutations and was
+    therefore skipped (the default signal threshold: at least one
+    Edit/Write/MultiEdit/NotebookEdit tool_use in the transcript). Pass
+    ``min_mutations=0`` to brief a session regardless — ``core.learn`` does,
+    because a session whose only product is a *correction* touches no files
+    and is exactly the session a user runs ``mnemo learn`` on. Raises on I/O
+    or LLM failure — callers that want fire-and-forget semantics should wrap
+    this in a try/except.
     """
     events = _load_jsonl_events(jsonl_path)
 
-    if _count_file_mutations(events) == 0:
+    if _count_file_mutations(events) < min_mutations:
         return None
 
     extraction_cfg = cfg.get("extraction") or {}

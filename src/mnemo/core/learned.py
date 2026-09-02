@@ -168,6 +168,19 @@ def record(vault_root: Path, *, run_id: str, entries: list[dict]) -> None:
     _rotate_if_needed(vault_root)
 
 
+def max_seq(vault_root: Path) -> int:
+    """The largest seq the ledger holds, or 0 when it is empty. Never raises.
+
+    ``core.learn`` takes this before a run and diffs against it after, which
+    is how a synchronous ``mnemo learn`` reports *what this session taught*
+    rather than the whole announcement backlog.
+    """
+    try:
+        return _max_seq(_read(vault_root))
+    except Exception:  # noqa: BLE001 — mirrors the fail-silent readers above
+        return 0
+
+
 def _pending_entries(
     vault_root: Path, project: str, universal_threshold: int = 2
 ) -> list[dict]:
