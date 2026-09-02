@@ -108,14 +108,20 @@ def test_feedback_system_prompt_instructs_merge_on_different_wording():
 
 
 def test_feedback_few_shot_includes_no_commits_cross_agent_merge():
-    """Few-shot must demonstrate the real no-commits vs no-commit-without-permission merge."""
+    """Few-shot must demonstrate the no-commits merge across two agents' files.
+
+    Example 1 was reshaped when `evidence` landed: the second memory file
+    (feedback_no_commit_without_permission.md) became a briefing carrying the
+    user's verbatim ## Corrections quote, so the example can show the merge AND
+    the evidence citation at once. The cross-agent merge it demonstrates is
+    unchanged, so this test still asserts both sources reach source_files.
+    """
     files = [_mk_file("x", "feedback", "example")]
     prompt = prompts.build_feedback_prompt(files)
     assert "no_commits" in prompt or "no-commits" in prompt
-    assert "no_commit_without_permission" in prompt or "no-commit-without-permission" in prompt
     # Both sources must appear in the merged output's source_files list
     assert "feedback_no_commits.md" in prompt
-    assert "feedback_no_commit_without_permission.md" in prompt
+    assert "bots/clubinho/briefings/sessions/9f1c.md" in prompt
 
 
 # --- v0.3.1: stability schema field ------------------------------------------

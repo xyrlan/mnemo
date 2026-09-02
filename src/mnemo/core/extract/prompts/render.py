@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 from mnemo.core.extract.prompts.encoding import _render_files
+from mnemo.core.extract.prompts.existing_rules import existing_rules_fragment
 from mnemo.core.extract.prompts.templates.briefing import BRIEFING_SYSTEM_PROMPT  # noqa: F401  (re-export anchor for the package shim)
 from mnemo.core.extract.prompts.templates.few_shot_feedback import _FEW_SHOT_FEEDBACK
 from mnemo.core.extract.prompts.templates.few_shot_simple import (
@@ -66,10 +67,12 @@ def build_consolidation_prompt(
     builder; new code should call this directly.
     """
     label, cluster_clause, few_shot = _CONSOLIDATION_TABLE[kind]
+    agents = {f.agent for f in files if getattr(f, "agent", None)}
     return (
         f"Task: consolidate these {label} memory files into canonical Tier 2 "
         f"pages. {cluster_clause}\n\n"
         f"{_existing_tags_fragment(vault_root, kind)}"
+        f"{existing_rules_fragment(vault_root, kind, agents=agents)}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{few_shot}\n"
         "Now consolidate these input files:\n\n"

@@ -14,13 +14,25 @@ from __future__ import annotations
 
 
 _FEW_SHOT_FEEDBACK = """\
-Example 1 — POSITIVE: two files with different wording, same rule → MERGE into one page.
-(This is the canonical case you must get right. Different agents, different
-filenames, different `name:` frontmatter, different phrasing — but the
-underlying rule is identical: never create git commits without explicit
-user permission.)
+Example 1 — POSITIVE: a briefing correction and a memory note state the same rule → ONE page with evidence.
+(The briefing's ## Corrections bullet is the user's own words; the memory
+file paraphrases the same rule. Merge them, cite the briefing quote as
+evidence, keep both files in source_files.)
 
 Input:
+[FILE: bots/clubinho/briefings/sessions/9f1c.md]
+---
+type: briefing
+agent: clubinho
+session_id: 9f1c
+corrections: 1
+---
+## Decisions made
+- Added a pre-commit hook. **Why:** lint drift.
+
+## Corrections
+- "do not commit on my behalf, I stage and commit myself" → Never run git commit unless explicitly asked
+[END]
 [FILE: bots/central-inteligencia-frontend/memory/feedback_no_commits.md]
 ---
 name: No commits
@@ -30,18 +42,9 @@ Never run `git commit` on my behalf. Only edit files.
 **Why:** I review and stage commits myself.
 **How to apply:** edit files but stop before committing.
 [END]
-[FILE: bots/clubinho/memory/feedback_no_commit_without_permission.md]
----
-name: Ask before committing
-type: feedback
----
-Do not create git commits unless I explicitly ask.
-**Why:** commit history is my responsibility.
-**How to apply:** wait for the user to say "commit this" before running git commit.
-[END]
 
-Output (ONE merged page, both files listed in source_files):
-{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" or \\"make a commit\\" before proceeding.","source_files":["bots/central-inteligencia-frontend/memory/feedback_no_commits.md","bots/clubinho/memory/feedback_no_commit_without_permission.md"],"stability":"stable"}]}
+Output (ONE merged page, both files listed in source_files, evidence quoting the briefing):
+{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" before proceeding.","source_files":["bots/clubinho/briefings/sessions/9f1c.md","bots/central-inteligencia-frontend/memory/feedback_no_commits.md"],"stability":"stable","tags":["git","workflow"],"evidence":{"quote":"do not commit on my behalf, I stage and commit myself","source":"bots/clubinho/briefings/sessions/9f1c.md"}}]}
 
 Example 2 — NEGATIVE: two files about genuinely different rules → DO NOT MERGE.
 (Use yarn and no-commits-without-permission are unrelated rules — different

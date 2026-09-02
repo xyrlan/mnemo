@@ -21,7 +21,8 @@ Required JSON output schema:
       "tags": ["topic1", "topic2"],
       "aliases": ["banco", "database"],
       "enforce": {"tool": "Bash", "deny_pattern": "...", "reason": "..."} | null,
-      "activates_on": {"tools": ["Edit"], "path_globs": ["..."]} | null
+      "activates_on": {"tools": ["Edit"], "path_globs": ["..."]} | null,
+      "evidence": {"quote": "verbatim user quote from a ## Corrections bullet", "source": "bots/<agent>/briefings/sessions/<id>.md"} | null
     }
   ]
 }
@@ -45,4 +46,9 @@ abbreviations like ["banco", "database", "db"]). Emit aliases when the rule
 contains domain terms a developer would naturally search in a different
 language or abbreviation; prefer concrete terms (framework names, file types,
 commands). Omit the field for generic rules without natural synonyms.
+
+`evidence` is REQUIRED for `type: feedback` and must be null for other types.
+The quote must be copied exactly from a `## Corrections` bullet of the cited
+source briefing, and the source must be one of the page's own source_files;
+both are verified mechanically.
 """
