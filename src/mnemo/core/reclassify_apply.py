@@ -225,6 +225,7 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
 
         verdict = v.verdict
         target_original: Optional[str] = None
+        target_rel: Optional[str] = None
         to_path: Optional[Path] = None
 
         target_path: Optional[Path] = None
@@ -268,6 +269,10 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
         elif verdict == "merge":
             assert target_path is not None  # resolved in the pre-check above
             target_original = _rel(_back_up(target_path, v.target))
+            # The target's *real* vault-relative path, not a path rebuilt from
+            # its slug: 97% of the real vault has filename != slug, so undo
+            # must restore to where the file actually lives.
+            target_rel = _rel(target_path)
             target_path.write_text(
                 _append_sources(target_path.read_text(encoding="utf-8"), fm_sources),
                 encoding="utf-8",
@@ -295,6 +300,7 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             "to": _rel(to_path) if to_path is not None else None,
             "target": v.target if verdict == "merge" else None,
             "target_original": target_original,
+            "target_path": target_rel,
         })
 
     report.skipped = skipped
@@ -358,7 +364,14 @@ def undo(vault_root: Path, run_id: str) -> int:
             target_original = move.get("target_original")
             if target_original:
                 backup = vault_root / str(target_original)
-                target = vault_root / "shared" / "feedback" / f"{move.get('target')}.md"
+                # Manifests written before target_path existed only knew the
+                # slug; fall back to the old (often wrong) reconstruction so
+                # an old run stays as undoable as it ever was.
+                target_rel = move.get("target_path")
+                target = (
+                    vault_root / str(target_rel) if target_rel
+                    else vault_root / "shared" / "feedback" / f"{move.get('target')}.md"
+                )
                 if backup.exists():
                     target.write_bytes(backup.read_bytes())
                     restored += 1

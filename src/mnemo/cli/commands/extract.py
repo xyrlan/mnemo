@@ -50,7 +50,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
     print(f"  calls:      {summary.llm_calls} LLM calls")
     print(f"  wall-time:  {summary.wall_time_s:.1f}s")
     print(f"  cost:       {cost_line}")
-    print(f"  echo rejected: {summary.echo_rejected} · redactions: {summary.redactions}")
+    print(
+        f"  staged unverified: {summary.demoted_unverified} · "
+        f"echo rejected: {summary.echo_rejected} · redactions: {summary.redactions}"
+    )
 
     if summary.failed_chunks > 0:
         print(f"  ⚠ failed_chunks: {summary.failed_chunks} (see ~/.errors.log; re-run to retry)", file=sys.stderr)

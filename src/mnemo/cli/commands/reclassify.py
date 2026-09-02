@@ -73,8 +73,9 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
         return 0
 
     cfg = load_config()
-    model = cfg.get("model") or "claude-haiku-4-5"
-    timeout = int(cfg.get("llm_timeout") or 60)
+    extraction = cfg.get("extraction") or {}
+    model = extraction.get("model") or "claude-haiku-4-5"
+    timeout = int(extraction.get("subprocessTimeout") or 60)
 
     rules = R.collect_rules(vault)
     limit = getattr(args, "limit", None)

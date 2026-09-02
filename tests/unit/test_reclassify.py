@@ -272,3 +272,45 @@ def test_has_transcript_flags_rules_whose_sessions_are_gone(vault, tmp_path):
     (projects / "s1.jsonl").write_text(json.dumps(
         {"type": "user", "message": {"role": "user", "content": "use yarn not npm"}}) + "\n")
     assert R.has_transcript(vault, rule, projects_root=tmp_path / "projects") is True
+
+
+def test_undo_restores_merge_target_at_its_real_path_not_its_slug(vault):
+    """Merge undo must restore the target where it lives, not at <slug>.md.
+
+    97% of the real vault has ``filename != slug``. Rebuilding the target as
+    ``shared/feedback/<slug>.md`` writes a stray file and leaves the real
+    target carrying the merged-in sources forever.
+    """
+    d = vault / "shared" / "feedback"
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / "Some Other Name.md"
+    target.write_text(
+        "---\nslug: use-yarn\nname: Use yarn\ndescription: Use yarn\ntype: feedback\n"
+        "sources:\n  - bots/proj/briefings/sessions/s1.md\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    original = target.read_bytes()
+    dup = _rule(vault, "use-yarn-dup", "Use yarn too")
+    dup.write_text(
+        dup.read_text().replace(
+            "sources:\n  - bots/proj/briefings/sessions/s1.md",
+            "sources:\n  - bots/proj/briefings/sessions/s2.md",
+        ),
+        encoding="utf-8",
+    )
+
+    plan = R.Plan(run_id="20260902T222222", llm_calls=0, verdicts=[
+        R.Verdict(slug="use-yarn-dup", verdict="merge", target="use-yarn"),
+    ])
+    assert R.apply(vault, plan, rebuild_indexes=False).merged == 1
+    assert target.read_bytes() != original, "the merge must have touched the target"
+
+    manifest = json.loads(
+        (vault / "shared" / "_archive" / "reclassify-20260902T222222" / "manifest.json").read_text()
+    )
+    assert manifest["moves"][0]["target_path"] == "shared/feedback/Some Other Name.md"
+
+    R.undo(vault, "20260902T222222")
+    assert target.read_bytes() == original
+    assert not (d / "use-yarn.md").exists(), "undo must not write a stray slug-named file"
+    assert dup.exists()

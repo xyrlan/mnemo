@@ -178,6 +178,7 @@ class ExtractionSummary:
     universal_promoted: int = 0
     echo_rejected: int = 0
     redactions: int = 0
+    demoted_unverified: int = 0
     mode: str = "manual"
 
 
@@ -360,7 +361,13 @@ def _run_extraction_body(
     force: bool,
 ) -> None:
     # The existing-rules prompt fragment caches its vault scan; a fresh run
-    # must not inherit another run's view of the vault.
+    # must not inherit another run's view of the vault. Invariant: the cache is
+    # empty or freshly cleared before the first consolidation prompt of every
+    # kind — this clear covers the first one, and each `apply_pages` below
+    # clears it again so the next kind sees the pages that just landed.
+    # Clearing before `promote_projects` rather than after is still correct:
+    # the cache fills lazily on first prompt build, and the fragment scans only
+    # rule kinds, so the project pages that phase writes cannot stale it.
     prompts.existing_rules.clear_cache()
     state = inbox.load_state(state_path)
     scan_result = scanner.scan(vault_root, state)
@@ -478,6 +485,11 @@ def _run_extraction_body(
                                 unverified_feedback=True, evidence=None)
                 else:
                     p = evidence.verify_page(p, vault_root)
+                    # Counted apart from echoes: an echo is a bad page, an
+                    # unverified feedback page is a real one whose quote the
+                    # gate could not find in a cited briefing.
+                    if p.unverified_feedback:
+                        summary.demoted_unverified += 1
                 # Redaction runs AFTER verification on purpose: the evidence
                 # quote is left untouched so it still matches the briefing (a
                 # quote containing PII is the user's own words). Rebuilt with

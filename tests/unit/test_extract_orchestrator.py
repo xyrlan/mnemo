@@ -727,7 +727,7 @@ def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
         ]),
     ])
 
-    run_extraction(_make_cfg(populated_vault))
+    summary = run_extraction(_make_cfg(populated_vault))
 
     promoted = populated_vault / "shared" / "feedback" / "retry-5xx-only.md"
     assert promoted.exists(), "a verified quote must reach the sacred dir"
@@ -737,3 +737,6 @@ def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
     assert demoted.exists(), "unevidenced feedback must stage as a reference page"
     assert "demoted_from: feedback" in demoted.read_text()
     assert not (populated_vault / "shared" / "feedback" / "write-clean-code.md").exists()
+    # The demotion is reported, not silent: one page staged, no echo involved.
+    assert summary.demoted_unverified == 1
+    assert summary.echo_rejected == 0
