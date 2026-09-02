@@ -52,6 +52,22 @@ turn off:
 | `extraction.auto.minNewMemories` | `1` | New source files required before a run |
 | `extraction.auto.minIntervalMinutes` | `60` | Minimum gap between automatic runs |
 
+Two things the debounce arithmetic does not do. **The first extraction of a
+vault is never debounced**: a vault that has never been extracted has no pages
+to count, and only an extraction produces them, so the count gate would hold a
+fresh install back forever. A missing last-run marker runs immediately.
+**Briefings count as new material** toward `extraction.auto.minNewMemories`,
+alongside memory files — a session whose only product is a correction mutates
+no files but does write a briefing, and that briefing is exactly what
+consolidation reads. The time gate is unaffected by both: new material does not
+buy a pass through `extraction.auto.minIntervalMinutes`.
+
+`mnemo learn` bypasses the debounce entirely. It runs the same two stages in
+the foreground regardless of when the last run was, and scopes extraction to
+the briefing for the current session, so it never sweeps another project's
+backlog into LLM calls. See
+[Five minutes](getting-started.md#five-minutes).
+
 Every LLM call mnemo makes — extraction, briefings, backfill — shells out to
 the `claude` CLI you already have and uses whatever authentication it already
 has. There is no separate credential to configure, and no switch here that
