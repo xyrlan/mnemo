@@ -439,6 +439,8 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
                           "args": ("uninstall",)},
     "uninstall-project": {"description": "remove hooks (project-scoped; keeps vault)",
                           "args": ("uninstall", "--project")},
+    "learn":             {"description": "learn from this session now: briefing + extraction, then the rule fires on your next prompt",
+                          "args": ("learn",)},
     "help":              {"description": "list commands",
                           "args": ("help",)},
 }
@@ -452,6 +454,8 @@ PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
     "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
     "why":     {"description": "why reflex fired (or stayed silent) on your last prompts",
                 "args": ("why",)},
+    "learn":   {"description": "learn from this session now: briefing + extraction, then the rule fires on your next prompt",
+                "args": ("learn",)},
     "open":    {"description": "open vault in Obsidian", "args": ("open",)},
     "fix":     {"description": "reset circuit breaker", "args": ("fix",)},
     "help":    {"description": "list commands", "args": ("help",)},

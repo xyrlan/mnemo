@@ -242,6 +242,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--yes", "-y", action="store_true",
         help="skip the confirmation prompt",
     )
+    learn = sub.add_parser(
+        "learn",
+        help="learn from this session now (briefing + extraction, synchronously)",
+    )
+    learn.add_argument(
+        "--session", metavar="ID", default=None,
+        help="learn from this session id instead of the newest one",
+    )
+    learn.add_argument(
+        "--dry-run", action="store_true",
+        help="report which transcript would be read, then stop",
+    )
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
     sub.add_parser("list-enforced", help="audit rules with enforce blocks (can block tool calls)")
