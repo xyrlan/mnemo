@@ -29,7 +29,7 @@ def _memory_file(root: Path, agent: str, *, origin: str | None) -> None:
     d = root / "bots" / agent / "memory"
     d.mkdir(parents=True, exist_ok=True)
     (d / "prefer-pathlib.md").write_text(
-        f"---\nname: Prefer pathlib\ntype: feedback\n{stamp}---\n\nUse pathlib.\n",
+        f"---\nname: Prefer pathlib\ntype: reference\n{stamp}---\n\nUse pathlib.\n",
         encoding="utf-8",
     )
 
@@ -51,7 +51,7 @@ def _cfg(root: Path) -> dict:
 
 def _stub(monkeypatch):
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([{
-        "slug": "prefer-pathlib", "type": "feedback", "name": "Prefer pathlib",
+        "slug": "prefer-pathlib", "type": "reference", "name": "Prefer pathlib",
         "description": "d", "body": "Use pathlib.",
         "source_files": ["bots/alpha/memory/prefer-pathlib.md",
                          "bots/beta/memory/prefer-pathlib.md"],
@@ -63,8 +63,8 @@ def test_backfill_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
     _stub(monkeypatch)
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
-    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
 
 
 def test_backfill_page_still_blocked_on_a_second_extract(tmp_path, monkeypatch):
@@ -74,7 +74,7 @@ def test_backfill_page_still_blocked_on_a_second_extract(tmp_path, monkeypatch):
     run_extraction(_cfg(root))
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists()
 
 
 def test_mixed_origin_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
@@ -94,8 +94,8 @@ def test_mixed_origin_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
     run_extraction(_cfg(root))
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
-    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
 
 
 # --- The flag must survive every page reconstruction ------------------------
@@ -107,7 +107,7 @@ def test_mixed_origin_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
 def _page(**kw):
     from mnemo.core.extract.inbox.types import ExtractedPage
     base = dict(
-        slug="s", type="feedback", name="n", description="d", body="b",
+        slug="s", type="reference", name="n", description="d", body="b",
         source_files=["bots/a/memory/x.md"], source_hash="sha256:x",
     )
     base.update(kw)
@@ -128,7 +128,7 @@ def test_dedupe_by_slug_keeps_the_backfill_flag(tmp_path):
     assert len(merged) == 1
     assert merged[0].origin_backfill is True
     assert _target_path_for_page(merged[0], tmp_path) == (
-        tmp_path / "shared" / "_inbox" / "feedback" / "s.md"
+        tmp_path / "shared" / "_inbox" / "reference" / "s.md"
     )
 
 
@@ -178,4 +178,4 @@ def test_live_cross_project_page_still_universally_promotes(tmp_path, monkeypatc
     run_extraction(_cfg(root))
     run_extraction(_cfg(root))
 
-    assert (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "reference" / "prefer-pathlib.md").exists()

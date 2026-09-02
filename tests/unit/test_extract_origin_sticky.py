@@ -52,7 +52,7 @@ def _vault(tmp_path: Path) -> Path:
 
 def _memory(
     root: Path, agent: str, stem: str, *,
-    type_: str = "feedback", origin: str | None = None, body: str = "Use pathlib.",
+    type_: str = "reference", origin: str | None = None, body: str = "Use pathlib.",
 ) -> Path:
     """Write a memory file. ``origin`` nests under ``metadata:`` like harvest does."""
     stamp = f"metadata:\n  origin: {origin}\n" if origin else ""
@@ -72,7 +72,7 @@ def _emit(
     body: str = "Use pathlib.",
 ):
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([{
-        "slug": slug, "type": "feedback", "name": "Prefer pathlib",
+        "slug": slug, "type": "reference", "name": "Prefer pathlib",
         "description": "d", "body": body, "source_files": sources,
     }]))
 
@@ -114,7 +114,7 @@ def test_a_later_extract_cannot_launder_a_staged_page(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    staged = root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md"
+    staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     assert staged.exists(), "precondition: run 1 staged the page"
 
     # Weeks later: a live memory file in another project, same lesson. A
@@ -124,7 +124,7 @@ def test_a_later_extract_cannot_launder_a_staged_page(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists(), (
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists(), (
         "a page staged for review was laundered into the sacred dir"
     )
     assert staged.exists(), "the staged copy was consumed by the universal door"
@@ -147,7 +147,7 @@ def test_the_staged_page_keeps_its_stamp_after_the_later_extract(tmp_path, monke
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    staged = root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md"
+    staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     assert "\norigin: backfill\n" in staged.read_text(encoding="utf-8")
 
 
@@ -158,7 +158,7 @@ def test_origin_is_persisted_onto_the_state_entry(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    entry = _state(root)["entries"]["feedback/prefer-pathlib"]
+    entry = _state(root)["entries"]["reference/prefer-pathlib"]
     assert entry["origin_backfill"] is True
 
 
@@ -169,9 +169,9 @@ def test_a_live_page_is_not_marked_backfill(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    entry = _state(root)["entries"]["feedback/prefer-pathlib"]
+    entry = _state(root)["entries"]["reference/prefer-pathlib"]
     assert entry["origin_backfill"] is False
-    assert (root / "shared" / "feedback" / "prefer-pathlib.md").exists(), (
+    assert (root / "shared" / "reference" / "prefer-pathlib.md").exists(), (
         "a live single-source page must still auto-promote"
     )
 
@@ -192,7 +192,7 @@ def test_a_live_page_still_auto_promotes_on_a_later_run(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    assert (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "reference" / "prefer-pathlib.md").exists()
 
 
 # --------------------------------------------------------------------------
@@ -216,9 +216,9 @@ def test_an_old_state_file_is_healed_from_the_staged_page(tmp_path, monkeypatch)
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists()
-    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
-    assert _state(root)["entries"]["feedback/prefer-pathlib"]["origin_backfill"] is True
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
+    assert _state(root)["entries"]["reference/prefer-pathlib"]["origin_backfill"] is True
 
 
 def test_state_entry_origin_round_trips_without_a_schema_bump(tmp_path):
@@ -234,7 +234,7 @@ def test_state_entry_origin_round_trips_without_a_schema_bump(tmp_path):
     from mnemo.core.extract.scanner import ExtractionState, StateEntry
 
     state = ExtractionState(last_run="r")
-    state.entries["feedback/a"] = StateEntry(
+    state.entries["reference/a"] = StateEntry(
         source_files=["bots/a/memory/x.md"], source_hash="sha256:a",
         written_hash="sha256:b", written_at="r", status="inbox",
         origin_backfill=True,
@@ -244,13 +244,13 @@ def test_state_entry_origin_round_trips_without_a_schema_bump(tmp_path):
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == SCHEMA_VERSION == 2
-    assert payload["entries"]["feedback/a"]["origin_backfill"] is True
-    assert inbox.load_state(path).entries["feedback/a"].origin_backfill is True
+    assert payload["entries"]["reference/a"]["origin_backfill"] is True
+    assert inbox.load_state(path).entries["reference/a"].origin_backfill is True
 
     # A v2 file written before the field existed.
-    del payload["entries"]["feedback/a"]["origin_backfill"]
+    del payload["entries"]["reference/a"]["origin_backfill"]
     path.write_text(json.dumps(payload), encoding="utf-8")
-    assert inbox.load_state(path).entries["feedback/a"].origin_backfill is False
+    assert inbox.load_state(path).entries["reference/a"].origin_backfill is False
 
 
 def test_force_must_not_wipe_the_staged_page_a_legacy_vault_heals_from(
@@ -270,7 +270,7 @@ def test_force_must_not_wipe_the_staged_page_a_legacy_vault_heals_from(
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    staged = root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md"
+    staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     assert staged.exists(), "precondition: run 1 staged the page"
     _downgrade_state(root)
 
@@ -278,7 +278,7 @@ def test_force_must_not_wipe_the_staged_page_a_legacy_vault_heals_from(
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root), force=True)
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists(), (
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists(), (
         "--force wiped the staged page, then laundered it into the sacred dir"
     )
     assert staged.exists()
@@ -293,10 +293,10 @@ def test_force_still_wipes_live_staged_pages(tmp_path, monkeypatch):
                         "bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    orphan = root / "shared" / "_inbox" / "feedback" / "drifted-slug.md"
+    orphan = root / "shared" / "_inbox" / "reference" / "drifted-slug.md"
     orphan.parent.mkdir(parents=True, exist_ok=True)
     orphan.write_text(
-        "---\nname: Drifted\ntype: feedback\n---\n\nA prior force run's leftover.\n",
+        "---\nname: Drifted\ntype: reference\n---\n\nA prior force run's leftover.\n",
         encoding="utf-8",
     )
     run_extraction(_cfg(root), force=True)
@@ -326,7 +326,7 @@ def test_a_backfill_co_citation_does_not_freeze_a_live_sacred_page(
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    sacred = root / "shared" / "feedback" / "prefer-pathlib.md"
+    sacred = root / "shared" / "reference" / "prefer-pathlib.md"
     assert sacred.exists(), "precondition: the live page auto-promoted"
 
     # A reconstruction turns up citing the live page alongside itself.
@@ -336,7 +336,7 @@ def test_a_backfill_co_citation_does_not_freeze_a_live_sacred_page(
     run_extraction(_cfg(root))
 
     assert sacred.exists(), "the upgrade branch must leave the sacred file alone"
-    assert _state(root)["entries"]["feedback/prefer-pathlib"]["origin_backfill"] is False
+    assert _state(root)["entries"]["reference/prefer-pathlib"]["origin_backfill"] is False
 
     # Weeks later, a purely live update to the live source.
     _memory(root, "alpha", "prefer-pathlib", origin=None, body="Use pathlib everywhere.")
@@ -357,7 +357,7 @@ def test_a_backfill_co_citation_does_not_freeze_a_live_sacred_page(
 def _page(**kw):
     from mnemo.core.extract.inbox.types import ExtractedPage
     base = dict(
-        slug="s", type="feedback", name="n", description="d", body="b",
+        slug="s", type="reference", name="n", description="d", body="b",
         source_files=["bots/a/memory/x.md"], source_hash="sha256:x",
     )
     base.update(kw)
@@ -385,10 +385,10 @@ def test_resolver_restores_the_flag_from_the_entry(tmp_path):
 def test_resolver_restores_the_flag_from_the_staged_file(tmp_path):
     from mnemo.core.extract.inbox.apply import _resolve_sticky_origin
 
-    staged = tmp_path / "shared" / "_inbox" / "feedback" / "s.md"
+    staged = tmp_path / "shared" / "_inbox" / "reference" / "s.md"
     staged.parent.mkdir(parents=True)
     staged.write_text(
-        "---\nname: n\ntype: feedback\norigin: backfill\n---\n\nb\n", encoding="utf-8",
+        "---\nname: n\ntype: reference\norigin: backfill\n---\n\nb\n", encoding="utf-8",
     )
     page = _page()
     _resolve_sticky_origin(page, _entry(), tmp_path)
@@ -399,9 +399,9 @@ def test_resolver_leaves_a_live_page_alone(tmp_path):
     """Neither an entry nor a staged file that says backfill → no flag."""
     from mnemo.core.extract.inbox.apply import _resolve_sticky_origin
 
-    staged = tmp_path / "shared" / "_inbox" / "feedback" / "s.md"
+    staged = tmp_path / "shared" / "_inbox" / "reference" / "s.md"
     staged.parent.mkdir(parents=True)
-    staged.write_text("---\nname: n\ntype: feedback\n---\n\nb\n", encoding="utf-8")
+    staged.write_text("---\nname: n\ntype: reference\n---\n\nb\n", encoding="utf-8")
 
     page = _page()
     _resolve_sticky_origin(page, _entry(), tmp_path)
@@ -456,12 +456,12 @@ def test_is_backfill_markdown_survives_undecodable_bytes(tmp_path):
 
     stamped = tmp_path / "stamped.md"
     stamped.write_bytes(
-        b"---\nname: n\ntype: feedback\norigin: backfill\n---\n\nbody \xff\xfe\n"
+        b"---\nname: n\ntype: reference\norigin: backfill\n---\n\nbody \xff\xfe\n"
     )
     assert is_backfill_markdown(stamped) is True
 
     plain = tmp_path / "plain.md"
-    plain.write_bytes(b"---\nname: n\ntype: feedback\n---\n\nbody \xff\xfe\n")
+    plain.write_bytes(b"---\nname: n\ntype: reference\n---\n\nbody \xff\xfe\n")
     assert is_backfill_markdown(plain) is False
 
 
@@ -477,12 +477,12 @@ def test_force_survives_an_undecodable_inbox_file(tmp_path, monkeypatch):
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
     run_extraction(_cfg(root))
 
-    junk = root / "shared" / "_inbox" / "feedback" / "hand-edited.md"
-    junk.write_bytes(b"---\nname: n\ntype: feedback\n---\n\noops \xff\n")
+    junk = root / "shared" / "_inbox" / "reference" / "hand-edited.md"
+    junk.write_bytes(b"---\nname: n\ntype: reference\n---\n\noops \xff\n")
 
     run_extraction(_cfg(root), force=True)  # must not raise
 
-    assert (root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
+    assert (root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
     assert not junk.exists(), "an unstamped hand-edited file is still a wipe target"
 
 
@@ -663,7 +663,7 @@ def test_the_reconciler_blocks_a_staged_page_whose_stamp_was_edited_out(
                         "bots/beta/memory/always-use-pathlib.md"])
     run_extraction(_cfg(root))
 
-    staged = root / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md"
+    staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     text = staged.read_text(encoding="utf-8")
     assert "\norigin: backfill\n" in text, "precondition: the file carried the stamp"
     staged.write_text(text.replace("\norigin: backfill\n", "\n"), encoding="utf-8")
@@ -671,7 +671,7 @@ def test_the_reconciler_blocks_a_staged_page_whose_stamp_was_edited_out(
     # Nothing is dirty now, so this run is the reconciler and nothing else.
     run_extraction(_cfg(root))
 
-    assert not (root / "shared" / "feedback" / "prefer-pathlib.md").exists(), (
+    assert not (root / "shared" / "reference" / "prefer-pathlib.md").exists(), (
         "the reconciler promoted a staged backfill page whose file-level "
         "stamp had been edited away"
     )
@@ -705,4 +705,4 @@ def test_an_unchanged_re_emission_still_persists_a_recovered_origin(
     summary = run_extraction(_cfg(root))
 
     assert summary.unchanged_skipped == 1, "precondition: took the skip path"
-    assert _state(root)["entries"]["feedback/use-pathlib"]["origin_backfill"] is True
+    assert _state(root)["entries"]["reference/use-pathlib"]["origin_backfill"] is True

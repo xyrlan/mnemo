@@ -65,7 +65,7 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -73,7 +73,7 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
                 "slug": "no-commits-without-permission",
                 "name": "No commits",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "no commits body",
                 "source_files": [
                     "bots/agent-b/memory/feedback_no_commits.md",
@@ -93,15 +93,15 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
     # project file exists
     assert (populated_vault / "shared" / "project" / "agent-b__china-portal.md").exists()
     # single-source yarn page auto-promoted to sacred dir
-    assert (populated_vault / "shared" / "feedback" / "use-yarn.md").exists()
+    assert (populated_vault / "shared" / "reference" / "use-yarn.md").exists()
     # multi-source no-commits page staged in _inbox/
-    assert (populated_vault / "shared" / "_inbox" / "feedback" / "no-commits-without-permission.md").exists()
+    assert (populated_vault / "shared" / "_inbox" / "reference" / "no-commits-without-permission.md").exists()
     assert summary.auto_promoted == 1
 
 
 def test_orchestrator_second_run_skips_unchanged(populated_vault: Path, stub_llm):
     response = _fake_llm_response([
-        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
+        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "reference",
          "body": "b", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
     ])
     stub_llm([response, response])
@@ -155,7 +155,7 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     # Use 2 sources to route through the _inbox/ branch (the original v0.2
     # test intent is about dismissed/force behavior of the inbox branch).
     response = _fake_llm_response([
-        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
+        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "reference",
          "body": "b",
          "source_files": [
              "bots/agent-a/memory/feedback_use_yarn.md",
@@ -165,7 +165,7 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     stub_llm([response, response])
     cfg = _make_cfg(populated_vault)
     run_extraction(cfg)
-    target = populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
+    target = populated_vault / "shared" / "_inbox" / "reference" / "use-yarn.md"
     target.unlink()
 
     run_extraction(cfg, force=True)
@@ -180,7 +180,7 @@ def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "evolving",
@@ -190,7 +190,7 @@ def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault
 
     run_extraction(_make_cfg(populated_vault))
 
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
     assert "stability: evolving" in sacred.read_text()
 
@@ -203,7 +203,7 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 # no "stability" field — legacy v0.2/v0.3 schema
@@ -213,7 +213,7 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
 
     run_extraction(_make_cfg(populated_vault))
 
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
     assert "stability: stable" in sacred.read_text()
 
@@ -231,7 +231,7 @@ def test_orchestrator_auto_deletes_legacy_wiki_sources(populated_vault: Path, st
                 "slug": "x",
                 "name": "X",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -249,7 +249,7 @@ def test_orchestrator_legacy_cleanup_is_idempotent(populated_vault: Path, stub_l
     stub_llm([
         _fake_llm_response([
             {
-                "slug": "x", "name": "X", "description": "d", "type": "feedback",
+                "slug": "x", "name": "X", "description": "d", "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -269,7 +269,7 @@ def test_orchestrator_regenerates_home_dashboard_after_run(populated_vault: Path
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -324,7 +324,7 @@ def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Pa
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -348,7 +348,7 @@ def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Pat
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -357,7 +357,7 @@ def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Pat
         ]),
     ])
     run_extraction(_make_cfg(populated_vault))
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     text = sacred.read_text()
     assert "  - auto-promoted" in text
     assert "  - package-management" in text
@@ -372,7 +372,7 @@ def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Pa
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -381,7 +381,7 @@ def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Pa
         ]),
     ])
     run_extraction(_make_cfg(populated_vault))
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     text = sacred.read_text()
     # auto-promoted should appear exactly once (system marker) — not twice from the LLM copy
     assert text.count("  - auto-promoted") == 1
@@ -411,7 +411,7 @@ def test_sanitize_llm_tags_caps_at_five():
 def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Path, stub_llm):
     """v0.3.1: --force nukes shared/_inbox/<type>/*.md so slug-drift duplicates die."""
     # Seed the inbox with stale slug-drift duplicates from a prior run.
-    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
     (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n")
     (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n")
@@ -423,7 +423,7 @@ def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Pa
                 "slug": "no-commits",
                 "name": "No commits",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "canonical body",
                 "source_files": [
                     "bots/agent-b/memory/feedback_no_commits.md",
@@ -445,7 +445,7 @@ def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Pa
 
 def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stub_llm):
     """Sanity: without --force, existing inbox files are preserved."""
-    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
     preserved = feedback_inbox / "preserved.md"
     preserved.write_text("keep me\n")
@@ -456,7 +456,7 @@ def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stu
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -481,7 +481,7 @@ def test_orchestrator_force_wipes_only_cluster_type_dirs(populated_vault: Path, 
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -509,9 +509,9 @@ def test_merge_apply_folds_new_fields():
     from mnemo.core.extract.inbox import ApplyResult
 
     apply_result = ApplyResult()
-    apply_result.auto_promoted = ["feedback/use-yarn", "feedback/no-bun"]
-    apply_result.sibling_bounced = [("feedback/use-yarn", "path/to/proposed.md")]
-    apply_result.upgrade_proposed = [("feedback/no-commits", "path/to/upgrade.md")]
+    apply_result.auto_promoted = ["reference/use-yarn", "reference/no-bun"]
+    apply_result.sibling_bounced = [("reference/use-yarn", "path/to/proposed.md")]
+    apply_result.upgrade_proposed = [("reference/no-commits", "path/to/upgrade.md")]
 
     summary = ExtractionSummary()
     _merge_apply(apply_result, summary)
@@ -560,14 +560,14 @@ def _parse_one_page(rp: dict):
     """Helper: feed a raw LLM page dict through _parse_pages_from_response."""
     from mnemo.core.extract import _parse_pages_from_response
     payload = json.dumps({"pages": [rp]})
-    return _parse_pages_from_response(payload, "feedback")
+    return _parse_pages_from_response(payload, "reference")
 
 
 _BASE_PAGE = {
     "slug": "some-rule",
     "name": "Some rule",
     "description": "d",
-    "type": "feedback",
+    "type": "reference",
     "body": "b",
     "source_files": ["bots/a/memory/feedback_some_rule.md"],
     "stability": "stable",

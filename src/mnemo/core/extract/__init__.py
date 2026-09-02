@@ -15,7 +15,7 @@ from mnemo.core.backfill.origin import (
     is_backfill_frontmatter,
     is_backfill_markdown,
 )
-from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract import evidence, inbox, promote, prompts, scanner, source_paths
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
 from mnemo.core.filters import MANAGED_TAGS
@@ -457,6 +457,7 @@ def _run_extraction_body(
                 summary.failed_chunks += 1
                 continue
 
+            pages = [evidence.verify_page(p, vault_root) for p in pages]
             all_pages.extend(pages)
             processed_files.extend(chunk)
 
@@ -570,6 +571,9 @@ def _reconcile_universal_promotions(
         except OSError:
             continue
         fm, body = parse_frontmatter(text)
+        if str(fm.get("demoted_from") or "") == "feedback":
+            # Demoted feedback stays staged until a person reviews it.
+            continue
         page = inbox.ExtractedPage(
             slug=slug,
             type=page_type,

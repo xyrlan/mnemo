@@ -14,7 +14,7 @@ from mnemo.core.extract.inbox.types import ExtractedPage
 
 def _page(**kw) -> ExtractedPage:
     base = dict(
-        slug="s", type="feedback", name="n", description="d",
+        slug="s", type="reference", name="n", description="d",
         body="b", source_files=["bots/a/memory/x.md"], source_hash="sha256:x",
     )
     base.update(kw)
@@ -23,17 +23,17 @@ def _page(**kw) -> ExtractedPage:
 
 def test_single_source_live_page_auto_promotes(tmp_path):
     target = _target_path_for_page(_page(), tmp_path)
-    assert target == tmp_path / "shared" / "feedback" / "s.md"
+    assert target == tmp_path / "shared" / "reference" / "s.md"
 
 
 def test_single_source_backfill_page_stages_in_inbox(tmp_path):
     target = _target_path_for_page(_page(origin_backfill=True), tmp_path)
-    assert target == tmp_path / "shared" / "_inbox" / "feedback" / "s.md"
+    assert target == tmp_path / "shared" / "_inbox" / "reference" / "s.md"
 
 
 def test_multi_source_still_stages_regardless_of_origin(tmp_path):
     page = _page(source_files=["bots/a/memory/x.md", "bots/b/memory/y.md"])
-    assert _target_path_for_page(page, tmp_path) == tmp_path / "shared" / "_inbox" / "feedback" / "s.md"
+    assert _target_path_for_page(page, tmp_path) == tmp_path / "shared" / "_inbox" / "reference" / "s.md"
 
 
 def test_origin_backfill_defaults_false():
@@ -42,11 +42,11 @@ def test_origin_backfill_defaults_false():
 
 def test_parser_flags_page_whose_sources_are_all_backfill():
     text = json.dumps({"pages": [{
-        "slug": "s", "type": "feedback", "name": "n", "description": "d",
+        "slug": "s", "type": "reference", "name": "n", "description": "d",
         "body": "b", "source_files": ["bots/a/memory/x.md"],
     }]})
     pages = _parse_pages_from_response(
-        text, "feedback", backfill_sources=frozenset({"bots/a/memory/x.md"}),
+        text, "reference", backfill_sources=frozenset({"bots/a/memory/x.md"}),
     )
     assert pages[0].origin_backfill is True
 
@@ -61,21 +61,21 @@ def test_parser_flags_mixed_origin_page():
     land in the sacred dir unreviewed.
     """
     text = json.dumps({"pages": [{
-        "slug": "s", "type": "feedback", "name": "n", "description": "d",
+        "slug": "s", "type": "reference", "name": "n", "description": "d",
         "body": "b", "source_files": ["bots/a/memory/x.md", "bots/a/memory/live.md"],
     }]})
     pages = _parse_pages_from_response(
-        text, "feedback", backfill_sources=frozenset({"bots/a/memory/x.md"}),
+        text, "reference", backfill_sources=frozenset({"bots/a/memory/x.md"}),
     )
     assert pages[0].origin_backfill is True
 
 
 def test_parser_without_backfill_sources_flags_nothing():
     text = json.dumps({"pages": [{
-        "slug": "s", "type": "feedback", "name": "n", "description": "d",
+        "slug": "s", "type": "reference", "name": "n", "description": "d",
         "body": "b", "source_files": ["bots/a/memory/x.md"],
     }]})
-    pages = _parse_pages_from_response(text, "feedback")
+    pages = _parse_pages_from_response(text, "reference")
     assert pages[0].origin_backfill is False
 
 
@@ -141,7 +141,7 @@ def harvested_vault(tmp_vault: Path, tmp_path: Path, monkeypatch) -> Path:
     cfg = _cfg(tmp_vault)
     _stub_llm(monkeypatch, [{
         "slug": "prefer-pathlib",
-        "type": "feedback",
+        "type": "reference",
         "name": "Prefer pathlib",
         "description": "Path handling",
         "body": "Use pathlib, not os.path.",
@@ -169,7 +169,7 @@ def test_single_source_harvested_file_stages_instead_of_auto_promoting(
     """End-to-end: harvested file in, staged page out. One source, no promotion."""
     _stub_llm(monkeypatch, [{
         "slug": "prefer-pathlib",
-        "type": "feedback",
+        "type": "reference",
         "name": "Prefer pathlib",
         "description": "Path handling",
         "body": "Use pathlib, not os.path.",
@@ -178,8 +178,8 @@ def test_single_source_harvested_file_stages_instead_of_auto_promoting(
 
     summary = run_extraction(_cfg(harvested_vault))
 
-    assert (harvested_vault / "shared" / "_inbox" / "feedback" / "prefer-pathlib.md").exists()
-    assert not (harvested_vault / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert (harvested_vault / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
+    assert not (harvested_vault / "shared" / "reference" / "prefer-pathlib.md").exists()
     assert summary.auto_promoted == 0
 
 
@@ -188,12 +188,12 @@ def test_single_source_live_file_still_auto_promotes(tmp_vault: Path, monkeypatc
     mem = tmp_vault / "bots" / "alpha" / "memory"
     mem.mkdir(parents=True)
     (mem / "prefer-pathlib.md").write_text(
-        "---\nname: Prefer pathlib\ntype: feedback\n---\n\nUse pathlib, not os.path.\n",
+        "---\nname: Prefer pathlib\ntype: reference\n---\n\nUse pathlib, not os.path.\n",
         encoding="utf-8",
     )
     _stub_llm(monkeypatch, [{
         "slug": "prefer-pathlib",
-        "type": "feedback",
+        "type": "reference",
         "name": "Prefer pathlib",
         "description": "Path handling",
         "body": "Use pathlib, not os.path.",
@@ -202,4 +202,4 @@ def test_single_source_live_file_still_auto_promotes(tmp_vault: Path, monkeypatc
 
     run_extraction(_cfg(tmp_vault))
 
-    assert (tmp_vault / "shared" / "feedback" / "prefer-pathlib.md").exists()
+    assert (tmp_vault / "shared" / "reference" / "prefer-pathlib.md").exists()

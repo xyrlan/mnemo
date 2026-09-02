@@ -35,11 +35,15 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
     Backfill-origin pages always stage, whatever their source count: they are
     reconstructed from archived transcripts, so a human confirms before they
     reach the sacred dir.
+    Feedback pages that failed evidence verification stage as reference pages,
+    whatever their source count.
 
     Routes through ``_promoted_path`` / ``_inbox_path`` so the shared
     ``shared/<type>/<slug>.md`` shape lives in exactly one place
     (kills D1 inline target construction in PR I).
     """
+    if page.unverified_feedback:
+        return _inbox_path(vault_root, page)
     if is_backfill_page(page):
         return _inbox_path(vault_root, page)
     if len(page.source_files) == 1:

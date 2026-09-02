@@ -69,6 +69,8 @@ def _is_universal_promotion(
         return False
     if is_backfill_page(page):
         return False
+    if page.unverified_feedback:
+        return False
     if entry is not None and entry.status == "auto_promoted":
         return False
     projects = merged_projects_for(page, entry)
