@@ -18,8 +18,10 @@ reflex: injected on 90 of 1041 prompts (8.7%)
 recall: primacy@5 41.7% over 72 cases (mnemo recall, 2026-09-01)
 ```
 
-On topics with more than 20 rules, query-aware ranking lifted primacy@5 from
-16% to 31% (530 evaluations). Your own numbers: `mnemo status`.
+`reflex` is the per-prompt recall; `primacy@5` means the rule that session
+actually needed was in the top five. On topics with more than 20 rules,
+query-aware ranking lifted primacy@5 from 16% to 31% (530 evaluations). Your
+own numbers: `mnemo status`.
 
 ## How it compares
 
