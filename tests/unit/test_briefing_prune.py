@@ -76,3 +76,21 @@ def test_prune_dry_run_keeps_files(tmp_path):
     _briefing(tmp_path, "a", "s3", 5)
     rep = briefing.prune(tmp_path, _cfg(), dry_run=True)
     assert rep.deleted == [old] and old.exists()
+
+
+def test_prune_protects_dot_slash_source_spelling(tmp_path):
+    old = _briefing(tmp_path, "a", "s1", 400)
+    _briefing(tmp_path, "a", "s2", 10)
+    _briefing(tmp_path, "a", "s3", 5)
+    _rule(tmp_path, "r", ["./bots/a/briefings/sessions/s1.md"])
+    rep = briefing.prune(tmp_path, _cfg())
+    assert rep.deleted == [] and old.exists() and rep.protected_by_sources == 1
+
+
+def test_prune_protects_absolute_source_under_vault(tmp_path):
+    old = _briefing(tmp_path, "a", "s1", 400)
+    _briefing(tmp_path, "a", "s2", 10)
+    _briefing(tmp_path, "a", "s3", 5)
+    _rule(tmp_path, "r", [str(tmp_path / "bots" / "a" / "briefings" / "sessions" / "s1.md")])
+    rep = briefing.prune(tmp_path, _cfg())
+    assert rep.deleted == [] and old.exists() and rep.protected_by_sources == 1

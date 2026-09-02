@@ -12,7 +12,7 @@ import os
 import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mnemo.core import corrections as corrections_mod
@@ -319,7 +319,30 @@ class PruneReport:
     protected_by_sources: int = 0
     kept_recent: int = 0
     kept_min: int = 0
-    deleted: list = field(default_factory=list)
+    deleted: list[Path] = field(default_factory=list)
+
+
+def _normalise_source(entry: str, vault_root: Path) -> str:
+    """One ``sources:`` entry in the vault-relative POSIX form briefings use.
+
+    Protection must not depend on how the writer spelled the path: strip
+    whitespace, use forward slashes, drop a leading ``./`` and redundant
+    separators, and fold an absolute path under ``vault_root`` back to
+    vault-relative. An absolute path outside the vault is returned as-is —
+    it can never name a briefing, so it simply never matches.
+    """
+    s = entry.strip().replace("\\", "/")
+    if not s:
+        return s
+    if Path(s).is_absolute():
+        try:
+            root = Path(vault_root).resolve()
+            return Path(s).resolve().relative_to(root).as_posix()
+        except (OSError, ValueError):
+            return s
+    if s.startswith("./"):
+        s = s[2:]
+    return PurePosixPath(s).as_posix()
 
 
 def _protected_briefings(vault_root: Path) -> set[str]:
@@ -334,7 +357,7 @@ def _protected_briefings(vault_root: Path) -> set[str]:
             continue
         for s in fm.get("sources") or []:
             if isinstance(s, str):
-                out.add(s.strip().replace("\\", "/"))
+                out.add(_normalise_source(s, vault_root))
     return out
 
 
