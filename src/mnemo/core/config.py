@@ -30,6 +30,10 @@ DEFAULTS: dict[str, Any] = {
     "briefings": {
         "enabled": True,
         "injectLastOnSessionStart": True,
+        # #116: briefings are written once per session and never pruned.
+        # retentionDays=0 disables pruning; keepPerAgent newest always survive.
+        "retentionDays": 180,
+        "keepPerAgent": 20,
     },
     "backfill": {
         "enabled": True,

@@ -1,12 +1,24 @@
 """Miscellaneous doctor checks that don't fit a richer concern bucket.
 
-Hosts :func:`_doctor_check_legacy_wiki_dirs` (v0.4 fossil-directory
-warning) and :func:`_doctor_check_auto_brain` (auto-extraction
-heartbeat + last-run-status check).
+Hosts :func:`_doctor_check_circuit_breaker` (every hook is silenced while
+it is open, #115), :func:`_doctor_check_legacy_wiki_dirs` (v0.4
+fossil-directory warning) and :func:`_doctor_check_auto_brain`
+(auto-extraction heartbeat + last-run-status check).
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+
+def _doctor_check_circuit_breaker(vault: Path) -> bool:
+    """A tripped breaker silences every hook; that is a fault, not advice."""
+    from mnemo.core import errors
+
+    if errors.should_run(vault):
+        print("  ✓ circuit breaker closed")
+        return True
+    print(f"  ✗ {errors.remedy_line(vault)}")
+    return False
 
 
 def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:

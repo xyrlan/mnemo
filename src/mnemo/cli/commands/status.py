@@ -75,6 +75,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     vault = cli._resolve_vault()
     print(f"Vault: {vault}  ({'exists' if vault.exists() else 'MISSING'})")
+    _print_briefings_status(vault)
     from mnemo.install.settings import HOOK_DEFINITIONS
 
     expected_events = tuple(HOOK_DEFINITIONS.keys())
@@ -94,8 +95,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             _print_scope_line("project", project_settings, expected_events)
         if scope in ("global", "all"):
             _print_scope_line("global", global_settings, expected_events)
-    breaker = "closed (ok)" if err_mod.should_run(vault) else "OPEN — recent errors detected"
-    print(f"Circuit breaker: {breaker}")
+    if err_mod.should_run(vault):
+        print("Circuit breaker: closed (ok)")
+    else:
+        count, buckets = err_mod.recent_summary(vault)
+        top = f" (top: {buckets[0][0]} ×{buckets[0][1]})" if buckets else ""
+        print(f"Circuit breaker: OPEN — {count} errors in the last hour{top}. Run `mnemo fix` to reset.")
     log = vault / ".errors.log"
     if log.exists():
         print(f"Error log: {log} ({log.stat().st_size} bytes)")
@@ -105,6 +110,31 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_numbers_status(vault)
     _print_learned_status(vault)
     return 0
+
+
+def _print_briefings_status(vault: Path) -> None:
+    """Briefing count, size, and what the retention policy would prune (#116).
+
+    A dry run of the same walk session_start performs weekly; silent when
+    the vault has no briefings at all."""
+    from mnemo.core import briefing as briefing_mod, config as cfg_mod
+    try:
+        cfg = cfg_mod.load_config()
+        rep = briefing_mod.prune(vault, cfg, dry_run=True)
+    except Exception:  # noqa: BLE001 — a status line is not worth a traceback
+        return
+    if rep.scanned == 0:
+        return
+    b = cfg.get("briefings") or {}
+    days = int(b.get("retentionDays", 180) or 0)
+    policy = (
+        "retention off" if days <= 0
+        else f"retention {days}d, keep {int(b.get('keepPerAgent', 20))}/agent"
+    )
+    print(
+        f"Briefings: {rep.scanned} across {rep.agents} agents ({rep.bytes / 1048576:.1f} MB) — "
+        f"{len(rep.deleted)} prunable ({policy})"
+    )
 
 
 def _current_project() -> str | None:

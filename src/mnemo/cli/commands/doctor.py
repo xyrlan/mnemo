@@ -28,6 +28,7 @@ from mnemo.cli.parser import command
 # True today (advisory-only), so the ``if ok is False`` guard below is
 # robust to either bool or None return values.
 DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
+    ("circuit_breaker",       doctor_misc._doctor_check_circuit_breaker),
     ("auto_brain",            doctor_misc._doctor_check_auto_brain),
     ("legacy_wiki_dirs",      doctor_misc._doctor_check_legacy_wiki_dirs),
     ("statusline_drift",      reflex._doctor_check_statusline_drift),

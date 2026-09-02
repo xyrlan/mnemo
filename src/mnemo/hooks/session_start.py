@@ -18,9 +18,30 @@ import json
 import re
 import os
 import sys
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+
+
+_PRUNE_MARKER = ".mnemo/briefings-prune.last"
+_PRUNE_INTERVAL = 7 * 86400
+
+
+def _maybe_prune_briefings(vault: Path, cfg: dict) -> None:
+    """Run ``briefing.prune`` at most once per week (#116). Cheap but not free:
+    it parses every live rule's frontmatter to build the protected set."""
+    from mnemo.core import briefing as briefing_mod
+
+    marker = Path(vault) / _PRUNE_MARKER
+    try:
+        if marker.exists() and time.time() - marker.stat().st_mtime < _PRUNE_INTERVAL:
+            return
+    except OSError:
+        pass
+    briefing_mod.prune(vault, cfg)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
 
 
 def _build_injection_payload(
@@ -437,6 +458,14 @@ def main() -> int:
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
         if not errors.should_run(vault):
+            # The breaker is the one failure a user cannot see from inside a
+            # session: every hook goes quiet and mnemo just "stops". Say so
+            # once per session start (#115); the other hooks stay silent on
+            # purpose — PreToolUse output would read as a denial.
+            try:
+                _emit_injection("[mnemo] paused: " + errors.remedy_line(vault))
+            except Exception:
+                pass
             return 0
         # A plugin install never runs `mnemo init`, so nothing else scaffolds
         # the vault: the hooks below would create only the directories they
@@ -463,6 +492,10 @@ def main() -> int:
             session.cleanup_stale(max_age_seconds=48 * 3600)
         except Exception as e:
             errors.log_error(vault, "session_start.cache", e)
+        try:
+            _maybe_prune_briefings(vault, cfg)
+        except Exception as e:
+            errors.log_error(vault, "session_start.briefings_prune", e)
         try:
             mirror.mirror_all(cfg)
         except Exception as e:
