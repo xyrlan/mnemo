@@ -305,6 +305,7 @@ def apply_pages(
             result.unchanged_skipped.append(key)
             continue
 
+        dismissed_before = len(result.dismissed_skipped)
         for predicate, handler in _DISPATCH:
             if predicate(page, entry, target, is_auto):
                 handler(
@@ -314,10 +315,11 @@ def apply_pages(
                 break
         _stamp_entry_origin(state, key, page)
         # Feed the page back into the index so a later page in this same batch
-        # that says the same thing redirects onto it. Registered
-        # unconditionally: a redirect onto a slug this run just wrote is the
-        # desired outcome, and re-registering a slug that was itself a redirect
-        # target simply refreshes that slug's profile with the newer text.
-        _sim_index(page.type).add(page)
+        # that says the same thing redirects onto it — but only if this page
+        # actually landed. A page dropped as dismissed_skipped wrote nothing, so
+        # registering it would let a later similar page redirect onto a slug
+        # that is not there, and be dropped in turn.
+        if len(result.dismissed_skipped) == dismissed_before:
+            _sim_index(page.type).add(page)
 
     return result

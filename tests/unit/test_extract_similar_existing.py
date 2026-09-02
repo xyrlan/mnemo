@@ -137,3 +137,35 @@ def test_find_tie_break_prefers_lexicographically_smaller_slug(tmp_path):
     page = _page("google-ads-negative-keyword-strategy",
                  "Negative keyword list before broad match launch", body=PARAPHRASE)
     assert idx.find(page) == "aaa-negative-keywords"
+
+
+def test_dismissed_page_does_not_become_a_redirect_target_mid_batch(tmp_path):
+    """A page dropped as dismissed_skipped wrote nothing, so it must not enter the index.
+
+    Three similar pages in one batch: the first collides with a dismissed entry
+    and is dropped; the remaining two must still collapse onto each other rather
+    than redirecting onto the slug that was never written.
+    """
+    state = ExtractionState(last_run=None)
+    _seed(tmp_path, state, "negative-keywords-early-launch", "Add negative keywords at launch",
+          status="dismissed")
+    pages = [
+        _page("negative-keywords-early-launch", "Add negative keywords at launch",
+              body=BODY, sources=["bots/a/briefings/sessions/1.md"], source_hash="hA"),
+        _page("negative-keyword-launch-checklist",
+              "Negative keyword list before broad match launch",
+              body=PARAPHRASE, sources=["bots/b/briefings/sessions/2.md"], source_hash="hB"),
+        _page("google-ads-negative-keyword-strategy",
+              "Negative keywords added early at launch",
+              body=PARAPHRASE_2, sources=["bots/c/briefings/sessions/3.md"], source_hash="hC"),
+    ]
+    apply_pages(pages, state, tmp_path, run_id="r1")
+    # The dismissed slug stays dismissed and keeps its original sources.
+    dismissed = state.entries["feedback/negative-keywords-early-launch"]
+    assert dismissed.status == "dismissed"
+    assert dismissed.source_files == ["bots/a/briefings/sessions/1.md"]
+    # Exactly one NEW entry: page 2 written, page 3 redirected onto it.
+    new_keys = [k for k in state.entries
+                if k.startswith("feedback/") and k != "feedback/negative-keywords-early-launch"]
+    assert new_keys == ["feedback/negative-keyword-launch-checklist"], new_keys
+    assert not (tmp_path / "shared" / "feedback" / "google-ads-negative-keyword-strategy.md").exists()
