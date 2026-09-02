@@ -31,6 +31,11 @@ def quote_verified(evidence: dict | None, vault_root: Path) -> bool:
     if not isinstance(evidence, dict):
         return False
     quote = str(evidence.get("quote") or "")
+    # A matching quote proves the user typed the words, not that the words
+    # establish a rule: a one-line approval ("implementa os fixes") appears in
+    # the Corrections of every session it closed. Same bar as reclassify (#119).
+    if not corrections.quote_is_specific(quote):
+        return False
     src = _source_path(vault_root, str(evidence.get("source") or ""))
     if src is None or not quote.strip():
         return False

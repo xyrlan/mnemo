@@ -103,3 +103,36 @@ def test_verified_single_source_page_auto_promotes(tmp_path):
     out = root / "shared" / "feedback" / "retry-5xx-only.md"
     assert out.exists()
     assert "confidence: verified" in out.read_text(encoding="utf-8")
+
+
+GENERIC_BRIEFING = """---
+type: briefing
+agent: proj
+session_id: s2
+corrections: 2
+---
+
+# Briefing — proj — s2
+
+## Corrections
+- "implementa os fixes" → Apply the fixes
+- "never run migrations against production without a backup first" → Back up before prod migrations
+"""
+
+
+def test_generic_quote_is_unverified_even_when_present_in_corrections(tmp_path):
+    """A one-line approval proves the user typed words, not that they establish a rule (#119)."""
+    root = _vault(tmp_path)
+    b = root / "bots" / "proj" / "briefings" / "sessions" / "s2.md"
+    b.write_text(GENERIC_BRIEFING, encoding="utf-8")
+    src = "bots/proj/briefings/sessions/s2.md"
+    generic = evidence.verify_page(_page(
+        source_files=[src], evidence={"quote": "implementa os fixes", "source": src}), root)
+    assert generic.type == "reference" and generic.unverified_feedback
+    assert generic.evidence is None
+    specific = evidence.verify_page(_page(
+        source_files=[src],
+        evidence={"quote": "never run migrations against production without a backup first",
+                  "source": src}), root)
+    assert specific.type == "feedback" and specific.confidence == "verified"
+    assert not specific.unverified_feedback
