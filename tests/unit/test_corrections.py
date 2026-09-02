@@ -88,3 +88,10 @@ def test_section_header_must_be_a_whole_line():
 def test_longer_header_is_not_the_section():
     body = '## Corrections to the plan\n- "use yarn not npm" → Use yarn\n'
     assert C.parse_section(body) == []
+
+
+def test_quote_is_specific_treats_unaccented_vao_as_a_stopword():
+    """Users type "vao" for "vão" as often as not; both must count as filler (#119)."""
+    from mnemo.core.corrections import quote_is_specific
+    assert not quote_is_specific("vão subir o deploy do backend hoje")
+    assert not quote_is_specific("vao subir o deploy do backend hoje")

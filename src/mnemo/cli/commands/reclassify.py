@@ -24,7 +24,12 @@ def _fmt(v) -> str:
         quote = (v.quote or "").replace("\n", " ")
         if len(quote) > 70:
             quote = quote[:70] + "…"
-        return f'  keep     {v.slug} · "{quote}"'
+        line = f'  keep     {v.slug} · "{quote}"'
+        # The grader's one-sentence justification (#119): a keep is only
+        # reviewable if the maintainer can see why the quote was accepted.
+        if v.link:
+            line += f"\n           link: {v.link.strip()}"
+        return line
     reason = f" · {v.reason}" if v.reason else ""
     return f"  {v.verdict:<8} {v.slug}{reason}"
 

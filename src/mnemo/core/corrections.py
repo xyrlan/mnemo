@@ -61,7 +61,7 @@ _STOPWORDS = frozenset("""
 a o os as um uma uns umas de do da dos das em no na nos nas por para pra pro com sem
 e ou mas que se não nao sim ok okay ja já isso isto aqui ali lá la ele ela eles elas
 eu tu voce você nós nos vc me te lhe meu minha seu sua
-é e ser esta está estão estao foi era tem têm ter vai vão vamos vamo bora
+é e ser esta está estão estao foi era tem têm ter vai vão vao vamos vamo bora
 pode podem poder deve devem faz faça fazer fez implementa implementar implemente
 aplica aplicar aplique testa testar teste roda rodar rode
 the a an and or but if so to of in on at for with by from as is are was were be been
