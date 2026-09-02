@@ -27,6 +27,12 @@ def test_rejects_pages_that_echo_extractor_guidance():
     assert is_prompt_echo(_p(description="Prefer Existing vault tags over inventing new ones"))
 
 
+def test_echo_phrase_in_name_alone_is_enough():
+    """The haystack spans name + description + body, not body only."""
+    assert is_prompt_echo(_p(name="Set activates_on for path-scoped rules",
+                             description="d", body="Keep functions small."))
+
+
 def test_accepts_ordinary_rules():
     assert not is_prompt_echo(_p(body="Never retry on 4xx.\n\n**Why:** x\n\n**How to apply:** y"))
 
@@ -119,7 +125,7 @@ def test_orchestrator_drops_prompt_echo_and_redacts_pii(
                 "name": "Retry only on 5xx",
                 "description": "d",
                 "type": "feedback",
-                "body": "Retry only 5xx. Ask ana.silva@example.com before changing.",
+                "body": "Retry only 5xx. Ask ana.silva@acme-corp.io before changing.",
                 "source_files": [src],
                 "evidence": {"quote": "never retry on 4xx, only on 5xx", "source": src},
             },
@@ -131,13 +137,16 @@ def test_orchestrator_drops_prompt_echo_and_redacts_pii(
     assert summary.echo_rejected == 1
     assert summary.redactions == 1
 
-    # The echo page is written nowhere at all.
+    # The echo page is demoted, not dropped: it stages for human review rather
+    # than reaching the sacred dir. A false positive must never lose data.
     assert not (populated_vault / "shared" / "feedback" / "enforce-block-guidance.md").exists()
     assert not (populated_vault / "shared" / "_inbox" / "feedback" / "enforce-block-guidance.md").exists()
-    assert not (populated_vault / "shared" / "_inbox" / "reference" / "enforce-block-guidance.md").exists()
+    demoted = populated_vault / "shared" / "_inbox" / "reference" / "enforce-block-guidance.md"
+    assert demoted.exists(), "a prompt-echo page must stage as a reference page"
+    assert "demoted_from: feedback" in demoted.read_text(encoding="utf-8")
 
     promoted = populated_vault / "shared" / "feedback" / "retry-5xx-only.md"
     assert promoted.exists(), "a verified quote must reach the sacred dir"
     text = promoted.read_text(encoding="utf-8")
     assert "[redacted]" in text
-    assert "ana.silva@example.com" not in text
+    assert "ana.silva@acme-corp.io" not in text

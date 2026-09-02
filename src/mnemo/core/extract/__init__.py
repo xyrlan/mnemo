@@ -5,7 +5,7 @@ import hashlib
 import json as _json
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -467,17 +467,28 @@ def _run_extraction_body(
             kept: list[inbox.ExtractedPage] = []
             for p in pages:
                 if is_prompt_echo(p):
+                    # Demoted, never dropped: a false positive today would be
+                    # permanent, silent data loss. Coerced exactly the way the
+                    # evidence gate demotes an unverified feedback page, so it
+                    # stages in shared/_inbox/reference/ for a human to judge.
                     summary.echo_rejected += 1
                     errors.log_error(vault_root, "extract.prompt_echo",
                                      ValueError(f"rejected prompt-echo page {p.type}/{p.slug}"))
-                    continue
-                p = evidence.verify_page(p, vault_root)
+                    p = replace(p, type="reference", confidence="inferred",
+                                unverified_feedback=True, evidence=None)
+                else:
+                    p = evidence.verify_page(p, vault_root)
                 # Redaction runs AFTER verification on purpose: the evidence
                 # quote is left untouched so it still matches the briefing (a
-                # quote containing PII is the user's own words).
-                p.body, n_body = redact(p.body)
-                p.description, n_desc = redact(p.description)
-                summary.redactions += n_body + n_desc
+                # quote containing PII is the user's own words). Rebuilt with
+                # ``replace`` rather than assigned in place — verify_page
+                # returns the *same* instance for a non-feedback page, so a
+                # field write would reach through to the caller's object.
+                new_name, n_name = redact(p.name)
+                new_desc, n_desc = redact(p.description)
+                new_body, n_body = redact(p.body)
+                summary.redactions += n_name + n_desc + n_body
+                p = replace(p, name=new_name, description=new_desc, body=new_body)
                 kept.append(p)
             all_pages.extend(kept)
             processed_files.extend(chunk)

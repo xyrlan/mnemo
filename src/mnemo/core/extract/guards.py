@@ -22,5 +22,5 @@ ECHO_PHRASES = (
 
 
 def is_prompt_echo(page: ExtractedPage) -> bool:
-    haystack = " ".join((page.name or "", page.description or "", page.body or "")).lower()
+    haystack = " ".join((page.name, page.description, page.body)).lower()
     return any(phrase in haystack for phrase in ECHO_PHRASES)
