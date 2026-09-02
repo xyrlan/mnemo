@@ -77,12 +77,11 @@ def _compute_confidence(
 
 def _load_vault_slugs(vault_root: Path) -> Set[str]:
     """Scan shared/ for frontmatter slug: fields in rule .md files."""
+    from mnemo.core.filters import iter_shared_pages
+
     slugs: Set[str] = set()
-    shared = vault_root / "shared"
-    if not shared.is_dir():
-        return slugs
     slug_re = re.compile(r"^slug:\s*(.+)$", re.MULTILINE)
-    for md in shared.rglob("*.md"):
+    for md in iter_shared_pages(vault_root):
         try:
             text = md.read_text(encoding="utf-8", errors="replace")
             for m in slug_re.finditer(text):
