@@ -3,6 +3,31 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The plugin's MCP server could not spawn on macOS/Linux.** `.mcp.json`
+  pointed at `bin/mnemo.cmd`, a shebang-less polyglot; Claude Code spawns
+  stdio MCP servers without a shell, so the spawn failed with ENOEXEC (hooks
+  were unaffected — they run through a shell). The entry now spawns
+  `bash bin/launch`. Opened as a project, the same file resolves to the
+  editable install instead of the literal `${CLAUDE_PLUGIN_ROOT}` string that
+  shadowed the working user-scope server. Native Windows plugin installs are
+  unverified either way — see #121. (#118)
+- `mnemo doctor`, `list-enforced`, `disable-rule` and the EOS proposer no
+  longer walk `shared/_archive/**` (reclassify originals); the stripped-enforce
+  advisory listed ~1.5k archived copies after `mnemo reclassify --apply`.
+  `list-enforced` and the advisory also stop descending into `_inbox`, which
+  the hook never enforces. (#120)
+
+### Internal
+
+- Every test runs under a temporary HOME with `MNEMO_CONFIG_PATH` redirected,
+  and a guard fails any test that changes the real vault's `.errors.log`,
+  `shared/` or `~/.claude/projects`. Hook tests used to write into the
+  developer's vault and trip its circuit breaker for an hour. (#117)
+
 ## [1.1.0] — 2026-09-02
 
 The corrections release. 1.0 proved mnemo could measure itself; the post-1.0
