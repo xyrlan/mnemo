@@ -18,7 +18,7 @@ def _make_frozen_set(tmp_path: Path, cases: list[dict]) -> Path:
     d = tmp_path / ".mnemo"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "recall-cases.frozen.json"
-    p.write_text(json.dumps(cases))
+    p.write_text(json.dumps(cases), encoding="utf-8")
     return p
 
 

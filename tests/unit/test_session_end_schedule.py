@@ -13,13 +13,13 @@ def _write_state(path, last_run):
         "entries": {},
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _touch_memory(vault, agent, name, mtime_offset=0):
     path = vault / "bots" / agent / "memory" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("---\nname: x\ntype: feedback\n---\nbody\n")
+    path.write_text("---\nname: x\ntype: feedback\n---\nbody\n", encoding="utf-8")
     if mtime_offset:
         atime = path.stat().st_atime
         mtime = path.stat().st_mtime + mtime_offset
@@ -201,7 +201,7 @@ def test_schedule_extraction_spawns_when_debounce_passes(tmp_path, monkeypatch):
 
     mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
     mem.parent.mkdir(parents=True)
-    mem.write_text("---\ntype: feedback\n---\nbody\n")
+    mem.write_text("---\ntype: feedback\n---\nbody\n", encoding="utf-8")
 
     spawn_called = []
     monkeypatch.setattr(session_end, "_spawn_detached_extraction",
@@ -231,7 +231,7 @@ def test_schedule_extraction_skips_when_lock_held(tmp_path, monkeypatch):
 
     mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
     mem.parent.mkdir(parents=True)
-    mem.write_text("---\ntype: feedback\n---\nbody\n")
+    mem.write_text("---\ntype: feedback\n---\nbody\n", encoding="utf-8")
 
     session_end._maybe_schedule_extraction(cfg, vault, "agent_a")
 
@@ -248,7 +248,7 @@ def test_resolve_session_jsonl_path_dash_encodes_cwd(tmp_path, monkeypatch):
     claude_dir = home / ".claude" / "projects" / "-home-xyrlan-github-mnemo"
     claude_dir.mkdir(parents=True)
     expected = claude_dir / "sid42.jsonl"
-    expected.write_text("{}\n")
+    expected.write_text("{}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
@@ -284,7 +284,7 @@ def test_spawn_detached_briefing_posix_uses_start_new_session(monkeypatch, tmp_p
     monkeypatch.setattr(sys, "platform", "linux")
 
     fake_jsonl = tmp_path / "sid.jsonl"
-    fake_jsonl.write_text("{}\n")
+    fake_jsonl.write_text("{}\n", encoding="utf-8")
     session_end._spawn_detached_briefing(fake_jsonl, "agent_a")
 
     argv = captured["argv"]
@@ -321,7 +321,7 @@ def test_schedule_briefing_spawns_when_enabled_and_jsonl_exists(tmp_path, monkey
     home = tmp_path / "home"
     jsonl_dir = home / ".claude" / "projects" / "-tmp-cwd"
     jsonl_dir.mkdir(parents=True)
-    (jsonl_dir / "sidA.jsonl").write_text("{}\n")
+    (jsonl_dir / "sidA.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
@@ -368,7 +368,7 @@ def test_schedule_briefing_swallows_popen_errors(tmp_path, monkeypatch):
     home = tmp_path / "home"
     jsonl_dir = home / ".claude" / "projects" / "-tmp-cwd"
     jsonl_dir.mkdir(parents=True)
-    (jsonl_dir / "sid.jsonl").write_text("{}\n")
+    (jsonl_dir / "sid.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
@@ -382,7 +382,7 @@ def test_schedule_briefing_swallows_popen_errors(tmp_path, monkeypatch):
 
     errors_log = vault / ".errors.log"
     assert errors_log.exists()
-    assert "session_end.briefing" in errors_log.read_text()
+    assert "session_end.briefing" in errors_log.read_text(encoding="utf-8")
 
 
 def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
@@ -399,7 +399,7 @@ def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
 
     mem = vault / "bots" / "agent_a" / "memory" / "feedback_x.md"
     mem.parent.mkdir(parents=True)
-    mem.write_text("---\ntype: feedback\n---\nbody\n")
+    mem.write_text("---\ntype: feedback\n---\nbody\n", encoding="utf-8")
 
     def boom():
         raise OSError("too many fds")
@@ -410,7 +410,7 @@ def test_schedule_extraction_swallows_popen_errors(tmp_path, monkeypatch):
 
     errors_log = vault / ".errors.log"
     assert errors_log.exists()
-    assert "session_end.schedule" in errors_log.read_text()
+    assert "session_end.schedule" in errors_log.read_text(encoding="utf-8")
 
 
 from unittest.mock import patch

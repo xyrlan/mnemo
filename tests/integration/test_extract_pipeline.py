@@ -124,7 +124,7 @@ def test_full_first_run_produces_expected_layout(populated_vault, stub_llm_integ
     # Verify state
     state_file = populated_vault / ".mnemo" / "extraction-state.json"
     assert state_file.exists()
-    state = json.loads(state_file.read_text())
+    state = json.loads(state_file.read_text(encoding="utf-8"))
     assert state["schema_version"] == 2
     assert any(k.startswith("project/") for k in state["entries"])
     assert any(k.startswith("feedback/") for k in state["entries"])
@@ -154,7 +154,7 @@ def test_partial_failure_leaves_successful_work_on_disk(populated_vault, stub_ll
     assert summary.failed_chunks == 1
     assert summary.projects_promoted >= 1  # Projects wrote successfully
     state_file = populated_vault / ".mnemo" / "extraction-state.json"
-    state = json.loads(state_file.read_text())
+    state = json.loads(state_file.read_text(encoding="utf-8"))
     assert any(k.startswith("project/") for k in state["entries"])
     # No feedback entries (the LLM call failed)
     assert not any(k.startswith("feedback/") for k in state["entries"])
@@ -255,7 +255,7 @@ def test_extraction_rebuilds_rule_activation_index(populated_vault, stub_llm_int
         None,
     )
     assert target_path.exists(), "promoted rule file must exist on disk"
-    assert "promoted_without_enforce: true" in target_path.read_text(), (
+    assert "promoted_without_enforce: true" in target_path.read_text(encoding="utf-8"), (
         "promoted file must carry promoted_without_enforce: true frontmatter key"
     )
 
@@ -298,15 +298,15 @@ def test_conflict_flow_sibling_bounced(populated_vault, stub_llm_integration):
     # Sacred file exists — user hand-edits it
     sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
     assert sacred.exists()
-    sacred.write_text(sacred.read_text() + "\n\n(user note)\n")
+    sacred.write_text(sacred.read_text(encoding="utf-8") + "\n\n(user note)\n", encoding="utf-8")
 
     # Source changes — mutate the memory file
     yarn_mem = populated_vault / "bots" / "agent-a" / "memory" / "feedback_use_yarn.md"
-    yarn_mem.write_text(yarn_mem.read_text() + "\n\nextra content\n")
+    yarn_mem.write_text(yarn_mem.read_text(encoding="utf-8") + "\n\nextra content\n", encoding="utf-8")
 
     summary = run_extraction(cfg)
 
     sibling = populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists()
-    assert "(user note)" in sacred.read_text(), "sacred file must be untouched"
+    assert "(user note)" in sacred.read_text(encoding="utf-8"), "sacred file must be untouched"
     assert summary.sibling_bounced == 1

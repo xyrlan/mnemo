@@ -14,7 +14,7 @@ def _write_v1_file(path, entries):
         "last_run": "2026-04-10T12:00:00",
         "entries": entries,
     }
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_load_v1_state_migrates_last_sync_from_written_at(tmp_path):
@@ -53,7 +53,7 @@ def test_load_v2_state_preserves_last_sync(tmp_path):
             },
         },
     }
-    state_path.write_text(json.dumps(payload))
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
 
     state = inbox.load_state(state_path)
 
@@ -77,7 +77,7 @@ def test_write_state_persists_v2_with_last_sync(tmp_path):
     state_path = tmp_path / "state.json"
     inbox.atomic_write_state(state, state_path)
 
-    payload = json.loads(state_path.read_text())
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 2
     entry = payload["entries"]["feedback/use-yarn"]
     assert entry["last_sync"] == "2026-04-13T12:00:00"
@@ -99,14 +99,14 @@ def test_v1_round_trip_through_load_and_save(tmp_path):
     state = inbox.load_state(state_path)
     inbox.atomic_write_state(state, state_path)
 
-    payload = json.loads(state_path.read_text())
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 2
     assert payload["entries"]["feedback/use-yarn"]["last_sync"] == "2026-04-10T12:00:00"
 
 
 def test_unknown_schema_version_raises(tmp_path):
     state_path = tmp_path / "state.json"
-    state_path.write_text(json.dumps({"schema_version": 99, "last_run": None, "entries": {}}))
+    state_path.write_text(json.dumps({"schema_version": 99, "last_run": None, "entries": {}}), encoding="utf-8")
 
     try:
         inbox.load_state(state_path)

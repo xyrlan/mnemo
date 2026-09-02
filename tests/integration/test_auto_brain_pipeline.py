@@ -49,8 +49,8 @@ def _write_memory(vault, agent, stem, type_, content_suffix=""):
         f"description: test\n"
         f"type: {type_}\n"
         "---\n\n"
-        f"body content for {stem}{content_suffix}\n"
-    )
+        f"body content for {stem}{content_suffix}\n", 
+    encoding="utf-8")
 
 
 def _mock_llm_response(pages):
@@ -120,7 +120,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
 
     single_target = vault / "shared" / "feedback" / "use-yarn.md"
     assert single_target.exists()
-    single_content = single_target.read_text()
+    single_content = single_target.read_text(encoding="utf-8")
     assert "auto-promoted" in single_content
     assert "last_sync:" in single_content
 
@@ -131,7 +131,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     multi_target = vault / "shared" / "feedback" / "no-commits.md"
     assert multi_target.exists()
     assert not (vault / "shared" / "_inbox" / "feedback" / "no-commits.md").exists()
-    multi_content = multi_target.read_text()
+    multi_content = multi_target.read_text(encoding="utf-8")
     assert "auto-promoted" in multi_content
 
     assert summary.auto_promoted == 1
@@ -141,7 +141,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
 
     last_run = vault / ".mnemo" / "last-auto-run.json"
     assert last_run.exists()
-    payload = json.loads(last_run.read_text())
+    payload = json.loads(last_run.read_text(encoding="utf-8"))
     assert payload["mode"] == "background"
     assert payload["exit_code"] == 0
     assert payload["summary"]["auto_promoted"] == 1
@@ -212,7 +212,7 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
     extract_mod.run_extraction(cfg, background=True)
 
     sacred = vault / "shared" / "feedback" / "use-yarn.md"
-    sacred.write_text(sacred.read_text() + "\n\n(User addition)\n")
+    sacred.write_text(sacred.read_text(encoding="utf-8") + "\n\n(User addition)\n", encoding="utf-8")
 
     _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback", content_suffix=" (updated)")
 
@@ -234,6 +234,6 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
 
     sibling = vault / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists()
-    assert "Updated" in sibling.read_text()
-    assert "(User addition)" in sacred.read_text()
+    assert "Updated" in sibling.read_text(encoding="utf-8")
+    assert "(User addition)" in sacred.read_text(encoding="utf-8")
     assert summary.sibling_bounced == 1

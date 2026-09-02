@@ -17,7 +17,7 @@ def _rule(root: Path, kind: str, slug: str, name: str, sources: list[str], inbox
     d = root / "shared" / ("_inbox/" + kind if inbox else kind)
     d.mkdir(parents=True, exist_ok=True)
     src = "\n".join(f"  - {s}" for s in sources)
-    (d / f"{slug}.md").write_text(f"---\nname: {name}\ntype: {kind}\nsources:\n{src}\ntags:\n  - x\n---\nbody\n")
+    (d / f"{slug}.md").write_text(f"---\nname: {name}\ntype: {kind}\nsources:\n{src}\ntags:\n  - x\n---\nbody\n", encoding="utf-8")
 
 
 def _mf(agent: str) -> MemoryFile:

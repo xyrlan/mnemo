@@ -22,7 +22,7 @@ def _session_payload(session_id: str, cwd: str) -> str:
 
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
 
 def _is_briefing_spawn(argv) -> bool:
@@ -124,7 +124,7 @@ def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeyp
     # 4. The briefing file must exist and carry the expected frontmatter/body.
     briefing_path = vault / "bots" / "fake-project" / "briefings" / "sessions" / "sidXYZ.md"
     assert briefing_path.exists(), f"briefing not written to {briefing_path}"
-    text = briefing_path.read_text()
+    text = briefing_path.read_text(encoding="utf-8")
     assert "type: briefing" in text
     assert "agent: fake-project" in text
     assert "session_id: sidXYZ" in text

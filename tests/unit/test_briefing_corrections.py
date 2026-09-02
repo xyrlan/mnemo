@@ -47,7 +47,7 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _write_jsonl(path: Path) -> Path:
-    path.write_text("\n".join(json.dumps(e) for e in _events()) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in _events()) + "\n", encoding="utf-8")
     return path
 
 
@@ -108,7 +108,7 @@ def test_briefing_keeps_verified_and_drops_fabricated(vault: Path, tmp_path: Pat
 
     jsonl = _write_jsonl(tmp_path / "sess1.jsonl")
     out = briefing_mod.generate_session_briefing(jsonl, "proj", {"extraction": {}})
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
 
     assert "[1] add a retry helper" in captured["prompt"]
     assert "task-notification" not in captured["prompt"].split("=== USER TURNS")[1].split("=== END USER TURNS")[0]
@@ -123,7 +123,7 @@ def test_briefing_without_corrections_has_no_section_and_zero_count(vault, tmp_p
         text="## TL;DR\nx\n", total_cost_usd=0.0, input_tokens=1, output_tokens=1,
         api_key_source="none", raw={}))
     jsonl = _write_jsonl(tmp_path / "sess2.jsonl")
-    text = briefing_mod.generate_session_briefing(jsonl, "proj", {"extraction": {}}).read_text()
+    text = briefing_mod.generate_session_briefing(jsonl, "proj", {"extraction": {}}).read_text(encoding="utf-8")
     assert "## Corrections" not in text
     assert "corrections: 0\n" in text.split("---")[1]
 
@@ -141,7 +141,7 @@ def test_briefing_survives_a_corrections_failure(vault, tmp_path, monkeypatch):
 
     jsonl = _write_jsonl(tmp_path / "sess3.jsonl")
     out = briefing_mod.generate_session_briefing(jsonl, "proj", {"extraction": {}})
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
 
     assert "## Corrections" not in text
     assert "corrections: 0\n" in text.split("---")[1]

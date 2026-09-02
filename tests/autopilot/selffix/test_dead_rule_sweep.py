@@ -376,8 +376,8 @@ def test_open_dead_rule_pr_dry_run_no_pr(tmp_path: Path) -> None:
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
-    )
+                    "last_changed_at": None, "last_changed_by": None}), 
+    encoding="utf-8")
     with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.open_pr") as mock_pr:
         result = open_dead_rule_pr(dead, vault_root=tmp_path, repo_root=tmp_path, dry_run=True)
     mock_pr.assert_not_called()
@@ -401,8 +401,8 @@ def test_open_dead_rule_pr_opens_pr_on_success(tmp_path: Path) -> None:
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
-    )
+                    "last_changed_at": None, "last_changed_by": None}), 
+    encoding="utf-8")
     with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_worktree",
                return_value=tmp_path / "wt"), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.mirror_paths"), \
@@ -444,8 +444,8 @@ def test_open_dead_rule_pr_caps_at_max(tmp_path: Path) -> None:
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
-    )
+                    "last_changed_at": None, "last_changed_by": None}), 
+    encoding="utf-8")
     with patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.create_worktree",
                return_value=tmp_path / "wt"), \
          patch("mnemo.autopilot.selffix.dead_rule_sweep._gh.mirror_paths"), \

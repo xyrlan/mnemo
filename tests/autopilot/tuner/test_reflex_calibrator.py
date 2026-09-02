@@ -27,7 +27,7 @@ def _make_log(vault_root: Path, entries: list[dict]) -> Path:
     d = vault_root / ".mnemo"
     d.mkdir(parents=True, exist_ok=True)
     log_path = d / "reflex-log.jsonl"
-    with log_path.open("w") as fh:
+    with log_path.open("w", encoding="utf-8") as fh:
         for e in entries:
             fh.write(json.dumps(e) + "\n")
     return log_path
@@ -92,7 +92,7 @@ class TestAnalyzeReflexLog:
         d = tmp_path / ".mnemo"
         d.mkdir(parents=True, exist_ok=True)
         log_path = d / "reflex-log.jsonl"
-        log_path.write_text('{"project":"p","ts":"' + _ts(0) + '","emitted":[],"silence_reason":null}\n{invalid json}\n')
+        log_path.write_text('{"project":"p","ts":"' + _ts(0) + '","emitted":[],"silence_reason":null}\n{invalid json}\n', encoding="utf-8")
         result = analyze_reflex_log(vault_root=tmp_path)
         assert "p" in result
         assert result["p"].total_prompts == 1
@@ -317,7 +317,7 @@ class TestReflexConfigIO:
         config = ReflexConfig(project="test", relative_gap=1.5, absolute_floor=2.0, min_tokens=2)
         write_reflex_config(config, tmp_path)
         path = tmp_path / ".mnemo" / "reflex-config.test.json"
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert "project" in data
         assert "relative_gap" in data
 

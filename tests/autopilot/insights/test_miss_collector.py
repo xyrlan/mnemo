@@ -20,7 +20,7 @@ def _write_recall_report(tmp_path: Path, results: list) -> None:
     }
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def _make_result(slug: str, hit: bool, project: str = "p") -> dict:
@@ -130,7 +130,7 @@ def test_collect_refreshes_stale_recall_report(tmp_path: Path, monkeypatch):
     }
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(stale))
+    path.write_text(json.dumps(stale), encoding="utf-8")
 
     refresh_calls: list[Path] = []
 
@@ -162,7 +162,7 @@ def test_collect_does_not_refresh_when_report_is_fresh(tmp_path: Path, monkeypat
     }
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(fresh))
+    path.write_text(json.dumps(fresh), encoding="utf-8")
 
     called = {"n": 0}
     def fake_refresh(vault_root: Path):

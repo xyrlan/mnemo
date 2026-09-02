@@ -137,7 +137,7 @@ def load_config(path: Path | None = None, missing_path: Path | None = None) -> d
     if missing_path is not None and not missing_path.exists():
         cfg_path = missing_path
     try:
-        raw = json.loads(cfg_path.read_text())
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raw = {}
     except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError):
@@ -148,4 +148,4 @@ def load_config(path: Path | None = None, missing_path: Path | None = None) -> d
 def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:
     cfg_path = path or default_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(json.dumps(cfg, indent=2))
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")

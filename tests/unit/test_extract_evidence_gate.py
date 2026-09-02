@@ -30,7 +30,7 @@ def _vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     b = root / "bots" / "proj" / "briefings" / "sessions" / "s1.md"
     b.parent.mkdir(parents=True)
-    b.write_text(BRIEFING)
+    b.write_text(BRIEFING, encoding="utf-8")
     (root / "shared").mkdir()
     return root
 
@@ -102,4 +102,4 @@ def test_verified_single_source_page_auto_promotes(tmp_path):
     apply_pages([p], state, root, run_id="r1")
     out = root / "shared" / "feedback" / "retry-5xx-only.md"
     assert out.exists()
-    assert "confidence: verified" in out.read_text()
+    assert "confidence: verified" in out.read_text(encoding="utf-8")

@@ -137,7 +137,7 @@ def test_orchestrator_flushes_state_after_each_phase(populated_vault: Path, stub
     run_extraction(_make_cfg(populated_vault))
     state_file = populated_vault / ".mnemo" / "extraction-state.json"
     assert state_file.exists()
-    payload = json.loads(state_file.read_text())
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
     # Project entries were flushed even though LLM phase blew up
     assert any(k.startswith("project/") for k in payload["entries"])
 
@@ -192,7 +192,7 @@ def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault
 
     sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
-    assert "stability: evolving" in sacred.read_text()
+    assert "stability: evolving" in sacred.read_text(encoding="utf-8")
 
 
 def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populated_vault: Path, stub_llm):
@@ -215,15 +215,15 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
 
     sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
-    assert "stability: stable" in sacred.read_text()
+    assert "stability: stable" in sacred.read_text(encoding="utf-8")
 
 
 def test_orchestrator_auto_deletes_legacy_wiki_sources(populated_vault: Path, stub_llm, capsys):
     """v0.4: wiki/sources/ and wiki/compiled/ get removed on the first extract."""
     (populated_vault / "wiki" / "sources").mkdir(parents=True)
-    (populated_vault / "wiki" / "sources" / "old.md").write_text("stale\n")
+    (populated_vault / "wiki" / "sources" / "old.md").write_text("stale\n", encoding="utf-8")
     (populated_vault / "wiki" / "compiled").mkdir(parents=True)
-    (populated_vault / "wiki" / "compiled" / "index.md").write_text("stale\n")
+    (populated_vault / "wiki" / "compiled" / "index.md").write_text("stale\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -280,7 +280,7 @@ def test_orchestrator_regenerates_home_dashboard_after_run(populated_vault: Path
     run_extraction(_make_cfg(populated_vault))
     home = populated_vault / "HOME.md"
     assert home.exists()
-    text = home.read_text()
+    text = home.read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert BLOCK_END in text
     assert "use-yarn" in text
@@ -296,7 +296,7 @@ def test_orchestrator_dashboard_skipped_on_dry_run(populated_vault: Path, stub_l
     home = populated_vault / "HOME.md"
     if home.exists():
         from mnemo.core.dashboard import BLOCK_BEGIN
-        assert BLOCK_BEGIN not in home.read_text()
+        assert BLOCK_BEGIN not in home.read_text(encoding="utf-8")
 
 
 def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Path, stub_llm):
@@ -316,8 +316,8 @@ def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Pa
         "  - auto-promoted\n"
         "  - package-management\n"
         "---\n"
-        "body\n"
-    )
+        "body\n", 
+    encoding="utf-8")
     stub_llm([
         _fake_llm_response([
             {
@@ -358,7 +358,7 @@ def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Pat
     ])
     run_extraction(_make_cfg(populated_vault))
     sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
-    text = sacred.read_text()
+    text = sacred.read_text(encoding="utf-8")
     assert "  - auto-promoted" in text
     assert "  - package-management" in text
     assert "  - workflow" in text
@@ -382,7 +382,7 @@ def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Pa
     ])
     run_extraction(_make_cfg(populated_vault))
     sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
-    text = sacred.read_text()
+    text = sacred.read_text(encoding="utf-8")
     # auto-promoted should appear exactly once (system marker) — not twice from the LLM copy
     assert text.count("  - auto-promoted") == 1
     # needs-review must never appear in an auto-promoted page
@@ -413,9 +413,9 @@ def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Pa
     # Seed the inbox with stale slug-drift duplicates from a prior run.
     feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
-    (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n")
-    (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n")
-    (feedback_inbox / "no-git-commits-without-permission.md").write_text("stale body 3\n")
+    (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n", encoding="utf-8")
+    (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n", encoding="utf-8")
+    (feedback_inbox / "no-git-commits-without-permission.md").write_text("stale body 3\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -448,7 +448,7 @@ def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stu
     feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
     preserved = feedback_inbox / "preserved.md"
-    preserved.write_text("keep me\n")
+    preserved.write_text("keep me\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -473,7 +473,7 @@ def test_orchestrator_force_wipes_only_cluster_type_dirs(populated_vault: Path, 
     project_inbox = populated_vault / "shared" / "_inbox" / "project"
     project_inbox.mkdir(parents=True, exist_ok=True)
     project_stale = project_inbox / "some-project.md"
-    project_stale.write_text("project body\n")
+    project_stale.write_text("project body\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -545,7 +545,7 @@ def test_run_extraction_background_writes_last_auto_run_json_on_success(tmp_path
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     assert last_run_path.exists(), "last-auto-run.json must be written in background mode"
 
-    payload = json.loads(last_run_path.read_text())
+    payload = json.loads(last_run_path.read_text(encoding="utf-8"))
     assert payload["mode"] == "background"
     assert payload["exit_code"] == 0
     assert payload["error"] is None
@@ -731,11 +731,11 @@ def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
 
     promoted = populated_vault / "shared" / "feedback" / "retry-5xx-only.md"
     assert promoted.exists(), "a verified quote must reach the sacred dir"
-    assert "confidence: verified" in promoted.read_text()
+    assert "confidence: verified" in promoted.read_text(encoding="utf-8")
 
     demoted = populated_vault / "shared" / "_inbox" / "reference" / "write-clean-code.md"
     assert demoted.exists(), "unevidenced feedback must stage as a reference page"
-    assert "demoted_from: feedback" in demoted.read_text()
+    assert "demoted_from: feedback" in demoted.read_text(encoding="utf-8")
     assert not (populated_vault / "shared" / "feedback" / "write-clean-code.md").exists()
     # The demotion is reported, not silent: one page staged, no echo involved.
     assert summary.demoted_unverified == 1

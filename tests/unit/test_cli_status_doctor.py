@@ -46,9 +46,9 @@ def test_doctor_warns_about_statusline_drift(tmp_home: Path, capsys: pytest.Capt
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
     # Simulate user editing settings.json after init to replace our composer
     settings_path = tmp_home / ".claude" / "settings.json"
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     data["statusLine"] = {"type": "command", "command": "/some/other/script.sh"}
-    settings_path.write_text(json.dumps(data))
+    settings_path.write_text(json.dumps(data), encoding="utf-8")
 
     cli.main(["doctor"])
     out = capsys.readouterr().out
@@ -141,7 +141,7 @@ def test_status_shows_last_run_when_present(tmp_path, monkeypatch, capsys):
         },
         "error": None,
     }
-    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run), encoding="utf-8")
 
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
         "vaultRoot": str(vault),
@@ -185,7 +185,7 @@ def test_doctor_warns_on_recent_background_failure(tmp_path, monkeypatch, capsys
         "summary": {"pages_written": 0, "failed_chunks": 1, "mode": "background"},
         "error": {"type": "LLMSubprocessError", "message": "timeout"},
     }
-    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run), encoding="utf-8")
 
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
         "vaultRoot": str(vault),
@@ -238,7 +238,7 @@ def test_doctor_warns_when_auto_enabled_but_no_recent_run(tmp_path, monkeypatch,
         "summary": {"pages_written": 0, "mode": "background"},
         "error": None,
     }
-    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run))
+    (vault / ".mnemo" / "last-auto-run.json").write_text(json.dumps(last_run), encoding="utf-8")
 
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
         "vaultRoot": str(vault),
@@ -265,7 +265,7 @@ def test_doctor_surfaces_recall_report_when_present(
         },
         "results": [],
     }
-    (vault / ".mnemo" / "recall-report.json").write_text(json.dumps(payload))
+    (vault / ".mnemo" / "recall-report.json").write_text(json.dumps(payload), encoding="utf-8")
 
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
     monkeypatch.setattr(
@@ -303,7 +303,7 @@ def test_doctor_silent_when_recall_report_malformed(
 ):
     vault = tmp_path / "vault"
     (vault / ".mnemo").mkdir(parents=True)
-    (vault / ".mnemo" / "recall-report.json").write_text("not json")
+    (vault / ".mnemo" / "recall-report.json").write_text("not json", encoding="utf-8")
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(vault)})
     monkeypatch.setattr(
         "mnemo.install.preflight.run_preflight",
@@ -437,7 +437,7 @@ def test_doctor_activation_fidelity_warns_when_rule_absent_from_index(
         "by_project": {},
         "universal": {"slugs": [], "topics": []},
         "malformed": [],
-    }))
+    }), encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
 
     cli.main(["doctor"])
@@ -502,7 +502,7 @@ def test_doctor_activation_fidelity_matches_index_slug_from_name_field(
         "by_project": {"proj-x": {"local_slugs": ["Display Name For Rule"], "topics": []}},
         "universal": {"slugs": [], "topics": []},
         "malformed": [],
-    }))
+    }), encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
 
     cli.main(["doctor"])
@@ -543,7 +543,7 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
         "by_project": {"proj-x": {"local_slugs": ["char-class-rule"], "topics": []}},
         "universal": {"slugs": [], "topics": []},
         "malformed": [],
-    }))
+    }), encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
 
     cli.main(["doctor"])
@@ -602,7 +602,7 @@ def test_doctor_activation_fidelity_does_not_use_capped_retrieval(
         }},
         "universal": {"slugs": [], "topics": []},
         "malformed": [],
-    }))
+    }), encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
 
     cli.main(["doctor"])
@@ -624,7 +624,7 @@ def _seed_canonical_rule(
     if sources_exist:
         src_dir = vault / "bots" / "proj-x" / "memory"
         src_dir.mkdir(parents=True, exist_ok=True)
-        (src_dir / f"{slug}.md").write_text("original source\n")
+        (src_dir / f"{slug}.md").write_text("original source\n", encoding="utf-8")
     lines = ["---", f"type: {page_type}", "tags:", "  - workflow", "sources:", f"  - {source_path}", "---", "", body]
     (d / f"{slug}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -659,7 +659,7 @@ def test_doctor_rule_integrity_ignores_inbox_drafts(tmp_path, monkeypatch, capsy
     (vault / ".mnemo").mkdir(parents=True)
     inbox = vault / "shared" / "_inbox" / "feedback"
     inbox.mkdir(parents=True, exist_ok=True)
-    (inbox / "draft.md").write_text("---\ntype: feedback\ntags: []\nsources: []\n---\n\nx\n")
+    (inbox / "draft.md").write_text("---\ntype: feedback\ntags: []\nsources: []\n---\n\nx\n", encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
 
     cli.main(["doctor"])
