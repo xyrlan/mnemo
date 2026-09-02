@@ -1,5 +1,6 @@
 """v0.3 background-schedule unit tests for session_end.py helpers."""
 from __future__ import annotations
+import pytest
 
 import json
 import os
@@ -120,6 +121,7 @@ def test_lock_held_false_when_stale_dir(tmp_path):
     assert session_end._lock_held(lock) is False
 
 
+@pytest.mark.real_spawn
 def test_spawn_detached_extraction_posix_uses_start_new_session(monkeypatch):
     import subprocess
     import sys
@@ -145,6 +147,7 @@ def test_spawn_detached_extraction_posix_uses_start_new_session(monkeypatch):
     assert captured["kwargs"]["stderr"] == subprocess.DEVNULL
 
 
+@pytest.mark.real_spawn
 def test_spawn_detached_extraction_windows_uses_creationflags(monkeypatch):
     import sys
     from mnemo.hooks import session_end
@@ -268,6 +271,7 @@ def test_resolve_session_jsonl_path_returns_none_when_missing(tmp_path, monkeypa
     assert resolved is None
 
 
+@pytest.mark.real_spawn
 def test_spawn_detached_briefing_posix_uses_start_new_session(monkeypatch, tmp_path):
     import subprocess
     import sys

@@ -16,6 +16,8 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from mnemo.autopilot.core import network
+
 WORKTREE_PREFIX = "mnemo-selffix-"
 
 
@@ -123,8 +125,12 @@ def push_branch(branch_name: str, *, repo_root: Path) -> bool:
     for git, but keeping every self-fix command inside the worktree keeps the
     blast radius of a bad argument there too.
 
-    Returns ``True`` on success, ``False`` on failure.
+    Returns ``True`` on success, ``False`` on failure — including when
+    ``autopilot.network.enabled`` is off, the backstop for any caller that
+    reaches here without its own gate.
     """
+    if not network.enabled():
+        return False
     try:
         result = subprocess.run(
             ["git", "push", "-u", "origin", branch_name],
@@ -148,9 +154,12 @@ def open_pr(
 ) -> Optional[int]:
     """Open a GitHub pull request and return its number.
 
-    Returns ``None`` when ``gh`` is unavailable, the command fails, or the
-    output cannot be parsed as an integer.
+    Returns ``None`` when ``autopilot.network.enabled`` is off, ``gh`` is
+    unavailable, the command fails, or the output cannot be parsed as an
+    integer.
     """
+    if not network.enabled():
+        return None
     cmd = [
         "gh", "pr", "create",
         "--base", "master",
@@ -193,7 +202,11 @@ def open_issue(
     Used for findings that carry no diff — a report with nothing to merge is
     an issue, not a pull request.  ``gh issue create`` prints the issue URL,
     whose last segment is the number.
+
+    Returns ``None`` when ``autopilot.network.enabled`` is off.
     """
+    if not network.enabled():
+        return None
     cmd = ["gh", "issue", "create", "--title", title, "--body", body]
     for label in labels:
         cmd += ["--label", label]

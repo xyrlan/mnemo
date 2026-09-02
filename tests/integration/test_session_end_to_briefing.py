@@ -35,6 +35,7 @@ def _is_briefing_spawn(argv) -> bool:
     return "briefing" in list(argv)
 
 
+@pytest.mark.real_spawn
 def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from mnemo import cli
     from mnemo.core import llm as llm_mod

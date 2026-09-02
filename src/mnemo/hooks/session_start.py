@@ -15,6 +15,7 @@ or resumed conversation.
 from __future__ import annotations
 
 import json
+import re
 import os
 import sys
 from dataclasses import asdict
@@ -288,6 +289,143 @@ def _maybe_schedule_install_backfill(
             pass
 
 
+def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
+    """One line, once per project, instead of spending LLM calls unasked.
+
+    ``backfill.autoOnFirstSession`` now defaults to False, so a fresh install
+    no longer harvests the user's transcript history the moment it is
+    installed. That is the right default only if they are told the history is
+    *there* — otherwise the feature they installed mnemo for is invisible and
+    the change reads as removing it. This is the invitation.
+
+    The one-shot is spent on a notice actually worth showing:
+
+    - a completed sweep (``installRunDone``) has nothing left to invite,
+    - zero transcripts leaves the flag unset, so a repo that accumulates
+      history later still gets its invitation rather than having burned it
+      while empty.
+
+    Shown once per *project*, not once per vault: "for this repo" is per
+    project, and a second repo sharing this vault has its own history to
+    invite. The call estimate is capped at ``backfill.installCap`` (20) —
+    the actual run also skips already-harvested sessions and ones with no
+    file mutations, so the true cost is usually lower than even this bound;
+    the notice says so and points at ``--dry-run`` for the exact number.
+
+    Fail-silent, like everything else on the session-start path.
+    """
+    try:
+        from mnemo.core.backfill import discover as _discover
+        from mnemo.core.backfill import ledger as _ledger
+
+        backfill_cfg = cfg.get("backfill") or {}
+        if not backfill_cfg.get("enabled", True):
+            return ""
+        led = _ledger.load(vault_root)
+        if led.get("installRunDone") or _ledger.notice_shown(led, project):
+            return ""
+        n = len(_discover.find_transcripts(project=project))
+        if n == 0:
+            return ""
+        _ledger.mark_notice_shown(vault_root, project)
+        cap = int(backfill_cfg.get("installCap", 20))
+        calls = min(n, cap)
+        return (
+            f"[mnemo] first run: {n} past session(s) for this repo can be learned "
+            f"with `mnemo backfill` (opt-in, up to {calls} Haiku calls; "
+            f"`mnemo backfill --dry-run` shows the exact cost)."
+        )
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.first_run_notice", exc)
+        except Exception:
+            pass
+        return ""
+
+
+#: Bullets per session. This block rides on the session-start prompt, so the
+#: cap is a budget, not a preference; the tail line points at `mnemo status`
+#: for the overflow rather than spending more of the prompt on it.
+_LEARNED_MAX = 5
+#: Evidence quotes are one line of a bullet, not a paragraph.
+_QUOTE_MAX = 80
+_NAME_MAX = 80
+_SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _one_line(value: object, limit: int) -> str:
+    """Collapse any whitespace (incl. CR/LF) to one space and cap the length.
+
+    Rule names and quotes are LLM-written or user-typed text injected into the
+    agent's context. Without this, a newline inside a name could end the
+    ``[/mnemo learned]`` fence early and put text outside any mnemo-attributed
+    block.
+    """
+    s = " ".join(str(value or "").split())
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
+    """What extraction promoted since this project last looked, each with its undo.
+
+    Extraction has always written rules silently. That is fine while the user
+    reads the vault and wrong the moment mnemo is trusted to inject rules on
+    its own: a rule nobody knows exists is a rule nobody can correct, so the
+    bad ones accrue. This block is the disclosure half of that trade, and the
+    ``veto:`` suffix is the reason it can stay one line — the correction is
+    right there, not three commands away in a vault the user has never opened.
+
+    Only a ``verified`` rule shows the sentence it was learned from. An
+    ``inferred`` one has no quote to show, and manufacturing a plausible one
+    would make the evidence worthless everywhere it *is* real.
+
+    Announcing marks announced, so the same rule never appears twice — even
+    when the render below is truncated at ``_LEARNED_MAX``: the overflow is
+    still on disk and ``mnemo status`` still lists it.
+
+    Fail-silent, like everything else on the session-start path.
+    """
+    try:
+        from mnemo.core import learned
+
+        threshold = int((cfg.get("scoping") or {}).get("universalThreshold", 2))
+        entries = learned.pending(
+            vault_root, project, limit=_LEARNED_MAX, universal_threshold=threshold
+        )
+        if not entries:
+            return ""
+        total = learned.pending_count(
+            vault_root, project, universal_threshold=threshold
+        )
+
+        lines = ["[mnemo learned since your last session]"]
+        for e in entries:
+            slug = _one_line(e.get("slug"), _NAME_MAX)
+            name = _one_line(e.get("name"), _NAME_MAX) or slug
+            quote = e.get("quote")
+            evidence = ""
+            if e.get("confidence") == "verified" and quote:
+                evidence = f' (verified from: "{_one_line(quote, _QUOTE_MAX)}")'
+            # The veto is a command the user may paste into a shell: only
+            # advertise it for a slug that is a plain token.
+            veto = f" · veto: mnemo disable-rule {slug}" if _SLUG_OK.match(slug) else ""
+            lines.append(f"• {slug} — {name}{evidence}{veto}")
+        if total > len(entries):
+            lines.append(f"({total - len(entries)} more — mnemo status)")
+        lines.append("[/mnemo learned]")
+
+        learned.mark_announced(vault_root, project)
+        return "\n".join(lines)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.learned", exc)
+        except Exception:
+            pass
+        return ""
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -388,6 +526,22 @@ def main() -> int:
                     current_project=canonical_name,
                     inject_briefing=inject_briefing,
                 )
+                # The notice stands on its own: a brand-new vault has no
+                # topics and no briefing, so the payload it would ride along
+                # with is empty on exactly the session the notice exists for.
+                notice = _first_run_notice(vault, cfg, canonical_name)
+                if notice:
+                    payload_text = (
+                        payload_text + "\n\n" + notice if payload_text else notice
+                    )
+                # Same rule as the notice: a vault whose only news is a rule it
+                # just learned still has news worth sending.
+                learned_block = _learned_block(vault, cfg, canonical_name)
+                if learned_block:
+                    payload_text = (
+                        payload_text + "\n\n" + learned_block
+                        if payload_text else learned_block
+                    )
                 if payload_text:
                     _emit_injection(payload_text)
                     try:

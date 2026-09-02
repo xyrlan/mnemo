@@ -35,7 +35,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "installCap": 20,
         "minFileMutations": 1,
-        "autoOnFirstSession": True,
+        "autoOnFirstSession": False,
     },
     "injection": {
         "enabled": True,
@@ -69,6 +69,12 @@ DEFAULTS: dict[str, Any] = {
         # Claude Code statusLine (e.g., after uninstalling a custom composer
         # but keeping the mnemo state file). Default false: drift is loud.
         "skipStatuslineDrift": False,
+    },
+    "autopilot": {
+        # Nothing mnemo does reaches the network unless this is on: no
+        # `gh issue create`, no self-fix PRs, no outcome polling. Local
+        # maintenance (indexes, sweep, calibration) is unaffected.
+        "network": {"enabled": False},
     },
     "reflex": {
         "enabled": True,  # v0.8.0 stable — flip to False in mnemo.config.json to disable

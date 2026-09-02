@@ -25,6 +25,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   onto a dismissed slug.
 - The reflex scores the evidence quote as its own BM25F field
   (`reflex.bm25f.fieldWeights.evidence`, default 2.5).
+- **The autopilot no longer touches the network without opt-in.**
+  `autopilot.network.enabled` now defaults to `false`: self-fix cures still
+  apply in place and every run is logged to `.mnemo/autopilot-runs.log`, but
+  nothing calls `gh`. If you relied on digest issues, self-fix PRs or outcome
+  polling, restore them with
+  `{"autopilot": {"network": {"enabled": true}}}`.
+- **The first-run backfill is opt-in.** `backfill.autoOnFirstSession` defaults
+  to `false`, so a fresh install no longer sweeps your old transcripts through
+  the LLM unasked. The first session in a repo with harvestable transcripts
+  prints a one-line invitation instead — how many sessions, what it would
+  cost, and that `mnemo backfill --dry-run` prices it exactly — shown once per
+  repo. Restore the old behaviour with
+  `{"backfill": {"autoOnFirstSession": true}}`.
+
+- **Self-fix works on Windows.** The perimeter guard compared backslash
+  paths against `shared/`-style prefixes, so every autopilot self-fix PR on
+  Windows aborted with a perimeter violation. Paths are now compared in POSIX
+  form.
 
 ### Added
 
@@ -35,6 +53,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   staged as reference pages instead of being promoted. E-mails, API tokens and
   32-character hex ids are redacted from rule name, description and body
   before writing (RFC 2606 example domains and `git@` remotes are left alone).
+- **Learned rules are announced at session start, each with its veto.** A
+  `[mnemo learned since your last session]` block lists what extraction
+  promoted since this project last looked — up to 5 bullets, each ending in
+  `veto: mnemo disable-rule <slug>`, with the source sentence shown for
+  `verified` rules. A rule written silently is a rule nobody can correct;
+  this is the disclosure half of letting extraction write on its own. Backed
+  by `.mnemo/learned.jsonl` and a per-project marker in
+  `.mnemo/announced.json`, so nothing is announced twice.
+- `mnemo status` grew a **Recently learned** section: the last 10 rules
+  relevant to the current project, announced or not — the overflow the
+  session-start block points at.
+- `mnemo disable-rule` is now a public command rather than an internal one,
+  since the session-start announcement hands it to users by name.
 
 ## [1.0.0] — 2026-09-01
 

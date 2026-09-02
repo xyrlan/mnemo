@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from mnemo.autopilot.core import pr_budget
+from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 
@@ -158,6 +158,10 @@ def open_telemetry_fix_pr(
 
     if repo_root is None:
         print("[autopilot] telemetry issue skipped: vault is not a git repo")
+        return None
+
+    if not network.enabled():
+        print(network.OFF_MESSAGE)
         return None
 
     date_tag = datetime.now(timezone.utc).strftime("%Y-%m-%d")

@@ -1,5 +1,6 @@
 """Integration: full session_end hook body with background scheduling."""
 from __future__ import annotations
+import pytest
 
 import io
 import json
@@ -20,6 +21,7 @@ def _is_extract_spawn(argv) -> bool:
     return list(argv[-2:]) == ["extract", "--background"]
 
 
+@pytest.mark.real_spawn
 def test_session_end_spawns_background_when_auto_enabled(tmp_path, monkeypatch):
     from mnemo.hooks import session_end
 

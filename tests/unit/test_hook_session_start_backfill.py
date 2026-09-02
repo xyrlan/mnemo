@@ -337,6 +337,14 @@ def _run_hook(monkeypatch, vault: Path, cwd: Path) -> None:
     monkeypatch.setattr(
         "mnemo.core.paths.vault_root", lambda _cfg=None: vault, raising=False
     )
+    # autoOnFirstSession defaults to False (opt-in); these tests exercise the
+    # auto-scheduling wiring itself, so opt in explicitly via a config file.
+    config_path = vault / ".mnemo" / "mnemo.config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps({"backfill": {"autoOnFirstSession": True}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(config_path))
     session_start.main()
 
 

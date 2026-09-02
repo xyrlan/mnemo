@@ -8,12 +8,17 @@ transcript filename stem) with the file's content hash, so:
 - a transcript that grew on disk is harvested again,
 - a transcript that fails three times is skipped for good.
 
-Two vault-wide fields sit beside the per-session map:
+Vault-wide fields sit beside the per-session map:
 
 - ``installRunDone`` — a first-run sweep **completed**. Written by
   ``cmd_backfill`` on an install run that actually got to the end, never by
   the hook that launches it, so an environmental abort (missing ``claude``
   CLI, expired auth, rate limit) leaves the one-shot unspent.
+- ``firstRunNoticeShown`` — the session-start invitation to run `mnemo
+  backfill` has been shown once per project. A dict keyed by canonical
+  project name (a legacy bool ``True`` from before this was per-project means
+  shown everywhere). A message, not a sweep: it never implies any transcript
+  was read, and never spends ``installRunDone``.
 - the spawn lock, a separate file — "a first-run sweep is in flight". See
   :func:`acquire_spawn_lock`.
 
@@ -135,6 +140,48 @@ def mark_install_run_done(vault_root: Path) -> None:
     save(vault_root, led)
 
 
+def notice_shown(led: dict[str, Any], project: str) -> bool:
+    """True when the first-run backfill invitation has already been shown.
+
+    The notice is per project — "for this repo" in its own wording — so a
+    second repo sharing this vault must get its own invitation. ``project``
+    is looked up in the ``firstRunNoticeShown`` dict. A legacy ``True`` bool
+    (pre-migration vaults, before the field became per-project) is treated as
+    shown everywhere, so an existing vault migrates cleanly without
+    re-inviting every project it already showed the notice to.
+    """
+    val = led.get("firstRunNoticeShown", False)
+    if val is True:
+        return True
+    if isinstance(val, dict):
+        return bool(val.get(project, False))
+    return False
+
+
+def mark_notice_shown(vault_root: Path, project: str) -> None:
+    """Record that the first-run invitation was shown for ``project``.
+
+    Read-modify-write. Separate from ``installRunDone``: the notice is a
+    *message*, the marker is a *sweep*. Someone who reads the invitation and
+    never runs `mnemo backfill` must not be pestered every session, and must
+    not have their unspent sweep look spent to the CLI.
+
+    The field is a dict keyed by canonical project name. A legacy ``True``
+    bool is left alone — it already means "shown everywhere". A legacy
+    ``False`` (or missing) is upgraded to ``{}`` before recording this
+    project, so older ledgers migrate in place on first use.
+    """
+    led = load(vault_root)
+    existing = led.get("firstRunNoticeShown", False)
+    if existing is True:
+        return  # already shown everywhere; nothing to record
+    if not isinstance(existing, dict):
+        existing = {}
+    existing[project] = True
+    led["firstRunNoticeShown"] = existing
+    save(vault_root, led)
+
+
 def transcript_hash(path: Path) -> str:
     """Content hash of a transcript, or ``""`` when unreadable."""
     h = hashlib.sha256()
@@ -155,9 +202,15 @@ def load(vault_root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("sessions"), dict):
-        return {"schemaVersion": SCHEMA_VERSION, "sessions": {}, "installRunDone": False}
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "sessions": {},
+            "installRunDone": False,
+            "firstRunNoticeShown": {},
+        }
     data.setdefault("schemaVersion", SCHEMA_VERSION)
     data.setdefault("installRunDone", False)
+    data.setdefault("firstRunNoticeShown", {})
     return data
 
 

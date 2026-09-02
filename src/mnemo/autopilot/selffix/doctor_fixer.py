@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from mnemo._selfexec import python_argv
-from mnemo.autopilot.core import pr_budget
+from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 from mnemo.autopilot.selffix._perimeter import assert_perimeter
@@ -384,6 +384,13 @@ def open_doctor_fix_pr(
         print(
             f"[autopilot] doctor fix applied to {len(modified)} file(s); "
             "vault is not a git repo, no PR opened"
+        )
+        return None
+
+    if not network.enabled():
+        print(
+            f"[autopilot] {len(modified)} fix(es) applied in place; "
+            "network off (autopilot.network.enabled=false), no PR opened"
         )
         return None
 
