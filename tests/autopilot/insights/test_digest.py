@@ -53,25 +53,25 @@ def _write_recall_report(tmp_path: Path, *, misses: list, hits: list) -> None:
     }
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def _write_reflex_log(tmp_path: Path, entries: list) -> None:
     path = tmp_path / _MNemo / "reflex-log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
 def _write_denial_log(tmp_path: Path, entries: list) -> None:
     path = tmp_path / _MNemo / "denial-log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
 def _write_mcp_log(tmp_path: Path, entries: list) -> None:
     path = tmp_path / _MNemo / "mcp-access-log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
 # ── DigestData basic shape ────────────────────────────────────────────────────
@@ -218,7 +218,7 @@ def test_write_digest_creates_file(tmp_path: Path):
     assert path.exists()
     assert "autopilot" in str(path)
     assert path.suffix == ".md"
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     assert "# Autopilot weekly digest" in content
 
 

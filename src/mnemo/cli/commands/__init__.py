@@ -24,6 +24,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     misc,
     recall,
     recall_sessions,
+    reclassify,
     regen_graph_edges,
     statusline,
     status,

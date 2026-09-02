@@ -275,7 +275,7 @@ def test_build_index_skips_inbox_rules(tmp_vault: Path):
         "enforce:\n  tool: Bash\n  deny_pattern: git push\n  reason: inbox\n"
         "---\n\nbody\n"
     )
-    (inbox_dir / "inbox-rule.md").write_text(content)
+    (inbox_dir / "inbox-rule.md").write_text(content, encoding="utf-8")
     # build_index only walks shared/feedback/, so this file won't even be seen.
     # But if it were walked, is_consumer_visible would reject it.
     index = build_index(tmp_vault)
@@ -501,7 +501,7 @@ def test_load_index_returns_none_on_non_dict(tmp_vault: Path):
     """If JSON root is not a dict → None."""
     mnemo_dir = tmp_vault / ".mnemo"
     mnemo_dir.mkdir(parents=True, exist_ok=True)
-    (mnemo_dir / "rule-activation-index.json").write_text("[1, 2, 3]")
+    (mnemo_dir / "rule-activation-index.json").write_text("[1, 2, 3]", encoding="utf-8")
     assert load_index(tmp_vault) is None
 
 

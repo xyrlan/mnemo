@@ -15,7 +15,7 @@ def _make_claude_project(home: Path, encoded_name: str, files: dict[str, str]) -
     for rel, content in files.items():
         p = project_dir / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        p.write_text(content, encoding="utf-8")
     return project_dir
 
 
@@ -34,8 +34,8 @@ def test_mirror_copies_memory_files(tmp_home: Path, tmp_vault: Path):
     cfg = {"vaultRoot": str(tmp_vault)}
     mirror.mirror_all(cfg)
     target_dir = tmp_vault / "bots" / "myrepo" / "memory"
-    assert (target_dir / "feedback.md").read_text() == "# feedback content"
-    assert (target_dir / "user_role.md").read_text() == "# user role"
+    assert (target_dir / "feedback.md").read_text(encoding="utf-8") == "# feedback content"
+    assert (target_dir / "user_role.md").read_text(encoding="utf-8") == "# user role"
 
 
 def test_mirror_never_deletes_user_notes(tmp_home: Path, tmp_vault: Path):
@@ -43,7 +43,7 @@ def test_mirror_never_deletes_user_notes(tmp_home: Path, tmp_vault: Path):
     cfg = {"vaultRoot": str(tmp_vault)}
     target_dir = tmp_vault / "bots" / "myrepo" / "memory"
     target_dir.mkdir(parents=True)
-    (target_dir / "user_note.md").write_text("user wrote this")
+    (target_dir / "user_note.md").write_text("user wrote this", encoding="utf-8")
     mirror.mirror_all(cfg)
     assert (target_dir / "user_note.md").exists()
     assert (target_dir / "a.md").exists()
@@ -65,8 +65,8 @@ def test_python_fallback_when_rsync_missing(tmp_home: Path, tmp_vault: Path, mon
     cfg = {"vaultRoot": str(tmp_vault)}
     mirror.mirror_all(cfg)
     target = tmp_vault / "bots" / "myrepo" / "memory"
-    assert (target / "top.md").read_text() == "top content"
-    assert (target / "deep" / "nested" / "file.md").read_text() == "deep content"
+    assert (target / "top.md").read_text(encoding="utf-8") == "top content"
+    assert (target / "deep" / "nested" / "file.md").read_text(encoding="utf-8") == "deep content"
 
 
 def test_mirror_lock_prevents_concurrent_runs(tmp_home: Path, tmp_vault: Path):

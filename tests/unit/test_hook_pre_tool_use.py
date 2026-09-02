@@ -276,7 +276,7 @@ def test_hook_fails_open_on_corrupt_index(tmp_vault: Path, monkeypatch):
     project_dir = _make_git_project(tmp_vault, project)
     mnemo_dir = tmp_vault / ".mnemo"
     mnemo_dir.mkdir(parents=True, exist_ok=True)
-    (mnemo_dir / "rule-activation-index.json").write_text("NOT VALID JSON }{")
+    (mnemo_dir / "rule-activation-index.json").write_text("NOT VALID JSON }{", encoding="utf-8")
 
     payload = {
         "tool_name": "Bash",
@@ -318,7 +318,7 @@ def test_hook_fails_open_on_internal_exception(tmp_vault: Path, monkeypatch):
     # Error must have been logged
     errors_log = tmp_vault / ".errors.log"
     assert errors_log.exists(), ".errors.log should have been written"
-    log_text = errors_log.read_text()
+    log_text = errors_log.read_text(encoding="utf-8")
     assert "pre_tool_use" in log_text
 
 

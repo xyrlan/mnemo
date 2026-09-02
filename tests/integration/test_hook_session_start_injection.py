@@ -33,8 +33,8 @@ def _write_page(
         f"{sources_yaml}\n"
         "tags:\n"
         f"{tags_yaml}\n"
-        "---\n\nbody\n"
-    )
+        "---\n\nbody\n", 
+    encoding="utf-8")
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def _set_config(vault: Path, **overrides):
     cfg_path = vault / "mnemo.config.json"
     base = {"vaultRoot": str(vault)}
     base.update(overrides)
-    cfg_path.write_text(json.dumps(base))
+    cfg_path.write_text(json.dumps(base), encoding="utf-8")
 
 
 def _run_hook(payload: dict, monkeypatch, capsys) -> str:

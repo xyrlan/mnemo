@@ -13,7 +13,7 @@ def test_status_shows_reflex_section(tmp_vault, monkeypatch, capsys):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "reflex": {"enabled": True},
-    }))
+    }), encoding="utf-8")
     session_state.bump_emission(tmp_vault, sid="s", kind="reflex", now_ts=1)
 
     cli.main(["status"])
@@ -33,7 +33,7 @@ def test_doctor_check_reflex_index_stale_detects_missing(tmp_vault, monkeypatch)
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "reflex": {"enabled": True},
-    }))
+    }), encoding="utf-8")
     # No reflex-index.json file exists — check should flag.
     ok = cli._doctor_check_reflex_index(tmp_vault)
     assert ok is False
@@ -45,7 +45,7 @@ def test_doctor_check_reflex_index_ok_when_disabled(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "reflex": {"enabled": False},
-    }))
+    }), encoding="utf-8")
     assert cli._doctor_check_reflex_index(tmp_vault) is True
 
 
@@ -54,7 +54,7 @@ def test_doctor_check_reflex_index_ok_when_present(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "reflex": {"enabled": True},
-    }))
+    }), encoding="utf-8")
     idx = tmp_vault / ".mnemo" / "reflex-index.json"
     idx.parent.mkdir(parents=True, exist_ok=True)
     idx.write_text("{}", encoding="utf-8")

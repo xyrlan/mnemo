@@ -61,8 +61,8 @@ def test_load_recent_read_counts_skips_malformed_lines(tmp_path):
         + json.dumps({"tool": "read_mnemo_rule", "timestamp": _ts(now, 1),
                       "args": {"slug": "ok"}}) + "\n"
         + json.dumps({"tool": "read_mnemo_rule", "timestamp": "garbage",
-                      "args": {"slug": "skipme"}}) + "\n"
-    )
+                      "args": {"slug": "skipme"}}) + "\n", 
+    encoding="utf-8")
     assert load_recent_read_counts(tmp_path, now=now) == Counter({"ok": 1})
 
 

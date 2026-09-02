@@ -48,7 +48,7 @@ def test_enrichment_emits_then_dedupes_same_slug(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "enrichment": {"enabled": True, "maxEmissionsPerSession": 15},
-    }))
+    }), encoding="utf-8")
     _seed_activation_rule(tmp_vault)
 
     payload = {
@@ -76,7 +76,7 @@ def test_enrichment_silent_when_session_cap_reached(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "enrichment": {"enabled": True, "maxEmissionsPerSession": 1},
-    }))
+    }), encoding="utf-8")
     _seed_activation_rule(tmp_vault)
     # Prime the counter at cap
     session_state.bump_emission(tmp_vault, sid="sid-cap", kind="enrich", now_ts=1)

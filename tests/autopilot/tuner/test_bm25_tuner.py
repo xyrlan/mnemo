@@ -57,7 +57,7 @@ class TestBM25Config:
         config = BM25Config(b=0.75, k1=1.5, weights={"name": 3.0, "body": 1.0})
         out = tmp_path / "bm25-config.json"
         write_bm25_config(config, out)
-        data = json.loads(out.read_text())
+        data = json.loads(out.read_text(encoding="utf-8"))
         assert "b" in data
         assert "k1" in data
         assert "weights" in data
@@ -70,7 +70,7 @@ class TestBM25Config:
 def _write_frozen(vault_root: Path, cases: list[dict]) -> None:
     d = vault_root / ".mnemo"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "recall-cases.frozen.json").write_text(json.dumps(cases))
+    (d / "recall-cases.frozen.json").write_text(json.dumps(cases), encoding="utf-8")
 
 
 class TestGridSearch:

@@ -65,7 +65,7 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -73,7 +73,7 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
                 "slug": "no-commits-without-permission",
                 "name": "No commits",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "no commits body",
                 "source_files": [
                     "bots/agent-b/memory/feedback_no_commits.md",
@@ -93,15 +93,15 @@ def test_orchestrator_first_run_writes_projects_and_clusters(populated_vault: Pa
     # project file exists
     assert (populated_vault / "shared" / "project" / "agent-b__china-portal.md").exists()
     # single-source yarn page auto-promoted to sacred dir
-    assert (populated_vault / "shared" / "feedback" / "use-yarn.md").exists()
+    assert (populated_vault / "shared" / "reference" / "use-yarn.md").exists()
     # multi-source no-commits page staged in _inbox/
-    assert (populated_vault / "shared" / "_inbox" / "feedback" / "no-commits-without-permission.md").exists()
+    assert (populated_vault / "shared" / "_inbox" / "reference" / "no-commits-without-permission.md").exists()
     assert summary.auto_promoted == 1
 
 
 def test_orchestrator_second_run_skips_unchanged(populated_vault: Path, stub_llm):
     response = _fake_llm_response([
-        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
+        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "reference",
          "body": "b", "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"]},
     ])
     stub_llm([response, response])
@@ -137,7 +137,7 @@ def test_orchestrator_flushes_state_after_each_phase(populated_vault: Path, stub
     run_extraction(_make_cfg(populated_vault))
     state_file = populated_vault / ".mnemo" / "extraction-state.json"
     assert state_file.exists()
-    payload = json.loads(state_file.read_text())
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
     # Project entries were flushed even though LLM phase blew up
     assert any(k.startswith("project/") for k in payload["entries"])
 
@@ -155,7 +155,7 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     # Use 2 sources to route through the _inbox/ branch (the original v0.2
     # test intent is about dismissed/force behavior of the inbox branch).
     response = _fake_llm_response([
-        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "feedback",
+        {"slug": "use-yarn", "name": "Use yarn", "description": "d", "type": "reference",
          "body": "b",
          "source_files": [
              "bots/agent-a/memory/feedback_use_yarn.md",
@@ -165,7 +165,7 @@ def test_orchestrator_force_reprocesses_dismissed(populated_vault: Path, stub_ll
     stub_llm([response, response])
     cfg = _make_cfg(populated_vault)
     run_extraction(cfg)
-    target = populated_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
+    target = populated_vault / "shared" / "_inbox" / "reference" / "use-yarn.md"
     target.unlink()
 
     run_extraction(cfg, force=True)
@@ -180,7 +180,7 @@ def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "evolving",
@@ -190,9 +190,9 @@ def test_orchestrator_forwards_stability_from_llm_to_frontmatter(populated_vault
 
     run_extraction(_make_cfg(populated_vault))
 
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
-    assert "stability: evolving" in sacred.read_text()
+    assert "stability: evolving" in sacred.read_text(encoding="utf-8")
 
 
 def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populated_vault: Path, stub_llm):
@@ -203,7 +203,7 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 # no "stability" field — legacy v0.2/v0.3 schema
@@ -213,17 +213,17 @@ def test_orchestrator_defaults_stability_to_stable_when_llm_omits_field(populate
 
     run_extraction(_make_cfg(populated_vault))
 
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
     assert sacred.exists()
-    assert "stability: stable" in sacred.read_text()
+    assert "stability: stable" in sacred.read_text(encoding="utf-8")
 
 
 def test_orchestrator_auto_deletes_legacy_wiki_sources(populated_vault: Path, stub_llm, capsys):
     """v0.4: wiki/sources/ and wiki/compiled/ get removed on the first extract."""
     (populated_vault / "wiki" / "sources").mkdir(parents=True)
-    (populated_vault / "wiki" / "sources" / "old.md").write_text("stale\n")
+    (populated_vault / "wiki" / "sources" / "old.md").write_text("stale\n", encoding="utf-8")
     (populated_vault / "wiki" / "compiled").mkdir(parents=True)
-    (populated_vault / "wiki" / "compiled" / "index.md").write_text("stale\n")
+    (populated_vault / "wiki" / "compiled" / "index.md").write_text("stale\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -231,7 +231,7 @@ def test_orchestrator_auto_deletes_legacy_wiki_sources(populated_vault: Path, st
                 "slug": "x",
                 "name": "X",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -249,7 +249,7 @@ def test_orchestrator_legacy_cleanup_is_idempotent(populated_vault: Path, stub_l
     stub_llm([
         _fake_llm_response([
             {
-                "slug": "x", "name": "X", "description": "d", "type": "feedback",
+                "slug": "x", "name": "X", "description": "d", "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -269,7 +269,7 @@ def test_orchestrator_regenerates_home_dashboard_after_run(populated_vault: Path
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -280,7 +280,7 @@ def test_orchestrator_regenerates_home_dashboard_after_run(populated_vault: Path
     run_extraction(_make_cfg(populated_vault))
     home = populated_vault / "HOME.md"
     assert home.exists()
-    text = home.read_text()
+    text = home.read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert BLOCK_END in text
     assert "use-yarn" in text
@@ -296,7 +296,7 @@ def test_orchestrator_dashboard_skipped_on_dry_run(populated_vault: Path, stub_l
     home = populated_vault / "HOME.md"
     if home.exists():
         from mnemo.core.dashboard import BLOCK_BEGIN
-        assert BLOCK_BEGIN not in home.read_text()
+        assert BLOCK_BEGIN not in home.read_text(encoding="utf-8")
 
 
 def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Path, stub_llm):
@@ -316,15 +316,15 @@ def test_orchestrator_threads_vault_root_into_prompt_builder(populated_vault: Pa
         "  - auto-promoted\n"
         "  - package-management\n"
         "---\n"
-        "body\n"
-    )
+        "body\n", 
+    encoding="utf-8")
     stub_llm([
         _fake_llm_response([
             {
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "b",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -348,7 +348,7 @@ def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Pat
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -357,8 +357,8 @@ def test_orchestrator_forwards_tags_from_llm_to_frontmatter(populated_vault: Pat
         ]),
     ])
     run_extraction(_make_cfg(populated_vault))
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
-    text = sacred.read_text()
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
+    text = sacred.read_text(encoding="utf-8")
     assert "  - auto-promoted" in text
     assert "  - package-management" in text
     assert "  - workflow" in text
@@ -372,7 +372,7 @@ def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Pa
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
                 "stability": "stable",
@@ -381,8 +381,8 @@ def test_orchestrator_strips_reserved_tags_llm_tries_to_emit(populated_vault: Pa
         ]),
     ])
     run_extraction(_make_cfg(populated_vault))
-    sacred = populated_vault / "shared" / "feedback" / "use-yarn.md"
-    text = sacred.read_text()
+    sacred = populated_vault / "shared" / "reference" / "use-yarn.md"
+    text = sacred.read_text(encoding="utf-8")
     # auto-promoted should appear exactly once (system marker) — not twice from the LLM copy
     assert text.count("  - auto-promoted") == 1
     # needs-review must never appear in an auto-promoted page
@@ -411,11 +411,11 @@ def test_sanitize_llm_tags_caps_at_five():
 def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Path, stub_llm):
     """v0.3.1: --force nukes shared/_inbox/<type>/*.md so slug-drift duplicates die."""
     # Seed the inbox with stale slug-drift duplicates from a prior run.
-    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
-    (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n")
-    (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n")
-    (feedback_inbox / "no-git-commits-without-permission.md").write_text("stale body 3\n")
+    (feedback_inbox / "no-commits-only-edits.md").write_text("stale body 1\n", encoding="utf-8")
+    (feedback_inbox / "no-commits-without-permission.md").write_text("stale body 2\n", encoding="utf-8")
+    (feedback_inbox / "no-git-commits-without-permission.md").write_text("stale body 3\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -423,7 +423,7 @@ def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Pa
                 "slug": "no-commits",
                 "name": "No commits",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "canonical body",
                 "source_files": [
                     "bots/agent-b/memory/feedback_no_commits.md",
@@ -445,10 +445,10 @@ def test_orchestrator_force_wipes_inbox_type_dirs_before_run(populated_vault: Pa
 
 def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stub_llm):
     """Sanity: without --force, existing inbox files are preserved."""
-    feedback_inbox = populated_vault / "shared" / "_inbox" / "feedback"
+    feedback_inbox = populated_vault / "shared" / "_inbox" / "reference"
     feedback_inbox.mkdir(parents=True, exist_ok=True)
     preserved = feedback_inbox / "preserved.md"
-    preserved.write_text("keep me\n")
+    preserved.write_text("keep me\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -456,7 +456,7 @@ def test_orchestrator_non_force_preserves_inbox_files(populated_vault: Path, stu
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -473,7 +473,7 @@ def test_orchestrator_force_wipes_only_cluster_type_dirs(populated_vault: Path, 
     project_inbox = populated_vault / "shared" / "_inbox" / "project"
     project_inbox.mkdir(parents=True, exist_ok=True)
     project_stale = project_inbox / "some-project.md"
-    project_stale.write_text("project body\n")
+    project_stale.write_text("project body\n", encoding="utf-8")
 
     stub_llm([
         _fake_llm_response([
@@ -481,7 +481,7 @@ def test_orchestrator_force_wipes_only_cluster_type_dirs(populated_vault: Path, 
                 "slug": "use-yarn",
                 "name": "Use yarn",
                 "description": "d",
-                "type": "feedback",
+                "type": "reference",
                 "body": "yarn body",
                 "source_files": ["bots/agent-a/memory/feedback_use_yarn.md"],
             },
@@ -509,9 +509,9 @@ def test_merge_apply_folds_new_fields():
     from mnemo.core.extract.inbox import ApplyResult
 
     apply_result = ApplyResult()
-    apply_result.auto_promoted = ["feedback/use-yarn", "feedback/no-bun"]
-    apply_result.sibling_bounced = [("feedback/use-yarn", "path/to/proposed.md")]
-    apply_result.upgrade_proposed = [("feedback/no-commits", "path/to/upgrade.md")]
+    apply_result.auto_promoted = ["reference/use-yarn", "reference/no-bun"]
+    apply_result.sibling_bounced = [("reference/use-yarn", "path/to/proposed.md")]
+    apply_result.upgrade_proposed = [("reference/no-commits", "path/to/upgrade.md")]
 
     summary = ExtractionSummary()
     _merge_apply(apply_result, summary)
@@ -545,7 +545,7 @@ def test_run_extraction_background_writes_last_auto_run_json_on_success(tmp_path
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     assert last_run_path.exists(), "last-auto-run.json must be written in background mode"
 
-    payload = json.loads(last_run_path.read_text())
+    payload = json.loads(last_run_path.read_text(encoding="utf-8"))
     assert payload["mode"] == "background"
     assert payload["exit_code"] == 0
     assert payload["error"] is None
@@ -560,14 +560,14 @@ def _parse_one_page(rp: dict):
     """Helper: feed a raw LLM page dict through _parse_pages_from_response."""
     from mnemo.core.extract import _parse_pages_from_response
     payload = json.dumps({"pages": [rp]})
-    return _parse_pages_from_response(payload, "feedback")
+    return _parse_pages_from_response(payload, "reference")
 
 
 _BASE_PAGE = {
     "slug": "some-rule",
     "name": "Some rule",
     "description": "d",
-    "type": "feedback",
+    "type": "reference",
     "body": "b",
     "source_files": ["bots/a/memory/feedback_some_rule.md"],
     "stability": "stable",
@@ -677,3 +677,66 @@ def test_run_extraction_manual_does_not_write_last_auto_run_json(tmp_path):
 
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     assert not last_run_path.exists(), "manual runs must not write last-auto-run.json"
+
+
+def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
+    populated_vault: Path, stub_llm,
+):
+    """End-to-end proof that _run_extraction_body runs the evidence gate.
+
+    Two feedback pages off one briefing: the one quoting its ``## Corrections``
+    section reaches the sacred dir verified, the one citing nothing is demoted
+    to a staged reference page. Without the ``evidence.verify_page`` call in
+    ``_run_extraction_body`` both would land in ``shared/feedback/``.
+    """
+    briefing = populated_vault / "bots" / "proj" / "briefings" / "sessions" / "s1.md"
+    briefing.parent.mkdir(parents=True)
+    briefing.write_text(
+        "---\n"
+        "type: briefing\n"
+        "agent: proj\n"
+        "session_id: s1\n"
+        "---\n"
+        "\n"
+        "# Briefing — proj — s1\n"
+        "\n"
+        "## Corrections\n"
+        '- "never retry on 4xx, only on 5xx" → Retry only on 5xx\n',
+        encoding="utf-8",
+    )
+    src = "bots/proj/briefings/sessions/s1.md"
+    stub_llm([
+        _fake_llm_response([
+            {
+                "slug": "retry-5xx-only",
+                "name": "Retry only on 5xx",
+                "description": "d",
+                "type": "feedback",
+                "body": "Retry only 5xx.",
+                "source_files": [src],
+                "evidence": {"quote": "never retry on 4xx, only on 5xx", "source": src},
+            },
+            {
+                "slug": "write-clean-code",
+                "name": "Write clean code",
+                "description": "d",
+                "type": "feedback",
+                "body": "Keep functions small.",
+                "source_files": [src],
+            },
+        ]),
+    ])
+
+    summary = run_extraction(_make_cfg(populated_vault))
+
+    promoted = populated_vault / "shared" / "feedback" / "retry-5xx-only.md"
+    assert promoted.exists(), "a verified quote must reach the sacred dir"
+    assert "confidence: verified" in promoted.read_text(encoding="utf-8")
+
+    demoted = populated_vault / "shared" / "_inbox" / "reference" / "write-clean-code.md"
+    assert demoted.exists(), "unevidenced feedback must stage as a reference page"
+    assert "demoted_from: feedback" in demoted.read_text(encoding="utf-8")
+    assert not (populated_vault / "shared" / "feedback" / "write-clean-code.md").exists()
+    # The demotion is reported, not silent: one page staged, no echo involved.
+    assert summary.demoted_unverified == 1
+    assert summary.echo_rejected == 0

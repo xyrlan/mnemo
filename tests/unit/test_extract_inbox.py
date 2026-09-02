@@ -48,7 +48,7 @@ def test_fresh_write_creates_inbox_file(tmp_vault: Path):
     result = inbox.apply_pages([page], state, tmp_vault)
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
     assert target.exists()
-    assert "use yarn" in target.read_text().lower()
+    assert "use yarn" in target.read_text(encoding="utf-8").lower()
     assert state.entries["feedback/use-yarn"].status == "inbox"
     assert result.written_fresh == ["feedback/use-yarn"]
     assert result.overwrite_safe == []
@@ -61,7 +61,7 @@ def test_frontmatter_contains_required_fields(tmp_vault: Path):
         "bots/proj/memory/feedback_yarn_only.md",
     ])
     inbox.apply_pages([page], state, tmp_vault)
-    text = (tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").read_text()
+    text = (tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").read_text(encoding="utf-8")
     assert "name:" in text
     assert "description:" in text
     assert "type: feedback" in text
@@ -106,7 +106,7 @@ def test_overwrite_safe_when_source_changes_and_disk_matches(tmp_vault: Path):
     )
     result = inbox.apply_pages([page_v2], state, tmp_vault)
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
-    assert "v2" in target.read_text()
+    assert "v2" in target.read_text(encoding="utf-8")
     assert result.overwrite_safe == ["feedback/use-yarn"]
 
 
@@ -117,7 +117,7 @@ def test_sibling_proposed_when_user_edited_inbox(tmp_vault: Path):
 
     # User edits the inbox file by hand
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
-    target.write_text(target.read_text() + "\n\n(user's handwritten note)\n")
+    target.write_text(target.read_text(encoding="utf-8") + "\n\n(user's handwritten note)\n", encoding="utf-8")
 
     v1_written_hash = state.entries["feedback/use-yarn"].written_hash
 
@@ -138,8 +138,8 @@ def test_sibling_proposed_when_user_edited_inbox(tmp_vault: Path):
 
     sibling = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists()
-    assert "new upstream body" in sibling.read_text()
-    assert "(user's handwritten note)" in target.read_text()  # untouched
+    assert "new upstream body" in sibling.read_text(encoding="utf-8")
+    assert "(user's handwritten note)" in target.read_text(encoding="utf-8")  # untouched
     assert len(result.sibling_proposed) == 1
     assert result.sibling_proposed[0][0] == "feedback/use-yarn"
     assert state.entries["feedback/use-yarn"].written_hash == v1_written_hash, (
@@ -157,7 +157,7 @@ def test_promoted_slug_writes_update_proposed(tmp_vault: Path):
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
     promoted = tmp_vault / "shared" / "feedback" / "use-yarn.md"
     promoted.parent.mkdir(parents=True)
-    promoted.write_text(target.read_text())
+    promoted.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
     target.unlink()
 
     # Source hash changes
@@ -177,7 +177,7 @@ def test_promoted_slug_writes_update_proposed(tmp_vault: Path):
 
     update = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.update-proposed.md"
     assert update.exists()
-    assert "v2 upstream" in update.read_text()
+    assert "v2 upstream" in update.read_text(encoding="utf-8")
     assert len(result.update_proposed) == 1
     assert state.entries["feedback/use-yarn"].status == "promoted"
 
@@ -221,7 +221,7 @@ def test_force_resurrects_dismissed(tmp_vault: Path):
     page_v2 = _page("use-yarn", body="new")
     result = inbox.apply_pages([page_v2], state, tmp_vault, force=True)
     assert target.exists()
-    assert "new" in target.read_text()
+    assert "new" in target.read_text(encoding="utf-8")
 
 
 # --- Task 9: dedupe / atomic state -----------------------------------------
@@ -292,7 +292,7 @@ def test_load_state_missing_returns_empty(tmp_vault: Path):
 def test_load_state_corrupt_backs_up_and_returns_empty(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "extraction-state.json"
     path.parent.mkdir(parents=True)
-    path.write_text("this is not json")
+    path.write_text("this is not json", encoding="utf-8")
     state = inbox.load_state(path)
     assert state.entries == {}
     # Backup sibling exists
@@ -334,7 +334,7 @@ def test_extracted_page_roundtrip_preserves_activation_fields(tmp_vault: Path):
     target = tmp_vault / "shared" / "feedback" / "no-coauthored.md"
     assert target.exists(), "single-source page must auto-promote"
 
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     fm = parse_frontmatter(text)
 
     # C3 safety rail (2026-04-23): auto-promoted pages have enforce stripped.
@@ -363,7 +363,7 @@ def test_extracted_page_without_activation_fields_omits_blocks(tmp_vault: Path):
     page = _page("use-yarn")  # 2 sources, no activation fields
     inbox.apply_pages([page], state, tmp_vault)
     target = tmp_vault / "shared" / "_inbox" / "feedback" / "use-yarn.md"
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     assert "\nenforce:" not in text
     assert "\nactivates_on:" not in text
 
@@ -389,7 +389,7 @@ def test_extracted_page_enforce_with_multiple_patterns_uses_block_list(tmp_vault
     )
     inbox.apply_pages([page], state, tmp_vault)
     target = tmp_vault / "shared" / "feedback" / "multi-deny.md"
-    text = target.read_text()
+    text = target.read_text(encoding="utf-8")
     fm = parse_frontmatter(text)
     # C3 safety rail (2026-04-23): auto-promoted pages have enforce stripped.
     assert fm.get("enforce") is None, (
@@ -404,6 +404,6 @@ def test_extracted_page_enforce_with_multiple_patterns_uses_block_list(tmp_vault
 def test_load_state_unknown_schema_version_raises(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "extraction-state.json"
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"schema_version": 999, "last_run": None, "entries": {}}))
+    path.write_text(json.dumps({"schema_version": 999, "last_run": None, "entries": {}}), encoding="utf-8")
     with pytest.raises(inbox.StateSchemaError):
         inbox.load_state(path)

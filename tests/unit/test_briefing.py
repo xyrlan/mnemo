@@ -11,7 +11,7 @@ from mnemo.core import llm as llm_mod
 
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
 
 def _fake_llm_response(text: str) -> llm_mod.LLMResponse:
@@ -112,7 +112,7 @@ def test_generate_briefing_emits_frontmatter_with_spec_fields(tmp_vault: Path, t
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
 
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "type: briefing" in text
     assert "agent: agent_a" in text
@@ -128,7 +128,7 @@ def test_generate_briefing_computes_duration_from_event_timestamps(tmp_vault: Pa
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
 
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "duration_minutes: 42" in text
 
 
@@ -143,7 +143,7 @@ def test_generate_briefing_includes_llm_body(tmp_vault: Path, tmp_path: Path, st
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
 
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "Implemented retry helper" in text
     assert "exponential backoff" in text
 
@@ -188,8 +188,8 @@ def test_generate_briefing_skips_malformed_jsonl_lines(tmp_vault: Path, tmp_path
                 ],
             },
         })
-        + "\n"
-    )
+        + "\n", 
+    encoding="utf-8")
     cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
@@ -314,7 +314,7 @@ def test_generate_briefing_falls_back_when_llm_returns_empty_body(tmp_vault: Pat
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
 
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "empty briefing" in text
 
 
@@ -341,13 +341,13 @@ def test_generate_briefing_handles_malformed_timestamps_gracefully(tmp_vault: Pa
                 ],
             },
         })
-        + "\n"
-    )
+        + "\n", 
+    encoding="utf-8")
     cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
 
     out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
 
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     # Duration defaults to 0 when no valid timestamps are present.
     assert "duration_minutes: 0" in text
 
@@ -368,7 +368,7 @@ def test_generate_briefing_handles_unreadable_jsonl(tmp_vault: Path, tmp_path: P
 
 def _jsonl_with_events(path: Path, events: list[dict]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
     return path
 
 
@@ -445,7 +445,7 @@ def test_cmd_briefing_logs_and_returns_1_on_llm_failure(tmp_vault: Path, tmp_pat
     monkeypatch.setattr(briefing_mod, "generate_session_briefing", boom)
 
     jsonl = tmp_path / "sid.jsonl"
-    jsonl.write_text("{}\n")
+    jsonl.write_text("{}\n", encoding="utf-8")
 
     rc = cli.main(["briefing", str(jsonl), "agent_a"])
     assert rc == 1

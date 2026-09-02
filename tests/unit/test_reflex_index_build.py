@@ -101,7 +101,7 @@ def test_build_index_schema_shape(tmp_vault):
     assert "project" not in idx
     assert isinstance(idx["avg_field_length"], dict)
     assert set(idx["avg_field_length"]) == {
-        "name", "topic_tags", "aliases", "description", "body",
+        "name", "topic_tags", "aliases", "description", "body", "evidence",
     }
     assert isinstance(idx["postings"], dict)
     assert isinstance(idx["docs"], dict)

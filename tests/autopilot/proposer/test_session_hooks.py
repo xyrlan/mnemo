@@ -56,7 +56,7 @@ def _write_fresh_cache(
         "branch": branch,
     }
     (vault_root / ".mnemo").mkdir(parents=True, exist_ok=True)
-    (vault_root / ".mnemo" / "preempt-cache.json").write_text(json.dumps(data))
+    (vault_root / ".mnemo" / "preempt-cache.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 def _minimal_cfg_patch(vault_root: Path):

@@ -31,7 +31,12 @@ from mnemo.core.extract.inbox.branches.universal_promotion import (
     merged_projects_for,
 )
 from mnemo.core.extract.inbox.branches.upgrade import _apply_upgrade_proposed
-from mnemo.core.extract.inbox.dedup import _detect_drift_slug, _detect_stem_collision
+from mnemo.core.extract.inbox.dedup import (
+    SimilarityIndex,
+    _detect_drift_slug,
+    _detect_similar_existing,
+    _detect_stem_collision,
+)
 from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
@@ -68,6 +73,8 @@ def _is_universal_promotion(
     if is_auto:
         return False
     if is_backfill_page(page):
+        return False
+    if page.unverified_feedback:
         return False
     if entry is not None and entry.status == "auto_promoted":
         return False
@@ -247,6 +254,19 @@ def apply_pages(
     run_id = run_id or datetime.now().isoformat(timespec="seconds")
     result = ApplyResult()
 
+    # Built lazily, one per page type, from the state as it stands at loop
+    # start, then kept current: every handled page is fed back in via
+    # ``SimilarityIndex.add`` so that two mutually-similar NEW pages in one
+    # batch (different slugs, so ``dedupe_by_slug`` does not merge them) end up
+    # as one page rather than two. Without that, the index is a snapshot and
+    # same-batch duplicates both get written.
+    sim_indexes: dict[str, SimilarityIndex] = {}
+
+    def _sim_index(page_type: str) -> SimilarityIndex:
+        if page_type not in sim_indexes:
+            sim_indexes[page_type] = SimilarityIndex(state, vault_root, page_type)
+        return sim_indexes[page_type]
+
     for page in pages:
         # Anti-drift guardrail: if the LLM chose a new slug for what is clearly
         # a rewrite of an existing page (same sources + similar body), redirect
@@ -259,6 +279,13 @@ def apply_pages(
             stem_target = _detect_stem_collision(page, state, vault_root)
             if stem_target is not None:
                 page.slug = stem_target
+            else:
+                # Third layer: neither the sources nor the slug line up, but the
+                # page says what an existing page of this type already says.
+                # Redirecting here is what makes source_count accrue.
+                similar = _detect_similar_existing(page, _sim_index(page.type))
+                if similar is not None:
+                    page.slug = similar
 
         key = f"{page.type}/{page.slug}"
         entry = state.entries.get(key)
@@ -278,6 +305,7 @@ def apply_pages(
             result.unchanged_skipped.append(key)
             continue
 
+        dismissed_before = len(result.dismissed_skipped)
         for predicate, handler in _DISPATCH:
             if predicate(page, entry, target, is_auto):
                 handler(
@@ -286,5 +314,14 @@ def apply_pages(
                 )
                 break
         _stamp_entry_origin(state, key, page)
+        # Feed the page back into the index so a later page in this same batch
+        # that says the same thing redirects onto it — but only if this page
+        # actually landed. A page dropped as dismissed_skipped wrote nothing, so
+        # registering it would let a later similar page redirect onto a slug
+        # that is not there, and be dropped in turn. Upgrade-proposed pages
+        # (which write only a ``.proposed.md`` sibling) are still indexed, which
+        # is benign: the slug itself does exist on disk.
+        if len(result.dismissed_skipped) == dismissed_before:
+            _sim_index(page.type).add(page)
 
     return result

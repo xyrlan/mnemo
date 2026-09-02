@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 from mnemo.core.extract.prompts.encoding import _render_files
+from mnemo.core.extract.prompts.existing_rules import existing_rules_fragment
 from mnemo.core.extract.prompts.templates.briefing import BRIEFING_SYSTEM_PROMPT  # noqa: F401  (re-export anchor for the package shim)
 from mnemo.core.extract.prompts.templates.few_shot_feedback import _FEW_SHOT_FEEDBACK
 from mnemo.core.extract.prompts.templates.few_shot_simple import (
@@ -66,10 +67,12 @@ def build_consolidation_prompt(
     builder; new code should call this directly.
     """
     label, cluster_clause, few_shot = _CONSOLIDATION_TABLE[kind]
+    agents = {f.agent for f in files if getattr(f, "agent", None)}
     return (
         f"Task: consolidate these {label} memory files into canonical Tier 2 "
         f"pages. {cluster_clause}\n\n"
         f"{_existing_tags_fragment(vault_root, kind)}"
+        f"{existing_rules_fragment(vault_root, kind, agents=agents)}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{few_shot}\n"
         "Now consolidate these input files:\n\n"
@@ -106,8 +109,38 @@ def build_reference_prompt(
     return build_consolidation_prompt("reference", files, vault_root=vault_root)
 
 
-def build_briefing_prompt(transcript: str) -> str:
+_USER_TURN_MAX_CHARS = 600
+
+
+def _render_user_turn(index: int, turn: str) -> str:
+    """One numbered turn, with any truncation marker kept off the quotable line.
+
+    A quote is verified by substring match against the real turn, so the
+    shown line must contain nothing the user did not type. An over-long
+    turn is cut at a word boundary and the "continues" note goes on its
+    own following line, where it cannot be quoted by mistake.
+    """
+    if len(turn) <= _USER_TURN_MAX_CHARS:
+        return f"[{index}] {turn}"
+    head = turn[:_USER_TURN_MAX_CHARS]
+    cut = head.rstrip()
+    space = cut.rfind(" ")
+    if space > 0:
+        cut = cut[:space].rstrip()
+    if not cut:  # no whitespace to break on — fall back to a hard cut
+        cut = head
+    return (
+        f"[{index}] {cut}\n"
+        f"    (turn continues — {len(turn)} chars total; "
+        "quote only the text shown above)"
+    )
+
+
+def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = None) -> str:
     """Render a briefing prompt from a pre-flattened transcript string.
+
+    ``user_turns`` are the person's own messages, numbered, so the model can
+    quote a correction verbatim and the caller can verify it did.
 
     SIGNATURE CHANGE in v0.9 PR F2: this function used to accept
     ``events: list[dict]`` and flattened them internally. Flattening is
@@ -115,13 +148,22 @@ def build_briefing_prompt(transcript: str) -> str:
     Callers wanting the old behaviour should compose the two:
 
         transcript = flatten_transcript_events(events)
-        prompt = build_briefing_prompt(transcript)
+        prompt = build_briefing_prompt(transcript, user_turns=user_turns(events))
     """
+    turns_block = ""
+    if user_turns:
+        lines = [_render_user_turn(i, turn) for i, turn in enumerate(user_turns, 1)]
+        turns_block = (
+            "=== USER TURNS (verbatim, numbered — quote these for Corrections) ===\n"
+            + "\n".join(lines)
+            + "\n=== END USER TURNS ===\n\n"
+        )
     return (
         "Task: write the shift handoff briefing markdown body for the "
         "following Claude Code session transcript. Follow the section "
         "structure from the system prompt exactly. Output markdown only, "
         "no frontmatter, no code fences.\n\n"
+        f"{turns_block}"
         "=== TRANSCRIPT ===\n"
         f"{transcript}\n"
         "=== END TRANSCRIPT ===\n"

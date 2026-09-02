@@ -31,8 +31,8 @@ def _write_page(
         f"{sources_yaml}\n"
         "tags:\n"
         f"{tags_yaml}\n"
-        "---\n\nbody\n"
-    )
+        "---\n\nbody\n", 
+    encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +49,7 @@ def _write_claude_json_with_mnemo(path: Path) -> None:
         "mcpServers": {
             "mnemo": {"command": "python", "args": ["-m", "mnemo", "mcp-server"]},
         },
-    }))
+    }), encoding="utf-8")
 
 
 # --- render ---
@@ -63,7 +63,7 @@ def test_render_returns_empty_when_mcp_not_registered(tmp_vault, tmp_path):
 
 def test_render_returns_empty_when_claude_json_has_no_mcp_section(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(json.dumps({"theme": "dark"}))
+    claude_json.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
     assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
@@ -71,7 +71,7 @@ def test_render_returns_empty_when_other_servers_but_no_mnemo(tmp_vault, tmp_pat
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text(json.dumps({
         "mcpServers": {"other": {"command": "node"}},
-    }))
+    }), encoding="utf-8")
     assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
@@ -105,13 +105,13 @@ def test_render_with_topics_and_calls(tmp_vault, tmp_path):
 
 def test_render_handles_malformed_claude_json(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text("{not valid")
+    claude_json.write_text("{not valid", encoding="utf-8")
     assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
 def test_render_handles_non_dict_claude_json(tmp_vault, tmp_path):
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text("[1, 2, 3]")
+    claude_json.write_text("[1, 2, 3]", encoding="utf-8")
     assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 

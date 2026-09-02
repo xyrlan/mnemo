@@ -48,8 +48,8 @@ def _write_page(
         "tags:\n"
         f"{tags_yaml}\n"
         "---\n\n"
-        f"{body}"
-    )
+        f"{body}", 
+    encoding="utf-8")
 
 
 # --- initialize / capabilities ---
@@ -471,7 +471,7 @@ def test_server_records_access_log_entry(tmp_vault, monkeypatch):
 
     log_path = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
     assert log_path.exists()
-    entry = json.loads(log_path.read_text().strip())
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert entry["tool"] == "list_rules_by_topic"
     assert entry["args"] == {"topic": "git", "scope": "project"}
     assert entry["result_count"] >= 0
@@ -499,7 +499,7 @@ def test_server_access_log_records_scope_and_project(tmp_vault, monkeypatch):
     }
     handle_request(req, vault_root=tmp_vault)
     log_path = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
-    entry = json.loads(log_path.read_text().strip())
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert entry["scope_requested"] == "vault"
     assert entry["project"] == "test-proj"
 

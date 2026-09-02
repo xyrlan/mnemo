@@ -28,6 +28,10 @@ def _yaml_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     s = str(value)
+    # Line breaks would terminate the frontmatter block early (a bare "---"
+    # line) or inject a bogus top-level key — collapse them to spaces rather
+    # than merely quoting, since quoting alone does not neutralize them here.
+    s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     if s == "":
         return "''"
     needs_quoting = (
@@ -127,6 +131,15 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     if isinstance(page.activates_on, dict) and page.activates_on:
         activates_on_block = _render_nested_block("activates_on", page.activates_on)
 
+    confidence = page.confidence or "inferred"
+    evidence_block = ""
+    if isinstance(page.evidence, dict) and page.evidence.get("quote") and page.evidence.get("source"):
+        evidence_block = _render_nested_block("evidence", {
+            "quote": str(page.evidence["quote"]),
+            "source": str(page.evidence["source"]),
+        })
+    demoted_line = "demoted_from: feedback\n" if page.unverified_feedback else ""
+
     body_prefix = ""
     if enforce_stripped:
         body_prefix = (
@@ -162,6 +175,8 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"extracted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         f"stability: {stability}\n"
+        f"confidence: {confidence}\n"
+        f"{demoted_line}"
         f"{origin_line}"
         f"{extras}"
         "sources:\n"
@@ -170,6 +185,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{tags_yaml}\n"
         f"{enforce_block}"
         f"{activates_on_block}"
+        f"{evidence_block}"
         "---\n\n"
         f"{body_prefix}{page.body}\n"
         f"{sources_section}"

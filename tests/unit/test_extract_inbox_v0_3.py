@@ -133,7 +133,7 @@ def test_apply_single_source_fresh_writes_sacred_with_auto_promoted_status(tmp_p
 
     target = tmp_path / "shared" / "feedback" / "use-yarn.md"
     assert target.exists(), "sacred file should be written"
-    content = target.read_text()
+    content = target.read_text(encoding="utf-8")
     assert "auto-promoted" in content
     assert "last_sync: 2026-04-13T12:00:00-run1" in content
 
@@ -157,7 +157,7 @@ def test_apply_single_source_overwrite_safe_updates_sacred(tmp_path):
     result = inbox.apply_pages([page_v2], state, tmp_path, run_id="2026-04-13T13:00:00-run2")
 
     target = tmp_path / "shared" / "feedback" / "use-yarn.md"
-    assert "Updated body" in target.read_text()
+    assert "Updated body" in target.read_text(encoding="utf-8")
     assert result.overwrite_safe == ["feedback/use-yarn"]
     entry = state.entries["feedback/use-yarn"]
     assert entry.status == "auto_promoted"
@@ -190,7 +190,7 @@ def test_apply_sibling_bounced_when_user_edited_sacred_file(tmp_path):
 
     # User edits the sacred file
     target = tmp_path / "shared" / "feedback" / "use-yarn.md"
-    target.write_text(target.read_text() + "\n\nUser's own paragraph.\n")
+    target.write_text(target.read_text(encoding="utf-8") + "\n\nUser's own paragraph.\n", encoding="utf-8")
 
     page_v2 = _page("use-yarn", sources=["bots/a/memory/feedback_use_yarn.md"])
     page_v2.source_hash = "sha256:newhash"
@@ -200,8 +200,8 @@ def test_apply_sibling_bounced_when_user_edited_sacred_file(tmp_path):
 
     sibling = tmp_path / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists(), "sibling should be bounced into _inbox/"
-    assert "Updated body from LLM" in sibling.read_text()
-    assert "User's own paragraph" in target.read_text(), "sacred file must be untouched"
+    assert "Updated body from LLM" in sibling.read_text(encoding="utf-8")
+    assert "User's own paragraph" in target.read_text(encoding="utf-8"), "sacred file must be untouched"
     assert result.sibling_bounced and result.sibling_bounced[0][0] == "feedback/use-yarn"
     entry = state.entries["feedback/use-yarn"]
     assert entry.status == "auto_promoted", "status must not regress"
@@ -216,7 +216,7 @@ def test_apply_upgrade_proposed_when_single_becomes_multi(tmp_path):
 
     target = tmp_path / "shared" / "feedback" / "use-yarn.md"
     assert target.exists()
-    sacred_snapshot = target.read_text()
+    sacred_snapshot = target.read_text(encoding="utf-8")
 
     # Run 2: the same slug now has 2 sources (a new agent memorized a yarn rule)
     page_v2 = _page("use-yarn", sources=[
@@ -229,8 +229,8 @@ def test_apply_upgrade_proposed_when_single_becomes_multi(tmp_path):
 
     sibling = tmp_path / "shared" / "_inbox" / "feedback" / "use-yarn.proposed.md"
     assert sibling.exists()
-    assert "bots/b/memory/feedback_yarn_rule.md" in sibling.read_text()
-    assert target.read_text() == sacred_snapshot, "sacred file untouched"
+    assert "bots/b/memory/feedback_yarn_rule.md" in sibling.read_text(encoding="utf-8")
+    assert target.read_text(encoding="utf-8") == sacred_snapshot, "sacred file untouched"
     entry = state.entries["feedback/use-yarn"]
     assert entry.status == "auto_promoted", "no regression to inbox status"
     assert len(entry.source_files) == 1, "existing entry preserved"
@@ -344,8 +344,8 @@ def test_guardrail_redirects_drifted_slug_to_existing(tmp_path):
     sacred = tmp_path / "shared" / "feedback" / f"{existing_slug}.md"
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
-        f"---\nname: r\ntype: feedback\ntags:\n  - auto-promoted\n  - react\n---\n\n{existing_body}\n"
-    )
+        f"---\nname: r\ntype: feedback\ntags:\n  - auto-promoted\n  - react\n---\n\n{existing_body}\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         f"feedback/{existing_slug}": StateEntry(
             source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
@@ -379,7 +379,7 @@ def test_guardrail_redirects_drifted_slug_to_existing(tmp_path):
     assert not (tmp_path / "shared" / "feedback" / "react-key-remount-state-reset.md").exists()
     # Existing sacred file was updated in place
     assert sacred.exists()
-    assert "react" in sacred.read_text()
+    assert "react" in sacred.read_text(encoding="utf-8")
     # State entry count unchanged (no new slug created)
     assert f"feedback/{existing_slug}" in state.entries
     assert "feedback/react-key-remount-state-reset" not in state.entries
@@ -392,8 +392,8 @@ def test_guardrail_does_not_redirect_distinct_rule_from_same_source(tmp_path):
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
         "---\nname: r\ntype: feedback\ntags:\n  - auto-promoted\n  - react\n---\n\n"
-        "React reconciles by key prop. Array reference changes do not remount children.\n"
-    )
+        "React reconciles by key prop. Array reference changes do not remount children.\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         "feedback/react-key-remount": StateEntry(
             source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
@@ -433,8 +433,8 @@ def test_guardrail_does_not_redirect_different_source(tmp_path):
     sacred = tmp_path / "shared" / "feedback" / "existing.md"
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
-        "---\nname: e\ntype: feedback\n---\n\nidentical body text for comparison\n"
-    )
+        "---\nname: e\ntype: feedback\n---\n\nidentical body text for comparison\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         "feedback/existing": StateEntry(
             source_files=["bots/agent-a/memory/feedback_one.md"],
@@ -494,8 +494,8 @@ def test_guardrail_does_not_trigger_when_slugs_already_match(tmp_path):
     sacred = tmp_path / "shared" / "feedback" / "stable-slug.md"
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
-        "---\nname: s\ntype: feedback\n---\n\nconsistent body for both runs\n"
-    )
+        "---\nname: s\ntype: feedback\n---\n\nconsistent body for both runs\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         "feedback/stable-slug": StateEntry(
             source_files=["bots/a/memory/feedback.md"],
@@ -548,8 +548,8 @@ def test_stem_collision_redirects_inflection_variant_across_source_sets(tmp_path
     sacred = tmp_path / "shared" / "feedback" / f"{existing_slug}.md"
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
-        f"---\nname: a\ntype: feedback\ntags:\n  - auto-promoted\n---\n\n{shared_body}\n"
-    )
+        f"---\nname: a\ntype: feedback\ntags:\n  - auto-promoted\n---\n\n{shared_body}\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         f"feedback/{existing_slug}": StateEntry(
             source_files=["bots/mnemo/memory/feedback_auto_populating_priority.md"],
@@ -592,8 +592,8 @@ def test_stem_collision_does_not_redirect_when_bodies_diverge(tmp_path):
     sacred.parent.mkdir(parents=True)
     sacred.write_text(
         "---\nname: c\ntype: feedback\n---\n\n"
-        "Cache keys must include upstream dependency versions to avoid stale hits.\n"
-    )
+        "Cache keys must include upstream dependency versions to avoid stale hits.\n", 
+    encoding="utf-8")
     state = _mkstate(**{
         "feedback/cache-key-versioning": StateEntry(
             source_files=["bots/a/memory/feedback_cache.md"],
@@ -779,7 +779,7 @@ def test_apply_v0_2_to_v0_3_migration_legacy_inbox_becomes_auto_promoted(tmp_pat
 
     sacred = tmp_path / "shared" / "feedback" / "use-yarn.md"
     assert sacred.exists(), "v0.2→v0.3 migration should write to sacred dir"
-    assert "auto-promoted" in sacred.read_text()
+    assert "auto-promoted" in sacred.read_text(encoding="utf-8")
     entry = state.entries["feedback/use-yarn"]
     assert entry.status == "auto_promoted"
     assert result.auto_promoted == ["feedback/use-yarn"]

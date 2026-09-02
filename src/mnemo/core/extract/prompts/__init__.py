@@ -12,6 +12,7 @@ accepts a pre-flattened ``transcript: str`` rather than
 :func:`mnemo.core.transcript.flatten_transcript_events` to produce the
 transcript string from raw events.
 """
+from mnemo.core.extract.prompts import existing_rules  # noqa: F401  (orchestrator calls prompts.existing_rules.clear_cache)
 from mnemo.core.extract.prompts.encoding import chunks_for  # noqa: F401
 from mnemo.core.extract.prompts.render import (  # noqa: F401
     build_briefing_prompt,

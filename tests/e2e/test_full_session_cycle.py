@@ -35,7 +35,7 @@ def test_full_session_cycle(tmp_home: Path, tmp_tempdir: Path, monkeypatch: pyte
     (repo / ".git").mkdir(parents=True)
     src = repo / "src" / "main.py"
     src.parent.mkdir(parents=True)
-    src.write_text("print('hi')")
+    src.write_text("print('hi')", encoding="utf-8")
 
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_home / "vault" / "mnemo.config.json"))
 
@@ -48,7 +48,7 @@ def test_full_session_cycle(tmp_home: Path, tmp_tempdir: Path, monkeypatch: pyte
     assert session_end.main() == 0
 
     # 5. Verify the daily log has green/red markers (the only log writes remaining)
-    log = (tmp_home / "vault" / "bots" / "repo" / "logs" / f"{date.today().isoformat()}.md").read_text()
+    log = (tmp_home / "vault" / "bots" / "repo" / "logs" / f"{date.today().isoformat()}.md").read_text(encoding="utf-8")
     assert "🟢 session started (startup)" in log
     assert "🔴 session ended (exit)" in log
 

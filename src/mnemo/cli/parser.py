@@ -24,6 +24,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "migrate-worktree-briefings",
     "migrate-plugin",
     "dedup-rules",
+    "reclassify",
     "disable-rule",
     "list-enforced",
     "regen-graph-edges",
@@ -221,6 +222,26 @@ def _build_parser() -> argparse.ArgumentParser:
     dedup.add_argument(
         "--apply", action="store_true",
         help="execute the plan (default: dry-run)",
+    )
+    reclass = sub.add_parser(
+        "reclassify",
+        help="grade legacy feedback rules with an LLM (plan by default; --apply to execute)",
+    )
+    reclass.add_argument(
+        "--apply", action="store_true",
+        help="execute the saved plan (no LLM calls)",
+    )
+    reclass.add_argument(
+        "--undo", metavar="RUN_ID",
+        help="restore every file a previous --apply touched, byte for byte",
+    )
+    reclass.add_argument(
+        "--limit", type=int, metavar="N",
+        help="grade at most N rules (useful for a trial run)",
+    )
+    reclass.add_argument(
+        "--yes", "-y", action="store_true",
+        help="skip the confirmation prompt",
     )
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")

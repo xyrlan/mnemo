@@ -5,7 +5,7 @@ import hashlib
 import json as _json
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -15,10 +15,12 @@ from mnemo.core.backfill.origin import (
     is_backfill_frontmatter,
     is_backfill_markdown,
 )
-from mnemo.core.extract import inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract import evidence, inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract.guards import is_prompt_echo
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
 from mnemo.core.filters import MANAGED_TAGS
+from mnemo.core.redact import redact
 
 
 def _sanitize_llm_tags(raw: object) -> list[str]:
@@ -129,6 +131,31 @@ def _sanitize_llm_activates_on(raw: object) -> dict | None:
     return {"tools": tools, "path_globs": globs}
 
 
+def _sanitize_llm_evidence(raw: object) -> dict | None:
+    """Accept ``{"quote": non-empty str, "source": non-empty path str}``; else None.
+
+    Whitespace (including newlines) in ``quote`` is collapsed to single
+    spaces so a hostile/careless LLM quote cannot inject a bare ``---`` line
+    or a bogus top-level key when the page is rendered to frontmatter.
+    ``source`` must be a single path token — any whitespace rejects it
+    outright rather than silently mangling a path.
+    """
+    if not isinstance(raw, dict):
+        return None
+    quote = raw.get("quote")
+    source = raw.get("source")
+    if not isinstance(quote, str) or not quote.strip():
+        return None
+    if not isinstance(source, str) or not source.strip():
+        return None
+    if any(c.isspace() for c in source):
+        return None
+    quote = " ".join(quote.split())
+    if not quote:
+        return None
+    return {"quote": quote, "source": source.strip()}
+
+
 @dataclass
 class ExtractionSummary:
     projects_promoted: int = 0
@@ -149,6 +176,9 @@ class ExtractionSummary:
     sibling_bounced: int = 0
     upgrade_proposed: int = 0
     universal_promoted: int = 0
+    echo_rejected: int = 0
+    redactions: int = 0
+    demoted_unverified: int = 0
     mode: str = "manual"
 
 
@@ -203,6 +233,7 @@ def _parse_pages_from_response(
         tags = _sanitize_llm_tags(rp.get("tags"))
         enforce = _sanitize_llm_enforce(rp.get("enforce"))
         activates_on = _sanitize_llm_activates_on(rp.get("activates_on"))
+        evidence = _sanitize_llm_evidence(rp.get("evidence"))
         # ``any``, not ``all``: a page mixing one live source with one
         # reconstructed source is still partly reconstructed, and under ``all``
         # it would carry origin_backfill=False, span two projects, and be
@@ -221,6 +252,7 @@ def _parse_pages_from_response(
             enforce=enforce,
             activates_on=activates_on,
             origin_backfill=origin_backfill,
+            evidence=evidence,
         ))
     return out
 
@@ -328,6 +360,15 @@ def _run_extraction_body(
     dry_run: bool,
     force: bool,
 ) -> None:
+    # The existing-rules prompt fragment caches its vault scan; a fresh run
+    # must not inherit another run's view of the vault. Invariant: the cache is
+    # empty or freshly cleared before the first consolidation prompt of every
+    # kind — this clear covers the first one, and each `apply_pages` below
+    # clears it again so the next kind sees the pages that just landed.
+    # Clearing before `promote_projects` rather than after is still correct:
+    # the cache fills lazily on first prompt build, and the fragment scans only
+    # rule kinds, so the project pages that phase writes cannot stale it.
+    prompts.existing_rules.clear_cache()
     state = inbox.load_state(state_path)
     scan_result = scanner.scan(vault_root, state)
 
@@ -430,7 +471,38 @@ def _run_extraction_body(
                 summary.failed_chunks += 1
                 continue
 
-            all_pages.extend(pages)
+            kept: list[inbox.ExtractedPage] = []
+            for p in pages:
+                if is_prompt_echo(p):
+                    # Demoted, never dropped: a false positive today would be
+                    # permanent, silent data loss. Coerced exactly the way the
+                    # evidence gate demotes an unverified feedback page, so it
+                    # stages in shared/_inbox/reference/ for a human to judge.
+                    summary.echo_rejected += 1
+                    errors.log_error(vault_root, "extract.prompt_echo",
+                                     ValueError(f"rejected prompt-echo page {p.type}/{p.slug}"))
+                    p = replace(p, type="reference", confidence="inferred",
+                                unverified_feedback=True, evidence=None)
+                else:
+                    p = evidence.verify_page(p, vault_root)
+                    # Counted apart from echoes: an echo is a bad page, an
+                    # unverified feedback page is a real one whose quote the
+                    # gate could not find in a cited briefing.
+                    if p.unverified_feedback:
+                        summary.demoted_unverified += 1
+                # Redaction runs AFTER verification on purpose: the evidence
+                # quote is left untouched so it still matches the briefing (a
+                # quote containing PII is the user's own words). Rebuilt with
+                # ``replace`` rather than assigned in place — verify_page
+                # returns the *same* instance for a non-feedback page, so a
+                # field write would reach through to the caller's object.
+                new_name, n_name = redact(p.name)
+                new_desc, n_desc = redact(p.description)
+                new_body, n_body = redact(p.body)
+                summary.redactions += n_name + n_desc + n_body
+                p = replace(p, name=new_name, description=new_desc, body=new_body)
+                kept.append(p)
+            all_pages.extend(kept)
             processed_files.extend(chunk)
 
         if all_pages:
@@ -439,6 +511,9 @@ def _run_extraction_body(
                 deduped, state, vault_root, run_id=run_id, force=force,
             )
             _merge_apply(apply_result, summary)
+            # Pages just landed in the vault; the next kind's prompt must see
+            # them so it can reinforce rather than mint a near-duplicate.
+            prompts.existing_rules.clear_cache()
 
         # For every successfully processed source file, record its file-level
         # hash under its scanner key so the next scan won't mark it dirty.
@@ -543,6 +618,9 @@ def _reconcile_universal_promotions(
         except OSError:
             continue
         fm, body = parse_frontmatter(text)
+        if str(fm.get("demoted_from") or "") == "feedback":
+            # Demoted feedback stays staged until a person reviews it.
+            continue
         page = inbox.ExtractedPage(
             slug=slug,
             type=page_type,
