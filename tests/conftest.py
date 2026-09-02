@@ -89,19 +89,19 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ``.errors.log``, tripping the real circuit breaker for an hour after a
     noisy run (#117). Redirecting HOME closes that path for every test.
 
-    ``MNEMO_CONFIG_PATH`` is pointed at a (non-existent) file under the temp
-    home unless the environment already carries one: ``load_config`` returns
-    defaults for a missing path, and those defaults resolve the vault under
-    the temp HOME. Tests that ``monkeypatch.setenv`` their own path override
-    it -- autouse fixtures are instantiated before the test body runs.
+    ``MNEMO_CONFIG_PATH`` is always pointed at a (non-existent) file under the
+    temp home: ``load_config`` returns defaults for a missing path, and those
+    defaults resolve the vault under the temp HOME. Autouse fixtures run
+    first, so a value already in the environment can only be the developer's
+    shell exporting the real config -- exactly what must be overridden. A
+    test's own ``monkeypatch.setenv`` runs later and still wins.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    if "MNEMO_CONFIG_PATH" not in os.environ:
-        monkeypatch.setenv("MNEMO_CONFIG_PATH", str(home / "mnemo" / "mnemo.config.json"))
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(home / "mnemo" / "mnemo.config.json"))
     return home
 
 
@@ -115,11 +115,18 @@ def real_home() -> Path:
 
 
 def _vault_fingerprint() -> tuple:
-    """``(size, mtime_ns)`` of the four real-vault paths a leaky test would hit.
+    """``(size, mtime_ns)`` of the three real-vault paths a leaky test would hit.
 
     Directory entries are shallow: a directory's mtime moves when an entry is
-    created or removed inside it, which is what a stray hook run does
-    (session caches, lock files, new project dirs). Missing paths are ``None``.
+    created or removed inside it. Missing paths are ``None``.
+
+    ``~/mnemo/.mnemo/`` is deliberately *not* watched. The developer's own
+    Claude Code session keeps firing real hooks while the suite runs, and
+    those atomically replace files there on every MCP call and every
+    reflex/enrich emission (``core/mcp/session_state.py``) and rename both
+    index files on SessionStart -- each bumping the directory's mtime. The
+    harm #117 names is ``.errors.log`` (the circuit breaker); watching
+    ``.mnemo/`` would only add false positives.
     """
     def st(p: Path):
         try:
@@ -129,7 +136,6 @@ def _vault_fingerprint() -> tuple:
             return None
     return (
         st(_REAL_VAULT / ".errors.log"),
-        st(_REAL_VAULT / ".mnemo"),
         st(_REAL_VAULT / "shared"),
         st(_REAL_HOME / ".claude" / "projects"),
     )
@@ -139,7 +145,7 @@ def _vault_fingerprint() -> tuple:
 def _real_vault_guard(request: pytest.FixtureRequest):
     """Fail any test that changes the real vault or ``~/.claude/projects``.
 
-    Four ``stat`` calls before and after. Tests marked ``recall`` run against
+    Three ``stat`` calls before and after. Tests marked ``recall`` run against
     the real vault on purpose and are exempt.
     """
     if request.node.get_closest_marker("recall"):
