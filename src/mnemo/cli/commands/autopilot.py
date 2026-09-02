@@ -44,6 +44,8 @@ def _do_on(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import set_state
     from mnemo.autopilot.core.frozen_recall import freeze_current
     from mnemo.autopilot.core.labels import ensure_label_exists
+    from mnemo.autopilot.core import network
+    from mnemo.core import config as config_mod
 
     vault = _vault()
     set_state(vault_root=vault, state="on", source="cli")
@@ -61,9 +63,16 @@ def _do_on(args: argparse.Namespace) -> int:
         pass
     except OSError:
         pass
-    ensure_label_exists()
+    cfg = config_mod.load_config()
+    if network.enabled(cfg):
+        ensure_label_exists()
     print("autopilot: on")
     print("(operations fire on Claude Code SessionStart/SessionEnd hooks)")
+    if not network.enabled(cfg):
+        print(
+            "network: off — set autopilot.network.enabled=true to let it "
+            "open GitHub issues/PRs"
+        )
     return 0
 
 
@@ -190,12 +199,23 @@ def _do_status(args: argparse.Namespace) -> int:
     from mnemo.autopilot.core.kill_switch import get_state, is_active
     from mnemo.autopilot.core.scheduler import status_summary
     from mnemo.autopilot.core._dirs import autopilot_budget_path
+    from mnemo.autopilot.core import network
+    from mnemo.core import config as config_mod
     import json
 
     vault = _vault()
     state = get_state(vault_root=vault)
     active = is_active(vault_root=vault)
     print(f"State: {state} ({'active' if active else 'inactive'})")
+
+    cfg = config_mod.load_config()
+    if network.enabled(cfg):
+        print("Network: on (gh issues/PRs allowed)")
+    else:
+        print(
+            "Network: off (autopilot.network.enabled=false — no gh calls; "
+            "self-fixes apply in place)"
+        )
 
     bp = autopilot_budget_path(vault)
     if bp.exists():
