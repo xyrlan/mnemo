@@ -355,6 +355,9 @@ def _run_extraction_body(
     dry_run: bool,
     force: bool,
 ) -> None:
+    # The existing-rules prompt fragment caches its vault scan; a fresh run
+    # must not inherit another run's view of the vault.
+    prompts.existing_rules.clear_cache()
     state = inbox.load_state(state_path)
     scan_result = scanner.scan(vault_root, state)
 
@@ -467,6 +470,9 @@ def _run_extraction_body(
                 deduped, state, vault_root, run_id=run_id, force=force,
             )
             _merge_apply(apply_result, summary)
+            # Pages just landed in the vault; the next kind's prompt must see
+            # them so it can reinforce rather than mint a near-duplicate.
+            prompts.existing_rules.clear_cache()
 
         # For every successfully processed source file, record its file-level
         # hash under its scanner key so the next scan won't mark it dirty.

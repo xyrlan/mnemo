@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mnemo.core.extract import _parse_pages_from_response
 from mnemo.core.extract.prompts import build_consolidation_prompt
+from mnemo.core.extract.prompts import existing_rules
 from mnemo.core.extract.prompts.existing_rules import existing_rules_fragment
 from mnemo.core.extract.prompts.templates.few_shot_feedback import _FEW_SHOT_FEEDBACK
 from mnemo.core.extract.prompts.templates.schema import _SCHEMA_EXAMPLE
@@ -71,3 +72,27 @@ def test_few_shot_example_1_round_trips_with_evidence():
     blob = _FEW_SHOT_FEEDBACK.split("Output (ONE merged page")[1].split("\n", 1)[1].split("\n\nExample 2")[0].strip()
     pages = _parse_pages_from_response(blob, "feedback")
     assert pages and pages[0].evidence and pages[0].evidence["quote"]
+
+
+def test_advertised_slug_is_normalized_so_it_round_trips(tmp_path):
+    """A page at Ask_Before_Refactor.md must be advertised as the slug the
+    response parser produces — otherwise the echoed slug mints a duplicate."""
+    _rule(tmp_path, "feedback", "Ask_Before_Refactor", "Ask before refactor", ["bots/a/memory/f.md"])
+    frag = existing_rules_fragment(tmp_path, "feedback", agents={"a"})
+    assert "- ask-before-refactor — Ask before refactor" in frag
+    assert "Ask_Before_Refactor" not in frag
+
+
+def test_collect_is_cached_until_cleared(tmp_path):
+    _rule(tmp_path, "feedback", "first", "First", ["bots/a/memory/f.md"])
+    existing_rules.clear_cache()
+    assert "- first — First" in existing_rules_fragment(tmp_path, "feedback", agents={"a"})
+
+    # A page written after the first scan stays invisible while cached...
+    _rule(tmp_path, "feedback", "second", "Second", ["bots/a/memory/g.md"])
+    assert "second" not in existing_rules_fragment(tmp_path, "feedback", agents={"a"})
+
+    # ...and appears once the run clears the cache (as it does after apply_pages).
+    existing_rules.clear_cache()
+    frag = existing_rules_fragment(tmp_path, "feedback", agents={"a"})
+    assert "- second — Second" in frag and "- first — First" in frag
