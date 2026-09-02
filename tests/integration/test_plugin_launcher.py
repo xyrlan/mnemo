@@ -179,10 +179,15 @@ def test_source_checkout_runs_python_when_plugin_root_unset(tmp_path: Path):
         "import sys; print('SOURCE-TREE', sys.argv[1:])\n"
     )
     (root / "src" / "mnemo_claude.egg-info").mkdir()
-    env = {**os.environ}
+    env = {
+        **os.environ,
+        "CLAUDE_PLUGIN_DATA": str(tmp_path / "data"),
+        # Absolute, so the sanitized PATH below cannot hide the interpreter.
+        "MNEMO_PYTHON": sys.executable,
+        # Keep the test off the network no matter which branch it reaches.
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+    }
     env.pop("CLAUDE_PLUGIN_ROOT", None)
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "data")
-    env["MNEMO_PYTHON"] = sys.executable
     r = subprocess.run(
         ["bash", str(root / "bin" / "launch"), "mcp-server"],
         capture_output=True, text=True, env=env, timeout=30, input="{}",
