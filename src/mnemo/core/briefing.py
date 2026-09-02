@@ -14,10 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from mnemo.core import corrections as corrections_mod
+from mnemo.core import errors as errors_mod
 from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
 from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
-from mnemo.core.transcript import flatten_transcript_events
+from mnemo.core.transcript import flatten_transcript_events, user_turns
 
 
 MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
@@ -99,6 +101,7 @@ def _render_briefing(
     session_id: str,
     date: str,
     duration_minutes: int,
+    corrections: int,
     body: str,
 ) -> str:
     header = f"# Briefing — {agent} — {session_id}\n"
@@ -109,6 +112,7 @@ def _render_briefing(
         f"session_id: {session_id}\n"
         f"date: {date}\n"
         f"duration_minutes: {duration_minutes}\n"
+        f"corrections: {corrections}\n"
         "---\n\n"
         f"{header}\n"
         f"{body.strip()}\n"
@@ -134,7 +138,8 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
     timeout = int(extraction_cfg.get("subprocessTimeout") or 60)
 
     transcript = flatten_transcript_events(events)
-    prompt_text = prompts.build_briefing_prompt(transcript)
+    turns = user_turns(events)
+    prompt_text = prompts.build_briefing_prompt(transcript, user_turns=turns)
     t0 = _time.perf_counter()
     response = llm.call(
         prompt_text,
@@ -158,6 +163,17 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
         pass  # telemetry must never break the briefing
     body = (response.text or "").strip() or "*(empty briefing — LLM returned no content)*"
 
+    vault_root = paths.vault_root(cfg)
+    proposed = corrections_mod.parse_section(body)
+    kept, rejected = corrections_mod.verify(proposed, turns)
+    body = corrections_mod.replace_section(body, kept)
+    if rejected:
+        errors_mod.log_error(
+            vault_root,
+            "briefing.corrections_rejected",
+            ValueError(f"{len(rejected)} correction quote(s) not found in user turns; dropped"),
+        )
+
     session_id = jsonl_path.stem
     duration_minutes = _compute_duration_minutes(events)
 
@@ -168,7 +184,6 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
     else:
         date_str = datetime.now().date().isoformat()
 
-    vault_root = paths.vault_root(cfg)
     out_path = vault_root / "bots" / agent / "briefings" / "sessions" / f"{session_id}.md"
 
     content = _render_briefing(
@@ -176,6 +191,7 @@ def generate_session_briefing(jsonl_path: Path, agent: str, cfg: dict) -> Path |
         session_id=session_id,
         date=date_str,
         duration_minutes=duration_minutes,
+        corrections=len(kept),
         body=body,
     )
     _atomic_write(out_path, content)

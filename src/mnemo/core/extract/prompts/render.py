@@ -106,8 +106,14 @@ def build_reference_prompt(
     return build_consolidation_prompt("reference", files, vault_root=vault_root)
 
 
-def build_briefing_prompt(transcript: str) -> str:
+_USER_TURN_MAX_CHARS = 600
+
+
+def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = None) -> str:
     """Render a briefing prompt from a pre-flattened transcript string.
+
+    ``user_turns`` are the person's own messages, numbered, so the model can
+    quote a correction verbatim and the caller can verify it did.
 
     SIGNATURE CHANGE in v0.9 PR F2: this function used to accept
     ``events: list[dict]`` and flattened them internally. Flattening is
@@ -115,13 +121,25 @@ def build_briefing_prompt(transcript: str) -> str:
     Callers wanting the old behaviour should compose the two:
 
         transcript = flatten_transcript_events(events)
-        prompt = build_briefing_prompt(transcript)
+        prompt = build_briefing_prompt(transcript, user_turns=user_turns(events))
     """
+    turns_block = ""
+    if user_turns:
+        lines = []
+        for i, turn in enumerate(user_turns, 1):
+            t = turn if len(turn) <= _USER_TURN_MAX_CHARS else turn[:_USER_TURN_MAX_CHARS] + "…"
+            lines.append(f"[{i}] {t}")
+        turns_block = (
+            "=== USER TURNS (verbatim, numbered — quote these for Corrections) ===\n"
+            + "\n".join(lines)
+            + "\n=== END USER TURNS ===\n\n"
+        )
     return (
         "Task: write the shift handoff briefing markdown body for the "
         "following Claude Code session transcript. Follow the section "
         "structure from the system prompt exactly. Output markdown only, "
         "no frontmatter, no code fences.\n\n"
+        f"{turns_block}"
         "=== TRANSCRIPT ===\n"
         f"{transcript}\n"
         "=== END TRANSCRIPT ===\n"
