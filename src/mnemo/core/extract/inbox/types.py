@@ -52,8 +52,9 @@ class ExtractedPage:
     origin_backfill: bool = False
     # The user quote this rule was built from, as ``{"quote": str, "source":
     # "<vault-relative briefing path>"}``. Only feedback pages carry one.
-    # ``extract/evidence.verify_page`` checks it against the source briefing's
-    # ``## Corrections`` section and sets ``confidence``.
+    # Verified later by ``extract/evidence.verify_page`` (Task 5), which checks
+    # it against the source briefing's ``## Corrections`` section and sets
+    # ``confidence``.
     evidence: dict | None = None
     # "verified" when the evidence quote was found in the cited briefing;
     # "inferred" otherwise (the default, and the only value for non-feedback).

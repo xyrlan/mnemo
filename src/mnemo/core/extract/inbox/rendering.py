@@ -28,6 +28,10 @@ def _yaml_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     s = str(value)
+    # Line breaks would terminate the frontmatter block early (a bare "---"
+    # line) or inject a bogus top-level key — collapse them to spaces rather
+    # than merely quoting, since quoting alone does not neutralize them here.
+    s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     if s == "":
         return "''"
     needs_quoting = (
@@ -127,14 +131,14 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     if isinstance(page.activates_on, dict) and page.activates_on:
         activates_on_block = _render_nested_block("activates_on", page.activates_on)
 
-    confidence = getattr(page, "confidence", None) or "inferred"
+    confidence = page.confidence or "inferred"
     evidence_block = ""
-    if isinstance(page.evidence, dict) and page.evidence.get("quote"):
+    if isinstance(page.evidence, dict) and page.evidence.get("quote") and page.evidence.get("source"):
         evidence_block = _render_nested_block("evidence", {
-            "quote": str(page.evidence.get("quote") or ""),
-            "source": str(page.evidence.get("source") or ""),
+            "quote": str(page.evidence["quote"]),
+            "source": str(page.evidence["source"]),
         })
-    demoted_line = "demoted_from: feedback\n" if getattr(page, "unverified_feedback", False) else ""
+    demoted_line = "demoted_from: feedback\n" if page.unverified_feedback else ""
 
     body_prefix = ""
     if enforce_stripped:

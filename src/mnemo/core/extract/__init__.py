@@ -130,7 +130,14 @@ def _sanitize_llm_activates_on(raw: object) -> dict | None:
 
 
 def _sanitize_llm_evidence(raw: object) -> dict | None:
-    """Accept ``{"quote": non-empty str, "source": non-empty str}``; else None."""
+    """Accept ``{"quote": non-empty str, "source": non-empty path str}``; else None.
+
+    Whitespace (including newlines) in ``quote`` is collapsed to single
+    spaces so a hostile/careless LLM quote cannot inject a bare ``---`` line
+    or a bogus top-level key when the page is rendered to frontmatter.
+    ``source`` must be a single path token — any whitespace rejects it
+    outright rather than silently mangling a path.
+    """
     if not isinstance(raw, dict):
         return None
     quote = raw.get("quote")
@@ -139,7 +146,12 @@ def _sanitize_llm_evidence(raw: object) -> dict | None:
         return None
     if not isinstance(source, str) or not source.strip():
         return None
-    return {"quote": quote.strip(), "source": source.strip()}
+    if any(c.isspace() for c in source):
+        return None
+    quote = " ".join(quote.split())
+    if not quote:
+        return None
+    return {"quote": quote, "source": source.strip()}
 
 
 @dataclass

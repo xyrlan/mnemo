@@ -111,9 +111,9 @@ def _dequote(value: str) -> str:
     Mismatched or unpaired quotes are left untouched.
     """
     if len(value) >= 2:
-        if (value[0] == "'" and value[-1] == "'") or (
-            value[0] == '"' and value[-1] == '"'
-        ):
+        if value[0] == "'" and value[-1] == "'":
+            return value[1:-1].replace("''", "'")
+        if value[0] == '"' and value[-1] == '"':
             return value[1:-1]
     return value
 
