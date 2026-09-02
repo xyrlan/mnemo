@@ -94,8 +94,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             _print_scope_line("project", project_settings, expected_events)
         if scope in ("global", "all"):
             _print_scope_line("global", global_settings, expected_events)
-    breaker = "closed (ok)" if err_mod.should_run(vault) else "OPEN — recent errors detected"
-    print(f"Circuit breaker: {breaker}")
+    if err_mod.should_run(vault):
+        print("Circuit breaker: closed (ok)")
+    else:
+        count, buckets = err_mod.recent_summary(vault)
+        top = f" (top: {buckets[0][0]} ×{buckets[0][1]})" if buckets else ""
+        print(f"Circuit breaker: OPEN — {count} errors in the last hour{top}. Run `mnemo fix` to reset.")
     log = vault / ".errors.log"
     if log.exists():
         print(f"Error log: {log} ({log.stat().st_size} bytes)")

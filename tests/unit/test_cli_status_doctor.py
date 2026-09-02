@@ -30,7 +30,7 @@ def test_status_reports_open_breaker(tmp_home: Path, capsys: pytest.CaptureFixtu
             errors.log_error(vault, "test", e)
     cli.main(["status"])
     out = capsys.readouterr().out
-    assert "open" in out.lower()
+    assert "Circuit breaker: OPEN — 15 errors in the last hour (top: test ×15). Run `mnemo fix` to reset." in out
 
 
 def test_doctor_runs_preflight_and_reports(tmp_home: Path, capsys: pytest.CaptureFixture):
