@@ -183,7 +183,14 @@ def _install(home: Path, monkeypatch) -> Path:
     assert cli.main(
         ["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"]
     ) == 0
-    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(vault / "mnemo.config.json"))
+    config_path = vault / "mnemo.config.json"
+    # ``backfill.autoOnFirstSession`` defaults to False — the first sweep is
+    # opt-in. These tests exercise the automatic first-session chain, so they
+    # opt in explicitly, the same way the hook's unit tests do.
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    cfg.setdefault("backfill", {})["autoOnFirstSession"] = True
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(config_path))
     return vault
 
 
