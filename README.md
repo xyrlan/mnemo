@@ -8,8 +8,8 @@ Thursday, a new session, you ask Claude to add a dependency: that rule is
 injected before Claude answers. One or two short lines, about 150 tokens, and
 only when it clearly applies.
 
-What gets injected is a 300-character preview plus a pointer:
-`mnemo reflex context: • [[use-yarn-not-npm]]: Use yarn, never npm …`. mnemo
+What gets injected is a 300-character preview plus a pointer, under a
+`reflex context:` header: `• [[use-yarn-not-npm]]: Use yarn, never npm …`. mnemo
 also registers an MCP server so Claude can call `read_mnemo_rule` for the full
 text when the preview is not enough; the plugin sets it up, and `/mnemo:doctor`
 tells you if it is not connected.
