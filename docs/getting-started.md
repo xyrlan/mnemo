@@ -354,6 +354,35 @@ At `PreToolUse`, a `Bash` command matching a rule you marked as a guardrail is
 blocked outright. An `Edit`/`Write` whose path matches a rule's `activates_on`
 gets that rule's body surfaced as context.
 
+## Taking your rules with you
+
+```bash
+mnemo export                      # → .claude/rules/mnemo.md
+mnemo export --target claude-md   # managed block inside CLAUDE.md instead
+mnemo export --host cursor        # → .cursor/rules/mnemo.mdc
+mnemo export --host codex         # managed block inside AGENTS.md
+mnemo export --dry-run            # print the block, touch nothing
+mnemo export --limit 10           # keep the ten most-sourced rules
+mnemo export --remove             # delete the file / strip the block
+```
+
+What goes in: `feedback` and `user` rules attributed to this repo, plus
+universal ones, most-sourced first. `reference` pages stay out unless you
+pass `--all-types`. Each rule carries the sentence you said as
+`> you said: "…"`. When the block would load more than about 4,000 tokens
+on every prompt, export says so on stderr and suggests a `--limit`.
+
+The block sits between `<!-- mnemo:start` and `<!-- mnemo:end -->`; anything
+outside the markers in CLAUDE.md or AGENTS.md is never touched, and export
+refuses to write if it finds a half-deleted or duplicated block. Re-running
+regenerates the block; nothing flows back from the file into the vault.
+
+Once a rule is in `.claude/rules/mnemo.md`, the reflex still ranks it but
+does not inject it again — Claude Code is already loading it — and
+`mnemo why` lists it as `exported`. `mnemo status` shows
+`Export: N rules → … (up to date)` or how many rules differ from the vault
+since you last exported.
+
 ## Observing and debugging
 
 ```bash
