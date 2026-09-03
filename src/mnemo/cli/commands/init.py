@@ -155,9 +155,11 @@ def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
         say(f"no rules yet — learn in Claude Code (mnemo learn), "
             f"then `mnemo export --host {host_name}`")
 
+    served = ("MCP tools + the rules file above" if report.rules
+              else "MCP tools (the rules file comes with your first export)")
     say("")
     say(f"mnemo learns from Claude Code sessions. In {host_name} it serves what it "
-        f"learned: MCP tools + the rules file above. Re-run "
+        f"learned: {served}. Re-run "
         f"`mnemo export --host {host_name}` after new rules.")
     return 0
 
