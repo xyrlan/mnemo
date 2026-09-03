@@ -20,6 +20,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   from calibration); a note on stderr flags user-profile pages, which can
   carry names or emails.
 
+### Fixed
+
+- **Reflex cold start.** A vault with a handful of rules could never clear
+  `absoluteFloor` — BM25 idf tops out near 0.3 per term at one rule, 1.3 at
+  five — so the first rule learned never fired on the next prompt. The floor
+  now scales with the vault's idf ceiling below
+  `reflex.thresholds.floorReferenceDocs` (default 30; vaults at or above it
+  are unchanged), and `mnemo why` shows both the configured and the
+  effective floor.
+
 ## [1.2.0] — 2026-09-02
 
 The follow-ups release. The corrections-layer reviews left seven findings;
