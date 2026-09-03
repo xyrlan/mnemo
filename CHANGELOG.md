@@ -3,6 +3,23 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`mnemo export`.** Writes the current repo's learned rules — `feedback`
+  and `user` pages attributed to it, plus universal ones — to a file the
+  host loads on its own: `.claude/rules/mnemo.md` (default), a managed block
+  in `CLAUDE.md` (`--target claude-md`), `.cursor/rules/mnemo.mdc`
+  (`--host cursor`) or a managed block in `AGENTS.md` (`--host codex`).
+  Each rule carries the user's own quote. `--dry-run`, `--limit`,
+  `--all-types`, `--remove`. A per-project manifest under the vault's
+  `.mnemo/export/` lets `mnemo status` report staleness, and the reflex
+  suppresses winners that the exported file already carries (`mnemo why`
+  marks them `exported`; those prompts are excluded from the emit rate and
+  from calibration); a note on stderr flags user-profile pages, which can
+  carry names or emails.
+
 ## [1.2.0] — 2026-09-02
 
 The follow-ups release. The corrections-layer reviews left seven findings;

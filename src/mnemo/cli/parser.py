@@ -258,6 +258,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="report which transcript would be read, then stop",
     )
+    export = sub.add_parser(
+        "export",
+        help="write this project's rules to a file Claude Code / Cursor / Codex loads",
+    )
+    export.add_argument("--host", choices=["claude", "cursor", "codex"], default="claude",
+                        help="which tool will read the file (default: claude)")
+    export.add_argument("--target", choices=["auto", "rules", "claude-md", "agents-md"], default="auto",
+                        help="rules file (default per host), or a managed block in CLAUDE.md / AGENTS.md")
+    export.add_argument("--project", default=None, help="export another project's rules instead of the cwd's")
+    export.add_argument("--types", default="feedback,user", help="page types to include (default: feedback,user)")
+    export.add_argument("--all-types", action="store_true",
+                        help="include reference and project pages too (cannot combine with --types)")
+    export.add_argument("--limit", type=int, default=None, metavar="N", help="keep only the first N after ordering")
+    export.add_argument("--dry-run", action="store_true", help="print the block, write nothing")
+    export.add_argument("--remove", action="store_true", help="delete the exported file / block and its manifest")
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
     sub.add_parser("list-enforced", help="audit rules with enforce blocks (can block tool calls)")

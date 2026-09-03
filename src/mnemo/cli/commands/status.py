@@ -109,6 +109,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_reflex_status(vault)
     _print_numbers_status(vault)
     _print_learned_status(vault)
+    _print_export_status(vault)
     return 0
 
 
@@ -138,11 +139,17 @@ def _print_briefings_status(vault: Path) -> None:
 
 
 def _current_project() -> str | None:
-    """The project name status is reporting on, or None when it cannot tell."""
+    """The project name status is reporting on, or None when it cannot tell.
+
+    Follows a worktree's `.git` file back to the main repo — same resolution
+    `mnemo export`, `mnemo why`, `mnemo learn` and the session hooks use, so a
+    worktree checkout finds the manifest and ledger entries they wrote under
+    the canonical repo name instead of the worktree's own directory name.
+    """
     import os as _os
     try:
-        from mnemo.core.agent import resolve_agent
-        return resolve_agent(_os.getcwd()).name or None
+        from mnemo.core.agent import resolve_canonical_agent
+        return resolve_canonical_agent(_os.getcwd()).name or None
     except Exception:  # noqa: BLE001 — a status line is not worth a traceback
         return None
 
@@ -170,6 +177,33 @@ def _print_learned_status(vault: Path) -> None:
         confidence = "verified" if e.get("confidence") == "verified" else "inferred"
         print(f"  • {slug} — {name} [{confidence}]")
     print(f"  (ledger: {learned.LEDGER_REL})")
+
+
+def _print_export_status(vault: Path) -> None:
+    """One line when this project has an exported rules file: where, and whether
+    the vault has moved on since. Silent when nothing was exported."""
+    from mnemo.core import config as cfg_mod
+    from mnemo.core import export as export_mod
+    from mnemo.core.export import manifest as manifest_mod
+
+    project = _current_project()
+    if not project:
+        return
+    data = manifest_mod.read_manifest(vault, project)
+    if not data:
+        return
+    try:
+        threshold = int((cfg_mod.load_config().get("scoping") or {}).get("universalThreshold", 2))
+    except Exception:  # noqa: BLE001
+        threshold = 2
+    current = export_mod.current_hashes(vault, project=project, universal_threshold=threshold)
+    stale = manifest_mod.staleness(vault, project, current=current)
+    if stale is None:
+        return
+    total, differing = stale
+    noun = "rule" if total == 1 else "rules"
+    state = "up to date" if differing == 0 else f"{differing} differ from the vault now, run mnemo export"
+    print(f"\nExport: {total} {noun} → {data.get('path')} ({state})")
 
 
 def _print_reflex_status(vault: Path) -> None:

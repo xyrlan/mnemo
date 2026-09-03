@@ -104,6 +104,13 @@ def _format_one(entry: dict[str, Any]) -> list[str]:
     return _format_silence(when, entry, str(reason or "unknown"))
 
 
+def _exported_line(when: str, entry: dict) -> list[str]:
+    exported = [str(s) for s in (entry.get("exported") or [])]
+    if not exported:
+        return []
+    return [f"{' ' * len(when)}  exported  {', '.join(exported)} (already in your rules file)"]
+
+
 def _format_emission(when: str, entry: dict, emitted: list) -> list[str]:
     scores = entry.get("scores") or []
     shown = ", ".join(
@@ -117,6 +124,7 @@ def _format_emission(when: str, entry: dict, emitted: list) -> list[str]:
     if runners:
         beaten = ", ".join(f"{slug} ({_num(score)})" for slug, score in runners)
         lines.append(f"{' ' * len(when)}  ahead of  {beaten}")
+    lines.extend(_exported_line(when, entry))
     return lines
 
 
@@ -125,6 +133,8 @@ def _format_silence(when: str, entry: dict, reason: str) -> list[str]:
     thresholds = entry.get("thresholds") or {}
     head, needs_table = _explain(reason, entry, candidates, thresholds)
     lines = [f"{when}  silent    {head}"]
+    if reason != "all_exported":
+        lines.extend(_exported_line(when, entry))
     if needs_table and candidates:
         pad = " " * (len(when) + 12)
         width = max(len(slug) for slug, _ in candidates)
@@ -153,6 +163,10 @@ def _explain(
     if reason == "session_cap_reached":
         return ("this session's injection cap is spent — a budget, not a miss",
                 False)
+
+    if reason == "all_exported":
+        names = ", ".join(str(s) for s in (entry.get("exported") or []))
+        return (f"every matching rule is already in your rules file ({names})", False)
 
     if not candidates:
         return (f"{reason} — no receipt recorded for this decision "

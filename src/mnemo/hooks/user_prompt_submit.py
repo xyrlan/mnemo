@@ -24,7 +24,7 @@ def main() -> int:
     try:
         from mnemo.core import config as cfg_mod
         from mnemo.core import errors, paths
-        from mnemo.core.agent import resolve_canonical_agent
+        from mnemo.core.agent import resolve_agent, resolve_canonical_agent
         from mnemo.core.mcp import session_state
         from mnemo.core.reflex import bm25, gates
         from mnemo.core.reflex.index import load_index
@@ -41,6 +41,7 @@ def main() -> int:
 
         cwd = payload.get("cwd") or str(Path.cwd())
         project = resolve_canonical_agent(cwd).name
+        tree_root = resolve_agent(cwd).repo_root
         sid = str(payload.get("session_id") or "unknown")
         prompt_raw = str(payload.get("prompt") or payload.get("user_message") or "")
 
@@ -110,12 +111,29 @@ def main() -> int:
                          candidates=receipt, thresholds=gate_thresholds)
             return 0
 
+        # Rules already exported into this tree's rules file are loaded by
+        # Claude Code itself; injecting them again is a repeat. Checked only
+        # against what the gates actually accepted — export suppresses
+        # output, it does not re-rank input (subtracting before scoring
+        # could let a weaker rule win a comparison the un-exported vault
+        # would have refused).
+        from mnemo.core.export.manifest import exported_slugs_for
+        exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
+                          & set(result.accepted_slugs))
+        accepted = [s for s in result.accepted_slugs if s not in exported]
+        if not accepted:
+            _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
+                         candidates=receipt, thresholds=gate_thresholds,
+                         exported=exported)
+            return 0
+
         # Dedupe against injected_cache (day-lifetime)
         cache = session_state.read_injected_cache(vault)
-        survivors = [s for s in result.accepted_slugs if s not in cache]
+        survivors = [s for s in accepted if s not in cache]
         if not survivors:
             _log_silence(vault, sid, project, prompt_raw, reason="deduped",
-                         candidates=receipt, thresholds=gate_thresholds)
+                         candidates=receipt, thresholds=gate_thresholds,
+                         exported=exported)
             return 0
 
         _emit_reflex_context(index, survivors)
@@ -126,7 +144,8 @@ def main() -> int:
         score_map = dict(scores)
         _log_emission(vault, sid, project, prompt_raw, survivors,
                       scores=[score_map.get(s, 0.0) for s in survivors],
-                      candidates=receipt, thresholds=gate_thresholds)
+                      candidates=receipt, thresholds=gate_thresholds,
+                      exported=exported)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -197,7 +216,8 @@ def _receipt(scores: list[tuple[str, float]]) -> list[list]:
 
 def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str,
                  candidates: list | None = None,
-                 thresholds: dict | None = None) -> None:
+                 thresholds: dict | None = None,
+                 exported: list | None = None) -> None:
     try:
         from mnemo.core.reflex.tokenizer import tokenize_query as _tq
         prompt_tokens_len = len(set(_tq(prompt)))
@@ -219,13 +239,16 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
         entry["candidates"] = candidates
     if thresholds:
         entry["thresholds"] = thresholds
+    if exported:
+        entry["exported"] = exported
     _record_log(vault_root, entry)
 
 
 def _log_emission(vault_root, sid: str, project: str, prompt: str,
                   emitted: list[str], *, scores: list[float],
                   candidates: list | None = None,
-                  thresholds: dict | None = None) -> None:
+                  thresholds: dict | None = None,
+                  exported: list | None = None) -> None:
     entry = {
         "session_id": sid,
         "project": project,
@@ -240,6 +263,8 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
     # varies by project — record them on emissions too, not just silences.
     if thresholds:
         entry["thresholds"] = thresholds
+    if exported:
+        entry["exported"] = exported
     _record_log(vault_root, entry)
 
 

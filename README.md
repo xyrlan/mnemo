@@ -157,9 +157,16 @@ waiting. Details in
 /mnemo:help     list commands
 ```
 
+Your rules are yours. `mnemo export` writes the ones for the repo you're in
+to `.claude/rules/mnemo.md` — a plain file Claude Code loads by itself, with
+your own quote under each rule — so a teammate without mnemo gets them too,
+and leaving mnemo costs you nothing. `--host cursor` and `--host codex` write
+the same rules where those tools look. Re-run after learning more;
+`mnemo status` says when the file is behind the vault.
+
 Everything else is a CLI subcommand (`mnemo help --all`): `mnemo open`,
 `mnemo fix`, `mnemo statusline`, `mnemo backfill`, `mnemo reclassify`,
-`mnemo autopilot`, `mnemo disable-rule`, and the rest.
+`mnemo export`, `mnemo autopilot`, `mnemo disable-rule`, and the rest.
 
 Want the live heartbeat in your status line (`mnemo · 9 topics · 7↓ today`)?
 It's opt-in, because plugins can't set a status line:

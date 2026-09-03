@@ -282,6 +282,23 @@ class TestEligibleEmitRate:
         )
         assert calibrate_thresholds(stats) is None
 
+    def test_all_exported_silences_do_not_move_the_emit_rate(self):
+        # A prompt answered by the exported rules file never reached the
+        # gates — it is neither a hit nor a miss for calibration, same as
+        # index_missing / below_min_tokens.
+        baseline = self._stats(
+            total=100,
+            emitted=10,
+            reasons={"absolute_floor_fail": 90},
+        )
+        with_exported = self._stats(
+            total=600,
+            emitted=10,
+            reasons={"absolute_floor_fail": 90, "all_exported": 500},
+        )
+        assert with_exported.eligible_prompts == baseline.eligible_prompts == 100
+        assert abs(with_exported.emit_rate - baseline.emit_rate) < 1e-9
+
 
 # ---------------------------------------------------------------------------
 # T9 — reflex config JSON I/O

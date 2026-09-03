@@ -24,8 +24,11 @@ DEFAULT_REFLEX_CONFIG = None  # set after class definition
 # threshold rejections. Counting them in the emit-rate denominator deflates
 # the rate and lets a chatty project hide behind a fake-low number — the
 # calibrator then never tightens it. Exclude them; calibrate over the prompts
-# that were actually scored.
-_DEAD_END_REASONS = frozenset({"index_missing", "below_min_tokens"})
+# that were actually scored. `all_exported` belongs in this set for a
+# different reason: the gates DID run and DID pick a winner, but the prompt
+# was still answered — by the rules file Claude Code already loaded, not by
+# reflex — so it is neither a hit nor a miss for threshold calibration.
+_DEAD_END_REASONS = frozenset({"index_missing", "below_min_tokens", "all_exported"})
 
 # Minimum scored (eligible) prompts required before auto-tuning a project.
 _MIN_ELIGIBLE = 100
