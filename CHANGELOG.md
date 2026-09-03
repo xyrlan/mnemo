@@ -26,6 +26,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   registration. `mnemo status` lists wired hosts, `mnemo doctor` verifies the
   registered command exists. Hooks, transcripts and auto-memory stay Claude
   Code-only (#127 keeps that half).
+- **Demo GIF.** `docs/assets/loop.gif` shows the five-minute loop — correct
+  Claude, `mnemo learn`, the next prompt already knows, `mnemo why` shows the
+  receipt — recorded from `tools/demo/loop.tape` against the real `claude`
+  CLI in a throwaway repo (`tools/demo/setup.sh`).
 
 ### Fixed
 

@@ -130,18 +130,23 @@ knobs.
 
 ### GIF storyboard
 
-For the maintainer recording the README asset. Three frames, about 20 seconds,
-no narration and no cuts mid-frame — the point is that a reader who never
-scrolls past the image still understands the loop.
+`docs/assets/loop.gif` is recorded by `tools/demo/loop.tape` against the real
+`claude` CLI in a throwaway repo (`tools/demo/README.md` has the procedure and
+the log of runs). Four frames, under a minute, no cuts mid-frame (the
+`/exit` between frames is not recorded):
 
-| # | Frame | Roughly |
-|---|---|---|
-| 1 | The correction. A normal Claude Code session; the user types `never use npm in this repo, always yarn` and Claude answers normally. Nothing mnemo-shaped happens on screen. | 6s |
-| 2 | `mnemo learn`. The four output lines land, with the `learned:` line — and its `evidence:` quote — on screen long enough to read. | 8s |
-| 3 | The next prompt. A fresh prompt about installing a package; the injected rule is visible in the context mnemo added, and Claude reaches for yarn. | 6s |
+| # | On screen | Hold |
+|---|-----------|------|
+| 1 | `claude` in the demo repo; the user types `never use npm in this repo, always yarn`; Claude acknowledges. | 3s |
+| 2 | `/exit`, then `mnemo learn`: the `learned:` line, with `evidence: "never use npm in this repo, always yarn"` — your own sentence, carried back. | 6s |
+| 3 | `claude` again; the user types `add the lodash package to the dependencies`; Claude runs `yarn add lodash`, not `npm install`. | 3s |
+| 4 | `/exit`, then `mnemo why`: the top entry reads `injected  <slug>`. | 5s |
 
-Record at a readable terminal size, don't speed it up, and let frame 2 sit —
-the quote is the thing people need time to notice.
+Frame 4 exists because the injection itself is invisible in the TUI
+(`UserPromptSubmit` context is not rendered); what a viewer can see is
+Claude's behaviour and the receipt. Frames 2 and 4 are the proof and hold
+longest. A run where Claude does not reach for yarn is discarded and logged,
+never edited.
 
 ## What `mnemo init` actually does
 

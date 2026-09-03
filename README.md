@@ -2,6 +2,8 @@
 
 > Claude Code forgets your corrections. mnemo doesn't.
 
+![The five-minute loop: correct Claude, run mnemo learn, the next prompt already knows](docs/assets/loop.gif)
+
 Monday, in your app repo, you tell Claude: *"never use npm in this repo, always
 yarn."* You run `mnemo learn` — or you just end the session and let it happen.
 Thursday, a new session, you ask Claude to add a dependency: that rule is
