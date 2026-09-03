@@ -6,7 +6,7 @@ the part of that layer another tool can use today: MCP registration and
 the rules file `mnemo export` writes. Hooks and transcript readers stay
 Claude-only (issue #127 tracks the rest).
 
-Each host answers four questions and nothing more:
+Each host implements four methods and nothing more:
 
 - ``register_mcp`` / ``unregister_mcp``: put the server in the host's config
 - ``export_target``: where the rules file goes in a repo
@@ -33,7 +33,7 @@ class HostStatus:
     name: str
     registered: bool
     path: str
-    command_ok: bool     # the registered command exists on disk
+    command_ok: bool     # the registered command exists (file on disk, or resolves on PATH)
     detail: str          # one short human line, may be empty
 
 
@@ -63,14 +63,8 @@ def _build_registry() -> Dict[str, Host]:
     return {h.name: h for h in (ClaudeHost(), CursorHost(), CodexHost())}
 
 
-HOSTS: Dict[str, Host] = {}
+HOSTS: Dict[str, Host] = _build_registry()
 
 
 def get_host(name: str) -> Host:
-    if not HOSTS:
-        HOSTS.update(_build_registry())
     return HOSTS[name]
-
-
-# Populate eagerly so ``list(HOSTS)`` is stable for argparse choices.
-HOSTS.update(_build_registry())

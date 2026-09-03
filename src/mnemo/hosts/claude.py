@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Tuple
 
 from mnemo.core.export.writers import Target, target_for
 from mnemo.hosts import Host, HostStatus, RegisterResult
@@ -18,22 +19,42 @@ def _mcp_path(project: bool, cwd: Path) -> Path:
 
 
 def command_exists(command: str) -> bool:
-    """True when ``command`` is an existing file or resolves on PATH."""
+    """True for an existing executable file, or a bare name that resolves on PATH."""
     if not command:
         return False
-    return Path(command).exists() or shutil.which(command) is not None
+    if os.sep in command or (os.altsep and os.altsep in command) or os.path.isabs(command):
+        return Path(command).is_file() and os.access(command, os.X_OK)
+    return shutil.which(command) is not None
 
 
-def json_registration(path: Path) -> tuple:
+def json_registration(path: Path) -> Tuple[bool, str]:
     """(registered, command) for a ``mcpServers`` JSON file; tolerant of garbage."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False, ""
-    entry = (data.get("mcpServers") or {}).get(inj.MCPSERVER_NAME) if isinstance(data, dict) else None
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    entry = servers.get(inj.MCPSERVER_NAME) if isinstance(servers, dict) else None
     if not isinstance(entry, dict):
         return False, ""
-    return True, str(entry.get("command") or "")
+    cmd = entry.get("command")
+    return True, cmd if isinstance(cmd, str) else ""
+
+
+def json_host_status(name: str, path: Path) -> HostStatus:
+    """Build a ``HostStatus`` from a ``mcpServers`` JSON file at ``path``."""
+    registered, command = json_registration(path)
+    ok = command_exists(command) if registered else False
+    if not registered:
+        detail = ""
+    elif not command:
+        detail = "registration has no command"
+    elif not ok:
+        detail = f"command not found: {command}"
+    else:
+        detail = ""
+    return HostStatus(name=name, registered=registered, path=str(path),
+                      command_ok=ok, detail=detail)
 
 
 class ClaudeHost(Host):
@@ -51,9 +72,4 @@ class ClaudeHost(Host):
         return target_for("claude", "auto", Path(cwd))
 
     def describe(self, *, project: bool, cwd: Path) -> HostStatus:
-        path = _mcp_path(project, cwd)
-        registered, command = json_registration(path)
-        ok = command_exists(command) if registered else False
-        detail = "" if (not registered or ok) else f"command not found: {command}"
-        return HostStatus(name=self.name, registered=registered, path=str(path),
-                          command_ok=ok, detail=detail)
+        return json_host_status(self.name, _mcp_path(project, cwd))
