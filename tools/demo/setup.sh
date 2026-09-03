@@ -49,6 +49,43 @@ git add -A && git -c user.name=demo -c user.email=demo@example.com commit -qm "i
 $MNEMO init --project --yes --no-mirror --quiet
 [ -f "$DEMO_ROOT/app/.mnemo/mnemo.config.json" ] || fail "mnemo init did not write $DEMO_ROOT/app/.mnemo/mnemo.config.json"
 
+# The demo is foreground-only: `mnemo learn` briefs and extracts by itself, so
+# the SessionEnd hook's detached briefing and first-run extraction would only
+# race it for the lock ("another extraction is in progress") in frame 2.
+python3 - "$DEMO_ROOT/app/.mnemo/mnemo.config.json" <<'EOF'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("extraction", {}).setdefault("auto", {})["enabled"] = False
+d.setdefault("briefings", {})["enabled"] = False
+json.dump(d, open(p, "w"), indent=2)
+EOF
+
+# No MCP in the demo: nothing on screen uses it, a project .mcp.json makes
+# Claude Code ask for approval on first start (which would eat frame 1), and
+# the maintainer's own servers would print an auth warning. The tape runs
+# claude with `--strict-mcp-config --mcp-config $DEMO_ROOT/mcp-empty.json`.
+rm -f "$DEMO_ROOT/app/.mcp.json"
+echo '{"mcpServers": {}}' > "$DEMO_ROOT/mcp-empty.json"
+
+# Claude Code opens a "Quick safety check: is this a project you trust?"
+# dialog the first time it starts in a new directory, and `/exit` typed into
+# that dialog picks "No, exit". Pre-answer it for the demo path — both
+# spellings, since /tmp is a symlink on macOS and Claude keys projects by the
+# physical path. ~/.claude.json is backed up first.
+CLAUDE_JSON="$HOME/.claude.json"
+APP_PHYS="$(cd "$DEMO_ROOT/app" && pwd -P)"
+[ -f "$CLAUDE_JSON" ] && cp "$CLAUDE_JSON" "$CLAUDE_JSON.demo-backup"
+python3 - "$CLAUDE_JSON" "$DEMO_ROOT/app" "$APP_PHYS" <<'EOF'
+import json, os, sys
+p, *paths = sys.argv[1:]
+d = json.load(open(p)) if os.path.exists(p) else {}
+projects = d.setdefault("projects", {})
+for path in dict.fromkeys(paths):
+    projects.setdefault(path, {})["hasTrustDialogAccepted"] = True
+json.dump(d, open(p, "w"), indent=2)
+EOF
+
 # Let Claude run yarn without a permission prompt in frame 3. Project
 # settings.json was just written by mnemo init; add the allow-list to it.
 python3 - "$DEMO_ROOT/app/.claude/settings.json" <<'EOF'

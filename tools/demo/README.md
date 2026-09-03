@@ -16,6 +16,21 @@ the real `claude` CLI against a throwaway repo and a fresh vault.
   and restore it afterwards; if the plugin is enabled, disable it in
   `/plugin` for the duration.
 
+`setup.sh` also pre-answers Claude Code's folder-trust dialog for the demo
+path in `~/.claude.json` (backup at `~/.claude.json.demo-backup`), removes
+the demo's `.mcp.json` (nothing on screen uses MCP, and a project MCP server
+would prompt for approval), and turns off the demo vault's background
+briefing and extraction so the typed `mnemo learn` never races the
+SessionEnd hook for the extraction lock.
+
+The tape's hidden prelude unsets any inherited `CLAUDE_CODE_*` variables
+(recording from inside a Claude Code session would otherwise start the demo
+with transcript saving off), disables Claude Code's alternate-screen renderer
+so vhs can see the TUI text, and aliases `claude` to run with
+`--strict-mcp-config` and an empty MCP config so your personal MCP servers
+stay out of the frame. Your `~/.claude/settings.json` display settings
+(status line, vim mode, permission mode) still show; that is fine.
+
 ## Record
 
 ```bash
