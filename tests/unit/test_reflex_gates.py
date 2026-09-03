@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from mnemo.core.reflex.gates import (
     GateResult, evaluate_gates, DEFAULT_THRESHOLDS,
+    idf_max, effective_absolute_floor,
 )
 
 
@@ -73,4 +76,64 @@ def test_top2_excluded_when_below_absolute_floor():
                              "b": {"prisma", "mock"},
                          },
                          thresholds=DEFAULT_THRESHOLDS)
+    assert res.accepted_slugs == ["a"]
+
+
+def test_idf_max_matches_bm25_laplace_idf():
+    assert idf_max(1) == pytest.approx(0.2877, abs=1e-3)
+    assert idf_max(30) == pytest.approx(3.0285, abs=1e-3)
+
+
+def test_effective_floor_scales_below_reference_and_clamps_above():
+    assert effective_absolute_floor(2.0, 1, 30) == pytest.approx(0.19, abs=0.01)
+    assert effective_absolute_floor(2.0, 6, 30) == pytest.approx(1.02, abs=0.01)
+    assert effective_absolute_floor(2.0, 30, 30) == 2.0
+    assert effective_absolute_floor(2.0, 500, 30) == 2.0
+
+
+def test_effective_floor_is_unscaled_without_doc_count_or_reference():
+    assert effective_absolute_floor(2.0, None, 30) == 2.0
+    assert effective_absolute_floor(2.0, 0, 30) == 2.0
+    assert effective_absolute_floor(2.0, 5, 1) == 2.0
+    assert effective_absolute_floor(2.0, 5, 0) == 2.0
+
+
+def test_one_rule_vault_can_pass_the_floor():
+    scores = [("a", 0.6)]
+    res = evaluate_gates(
+        scores,
+        query_tokens=["add", "dependencies", "package"],
+        doc_tokens_by_slug={"a": {"add", "dependencies", "package", "yarn"}},
+        thresholds=DEFAULT_THRESHOLDS,
+        doc_count=1,
+    )
+    assert res.accepted_slugs == ["a"]
+    assert res.silence_reason is None
+    assert res.effective_floor == pytest.approx(0.19, abs=0.01)
+
+
+def test_without_doc_count_the_floor_is_not_scaled():
+    scores = [("a", 0.6)]
+    res = evaluate_gates(
+        scores,
+        query_tokens=["add", "dependencies", "package"],
+        doc_tokens_by_slug={"a": {"add", "dependencies", "package", "yarn"}},
+        thresholds=DEFAULT_THRESHOLDS,
+    )
+    assert res.silence_reason == "absolute_floor_fail"
+    assert res.effective_floor == 2.0
+
+
+def test_scaled_floor_still_applies_to_top2():
+    scores = [("a", 0.6), ("b", 0.1)]
+    res = evaluate_gates(
+        scores,
+        query_tokens=["add", "dependencies", "package"],
+        doc_tokens_by_slug={
+            "a": {"add", "dependencies", "package"},
+            "b": {"add", "dependencies", "package"},
+        },
+        thresholds=DEFAULT_THRESHOLDS,
+        doc_count=1,
+    )
     assert res.accepted_slugs == ["a"]
