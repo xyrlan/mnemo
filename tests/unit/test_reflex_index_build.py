@@ -90,6 +90,27 @@ def test_build_index_indexes_aliases_field(tmp_vault):
     assert idx["docs"]["c"]["field_length"]["aliases"] == 3
 
 
+def test_build_index_keeps_auto_promoter_advisory_out_of_preview_and_tokens(tmp_vault):
+    """#134: the stripped-enforce note must neither open the preview Claude
+    receives nor feed the BM25 postings."""
+    advisory = (
+        "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+        "> _Review the pattern and re-add manually if safe._\n"
+    )
+    _write_rule(tmp_vault, "feedback", "top.md", name="top",
+                body=advisory + "\nUse yarn, never npm.")
+    _write_rule(tmp_vault, "feedback", "bottom.md", name="bottom",
+                body="Use yarn, never npm.\n\n" + advisory)
+
+    idx = build_index(tmp_vault, universal_threshold=2)
+
+    assert idx["docs"]["top"]["preview"] == "Use yarn, never npm."
+    assert idx["docs"]["bottom"]["preview"] == "Use yarn, never npm."
+    for tok in ("promoter", "stripped", "advisory", "manually"):
+        assert tok not in idx["postings"], f"advisory token {tok!r} was indexed"
+    assert "yarn" in idx["postings"]
+
+
 def test_build_index_schema_shape(tmp_vault):
     _write_rule(tmp_vault, "feedback", "a.md", name="a")
     idx = build_index(tmp_vault, universal_threshold=2)

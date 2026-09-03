@@ -169,3 +169,37 @@ def test_dismissed_page_does_not_become_a_redirect_target_mid_batch(tmp_path):
                 if k.startswith("feedback/") and k != "feedback/negative-keywords-early-launch"]
     assert new_keys == ["feedback/negative-keyword-launch-checklist"], new_keys
     assert not (tmp_path / "shared" / "feedback" / "google-ads-negative-keyword-strategy.md").exists()
+
+
+ADVISORY = (
+    "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+    "> _Review the pattern and re-add manually if safe._\n"
+)
+YARN_BODY = "Always use yarn.\n\n**Why:** yarn.lock is canonical.\n\n**How to apply:** yarn add."
+
+
+def _index(root: Path, with_note: bool) -> dedup.SimilarityIndex:
+    state = ExtractionState(last_run=None)
+    ads = BODY
+    yarn = YARN_BODY
+    if with_note:
+        ads = ADVISORY + "\n" + ads          # pre-#134 placement, note on top
+        yarn = yarn + "\n\n" + ADVISORY     # post-#134 placement, note below
+    _seed(root, state, "negative-keywords-early-launch", "Add negative keywords at launch", body=ads)
+    _seed(root, state, "use-yarn", "Use yarn for package management", body=yarn)
+    return dedup.SimilarityIndex(state, root, "feedback")
+
+
+def test_auto_promoter_advisory_contributes_nothing_to_similarity(tmp_path):
+    """#134: two unrelated auto-promoted pages that both carry the stripped-
+    enforce note must not drift toward each other; the note is invisible to
+    the profile, whichever end of the body it sits at."""
+    noted = _index(tmp_path / "noted", with_note=True)
+    plain = _index(tmp_path / "plain", with_note=False)
+
+    assert noted._profiles == plain._profiles
+    score = dedup.weighted_jaccard(noted._profiles["use-yarn"],
+                                   noted._profiles["negative-keywords-early-launch"])
+    assert score == dedup.weighted_jaccard(plain._profiles["use-yarn"],
+                                           plain._profiles["negative-keywords-early-launch"])
+    assert score < dedup.SIMILARITY_THRESHOLD

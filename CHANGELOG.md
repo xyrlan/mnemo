@@ -3,6 +3,21 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The auto-promoter's advisory sits below the rule and stays out of
+  previews, exports and indexes.** A rule promoted without its `enforce:`
+  block used to open with a two-line maintainer note ("mnemo auto-promoter
+  stripped an `enforce:` block…"), so the reflex preview — the first 300
+  characters of the body — and `mnemo export` handed the host that note
+  instead of the rule. The note now follows the rule text on disk, drops its
+  reference to a docs path that does not exist in user checkouts, and no
+  longer opens the reflex preview, lands in the exported rules file, or feeds
+  BM25 and similarity scoring — including on pages written by earlier
+  versions. `read_mnemo_rule` still returns the page as written. #134
+
 ## [1.3.0] — 2026-09-03
 
 The distribution release. Rules leave the vault: `mnemo export` writes them

@@ -347,7 +347,7 @@ class SimilarityIndex:
 
     def __init__(self, state: ExtractionState, vault_root: Path, page_type: str) -> None:
         from mnemo.core.filters import parse_frontmatter
-        from mnemo.core.text_utils import strip_graph_section
+        from mnemo.core.text_utils import retrieval_body
 
         self._profiles: dict[str, dict[str, int]] = {}
         self._names: dict[str, set[str]] = {}
@@ -370,13 +370,12 @@ class SimilarityIndex:
                 continue
             fm = parse_frontmatter(text)
             name = str(fm.get("name") or slug)
-            # Strip the appended "## Sources" wikilink block before profiling:
-            # its file-path tokens are shared by every page written from the
-            # same briefing tree and would inflate every pairwise score.
+            # Profile what retrieval sees (text_utils.retrieval_body): wikilink
+            # and advisory tokens are shared across pages and inflate every score.
             self._profiles[slug] = _weighted_profile(
                 name,
                 str(fm.get("description") or ""),
-                _extract_body(strip_graph_section(text)),
+                _extract_body(retrieval_body(text)),
             )
             self._names[slug] = _name_tokens(name)
 

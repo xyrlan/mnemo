@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 from mnemo.core.filters import derive_rule_slug, is_consumer_visible, iter_shared_pages
 from mnemo.core.reclassify_types import split_frontmatter
 from mnemo.core.rule_activation import is_universal, projects_for_rule
-from mnemo.core.text_utils import strip_graph_section
+from mnemo.core.text_utils import retrieval_body
 
 DEFAULT_TYPES: tuple[str, ...] = ("feedback", "user")
 
@@ -66,7 +66,7 @@ def select_rules(
         out.append(ExportRule(
             slug=slug,
             name=str(fm.get("name") or slug),
-            body=strip_graph_section(body).strip() + "\n",
+            body=retrieval_body(body).strip() + "\n",
             quote=str(quote).strip() if quote else None,
             universal=universal,
             source_count=len(sources),
