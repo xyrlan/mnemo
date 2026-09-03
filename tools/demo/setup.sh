@@ -68,6 +68,45 @@ EOF
 rm -f "$DEMO_ROOT/app/.mcp.json"
 echo '{"mcpServers": {}}' > "$DEMO_ROOT/mcp-empty.json"
 
+# The shell the tape records in sources this file (hidden prelude). `mnemo`
+# is the checkout's mnemo; `claude` is a wrapper that runs the real CLI with
+# the demo flags and a watchdog. The watchdog matters: Claude Code 2.1.259
+# opens a claude.ai session-bridge for every session, and at /exit its
+# teardown can race the archive call and leave the process idling for
+# minutes after the session is over. The demo's own SessionEnd hook writes
+# "session ended" to the vault log the moment /exit runs (transcript already
+# complete), so a shutdown still alive four seconds after that line is
+# killed and the shell comes back for the next frame.
+cat > "$DEMO_ROOT/demo-shell.sh" <<EOF
+alias mnemo="$MNEMO"
+DEMO_ROOT="$DEMO_ROOT"
+EOF
+cat >> "$DEMO_ROOT/demo-shell.sh" <<'EOF'
+claude() {
+  local log="$DEMO_ROOT/app/.mnemo/bots/app/logs/$(date +%F).md"
+  local before; before=$(grep -c 'session ended' "$log" 2>/dev/null); before=${before:-0}
+  { (
+    local pid="" i now
+    for i in $(seq 1 60); do pid=$(pgrep -P $$ -f 'claude ' | head -1); [ -n "$pid" ] && break; sleep 0.5; done
+    [ -n "$pid" ] || exit 0
+    while kill -0 "$pid" 2>/dev/null; do
+      now=$(grep -c 'session ended' "$log" 2>/dev/null); now=${now:-0}
+      if [ "$now" -gt "$before" ]; then
+        sleep 4; kill -9 "$pid" 2>/dev/null; exit 0
+      fi
+      sleep 1
+    done
+  ) >/dev/null 2>&1 & } 2>/dev/null   # the group's stderr swallows "[1] 12345"
+  local watchdog=$!
+  command claude --model sonnet --disallowedTools Write,Edit,NotebookEdit \
+    --strict-mcp-config --mcp-config "$DEMO_ROOT/mcp-empty.json" "$@"
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  # A killed TUI can leave the terminal in raw mode; hand the shell back in
+  # a known state and print a marker the tape can wait for.
+  stty sane 2>/dev/null; clear; echo DEMO-SHELL-READY
+}
+EOF
+
 # Claude Code opens a "Quick safety check: is this a project you trust?"
 # dialog the first time it starts in a new directory, and `/exit` typed into
 # that dialog picks "No, exit". Pre-answer it for the demo path — both
@@ -88,17 +127,27 @@ EOF
 
 # Let Claude run yarn without a permission prompt in frame 3. Project
 # settings.json was just written by mnemo init; add the allow-list to it.
+# Claude Code's own auto-memory is off for the demo: otherwise frame 1 shows
+# Claude saving the preference to MEMORY.md as well, and frame 3 can no
+# longer be attributed to mnemo's injection.
 python3 - "$DEMO_ROOT/app/.claude/settings.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
 perms = d.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
-for rule in ("Bash(yarn add:*)", "Bash(yarn:*)", "Read", "Edit", "Write"):
+for rule in ("Bash(yarn add:*)", "Bash(yarn:*)", "Read"):
     if rule not in allow:
         allow.append(rule)
+d["autoMemoryEnabled"] = False
 json.dump(d, open(p, "w"), indent=2)
 EOF
+
+# Fresh Claude Code state for the demo path too (transcripts and auto-memory
+# from an earlier take), so `mnemo learn` reads this take's session only.
+for p in "$DEMO_ROOT/app" "$APP_PHYS"; do
+  rm -rf "$HOME/.claude/projects/$(printf '%s' "$p" | tr '/' '-')"
+done
 
 echo "demo ready at $DEMO_ROOT/app (vault: $DEMO_ROOT/app/.mnemo)"
 echo "record with:  cd $REPO_ROOT && vhs tools/demo/loop.tape"

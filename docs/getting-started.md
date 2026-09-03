@@ -132,7 +132,8 @@ knobs.
 
 `docs/assets/loop.gif` is recorded by `tools/demo/loop.tape` against the real
 `claude` CLI in a throwaway repo (`tools/demo/README.md` has the procedure and
-the log of runs). Four frames, about 30 seconds, no cuts mid-frame:
+the log of runs). Four frames, under a minute, no cuts mid-frame (the
+`/exit` between frames is not recorded):
 
 | # | On screen | Hold |
 |---|-----------|------|

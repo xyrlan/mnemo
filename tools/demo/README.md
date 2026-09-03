@@ -48,10 +48,18 @@ touching frame durations).
 - If Claude's reply in frame 3 does not use yarn, or `mnemo learn` stages
   the rule instead of learning it, **discard the run and retry**. Never
   edit the GIF. Log the run below either way.
+- If Claude persists the rule itself in frame 1 (writes a `CLAUDE.md`, a
+  memory file, anything on disk), discard too: frame 3 would no longer be
+  attributable to mnemo. The demo hides Write/Edit and turns auto-memory
+  off to make this rare, not impossible.
 - The README never carries a cherry-picked run without a log entry.
 
 ## Runs
 
 | date | model (claude --version / default model) | outcome |
 |------|------------------------------------------|---------|
-| _none yet_ | | |
+| 2026-09-03 | 2.1.259 / Fable 5.1 (maintainer's default) | take 1: all four frames held (`injected use-yarn-not-npm (0.43)`), **discarded**: typed `$MNEMO learn` literally, and Claude also saved the rule to its own auto-memory, so frame 3 was not attributable |
+| 2026-09-03 | 2.1.259 / Opus 5 then Sonnet 5 | takes 2–13 **discarded** while hardening the tape: slash-menu Enter, Opus exploring the repo for minutes, Escape mid-reply, Claude writing a CLAUDE.md, and above all the shutdown hang after `/exit` (bridge reconnect loop; fixed by the watchdog in `demo-shell.sh`). None reached a GIF worth judging |
+| 2026-09-03 | 2.1.259 / Sonnet 5 | take 14: all four frames held (`injected use-yarn-never-npm (0.52)`), **discarded**: `[1] pid` job notice and a debug banner from the recording harness in frames 1 and 3 |
+| 2026-09-03 | 2.1.259 / Sonnet 5 | take 15 **discarded**: API `529 Overloaded` in frame 1 |
+| 2026-09-03 | 2.1.259 / Sonnet 5 | take 16 **kept**: correction → `learned: use-yarn-for-package-management … (evidence: "never use npm in this repo, always yarn")` → `yarn add lodash` → `injected use-yarn-for-package-management (0.60)`; 53 s, 659 KB. Claude Code's "75% of your weekly limit" banner shows in frame 3 |
