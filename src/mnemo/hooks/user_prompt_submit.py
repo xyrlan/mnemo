@@ -109,7 +109,8 @@ def main() -> int:
         # (all pass thresholds=gate_thresholds) carries it — `mnemo why` needs
         # both the configured floor and the effective one to explain a scaled
         # decision. `absolute_floor` stays the configured value.
-        gate_thresholds["absolute_floor_effective"] = result.effective_floor
+        if result.effective_floor is not None:
+            gate_thresholds["absolute_floor_effective"] = result.effective_floor
         gate_thresholds["doc_count"] = doc_count
         # The receipt: the ranking and the numbers this decision was made on.
         # Everything past this point had rules scored, so a silence here can be

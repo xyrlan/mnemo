@@ -144,7 +144,7 @@ def test_a_scaled_floor_is_explained_with_the_vault_size(vault):
     assert "use-yarn-not-npm" in text
     assert "under the 0.19 floor" in text
     assert "scaled down from 2" in text
-    assert "1 rules" in text
+    assert "the vault has 1 rule)" in text
 
 
 def test_an_unscaled_floor_reads_as_before(vault):

@@ -189,8 +189,9 @@ def _explain(
         floor = float(thresholds.get("absolute_floor_effective", configured))
         note = ""
         if floor < configured:
-            note = (f" (floor scaled down from {_num(configured)} — the vault has "
-                    f"{thresholds.get('doc_count', '?')} rules)")
+            n = thresholds.get("doc_count")
+            rules = "?" if n is None else f"{n} rule{'' if n == 1 else 's'}"
+            note = f" (floor scaled down from {_num(configured)} — the vault has {rules})"
         return (
             f"{top_slug} led at {_num(top_score)}, under the {_num(floor)} floor{note} "
             "— nothing scored well enough to be worth saying",
