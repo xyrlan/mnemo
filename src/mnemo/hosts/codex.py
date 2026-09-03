@@ -75,10 +75,10 @@ def _run(argv: List[str]) -> Optional[str]:
 
 _NAME = re.escape(inj.MCPSERVER_NAME)
 _TABLE_RE = re.compile(
-    r'^[ \t]*\[mcp_servers\.(?:' + _NAME + r'|"' + _NAME + r'")\][ \t]*(?:#.*)?$', re.M
+    r'^[ \t]*\[mcp_servers\.(?:' + _NAME + r'|"' + _NAME + r'")\][ \t\r]*(?:#.*)?$', re.M
 )
 _NEXT_TABLE_RE = re.compile(r"^[ \t]*\[", re.M)
-_COMMAND_RE = re.compile(r"""^[ \t]*command\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.M)
+_COMMAND_RE = re.compile(r"""^[ \t]*command\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')""", re.M)
 
 
 class CodexHost(Host):

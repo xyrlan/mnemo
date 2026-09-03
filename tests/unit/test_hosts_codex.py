@@ -167,6 +167,29 @@ def test_codex_describe_unescapes_basic_string_command(tmp_home: Path, tmp_path:
     assert r"C:\\bin\\py.exe" not in s.detail
 
 
+def test_codex_describe_tolerates_crlf_line_endings(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_bytes(b'[mcp_servers.mnemo]\r\ncommand = "/nonexistent/python"\r\n')
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True
+
+
+def test_codex_describe_unescapes_embedded_quote(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('[mcp_servers.mnemo]\ncommand = "a\\"b"\n', encoding="utf-8")
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True
+    assert 'a"b' in s.detail
+
+
 def test_run_returns_message_when_subprocess_raises_oserror(monkeypatch: pytest.MonkeyPatch):
     from mnemo.hosts import codex
 
