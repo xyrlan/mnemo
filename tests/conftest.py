@@ -115,7 +115,9 @@ def real_home() -> Path:
 
 
 def _vault_fingerprint() -> tuple:
-    """``(size, mtime_ns)`` of the three real-vault paths a leaky test would hit.
+    """``(size, mtime_ns)`` of five real paths (the vault's error log and
+    ``shared/``, ``~/.claude/projects``, and the Cursor and Codex config dirs
+    a host adapter would write) that a leaky test would hit.
 
     Directory entries are shallow: a directory's mtime moves when an entry is
     created or removed inside it. Missing paths are ``None``.
@@ -138,14 +140,17 @@ def _vault_fingerprint() -> tuple:
         st(_REAL_VAULT / ".errors.log"),
         st(_REAL_VAULT / "shared"),
         st(_REAL_HOME / ".claude" / "projects"),
+        st(_REAL_HOME / ".cursor"),
+        st(_REAL_HOME / ".codex"),
     )
 
 
 @pytest.fixture(autouse=True)
 def _real_vault_guard(request: pytest.FixtureRequest):
-    """Fail any test that changes the real vault or ``~/.claude/projects``.
+    """Fail any test that changes the real vault, ``~/.claude/projects``,
+    ``~/.cursor``, or ``~/.codex``.
 
-    Three ``stat`` calls before and after. Tests marked ``recall`` run against
+    Five ``stat`` calls before and after. Tests marked ``recall`` run against
     the real vault on purpose and are exempt.
     """
     if request.node.get_closest_marker("recall"):
@@ -156,7 +161,8 @@ def _real_vault_guard(request: pytest.FixtureRequest):
     after = _vault_fingerprint()
     if before != after:
         pytest.fail(
-            f"test touched the real vault at {_REAL_VAULT} "
+            f"test touched the real vault, ~/.claude/projects, ~/.cursor, or "
+            f"~/.codex at {_REAL_VAULT} "
             f"(before={before}, after={after}); build a tmp vault and set "
             "MNEMO_CONFIG_PATH instead (see tests/unit/test_hook_session_start_backfill.py::_run_hook)"
         )
