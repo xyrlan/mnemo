@@ -88,6 +88,22 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     from mnemo.install import settings as inj
 
     project = bool(getattr(args, "project", False))
+    host_name = getattr(args, "host", "claude") or "claude"
+    if host_name != "claude":
+        # `--yes` is not consulted here: the only thing removed is one config
+        # entry — no hooks, no status line, and the vault is never touched.
+        from mnemo.hosts import get_host
+        from mnemo.hosts.codex import CodexScopeError
+
+        try:
+            get_host(host_name).unregister_mcp(project=project, cwd=Path.cwd())
+        except CodexScopeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"MCP registration removed for {host_name}. Vault and rules file preserved "
+              f"(`mnemo export --host {host_name} --remove` deletes the file).")
+        return 0
+
     cwd = Path.cwd()
     if project:
         settings_path = cwd / ".claude" / "settings.json"
