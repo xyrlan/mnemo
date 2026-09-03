@@ -28,6 +28,7 @@ from mnemo.autopilot.insights._log_readers import (
     read_denial_log,
     read_recall_report,
 )
+from mnemo.core.numbers import is_reflex_opportunity
 
 
 @dataclass
@@ -84,11 +85,22 @@ def generate_digest(*, vault_root: Path, since_days: int = 7) -> DigestData:
 
     # ── Reflex ────────────────────────────────────────────────────────────────
     reflex_entries = read_reflex_log(vault_root, since_dt=since)
-    d.reflex_prompt_count = len(reflex_entries)
-    d.reflex_emit_count = sum(1 for e in reflex_entries if e.get("emitted"))
+
+    # A row whose silence_reason is "all_exported" was answered by the
+    # exported rules file, not by reflex — it was never a reflex opportunity.
+    # core/numbers.py (which backs `mnemo status`) excludes these rows from
+    # both sides of its emit-rate ratio; the digest must use the same
+    # denominator or the two surfaces report different numbers for the same
+    # log. Both call is_reflex_opportunity() so they can't drift apart again.
+    opportunity_entries = [e for e in reflex_entries if is_reflex_opportunity(e)]
+    d.reflex_prompt_count = len(opportunity_entries)
+    d.reflex_emit_count = sum(1 for e in opportunity_entries if e.get("emitted"))
     if d.reflex_prompt_count > 0:
         d.reflex_emit_rate = d.reflex_emit_count / d.reflex_prompt_count
 
+    # Silence-reason tallies still cover every entry, all_exported included —
+    # it's a real recorded reason and useful to see, even though it's
+    # excluded from the emit-rate denominator above.
     silence_counts: Counter = Counter()
     index_missing = 0
     for e in reflex_entries:

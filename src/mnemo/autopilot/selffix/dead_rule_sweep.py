@@ -5,7 +5,8 @@ to ``shared/_archive/``.
 
 Heuristics for "dead":
 - 0 hits in ``mcp-access-log.jsonl`` over ``days``
-- 0 entries in ``reflex-log.jsonl`` (``emitted`` arrays) over ``days``
+- 0 entries in ``reflex-log.jsonl`` (``emitted`` or ``exported`` arrays) over
+  ``days``
 - Known to have been created at least ``days`` ago
 
 The age check fails **closed**. It used to read a ``created_at:`` frontmatter
@@ -162,7 +163,14 @@ def _active_slugs_from_access_log(vault_root: Path, cutoff: datetime) -> Set[str
 
 
 def _active_slugs_from_reflex_log(vault_root: Path, cutoff: datetime) -> Set[str]:
-    """Return set of slugs emitted in reflex log after *cutoff*."""
+    """Return set of slugs emitted or exported in reflex log after *cutoff*.
+
+    A slug reaching the user only through the repo's exported rules file
+    (``entry["exported"]``, recorded on any silence or emission row where
+    export suppressed some accepted slugs) is still live — export is a
+    delivery path, not an absence of one. Counting only ``emitted`` would
+    sweep a rule as dead precisely because export is working (issue #128).
+    """
     log_path = vault_root / ".mnemo" / "reflex-log.jsonl"
     if not log_path.exists():
         return set()
@@ -179,7 +187,7 @@ def _active_slugs_from_reflex_log(vault_root: Path, cutoff: datetime) -> Set[str
             ts = _parse_ts(entry.get("ts") or "")
             if ts is None or ts < cutoff:
                 continue
-            for slug in entry.get("emitted") or []:
+            for slug in (entry.get("emitted") or []) + (entry.get("exported") or []):
                 if slug:
                     active.add(slug)
     except OSError:

@@ -63,6 +63,29 @@ def _iter_rows(path: Path):
         return
 
 
+def is_reflex_opportunity(row: dict) -> bool:
+    """Whether *row* is a prompt reflex actually had a chance to answer.
+
+    A row whose ``silence_reason`` is ``all_exported`` was answered by the
+    rules file Claude Code already loads, not by reflex — it was never a
+    reflex opportunity, so any "how often does reflex fire" ratio must
+    exclude it from both the numerator and the denominator. Every other row
+    (an emission, or a silence for any other reason, including no reason at
+    all) counts.
+
+    This predicate defines the *user-facing* emit rate — ``reflex_emit_rate``
+    below and ``autopilot/insights/digest.py`` both call this rather than
+    re-deriving the check, so ``mnemo status`` and the weekly digest can't
+    drift apart again. The reflex calibrator computes its own emit rate over
+    a deliberately narrower "scored prompts" denominator (it also drops
+    ``index_missing`` and ``below_min_tokens`` — see
+    ``reflex_calibrator._DEAD_END_REASONS``) for calibration eligibility, a
+    different question; it is not a bug for it to disagree with this
+    function, and it should not be switched to call it.
+    """
+    return row.get("silence_reason") != "all_exported"
+
+
 def reflex_emit_rate(
     vault_root: Path,
     *,
@@ -95,7 +118,7 @@ def reflex_emit_rate(
                 ts = _parse_ts(row.get("ts"))
                 if ts is None or ts < cutoff:
                     continue
-                if row.get("silence_reason") == "all_exported":
+                if not is_reflex_opportunity(row):
                     continue
                 total += 1
                 if row.get("emitted"):

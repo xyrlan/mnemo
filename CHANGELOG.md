@@ -18,6 +18,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   BM25 and similarity scoring — including on pages written by earlier
   versions. `read_mnemo_rule` still returns the page as written. #134
 
+- **Reflex log readers now treat `exported` as liveness, and the digest
+  agrees with `mnemo status` on the emit rate.** The dead-rule sweep counted
+  only `emitted` as proof of life, so a rule delivered exclusively through
+  the exported rules file — working exactly as designed — accrued no
+  `emitted` mentions and was proposed dead after the sweep window; it now
+  also counts `exported` mentions. Separately, the weekly digest computed
+  `reflex_emit_rate` over every logged row while `core/numbers.py` (which
+  backs `mnemo status`) excludes `all_exported` rows from both sides of the
+  ratio, so the two surfaces could report different numbers for the same
+  log; the digest now excludes them too, via the same `is_reflex_opportunity`
+  check both readers now share. (#128)
+
 ## [1.3.0] — 2026-09-03
 
 The distribution release. Rules leave the vault: `mnemo export` writes them

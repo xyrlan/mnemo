@@ -349,6 +349,52 @@ def test_detect_dead_rules_skips_rule_in_reflex_log(tmp_path: Path) -> None:
     assert rules == []
 
 
+def test_detect_dead_rules_skips_rule_only_seen_via_export(tmp_path: Path) -> None:
+    """A rule delivered only through the exported rules file is not dead.
+
+    Issue #128: the hook records an ``exported`` list on both an
+    ``all_exported`` silence row (every accepted slug was suppressed) and on
+    an emission row (some accepted slugs were suppressed alongside others
+    that were injected). Either shape must count as liveness — the rule is
+    reaching the user, just not through reflex injection. Two distinct rules
+    are used here, one per shape, so a fix that only recognizes one of the
+    two shapes cannot pass this test.
+    """
+    _make_rule(tmp_path, "silence-only-exported", created_days_ago=100)
+    _make_rule(tmp_path, "emission-only-exported", created_days_ago=100)
+    _write_reflex_log(tmp_path, [
+        {
+            "ts": _ts(10),
+            "emitted": [],
+            "silence_reason": "all_exported",
+            "exported": ["silence-only-exported"],
+        },
+        {
+            "ts": _ts(5),
+            "emitted": ["other-rule"],
+            "silence_reason": None,
+            "exported": ["emission-only-exported"],
+        },
+    ])
+    rules = detect_dead_rules(vault_root=tmp_path, days=90)
+    assert rules == []
+
+
+def test_detect_dead_rules_archives_rule_with_no_mentions_at_all(tmp_path: Path) -> None:
+    """A rule with neither ``emitted`` nor ``exported`` mentions is still dead."""
+    _make_rule(tmp_path, "truly-dead-rule", created_days_ago=100)
+    _write_reflex_log(tmp_path, [
+        {
+            "ts": _ts(10),
+            "emitted": ["other-rule"],
+            "silence_reason": None,
+            "exported": ["other-rule"],
+        },
+    ])
+    rules = detect_dead_rules(vault_root=tmp_path, days=90)
+    assert [r.slug for r in rules] == ["truly-dead-rule"]
+
+
 # ---------------------------------------------------------------------------
 # archive_rule
 # ---------------------------------------------------------------------------
