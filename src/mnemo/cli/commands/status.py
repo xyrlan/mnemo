@@ -95,6 +95,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             _print_scope_line("project", project_settings, expected_events)
         if scope in ("global", "all"):
             _print_scope_line("global", global_settings, expected_events)
+    _print_hosts_status()
     if err_mod.should_run(vault):
         print("Circuit breaker: closed (ok)")
     else:
@@ -204,6 +205,19 @@ def _print_export_status(vault: Path) -> None:
     noun = "rule" if total == 1 else "rules"
     state = "up to date" if differing == 0 else f"{differing} differ from the vault now, run mnemo export"
     print(f"\nExport: {total} {noun} → {data.get('path')} ({state})")
+
+
+def _print_hosts_status() -> None:
+    """One line naming the non-Claude hosts with an MCP registration. Silent
+    when there are none — Claude Code is the default and has its own lines."""
+    from mnemo.hosts import registered_hosts
+
+    found = []
+    for s in registered_hosts(Path.cwd()):
+        suffix = "" if s.command_ok else " — command missing, see mnemo doctor"
+        found.append(f"{s.name} ({s.path}){suffix}")
+    if found:
+        print("Hosts: " + ", ".join(found))
 
 
 def _print_reflex_status(vault: Path) -> None:

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, Optional
 
 from mnemo.core.export.writers import Target
 
@@ -68,3 +68,31 @@ HOSTS: Dict[str, Host] = _build_registry()
 
 def get_host(name: str) -> Host:
     return HOSTS[name]
+
+
+def registered_hosts(cwd: Path) -> Iterator[HostStatus]:
+    """Every registered non-Claude host, global and project scope, deduped.
+
+    Claude Code is the default host with its own status lines elsewhere, so
+    it is skipped here. A host that ignores ``project`` (codex has no
+    per-project MCP config) reports the same path for both scopes; dedupe by
+    ``(name, path)`` so it is not yielded twice. Per-host errors — a
+    malformed config, a host module that fails to import — are swallowed: a
+    status/doctor line is not worth a traceback.
+    """
+    seen = set()
+    for name, host in HOSTS.items():
+        if name == "claude":
+            continue
+        for project in (False, True):
+            try:
+                status = host.describe(project=project, cwd=cwd)
+            except Exception:  # noqa: BLE001
+                continue
+            if not status.registered:
+                continue
+            key = (name, status.path)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield status

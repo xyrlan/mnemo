@@ -14,6 +14,7 @@ from pathlib import Path
 from mnemo.cli.commands.doctor_checks import (
     activation,
     fidelity,
+    hosts,
     install_backfill,
     misc as doctor_misc,
     orphan_worktree_briefings,
@@ -46,6 +47,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("bare_deny_command",     rules._doctor_check_bare_deny_command),
     ("stripped_enforce",      rules._doctor_check_stripped_enforce),
     ("install_backfill",      install_backfill._doctor_check_install_backfill),
+    ("hosts",                 hosts._doctor_check_hosts),
 ]
 
 
