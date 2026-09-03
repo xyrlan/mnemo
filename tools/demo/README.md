@@ -7,6 +7,9 @@ the real `claude` CLI against a throwaway repo and a fresh vault.
 
 - `brew install vhs` (brings ttyd and ffmpeg)
 - `claude` on PATH and logged in
+- `MNEMO` (default `/usr/local/bin/python3 -m mnemo`) running a build that
+  includes the cold-start floor fix (#131). Without it a one-rule vault
+  never clears `absoluteFloor` and frame 4 reads `silent`, not `injected`.
 - **No global mnemo active** — `tools/demo/setup.sh` refuses otherwise,
   because a second reflex would inject next to the demo's. Move
   `~/.claude/settings.json` aside (or `mnemo uninstall`) for the recording
