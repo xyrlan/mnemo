@@ -93,6 +93,14 @@ def cmd_export(args: argparse.Namespace) -> int:
     if not report.rules:
         print(f"no rules to export for {project} — correct Claude, run `mnemo learn`, then export")
         return 0
+    if report.user_pages:
+        slugs = ", ".join(report.user_pages)
+        n_user = len(report.user_pages)
+        print(
+            f"note: {n_user} user-profile page(s) included ({slugs}) — they can carry "
+            "names or emails; check before committing, or pass --types feedback to omit",
+            file=sys.stderr,
+        )
     if report.warning:
         print(f"warning: {report.warning}", file=sys.stderr)
     n = len(report.rules)

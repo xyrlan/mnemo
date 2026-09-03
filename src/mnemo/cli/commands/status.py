@@ -139,11 +139,17 @@ def _print_briefings_status(vault: Path) -> None:
 
 
 def _current_project() -> str | None:
-    """The project name status is reporting on, or None when it cannot tell."""
+    """The project name status is reporting on, or None when it cannot tell.
+
+    Follows a worktree's `.git` file back to the main repo — same resolution
+    `mnemo export`, `mnemo why`, `mnemo learn` and the session hooks use, so a
+    worktree checkout finds the manifest and ledger entries they wrote under
+    the canonical repo name instead of the worktree's own directory name.
+    """
     import os as _os
     try:
-        from mnemo.core.agent import resolve_agent
-        return resolve_agent(_os.getcwd()).name or None
+        from mnemo.core.agent import resolve_canonical_agent
+        return resolve_canonical_agent(_os.getcwd()).name or None
     except Exception:  # noqa: BLE001 — a status line is not worth a traceback
         return None
 

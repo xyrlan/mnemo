@@ -369,8 +369,11 @@ mnemo export --remove             # delete the file / strip the block
 What goes in: `feedback` and `user` rules attributed to this repo, plus
 universal ones, most-sourced first. `reference` pages stay out unless you
 pass `--all-types`. Each rule carries the sentence you said as
-`> you said: "…"`. When the block would load more than about 4,000 tokens
-on every prompt, export says so on stderr and suggests a `--limit`.
+`> you said: "…"`. User-profile pages (`type: user`) are included too and
+can carry names or emails — export tells you when one is in the block; pass
+`--types feedback` to leave them out. When the block would load more than
+about 4,000 tokens on every prompt, export says so on stderr and suggests a
+`--limit`.
 
 The block sits between `<!-- mnemo:start` and `<!-- mnemo:end -->`; anything
 outside the markers in CLAUDE.md or AGENTS.md is never touched, and export

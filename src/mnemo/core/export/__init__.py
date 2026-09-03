@@ -31,6 +31,7 @@ class ExportReport:
     wrote: bool = False
     removed: bool = False
     warning: Optional[str] = None
+    user_pages: List[str] = field(default_factory=list)
 
     @property
     def universal(self) -> int:
@@ -74,6 +75,7 @@ def run_export(
                                 universal_threshold=universal_threshold, limit=limit)
     if not report.rules:
         return report
+    report.user_pages = [r.slug for r in report.rules if r.page_type == "user"]
     report.block = render_block(report.rules, project=project,
                                 today=today or date.today().isoformat())
     report.tokens = estimated_tokens(report.block)

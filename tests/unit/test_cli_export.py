@@ -192,6 +192,32 @@ def test_export_twice_is_byte_identical(repo: Path, vault: Path):
     assert first_manifest["rules"] == second_manifest["rules"]
 
 
+def test_user_page_note_on_dry_run(repo: Path, vault: Path, capsys):
+    write_rule(vault, slug="feedback-rule", page_type="feedback")
+    write_rule(vault, slug="alice-profile", page_type="user")
+    assert cli.main(["export", "--dry-run"]) == 0
+    err = capsys.readouterr().err
+    assert "note:" in err
+    assert "1 user-profile page(s) included (alice-profile)" in err
+    assert "--types feedback" in err
+
+
+def test_user_page_note_on_write(repo: Path, vault: Path, capsys):
+    write_rule(vault, slug="feedback-rule", page_type="feedback")
+    write_rule(vault, slug="alice-profile", page_type="user")
+    assert cli.main(["export"]) == 0
+    err = capsys.readouterr().err
+    assert "1 user-profile page(s) included (alice-profile)" in err
+
+
+def test_no_user_page_note_when_types_excludes_user(repo: Path, vault: Path, capsys):
+    write_rule(vault, slug="feedback-rule", page_type="feedback")
+    write_rule(vault, slug="alice-profile", page_type="user")
+    assert cli.main(["export", "--types", "feedback", "--dry-run"]) == 0
+    err = capsys.readouterr().err
+    assert "user-profile" not in err
+
+
 def test_manifest_present_only_after_a_real_write(repo: Path, vault: Path):
     write_rule(vault, slug="r")
     manifest_path = vault / ".mnemo" / "export" / "app.json"

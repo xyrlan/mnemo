@@ -17,7 +17,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `.mnemo/export/` lets `mnemo status` report staleness, and the reflex
   suppresses winners that the exported file already carries (`mnemo why`
   marks them `exported`; those prompts are excluded from the emit rate and
-  from calibration).
+  from calibration); a note on stderr flags user-profile pages, which can
+  carry names or emails.
 
 ## [1.2.0] — 2026-09-02
 
