@@ -3,7 +3,16 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] — 2026-09-03
+
+The distribution release. Rules leave the vault: `mnemo export` writes them
+to a file the host loads on its own, and `mnemo init --host cursor|codex`
+registers the MCP server and that file in Cursor and Codex. The README opens
+with a recorded GIF of the five-minute loop — the real `claude` CLI in a
+throwaway repo, correction to receipt, no staging — and recording it found
+the bug that would have made it impossible for every new user: a vault with
+a handful of rules could never clear the reflex floor, so the first rule
+anyone learned never fired. The floor now scales with the vault.
 
 ### Added
 
