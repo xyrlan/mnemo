@@ -137,7 +137,8 @@ when it clears all three thresholds.
 | `reflex.maxEmissionsPerSession` | `10` | Stop injecting after this many hits in one session |
 | `reflex.thresholds.termOverlapMin` | `2` | Query/rule terms that must overlap |
 | `reflex.thresholds.relativeGap` | `1.5` | How far the top hit must beat the runner-up |
-| `reflex.thresholds.absoluteFloor` | `2.0` | Minimum score to inject at all |
+| `reflex.thresholds.absoluteFloor` | `2.0` | Minimum score to inject at all (scaled down in small vaults, see next row) |
+| `reflex.thresholds.floorReferenceDocs` | `30` | Below this many rules the floor is scaled down with the vault's idf ceiling, so a young vault can inject at all |
 | `reflex.thresholds.minQueryTokens` | `3` | Prompts shorter than this are skipped |
 | `reflex.bm25f.k1`, `reflex.bm25f.b` | `1.5`, `0.75` | Standard BM25 parameters |
 | `reflex.bm25f.fieldWeights.*` | see note | `name` 3.0, `topic_tags` 3.0, `aliases` 2.5, `evidence` 2.5, `description` 2.0, `body` 1.0 |

@@ -132,6 +132,33 @@ def test_an_absolute_floor_silence_names_the_floor_it_missed(vault):
     assert "1.1" in text and "2.0" in text
 
 
+def test_a_scaled_floor_is_explained_with_the_vault_size(vault):
+    """A scaled floor must say *why* it isn't the configured number."""
+    text = receipts.format_human([_entry(
+        silence_reason="absolute_floor_fail",
+        candidates=[["use-yarn-not-npm", 0.12]],
+        thresholds={"relative_gap": 1.5, "absolute_floor": 2.0,
+                    "absolute_floor_effective": 0.19, "doc_count": 1,
+                    "term_overlap_min": 2},
+    )])
+    assert "use-yarn-not-npm" in text
+    assert "under the 0.19 floor" in text
+    assert "scaled down from 2" in text
+    assert "the vault has 1 rule)" in text
+
+
+def test_an_unscaled_floor_reads_as_before(vault):
+    """When the effective floor equals the configured one, say nothing extra."""
+    text = receipts.format_human([_entry(
+        silence_reason="absolute_floor_fail",
+        candidates=[["weak-rule", 1.10]],
+        thresholds={"relative_gap": 1.5, "absolute_floor": 2.0,
+                    "absolute_floor_effective": 2.0, "doc_count": 40,
+                    "term_overlap_min": 2},
+    )])
+    assert "scaled down" not in text
+
+
 def test_a_term_overlap_silence_says_so_in_words(vault):
     text = receipts.format_human([_entry(
         silence_reason="term_overlap_fail",

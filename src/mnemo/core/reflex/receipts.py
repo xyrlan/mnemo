@@ -185,9 +185,15 @@ def _explain(
         )
 
     if reason == "absolute_floor_fail":
-        floor = float(thresholds.get("absolute_floor", 2.0))
+        configured = float(thresholds.get("absolute_floor", 2.0))
+        floor = float(thresholds.get("absolute_floor_effective", configured))
+        note = ""
+        if floor < configured:
+            n = thresholds.get("doc_count")
+            rules = "?" if n is None else f"{n} rule{'' if n == 1 else 's'}"
+            note = f" (floor scaled down from {_num(configured)} — the vault has {rules})"
         return (
-            f"{top_slug} led at {_num(top_score)}, under the {_num(floor)} floor "
+            f"{top_slug} led at {_num(top_score)}, under the {_num(floor)} floor{note} "
             "— nothing scored well enough to be worth saying",
             True,
         )

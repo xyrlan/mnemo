@@ -87,6 +87,7 @@ DEFAULTS: dict[str, Any] = {
             "termOverlapMin": 2,
             "relativeGap": 1.5,
             "absoluteFloor": 2.0,
+            "floorReferenceDocs": 30,
             "minQueryTokens": 3,
         },
         "bm25f": {

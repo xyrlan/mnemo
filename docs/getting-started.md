@@ -345,8 +345,10 @@ them at session start. All three default to `scope="project"`; pass
 
 On every prompt, mnemo runs BM25F retrieval over its rule index and injects
 the single most relevant rule inline — only when it clears a triple gate on
-term overlap, relative score gap, and an absolute floor. Fail-open: any error
-means the prompt passes through untouched.
+term overlap, relative score gap, and an absolute floor. The floor scales
+with the vault's size, so the first rule you learn can fire on the next
+prompt instead of waiting for the vault to grow. Fail-open: any error means
+the prompt passes through untouched.
 
 ### Enforcement and enrichment
 
