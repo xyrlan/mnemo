@@ -19,6 +19,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   marks them `exported`; those prompts are excluded from the emit rate and
   from calibration); a note on stderr flags user-profile pages, which can
   carry names or emails.
+- **Cursor and Codex.** `mnemo init --host cursor|codex` registers the MCP
+  server in that tool's config (`~/.cursor/mcp.json` or `<repo>/.cursor/mcp.json`;
+  `codex mcp add`, with a TOML snippet when the binary is missing) and writes
+  the rules file through `mnemo export`. `mnemo uninstall --host …` removes the
+  registration. `mnemo status` lists wired hosts, `mnemo doctor` verifies the
+  registered command exists. Hooks, transcripts and auto-memory stay Claude
+  Code-only (#127 keeps that half).
 
 ## [1.2.0] — 2026-09-02
 

@@ -386,6 +386,28 @@ does not inject it again — Claude Code is already loading it — and
 `Export: N rules → … (up to date)` or how many rules differ from the vault
 since you last exported.
 
+### Cursor and Codex
+
+```bash
+mnemo init --host cursor          # ~/.cursor/mcp.json + .cursor/rules/mnemo.mdc
+mnemo init --host cursor --project   # <repo>/.cursor/mcp.json instead of the global file
+mnemo init --host codex           # runs `codex mcp add mnemo …` + AGENTS.md block
+mnemo uninstall --host cursor     # removes only that MCP registration
+```
+
+What you get in those tools is the two halves that do not need a hook: the
+MCP tools (`list_rules_by_topic`, `read_mnemo_rule`) and the rules file
+`mnemo export` writes, loaded by the tool itself. What you do not get is
+learning — mnemo reads Claude Code transcripts, not Cursor's or Codex's — so
+correct Claude in Claude Code, run `mnemo learn`, then
+`mnemo export --host cursor` (or `codex`) to refresh the file.
+
+Codex has no per-project MCP config, so `--project` is refused there. If the
+`codex` binary is not on your PATH, `init` prints the `[mcp_servers.mnemo]`
+table to paste into `~/.codex/config.toml`. `mnemo status` lists the hosts it
+finds registered; `mnemo doctor` checks that each registration points at a
+command that still exists.
+
 ## Observing and debugging
 
 ```bash
