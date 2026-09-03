@@ -18,7 +18,7 @@ from mnemo.core.export.writers import (  # noqa: F401  — re-exported for calle
     MarkerError, Target, TargetError, remove_target, target_for, write_target,
 )
 
-ALL_TYPES: tuple = ("feedback", "user", "reference", "project")
+ALL_TYPES: tuple[str, ...] = ("feedback", "user", "reference", "project")
 
 
 @dataclass
@@ -61,7 +61,7 @@ def run_export(
 ) -> ExportReport:
     """Select, render, write (or remove). Raises TargetError / MarkerError."""
     vault_root = Path(vault_root)
-    repo_root = Path(repo_root)
+    repo_root = Path(repo_root).resolve()
     tgt = target_for(host, target, repo_root)
     report = ExportReport(project=project, target=tgt)
 
@@ -77,17 +77,25 @@ def run_export(
     report.block = render_block(report.rules, project=project,
                                 today=today or date.today().isoformat())
     report.tokens = estimated_tokens(report.block)
-    if force_warning or report.tokens > TOKEN_WARN:
+    n = len(report.rules)
+    suggested_limit = max(1, n // 2)
+    if force_warning:
         report.warning = (
-            f"about {report.tokens} tokens will load on every prompt — "
-            "consider --limit N to keep the most-sourced rules only"
+            f"includes reference/project pages, which are noisier than corrections: "
+            f"{n} rules, about {report.tokens} tokens on every prompt — "
+            f"try --limit {suggested_limit}"
+        )
+    elif report.tokens > TOKEN_WARN:
+        report.warning = (
+            f"about {report.tokens} tokens from {n} rules will load on every prompt — "
+            f"try --limit {suggested_limit} to keep the most-sourced ones"
         )
     if dry_run:
         return report
 
     write_target(tgt, report.block)
     manifest_mod.write_manifest(
-        vault_root, project, host=host, target=tgt.name, cwd=str(repo_root.resolve()),
+        vault_root, project, host=host, target=tgt.name, cwd=str(repo_root),
         path=tgt.path.relative_to(repo_root).as_posix(),
         rules={r.slug: entry_hash(r) for r in report.rules},
     )

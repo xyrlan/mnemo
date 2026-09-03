@@ -69,8 +69,13 @@ def exported_slugs_for(vault_root: Path, project: str, *, repo_root: str) -> Set
     the CLI wrote the manifest from the worktree path, so an exact string
     comparison would miss a real, currently-loaded file. The manifest's
     ``path`` resolved under ``repo_root`` existing and still carrying a
-    mnemo marker is the actual fact we care about; ``cwd`` stays recorded
-    for ``status`` to show, but is no longer compared here.
+    mnemo marker is the actual fact we care about. First we probe the tree
+    the hook is standing in right now (``repo_root``); if that copy is
+    missing — a worktree checked out somewhere other than where the export
+    was written from, or vice versa — we fall back to the tree the export
+    was actually written from (the manifest's recorded ``cwd``). Either way
+    the marker check applies to whichever file was found, so a stale or
+    hand-edited file that lost its marker still doesn't count.
     """
     data = read_manifest(vault_root, project)
     if not data:
@@ -80,7 +85,15 @@ def exported_slugs_for(vault_root: Path, project: str, *, repo_root: str) -> Set
     rel = data.get("path")
     if not isinstance(rel, str) or not rel:
         return set()
+
     target_path = Path(repo_root) / rel
+    if not target_path.is_file():
+        cwd = data.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            fallback = Path(cwd) / rel
+            if fallback.is_file():
+                target_path = fallback
+
     try:
         if not target_path.is_file():
             return set()

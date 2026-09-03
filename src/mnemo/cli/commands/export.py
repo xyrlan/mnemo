@@ -26,7 +26,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     # the same, so the manifest and the reflex agree); the file lands in the
     # tree the user is actually standing in.
     project = getattr(args, "project", None) or resolve_canonical_agent(cwd).name
-    repo_root = Path(resolve_agent(cwd).repo_root)
+    repo_root = Path(resolve_agent(cwd).repo_root).resolve()
     host = getattr(args, "host", "claude")
     target = getattr(args, "target", "auto")
 
@@ -40,9 +40,32 @@ def cmd_export(args: argparse.Namespace) -> int:
         return 2
 
     all_types = bool(getattr(args, "all_types", False))
-    types = export_mod.ALL_TYPES if all_types else tuple(
-        t.strip() for t in str(getattr(args, "types", "feedback,user")).split(",") if t.strip()
-    )
+    raw_types = str(getattr(args, "types", "feedback,user"))
+    if all_types and raw_types != "feedback,user":
+        print("error: --all-types and --types are mutually exclusive", file=sys.stderr)
+        return 2
+
+    if all_types:
+        types = export_mod.ALL_TYPES
+    else:
+        types = tuple(t.strip() for t in raw_types.split(",") if t.strip())
+        if not types:
+            print("error: --types cannot be empty", file=sys.stderr)
+            return 2
+        unknown = [t for t in types if t not in export_mod.ALL_TYPES]
+        if unknown:
+            print(
+                f"error: unknown page type(s): {', '.join(unknown)}; "
+                f"choose from {', '.join(export_mod.ALL_TYPES)}",
+                file=sys.stderr,
+            )
+            return 2
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit < 1:
+        print("error: --limit must be at least 1", file=sys.stderr)
+        return 2
+
     try:
         threshold = int((cfg_mod.load_config().get("scoping") or {}).get("universalThreshold", 2))
     except Exception:  # noqa: BLE001
@@ -54,7 +77,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             vault, project=project, repo_root=repo_root,
             host=host, target=target,
             types=types, universal_threshold=threshold,
-            limit=getattr(args, "limit", None),
+            limit=limit,
             dry_run=bool(getattr(args, "dry_run", False)),
             remove=remove,
             force_warning=all_types,

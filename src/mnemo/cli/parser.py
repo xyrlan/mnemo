@@ -268,7 +268,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="rules file (default per host), or a managed block in CLAUDE.md / AGENTS.md")
     export.add_argument("--project", default=None, help="export another project's rules instead of the cwd's")
     export.add_argument("--types", default="feedback,user", help="page types to include (default: feedback,user)")
-    export.add_argument("--all-types", action="store_true", help="include reference and project pages too")
+    export.add_argument("--all-types", action="store_true",
+                        help="include reference and project pages too (cannot combine with --types)")
     export.add_argument("--limit", type=int, default=None, metavar="N", help="keep only the first N after ordering")
     export.add_argument("--dry-run", action="store_true", help="print the block, write nothing")
     export.add_argument("--remove", action="store_true", help="delete the exported file / block and its manifest")
