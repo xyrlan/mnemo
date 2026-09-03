@@ -42,12 +42,13 @@ def test_codex_unregisters_through_the_cli(tmp_home: Path, tmp_path: Path, fake_
 def test_codex_without_binary_prints_a_toml_snippet(tmp_home: Path, tmp_path: Path, monkeypatch):
     from mnemo.hosts import get_host
     from mnemo._selfexec import self_argv
+    from mnemo.hosts.codex import _toml_escape
 
     monkeypatch.setattr("mnemo.hosts.codex.shutil.which", lambda name: None)
     r = get_host("codex").register_mcp(project=False, cwd=tmp_path)
     assert r.method == "snippet"
     assert "[mcp_servers.mnemo]" in r.note
-    assert f'command = "{self_argv("mcp-server")[0]}"' in r.note
+    assert f'command = "{_toml_escape(self_argv("mcp-server")[0])}"' in r.note
     assert "args = [" in r.note
 
 

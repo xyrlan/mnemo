@@ -87,6 +87,7 @@ def test_command_exists_directory_is_false(tmp_path: Path):
     assert command_exists(str(tmp_path)) is False
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no executable bit; os.access(X_OK) is always true")
 def test_command_exists_non_executable_file_is_false(tmp_path: Path):
     from mnemo.hosts.claude import command_exists
 
