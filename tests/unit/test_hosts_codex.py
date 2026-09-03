@@ -12,6 +12,8 @@ def fake_codex(monkeypatch: pytest.MonkeyPatch):
     calls: list = []
 
     def fake_run(argv, **kw):
+        assert kw.get("timeout") == 30
+        assert kw.get("capture_output") is True
         calls.append(list(argv))
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -113,3 +115,64 @@ def test_codex_toml_snippet_renders_exact_text(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("mnemo.hosts.codex.self_argv", lambda *a: ["/py", "-m", "mnemo", "mcp-server"])
     assert codex.toml_snippet() == '[mcp_servers.mnemo]\ncommand = "/py"\nargs = ["-m", "mnemo", "mcp-server"]\n'
+
+
+def test_codex_describe_tolerates_comment_indent_and_indented_command(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        '  [mcp_servers.mnemo]  # added by codex\n'
+        '  command = "/nonexistent/python"\n',
+        encoding="utf-8",
+    )
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True and s.command_ok is False and "nonexistent" in s.detail
+
+
+def test_codex_describe_accepts_quoted_key(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('[mcp_servers."mnemo"]\ncommand = "/nonexistent/python"\n', encoding="utf-8")
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True and "nonexistent" in s.detail
+
+
+def test_codex_describe_accepts_literal_string_command(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("[mcp_servers.mnemo]\ncommand = 'literal'\n", encoding="utf-8")
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True and "literal" in s.detail
+
+
+def test_codex_describe_unescapes_basic_string_command(tmp_home: Path, tmp_path: Path):
+    from mnemo.hosts import get_host
+
+    host = get_host("codex")
+    cfg = tmp_home / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('[mcp_servers.mnemo]\ncommand = "C:\\\\bin\\\\py.exe"\n', encoding="utf-8")
+    s = host.describe(project=False, cwd=tmp_path)
+    assert s.registered is True
+    assert r"C:\bin\py.exe" in s.detail
+    assert r"C:\\bin\\py.exe" not in s.detail
+
+
+def test_run_returns_message_when_subprocess_raises_oserror(monkeypatch: pytest.MonkeyPatch):
+    from mnemo.hosts import codex
+
+    def raising_run(argv, **kw):
+        raise OSError("no such file")
+
+    monkeypatch.setattr("mnemo.hosts.codex.subprocess.run", raising_run)
+    err = codex._run(["codex", "mcp", "add", "mnemo"])
+    assert err is not None and "no such file" in err

@@ -47,6 +47,11 @@ def _toml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _toml_unescape(value: str) -> str:
+    """Reverse ``_toml_escape``: ``\\"`` -> ``"``, ``\\\\`` -> ``\\``."""
+    return re.sub(r'\\(["\\])', r"\1", value)
+
+
 def toml_snippet() -> str:
     argv = _server_argv()
     args = ", ".join(f'"{_toml_escape(a)}"' for a in argv[1:])
@@ -68,8 +73,12 @@ def _run(argv: List[str]) -> Optional[str]:
     return None
 
 
-_TABLE_RE = re.compile(r"^\[mcp_servers\." + re.escape(inj.MCPSERVER_NAME) + r"\]\s*$", re.M)
-_COMMAND_RE = re.compile(r'^command\s*=\s*"([^"]*)"', re.M)
+_NAME = re.escape(inj.MCPSERVER_NAME)
+_TABLE_RE = re.compile(
+    r'^[ \t]*\[mcp_servers\.(?:' + _NAME + r'|"' + _NAME + r'")\][ \t]*(?:#.*)?$', re.M
+)
+_NEXT_TABLE_RE = re.compile(r"^[ \t]*\[", re.M)
+_COMMAND_RE = re.compile(r"""^[ \t]*command\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.M)
 
 
 class CodexHost(Host):
@@ -80,12 +89,12 @@ class CodexHost(Host):
             raise CodexScopeError("Codex has no project-level MCP config; omit --project")
         path = str(_config_path())
         if shutil.which("codex") is None:
-            note = ("`codex` is not on PATH — add this to ~/.codex/config.toml by hand:\n\n"
+            note = (f"`codex` is not on PATH — add this to {path} by hand:\n\n"
                     + toml_snippet())
             return RegisterResult(path=path, method="snippet", note=note)
         err = _run(_add_argv())
         if err:
-            note = (f"`codex mcp add` failed ({err}) — add this to ~/.codex/config.toml by hand:\n\n"
+            note = (f"`codex mcp add` failed ({err}) — add this to {path} by hand:\n\n"
                     + toml_snippet())
             return RegisterResult(path=path, method="snippet", note=note)
         return RegisterResult(path=path, method="codex-cli", note=None)
@@ -95,6 +104,9 @@ class CodexHost(Host):
             raise CodexScopeError("Codex has no project-level MCP config; omit --project")
         if shutil.which("codex") is None:
             return
+        # Uninstall is best-effort: Host.unregister_mcp -> None, so a failed
+        # `codex mcp remove` (already gone, codex changed its CLI, ...) is
+        # deliberately swallowed rather than raised.
         _run(_remove_argv())
 
     def export_target(self, cwd: Path) -> Target:
@@ -111,10 +123,16 @@ class CodexHost(Host):
             return HostStatus(name=self.name, registered=False, path=str(path), command_ok=False, detail="")
         # The table's own lines run until the next ``[`` header.
         rest = text[m.end():]
-        nxt = re.search(r"^\[", rest, re.M)
+        nxt = _NEXT_TABLE_RE.search(rest)
         body = rest[: nxt.start()] if nxt else rest
         cm = _COMMAND_RE.search(body)
-        command = cm.group(1) if cm else ""
+        if cm:
+            raw = cm.group(1) if cm.group(1) is not None else cm.group(2)
+            # group(1) is a basic string ("...", escaped); group(2) is a
+            # literal string ('...', verbatim) — only un-escape the former.
+            command = _toml_unescape(raw) if cm.group(1) is not None else raw
+        else:
+            command = ""
         ok = command_exists(command)
         detail = "" if ok else f"command not found: {command or '(missing)'}"
         return HostStatus(name=self.name, registered=True, path=str(path), command_ok=ok, detail=detail)
