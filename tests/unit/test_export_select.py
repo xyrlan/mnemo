@@ -81,3 +81,52 @@ def test_missing_vault_yields_nothing(tmp_path: Path):
     from mnemo.core.export.select import select_rules
 
     assert select_rules(tmp_path / "nope", project="app") == []
+
+
+def test_types_as_bare_string_is_treated_as_one_type(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    write_rule(tmp_vault, slug="fb", page_type="feedback")
+
+    assert [r.slug for r in select_rules(tmp_vault, project="app", types="feedback")] == ["fb"]
+
+
+def test_empty_sources_with_frontmatter_project_is_selected(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    page_dir = tmp_vault / "shared" / "feedback"
+    page_dir.mkdir(parents=True, exist_ok=True)
+    (page_dir / "fb.md").write_text(
+        "---\nname: fb\nslug: fb\ntype: feedback\nstability: stable\n"
+        "sources: []\nproject: app\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    (rule,) = select_rules(tmp_vault, project="app")
+    assert rule.slug == "fb"
+    assert rule.source_count == 0
+
+
+def test_frontmatter_projects_list_goes_universal(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    page_dir = tmp_vault / "shared" / "feedback"
+    page_dir.mkdir(parents=True, exist_ok=True)
+    (page_dir / "fb.md").write_text(
+        "---\nname: fb\nslug: fb\ntype: feedback\nstability: stable\n"
+        "sources: []\nprojects:\n  - app\n  - other\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+    (rule,) = select_rules(tmp_vault, project="app")
+    assert rule.universal is True
+
+
+def test_limit_zero_returns_empty_and_none_returns_everything(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    write_rule(tmp_vault, slug="a", projects=("app",))
+    write_rule(tmp_vault, slug="b", projects=("app",))
+
+    assert select_rules(tmp_vault, project="app", limit=0) == []
+    assert [r.slug for r in select_rules(tmp_vault, project="app", limit=None)] == ["a", "b"]

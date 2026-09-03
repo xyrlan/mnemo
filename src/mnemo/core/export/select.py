@@ -42,7 +42,7 @@ def select_rules(
     """Rules scoped to *project*, universal first, then most-sourced, then slug."""
     vault_root = Path(vault_root)
     shared = vault_root / "shared"
-    wanted = set(types)
+    wanted = {types} if isinstance(types, str) else set(types)
     out: list[ExportRule] = []
     for md in iter_shared_pages(vault_root, include_inbox=False):
         rel = md.relative_to(shared).parts

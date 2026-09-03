@@ -17,10 +17,16 @@ TOKEN_WARN = 4000
 
 
 def render_entry(rule: ExportRule) -> str:
-    head = f"### {rule.name}  `{rule.slug}`"
+    name = rule.name.replace("`", "'")
+    head = f"### {name}  `{rule.slug}`"
     if rule.universal:
         head += " (universal)"
-    parts = [head, rule.body.rstrip()]
+    # Neutralise any marker-like sequence in the body: a rule body containing
+    # a literal "<!-- mnemo:end -->" (or "<!-- mnemo:start") would otherwise
+    # truncate the managed block for the host and break the writer. Uses a
+    # zero-width space so the text still reads correctly to a human.
+    body = rule.body.rstrip().replace("<!-- mnemo:", "<!--​ mnemo:")
+    parts = [head] + ([body] if body else [])
     if rule.quote:
         parts.append(f'> you said: "{rule.quote}"')
     return "\n".join(parts) + "\n"
@@ -36,8 +42,10 @@ def render_block(rules: Sequence[ExportRule], *, project: str, today: str) -> st
         f"## Rules mnemo learned from you (project: {project}, "
         f"{len(rules)} rule{'s' if len(rules) != 1 else ''}, {n_uni} universal)"
     )
+    if not rules:
+        return "\n".join([header, "", title, "", END_MARKER]) + "\n"
     body = "\n".join(render_entry(r) for r in rules)
-    return "\n".join([header, title, "", body.rstrip(), END_MARKER]) + "\n"
+    return "\n".join([header, "", title, "", body.rstrip(), "", END_MARKER]) + "\n"
 
 
 def entry_hash(rule: ExportRule) -> str:
