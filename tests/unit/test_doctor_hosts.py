@@ -3,16 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_hosts_check_is_silent_ok_with_no_extra_hosts(tmp_home: Path, tmp_path: Path, capsys):
+def test_hosts_check_is_silent_ok_with_no_extra_hosts(tmp_home: Path, tmp_path: Path, capsys, monkeypatch):
     from mnemo.cli.commands.doctor_checks.hosts import _doctor_check_hosts
 
+    monkeypatch.chdir(tmp_path)
     assert _doctor_check_hosts(tmp_path) is True
     assert capsys.readouterr().out == ""
 
 
-def test_hosts_check_flags_a_missing_command(tmp_home: Path, tmp_path: Path, capsys):
+def test_hosts_check_flags_a_missing_command(tmp_home: Path, tmp_path: Path, capsys, monkeypatch):
     from mnemo.cli.commands.doctor_checks.hosts import _doctor_check_hosts
 
+    monkeypatch.chdir(tmp_path)
     cfg = tmp_home / ".codex" / "config.toml"
     cfg.parent.mkdir(parents=True)
     cfg.write_text('[mcp_servers.mnemo]\ncommand = "/nonexistent/python"\nargs = ["-m", "mnemo", "mcp-server"]\n', encoding="utf-8")

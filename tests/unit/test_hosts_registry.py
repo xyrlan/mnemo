@@ -29,10 +29,9 @@ def test_registered_hosts_empty_when_none_registered(tmp_home: Path, tmp_path: P
     assert list(registered_hosts(tmp_path)) == []
 
 
-def test_registered_hosts_lists_a_globally_registered_cursor(tmp_home: Path, tmp_path: Path, monkeypatch):
+def test_registered_hosts_lists_a_globally_registered_cursor(tmp_home: Path, tmp_path: Path):
     from mnemo.hosts import get_host, registered_hosts
 
-    monkeypatch.chdir(tmp_path)
     get_host("cursor").register_mcp(project=False, cwd=tmp_path)
     statuses = list(registered_hosts(tmp_path))
     assert len(statuses) == 1
@@ -40,10 +39,9 @@ def test_registered_hosts_lists_a_globally_registered_cursor(tmp_home: Path, tmp
     assert statuses[0].registered
 
 
-def test_registered_hosts_dedupes_codex_global_only_config(tmp_home: Path, tmp_path: Path, monkeypatch):
+def test_registered_hosts_dedupes_codex_global_only_config(tmp_home: Path, tmp_path: Path):
     from mnemo.hosts import registered_hosts
 
-    monkeypatch.chdir(tmp_path)
     cfg = tmp_home / ".codex" / "config.toml"
     cfg.parent.mkdir(parents=True)
     cfg.write_text(

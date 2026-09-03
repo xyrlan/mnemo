@@ -10,6 +10,9 @@ from pathlib import Path
 def _doctor_check_hosts(vault: Path) -> bool:
     from mnemo.hosts import registered_hosts
 
+    # `vault` is part of every doctor check's signature but unused here on
+    # purpose: host registrations are cwd-scoped (e.g. project .cursor/mcp.json
+    # lives next to the repo), not vault-scoped.
     ok = True
     for status in registered_hosts(Path.cwd()):
         if status.command_ok:
