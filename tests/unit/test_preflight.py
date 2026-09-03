@@ -48,3 +48,23 @@ def test_issue_has_remediation(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
     result = preflight.run_preflight(vault_root=tmp_home / "mnemo")
     issues = [i for i in result.issues if i.kind == "python_version"]
     assert issues and issues[0].remediation
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX chmod semantics not honored on Windows")
+@pytest.mark.skipif(os.geteuid() == 0 if hasattr(os, "geteuid") else False, reason="root ignores file modes")
+def test_check_settings_false_skips_the_settings_probe(tmp_home: Path):
+    """Hosts that never write ~/.claude/settings.json must not be blocked by it."""
+    settings = tmp_home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}")
+    settings.chmod(0o444)
+    try:
+        blocked = preflight.run_preflight(vault_root=tmp_home / "mnemo")
+        assert blocked.ok is False
+        assert any(i.kind == "settings_unwritable" for i in blocked.issues)
+
+        skipped = preflight.run_preflight(vault_root=tmp_home / "mnemo", check_settings=False)
+        assert skipped.ok is True
+        assert not any(i.kind == "settings_unwritable" for i in skipped.issues)
+    finally:
+        settings.chmod(0o600)

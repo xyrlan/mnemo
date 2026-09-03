@@ -7,6 +7,8 @@ path is untouched, which the last test here pins.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -96,7 +98,47 @@ def test_init_cursor_survives_a_broken_rules_file(tmp_home: Path, repo: Path, ca
 
     monkeypatch.setattr(export_mod, "run_export", boom)
     rc = cli.main(["init", "--host", "cursor", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "rules file not written" in captured.err
+    assert "mnemo export --host cursor" in captured.err
+    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX chmod semantics not honored on Windows")
+@pytest.mark.skipif(os.geteuid() == 0 if hasattr(os, "geteuid") else False, reason="root ignores file modes")
+def test_init_cursor_ignores_an_unwritable_claude_settings(tmp_home: Path, repo: Path):
+    """Cursor never writes ~/.claude/settings.json, so it must not gate on it."""
+    settings = tmp_home / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{}")
+    settings.chmod(0o444)
+    try:
+        rc = cli.main(["init", "--host", "cursor", "--yes",
+                       "--vault-root", str(tmp_home / "v"), "--no-mirror"])
+        assert rc == 0
+        assert (tmp_home / ".cursor" / "mcp.json").exists()
+    finally:
+        settings.chmod(0o600)
+
+
+def test_codex_paste_snippet_survives_quiet(tmp_home: Path, repo: Path, capsys, monkeypatch):
+    """--quiet must not swallow work the user still has to do by hand."""
+    monkeypatch.setattr("mnemo.hosts.codex.shutil.which", lambda name: None)
+    rc = cli.main(["init", "--host", "codex", "--yes", "--quiet",
+                   "--vault-root", str(tmp_home / "v"), "--no-mirror"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "rules file not written" in out
-    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    assert "[mcp_servers.mnemo]" in out
+    # ...while the ordinary progress chatter still is suppressed
+    assert "Running preflight checks" not in out
+
+
+def test_init_cursor_prints_the_user_page_privacy_note(tmp_home: Path, repo: Path, capsys):
+    vault = tmp_home / "v"
+    write_rule(vault, page_type="user", slug="prefers-terse-replies", projects=("app",))
+    rc = cli.main(["init", "--host", "cursor", "--yes", "--vault-root", str(vault), "--no-mirror"])
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "user-profile page(s) included" in err
+    assert "prefers-terse-replies" in err

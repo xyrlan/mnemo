@@ -65,7 +65,14 @@ def run_preflight(
     vault_root: Path | None = None,
     *,
     settings_target: Path | None = None,
+    check_settings: bool = True,
 ) -> PreflightResult:
+    """Validate the environment before an install.
+
+    ``check_settings=False`` skips the settings-writability probe entirely —
+    for hosts (cursor, codex) that never write a Claude ``settings.json``, so
+    a read-only one of those must not block their install.
+    """
     vault_root = Path(vault_root) if vault_root else Path(os.path.expanduser("~/mnemo"))
     issues: list[Issue] = []
 
@@ -81,7 +88,7 @@ def run_preflight(
             f"Cannot write to {vault_root.parent}",
             f"Pick a different vault location with --vault-root, or run: chmod u+w {vault_root.parent}",
         ))
-    if not _settings_writable(settings_target):
+    if check_settings and not _settings_writable(settings_target):
         target_label = str(settings_target) if settings_target is not None else "~/.claude/settings.json"
         issues.append(Issue(
             "settings_unwritable", "error",

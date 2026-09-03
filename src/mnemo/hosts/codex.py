@@ -26,6 +26,11 @@ class CodexScopeError(ValueError):
     """Codex has no project-level MCP config; only global registration exists."""
 
 
+#: One wording for the refusal, so callers that pre-empt the raise (``mnemo
+#: init --host codex --project``) say exactly what the raise would have said.
+PROJECT_SCOPE_MESSAGE = "Codex has no project-level MCP config; omit --project"
+
+
 def _config_path() -> Path:
     return Path(os.path.expanduser("~/.codex/config.toml"))
 
@@ -86,7 +91,7 @@ class CodexHost(Host):
 
     def register_mcp(self, *, project: bool, cwd: Path) -> RegisterResult:
         if project:
-            raise CodexScopeError("Codex has no project-level MCP config; omit --project")
+            raise CodexScopeError(PROJECT_SCOPE_MESSAGE)
         path = str(_config_path())
         if shutil.which("codex") is None:
             note = (f"`codex` is not on PATH — add this to {path} by hand:\n\n"
@@ -101,7 +106,7 @@ class CodexHost(Host):
 
     def unregister_mcp(self, *, project: bool, cwd: Path) -> None:
         if project:
-            raise CodexScopeError("Codex has no project-level MCP config; omit --project")
+            raise CodexScopeError(PROJECT_SCOPE_MESSAGE)
         if shutil.which("codex") is None:
             return
         # Uninstall is best-effort: Host.unregister_mcp -> None, so a failed
