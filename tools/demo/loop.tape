@@ -55,7 +55,7 @@ Type "claude"
 Enter
 Wait+Screen@60s /(?i)(claude|welcome|tips)/
 Sleep 2s
-Type "add lodash as a dependency"
+Type "add the lodash package to the dependencies"
 Sleep 1s
 Enter
 Wait+Screen@120s /yarn add lodash/

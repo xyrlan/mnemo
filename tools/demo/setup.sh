@@ -28,7 +28,7 @@ $MNEMO --version >/dev/null 2>&1 || fail "'$MNEMO' does not run; set MNEMO to a 
 
 # --- fresh tree -------------------------------------------------------------
 rm -rf "$DEMO_ROOT"
-mkdir -p "$DEMO_ROOT/app" "$DEMO_ROOT/vault"
+mkdir -p "$DEMO_ROOT/app" "$REPO_ROOT/docs/assets"
 cd "$DEMO_ROOT/app"
 git init -q -b main
 cat > package.json <<'EOF'
@@ -43,8 +43,11 @@ EOF
 printf '# app\n\nA small demo app.\n' > README.md
 git add -A && git -c user.name=demo -c user.email=demo@example.com commit -qm "init"
 
-# mnemo, project-scoped, with its own vault. --no-mirror: nothing to mirror.
-$MNEMO init --project --vault-root "$DEMO_ROOT/vault" --yes --no-mirror --quiet
+# mnemo, project-scoped: the vault lands at ./.mnemo, which is the only
+# project location config discovery knows about (a --vault-root elsewhere
+# would leave learn/why/hooks on the global vault). --no-mirror: nothing to mirror.
+$MNEMO init --project --yes --no-mirror --quiet
+[ -f "$DEMO_ROOT/app/.mnemo/mnemo.config.json" ] || fail "mnemo init did not write $DEMO_ROOT/app/.mnemo/mnemo.config.json"
 
 # Let Claude run yarn without a permission prompt in frame 3. Project
 # settings.json was just written by mnemo init; add the allow-list to it.
@@ -60,5 +63,5 @@ for rule in ("Bash(yarn add:*)", "Bash(yarn:*)", "Read", "Edit", "Write"):
 json.dump(d, open(p, "w"), indent=2)
 EOF
 
-echo "demo ready at $DEMO_ROOT/app (vault: $DEMO_ROOT/vault)"
+echo "demo ready at $DEMO_ROOT/app (vault: $DEMO_ROOT/app/.mnemo)"
 echo "record with:  cd $REPO_ROOT && vhs tools/demo/loop.tape"
