@@ -54,7 +54,7 @@ def test_export_writes_file_manifest_and_summary(repo: Path, vault: Path, capsys
     assert "exported 2 rules (1 universal) → .claude/rules/mnemo.md" in out
     text = (repo / ".claude" / "rules" / "mnemo.md").read_text(encoding="utf-8")
     assert text.startswith("<!-- mnemo:start") and '> you said: "always yarn"' in text
-    data = json.loads((vault / ".mnemo" / "export" / "app.json").read_text())
+    data = json.loads((vault / ".mnemo" / "export" / "app.json").read_text(encoding="utf-8"))
     assert data["cwd"] == str(repo.resolve()) and set(data["rules"]) == {"use-yarn-not-npm", "uni"}
     assert data["path"] == ".claude/rules/mnemo.md"
 
@@ -70,9 +70,9 @@ def test_cursor_and_codex_targets(repo: Path, vault: Path):
     write_rule(vault, slug="r")
     (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
     assert cli.main(["export", "--host", "cursor"]) == 0
-    assert (repo / ".cursor" / "rules" / "mnemo.mdc").read_text().startswith("---\ndescription:")
+    assert (repo / ".cursor" / "rules" / "mnemo.mdc").read_text(encoding="utf-8").startswith("---\ndescription:")
     assert cli.main(["export", "--host", "codex"]) == 0
-    agents = (repo / "AGENTS.md").read_text()
+    agents = (repo / "AGENTS.md").read_text(encoding="utf-8")
     assert agents.startswith("# Agents\n") and "<!-- mnemo:end -->" in agents
 
 
@@ -86,7 +86,7 @@ def test_single_marker_refuses_without_writing(repo: Path, vault: Path, capsys):
     (repo / "CLAUDE.md").write_text("x\n<!-- mnemo:start — old -->\nhalf\n", encoding="utf-8")
     assert cli.main(["export", "--target", "claude-md"]) == 1
     assert "one mnemo marker" in capsys.readouterr().err
-    assert (repo / "CLAUDE.md").read_text() == "x\n<!-- mnemo:start — old -->\nhalf\n"
+    assert (repo / "CLAUDE.md").read_text(encoding="utf-8") == "x\n<!-- mnemo:start — old -->\nhalf\n"
 
 
 def test_remove_strips_file_and_manifest(repo: Path, vault: Path, capsys):
@@ -182,11 +182,11 @@ def test_export_twice_is_byte_identical(repo: Path, vault: Path):
     write_rule(vault, slug="uni", projects=("x", "y"))
     assert cli.main(["export"]) == 0
     first_text = (repo / ".claude" / "rules" / "mnemo.md").read_bytes()
-    first_manifest = json.loads((vault / ".mnemo" / "export" / "app.json").read_text())
+    first_manifest = json.loads((vault / ".mnemo" / "export" / "app.json").read_text(encoding="utf-8"))
 
     assert cli.main(["export"]) == 0
     second_text = (repo / ".claude" / "rules" / "mnemo.md").read_bytes()
-    second_manifest = json.loads((vault / ".mnemo" / "export" / "app.json").read_text())
+    second_manifest = json.loads((vault / ".mnemo" / "export" / "app.json").read_text(encoding="utf-8"))
 
     assert first_text == second_text
     assert first_manifest["rules"] == second_manifest["rules"]

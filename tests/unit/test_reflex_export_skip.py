@@ -24,7 +24,7 @@ def _run_hook(monkeypatch, vault: Path, repo: Path, prompt: str) -> tuple:
     monkeypatch.setattr("sys.stdout", out)
     assert hook.main() == 0
     log = vault / ".mnemo" / "reflex-log.jsonl"
-    entries = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
     return out.getvalue(), entries
 
 
