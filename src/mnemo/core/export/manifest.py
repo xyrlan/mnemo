@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 from mnemo.core.atomic import atomic_write_bytes
+from mnemo.core.export.render import START_MARKER
 
 MANIFEST_DIR_REL = ".mnemo/export"
 
@@ -61,13 +62,32 @@ def delete_manifest(vault_root: Path, project: str) -> bool:
 
 
 def exported_slugs_for(vault_root: Path, project: str, *, repo_root: str) -> Set[str]:
-    """Slugs the host is already loading for this repo, else empty."""
+    """Slugs the host is already loading for this repo, else empty.
+
+    Checked by file, not by the manifest's recorded ``cwd``: in a git
+    worktree the UserPromptSubmit hook resolves to the main repo root while
+    the CLI wrote the manifest from the worktree path, so an exact string
+    comparison would miss a real, currently-loaded file. The manifest's
+    ``path`` resolved under ``repo_root`` existing and still carrying a
+    mnemo marker is the actual fact we care about; ``cwd`` stays recorded
+    for ``status`` to show, but is no longer compared here.
+    """
     data = read_manifest(vault_root, project)
     if not data:
         return set()
     if (data.get("host"), data.get("target")) not in _CLAUDE_LOADED:
         return set()
-    if str(data.get("cwd") or "") != str(repo_root):
+    rel = data.get("path")
+    if not isinstance(rel, str) or not rel:
+        return set()
+    target_path = Path(repo_root) / rel
+    try:
+        if not target_path.is_file():
+            return set()
+        text = target_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    if START_MARKER not in text:
         return set()
     return {s for s in data["rules"] if isinstance(s, str)}
 

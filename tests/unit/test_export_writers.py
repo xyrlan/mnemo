@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from mnemo.core.export.render import END_MARKER
+
 BLOCK = "<!-- mnemo:start — x -->\n## Rules\n\n### A  `a`\nbody\n<!-- mnemo:end -->\n"
 BLOCK2 = "<!-- mnemo:start — y -->\n## Rules\n\n### B  `b`\nbody2\n<!-- mnemo:end -->\n"
 
@@ -60,6 +62,53 @@ def test_strip_block_removes_it_or_returns_none():
     assert strip_block("no block here\n") is None
 
 
+def test_markers_must_start_the_line():
+    """A marker-like sequence inside an indented fenced snippet in the user's
+    own CLAUDE.md must not be treated as a real mnemo marker."""
+    from mnemo.core.export.writers import replace_block
+
+    text = (
+        "# Docs\n\n"
+        "Example:\n\n"
+        "```\n"
+        "  <!-- mnemo:start — x -->\n"
+        "  stuff\n"
+        "  <!-- mnemo:end -->\n"
+        "```\n"
+    )
+    result = replace_block(text, BLOCK)
+    assert result == text + "\n" + BLOCK
+    assert "  <!-- mnemo:start" in result  # snippet left untouched
+
+
+def test_two_full_blocks_are_rejected():
+    from mnemo.core.export.writers import MarkerError, replace_block, strip_block
+
+    text = BLOCK + "\n" + BLOCK2
+    with pytest.raises(MarkerError):
+        replace_block(text, BLOCK)
+    with pytest.raises(MarkerError):
+        strip_block(text)
+
+
+def test_start_marker_mid_line_with_proper_end_is_rejected():
+    from mnemo.core.export.writers import MarkerError, replace_block
+
+    text = "See <!-- mnemo:start — x --> for details\n" + END_MARKER + "\n"
+    with pytest.raises(MarkerError):
+        replace_block(text, BLOCK)
+
+
+def test_strip_block_round_trip_is_at_most_one_newline_off():
+    from mnemo.core.export.writers import replace_block, strip_block
+
+    assert strip_block(replace_block("", BLOCK)) == ""
+    assert strip_block(replace_block("a", BLOCK)) == "a\n"       # one \n added
+    assert strip_block(replace_block("a\n", BLOCK)) == "a\n"
+    assert strip_block(replace_block("a\n\n", BLOCK)) == "a\n"   # one \n removed
+    assert strip_block(replace_block("a\n\n\n", BLOCK)) == "a\n\n"  # one \n removed
+
+
 def test_write_whole_target_writes_prelude_plus_block(tmp_path: Path):
     from mnemo.core.export.writers import target_for, write_target
 
@@ -88,3 +137,46 @@ def test_remove_whole_target_deletes_file(tmp_path: Path):
     write_target(t, BLOCK)
     assert remove_target(t) is True and not t.path.exists()
     assert remove_target(t) is False
+
+
+def test_remove_block_target_deletes_file_when_block_was_the_whole_file(tmp_path: Path):
+    """CLAUDE.md that contained nothing but the mnemo block: after removing
+    it there is nothing left worth keeping, so delete rather than leave an
+    empty file behind."""
+    from mnemo.core.export.writers import remove_target, target_for, write_target
+
+    t = target_for("claude", "claude-md", tmp_path)
+    write_target(t, BLOCK)
+    assert t.path.read_text(encoding="utf-8") == BLOCK
+    assert remove_target(t) is True
+    assert not t.path.exists()
+
+
+def test_write_target_rejects_non_utf8_file(tmp_path: Path):
+    from mnemo.core.export.writers import TargetError, target_for, write_target
+
+    t = target_for("claude", "claude-md", tmp_path)
+    t.path.write_bytes("café latin-1 \xe9\n".encode("latin-1"))
+    with pytest.raises(TargetError):
+        write_target(t, BLOCK)
+
+
+def test_write_target_rejects_a_directory_in_place_of_the_file(tmp_path: Path):
+    from mnemo.core.export.writers import TargetError, target_for, write_target
+
+    t = target_for("codex", "agents-md", tmp_path)
+    t.path.mkdir(parents=True)
+    with pytest.raises(TargetError):
+        write_target(t, BLOCK)
+
+
+def test_crlf_file_round_trips_untouched_bytes(tmp_path: Path):
+    from mnemo.core.export.writers import remove_target, target_for, write_target
+
+    t = target_for("claude", "claude-md", tmp_path)
+    original = b"# Project\r\n\r\nsome notes\r\n"
+    t.path.write_bytes(original)
+    write_target(t, BLOCK)
+    write_target(t, BLOCK)
+    assert remove_target(t) is True
+    assert t.path.read_bytes() == original

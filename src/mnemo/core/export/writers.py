@@ -9,12 +9,19 @@ silently swallows the user's own text.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
 from mnemo.core.atomic import atomic_write_bytes
 from mnemo.core.export.render import END_MARKER, START_MARKER
+
+# Markers must anchor the start of a line: a marker-like sequence quoted or
+# indented inside the user's own prose (a fenced snippet in CLAUDE.md, a
+# mid-sentence mention) must never be mistaken for a real mnemo block.
+_START_RE = re.compile(r"^" + re.escape(START_MARKER), re.M)
+_END_RE = re.compile(r"^" + re.escape(END_MARKER) + r"[ \t]*\r?$", re.M)
 
 
 class TargetError(ValueError):
@@ -58,14 +65,19 @@ def target_for(host: str, target: str, cwd: Path) -> Target:
 
 def _span(text: str) -> Tuple[Optional[int], Optional[int]]:
     """(start offset, offset just past the end marker's line) or Nones."""
-    s = text.find(START_MARKER)
-    e = text.find(END_MARKER)
-    if s == -1 and e == -1:
+    starts = list(_START_RE.finditer(text))
+    ends = list(_END_RE.finditer(text))
+    if not starts and not ends:
         return None, None
-    if s == -1 or e == -1 or e < s:
+    if len(starts) > 1 or len(ends) > 1:
+        raise MarkerError("more than one mnemo block in the file; remove the extra one by hand")
+    if len(starts) != 1 or len(ends) != 1 or ends[0].start() < starts[0].start():
         raise MarkerError("found one mnemo marker but not the other; fix the file by hand")
-    end = e + len(END_MARKER)
-    if text[end:end + 1] == "\n":
+    s = starts[0].start()
+    end = ends[0].end()
+    if text[end:end + 2] == "\r\n":
+        end += 2
+    elif text[end:end + 1] == "\n":
         end += 1
     return s, end
 
@@ -87,21 +99,28 @@ def strip_block(text: str) -> Optional[str]:
     before, after = text[:s], text[e:]
     if after.startswith("\n"):
         after = after[1:]
-    elif not after:
-        # Nothing follows the block: also drop the blank-line separator
-        # replace_block would have inserted before it, so a strip undoes
-        # exactly what an append did.
-        before = before.rstrip("\n")
-        if before:
-            before += "\n"
+    elif not after and before.endswith("\n\n"):
+        # Nothing follows the block: drop at most the one separator newline
+        # replace_block may have inserted before it. Not a full rstrip — the
+        # user's own blank lines before that point are left alone.
+        before = before[:-1]
     return before + after
 
 
 def _read(path: Path) -> str:
+    # We write the file back below, so a lossy decode (errors="replace")
+    # would corrupt it; fail loudly instead of silently mangling bytes we
+    # don't understand. newline="" disables universal-newline translation so
+    # a CRLF file's line endings survive the round trip untouched.
     try:
-        return path.read_text(encoding="utf-8")
+        with open(path, "r", encoding="utf-8", newline="") as fh:
+            return fh.read()
     except FileNotFoundError:
         return ""
+    except UnicodeDecodeError:
+        raise TargetError(f"{path} is not valid UTF-8; mnemo export cannot safely rewrite it")
+    except OSError as exc:
+        raise TargetError(f"cannot read {path}: {exc}")
 
 
 def write_target(target: Target, block: str) -> None:
@@ -124,5 +143,10 @@ def remove_target(target: Target) -> bool:
     stripped = strip_block(_read(target.path))
     if stripped is None:
         return False
+    if not stripped:
+        # The block was the whole file; leave nothing behind rather than an
+        # empty file.
+        target.path.unlink()
+        return True
     atomic_write_bytes(target.path, stripped.encode("utf-8"))
     return True
