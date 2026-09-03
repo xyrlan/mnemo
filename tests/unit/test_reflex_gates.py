@@ -137,3 +137,31 @@ def test_scaled_floor_still_applies_to_top2():
         doc_count=1,
     )
     assert res.accepted_slugs == ["a"]
+
+
+def test_scaled_floor_admits_a_top2_the_unscaled_floor_would_reject():
+    # 0.25 clears the scaled floor (~0.19 at doc_count=1) but not the
+    # configured 2.0 floor. Relative gap: 0.6 >= 1.5 * 0.25 (0.375) passes.
+    scores = [("a", 0.6), ("b", 0.25)]
+    doc_tokens = {
+        "a": {"add", "dependencies", "package"},
+        "b": {"add", "dependencies", "package"},
+    }
+
+    res = evaluate_gates(
+        scores,
+        query_tokens=["add", "dependencies", "package"],
+        doc_tokens_by_slug=doc_tokens,
+        thresholds=DEFAULT_THRESHOLDS,
+        doc_count=1,
+    )
+    assert res.accepted_slugs == ["a", "b"]
+
+    res_unscaled = evaluate_gates(
+        scores,
+        query_tokens=["add", "dependencies", "package"],
+        doc_tokens_by_slug=doc_tokens,
+        thresholds=DEFAULT_THRESHOLDS,
+    )
+    assert res_unscaled.accepted_slugs == []
+    assert res_unscaled.silence_reason == "absolute_floor_fail"

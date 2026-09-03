@@ -94,13 +94,23 @@ def main() -> int:
                 "relative_gap", thresholds.get("relativeGap", 1.5))),
             "absolute_floor": float(overrides.get(
                 "absolute_floor", thresholds.get("absoluteFloor", 2.0))),
+            "floor_reference_docs": int(overrides.get(
+                "floor_reference_docs", thresholds.get("floorReferenceDocs", 30))),
         }
+        doc_count = int(index.get("doc_count", 0))
         result = gates.evaluate_gates(
             scores,
             query_tokens=q_tokens,
             doc_tokens_by_slug=doc_tokens_by_slug,
             thresholds=gate_thresholds,
+            doc_count=doc_count,
         )
+        # Record what was actually used so every later _log_silence/_log_emission
+        # (all pass thresholds=gate_thresholds) carries it — `mnemo why` needs
+        # both the configured floor and the effective one to explain a scaled
+        # decision. `absolute_floor` stays the configured value.
+        gate_thresholds["absolute_floor_effective"] = result.effective_floor
+        gate_thresholds["doc_count"] = doc_count
         # The receipt: the ranking and the numbers this decision was made on.
         # Everything past this point had rules scored, so a silence here can be
         # explained rather than merely named — see `core.reflex.receipts`.

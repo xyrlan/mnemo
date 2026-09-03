@@ -58,6 +58,82 @@ def test_hook_emits_on_confident_match(tmp_vault, monkeypatch, synthetic_index):
     assert "[[use-prisma-mock]]" in text
 
 
+def _one_rule_index(vault) -> None:
+    """Seed a reflex-index.json with ONLY the high-signal 'use-prisma-mock' rule.
+
+    No noise rules — this is the whole point of the cold-start floor fix: a
+    real N=1 vault must still be able to fire without artificially padding
+    the doc count. Source stays under ``bots/mnemo/memory/`` so
+    ``universal_threshold=1`` makes it universal.
+    """
+    from mnemo.core.reflex.index import build_index, write_index
+    feedback = vault / "shared" / "feedback"
+    feedback.mkdir(parents=True, exist_ok=True)
+
+    (feedback / "use-prisma-mock.md").write_text(
+        "---\n"
+        "name: use-prisma-mock\n"
+        "description: Always use jest-mock-extended to mock Prisma in tests\n"
+        "tags:\n"
+        "  - prisma\n"
+        "  - testing\n"
+        "aliases:\n"
+        "  - banco\n"
+        "  - database\n"
+        "sources:\n"
+        "  - bots/mnemo/memory/mock.md\n"
+        "stability: stable\n"
+        "---\n"
+        "Mock the Prisma client in tests using jest-mock-extended.\n",
+        encoding="utf-8",
+    )
+
+    idx = build_index(vault, universal_threshold=1)
+    write_index(vault, idx)
+
+
+def test_a_one_rule_vault_fires_on_the_next_prompt(tmp_vault, monkeypatch):
+    """The whole point of the fix: N=1 no longer requires padding with noise."""
+    _enable_reflex(tmp_vault, monkeypatch)
+    _one_rule_index(tmp_vault)
+
+    rc, stdout = _run_hook({
+        "cwd": str(tmp_vault),
+        "session_id": "sid-cold",
+        "prompt": "How do I mock prisma in a jest test with typescript",
+    })
+
+    assert rc == 0
+    assert stdout
+    payload = json.loads(stdout)
+    text = payload["hookSpecificOutput"]["additionalContext"]
+    assert "use-prisma-mock" in text
+
+    entry = _log_entries(tmp_vault)[-1]
+    assert entry["emitted"] == ["use-prisma-mock"]
+    assert entry["thresholds"]["absolute_floor"] == 2.0
+    assert entry["thresholds"]["absolute_floor_effective"] < 0.5
+    assert entry["thresholds"]["doc_count"] == 1
+    assert entry["thresholds"]["floor_reference_docs"] == 30
+
+
+def test_floor_reference_docs_of_one_disables_the_scaling(tmp_vault, monkeypatch):
+    _enable_reflex(tmp_vault, monkeypatch, thresholds={"floorReferenceDocs": 1})
+    _one_rule_index(tmp_vault)
+
+    rc, stdout = _run_hook({
+        "cwd": str(tmp_vault),
+        "session_id": "sid-noscale",
+        "prompt": "How do I mock prisma in a jest test with typescript",
+    })
+
+    assert rc == 0
+    assert stdout == ""
+    entry = _log_entries(tmp_vault)[-1]
+    assert entry["silence_reason"] == "absolute_floor_fail"
+    assert entry["thresholds"]["absolute_floor_effective"] == 2.0
+
+
 def _log_entries(vault) -> list[dict]:
     path = vault / ".mnemo" / "reflex-log.jsonl"
     if not path.exists():
