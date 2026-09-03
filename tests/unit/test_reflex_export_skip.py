@@ -50,9 +50,11 @@ def test_exported_slug_is_not_injected_and_is_recorded(tmp_vault: Path, repo: Pa
                      path=".claude/rules/mnemo.md", rules={"use-prisma-mock": "h"})
 
     out, entries = _run_hook(monkeypatch, tmp_vault, repo, PROMPT)
+    e = entries[-1]
     assert "use-prisma-mock" not in out
-    assert entries[-1]["exported"] == ["use-prisma-mock"]
-    assert entries[-1]["silence_reason"] == "all_exported" or "use-prisma-mock" not in entries[-1]["emitted"]
+    assert e["silence_reason"] == "all_exported"
+    assert e["exported"] == ["use-prisma-mock"]
+    assert any(c[0] == "use-prisma-mock" for c in e["candidates"])   # still visible in the receipt with its score
 
 
 def test_no_exported_file_still_injects(tmp_vault: Path, repo: Path, synthetic_index, monkeypatch):
@@ -61,6 +63,23 @@ def test_no_exported_file_still_injects(tmp_vault: Path, repo: Path, synthetic_i
     synthetic_index(tmp_vault)
     M.write_manifest(tmp_vault, "app", host="claude", target="rules", cwd="/somewhere/else",
                      path=".claude/rules/mnemo.md", rules={"use-prisma-mock": "h"})
+
+    out, entries = _run_hook(monkeypatch, tmp_vault, repo, PROMPT)
+    assert "use-prisma-mock" in out
+    assert "exported" not in entries[-1]
+
+
+def test_exported_rule_not_among_accepted_slugs_is_not_recorded(tmp_vault: Path, repo: Path, synthetic_index, monkeypatch):
+    """The manifest exports a rule that never won the gates (a noise rule);
+    the accepted rule injects normally and nothing was suppressed."""
+    from mnemo.core.export import manifest as M
+
+    synthetic_index(tmp_vault)
+    p = repo / ".claude" / "rules" / "mnemo.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("<!-- mnemo:start — x -->\n## Rules\n\n### P  `use-yarn`\nbody\n\n<!-- mnemo:end -->\n", encoding="utf-8")
+    M.write_manifest(tmp_vault, "app", host="claude", target="rules", cwd=str(repo.resolve()),
+                     path=".claude/rules/mnemo.md", rules={"use-yarn": "h"})
 
     out, entries = _run_hook(monkeypatch, tmp_vault, repo, PROMPT)
     assert "use-prisma-mock" in out
@@ -78,3 +97,17 @@ def test_why_prints_exported_lines():
     assert "injected  b (3.00)" in text
     assert "exported  a (already in your rules file)" in text
     assert "silent    every matching rule is already in your rules file (a, c)" in text
+
+
+def test_why_exported_line_comes_before_the_candidate_table():
+    from mnemo.core.reflex import receipts
+
+    silence = {"ts": "2026-09-02T09:43:00Z", "emitted": [], "scores": [],
+               "silence_reason": "relative_gap_fail", "exported": ["z"],
+               "candidates": [["strong", 6.0], ["weak", 5.0]],
+               "thresholds": {"relative_gap": 1.5}}
+    text = receipts.format_human([silence])
+    lines = text.splitlines()
+    exported_idx = next(i for i, l in enumerate(lines) if "exported  z" in l)
+    table_idx = next(i for i, l in enumerate(lines) if l.strip().startswith("strong"))
+    assert exported_idx < table_idx

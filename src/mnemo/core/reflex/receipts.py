@@ -133,13 +133,13 @@ def _format_silence(when: str, entry: dict, reason: str) -> list[str]:
     thresholds = entry.get("thresholds") or {}
     head, needs_table = _explain(reason, entry, candidates, thresholds)
     lines = [f"{when}  silent    {head}"]
+    if reason != "all_exported":
+        lines.extend(_exported_line(when, entry))
     if needs_table and candidates:
         pad = " " * (len(when) + 12)
         width = max(len(slug) for slug, _ in candidates)
         for slug, score in candidates:
             lines.append(f"{pad}{slug.ljust(width)}  {_num(score)}")
-    if reason != "all_exported":
-        lines.extend(_exported_line(when, entry))
     return lines
 
 

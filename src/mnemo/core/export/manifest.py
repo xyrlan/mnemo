@@ -64,18 +64,17 @@ def delete_manifest(vault_root: Path, project: str) -> bool:
 def exported_slugs_for(vault_root: Path, project: str, *, repo_root: str) -> Set[str]:
     """Slugs the host is already loading for this repo, else empty.
 
-    Checked by file, not by the manifest's recorded ``cwd``: in a git
-    worktree the UserPromptSubmit hook resolves to the main repo root while
-    the CLI wrote the manifest from the worktree path, so an exact string
-    comparison would miss a real, currently-loaded file. The manifest's
-    ``path`` resolved under ``repo_root`` existing and still carrying a
-    mnemo marker is the actual fact we care about. First we probe the tree
-    the hook is standing in right now (``repo_root``); if that copy is
-    missing — a worktree checked out somewhere other than where the export
-    was written from, or vice versa — we fall back to the tree the export
-    was actually written from (the manifest's recorded ``cwd``). Either way
-    the marker check applies to whichever file was found, so a stale or
-    hand-edited file that lost its marker still doesn't count.
+    Checked by file, not by the manifest's recorded ``cwd``: the hook passes
+    ``repo_root`` as the tree it is standing in right now (via
+    ``resolve_agent``), so that is the only tree probed. The manifest's
+    ``cwd`` is informational — read by ``mnemo status`` to show where the
+    export was last written from — and is never used to locate the file
+    here. A sibling git worktree with no rules file of its own must read as
+    "nothing exported", even if another worktree recorded in the manifest's
+    ``cwd`` still has one; probing ``cwd`` as a fallback would leak that
+    worktree's export into this one. The file existing under ``repo_root``
+    and still carrying the mnemo marker is the actual fact we care about, so
+    a stale or hand-edited file that lost its marker still doesn't count.
     """
     data = read_manifest(vault_root, project)
     if not data:
@@ -87,13 +86,6 @@ def exported_slugs_for(vault_root: Path, project: str, *, repo_root: str) -> Set
         return set()
 
     target_path = Path(repo_root) / rel
-    if not target_path.is_file():
-        cwd = data.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            fallback = Path(cwd) / rel
-            if fallback.is_file():
-                target_path = fallback
-
     try:
         if not target_path.is_file():
             return set()

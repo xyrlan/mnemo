@@ -51,12 +51,11 @@ def test_exported_slugs_only_for_claude_loaded_targets_in_that_repo(tmp_vault: P
                      path=".claude/rules/mnemo.md", rules={"a": "h", "b": "h"})
     # file present, with the marker, in the repo the manifest's path resolves under
     assert M.exported_slugs_for(tmp_vault, "app", repo_root=str(repo)) == {"a", "b"}
-    # a different repo root that lacks the file falls back to the manifest's
-    # recorded cwd, which still has it (see the dedicated fallback test for
-    # the case where neither location has the file)
+    # a different repo root that lacks the file: empty — the hook only probes
+    # the tree it is standing in, never the manifest's recorded cwd
     other = tmp_path / "elsewhere" / "app"
     other.mkdir(parents=True)
-    assert M.exported_slugs_for(tmp_vault, "app", repo_root=str(other)) == {"a", "b"}
+    assert M.exported_slugs_for(tmp_vault, "app", repo_root=str(other)) == set()
     # unknown project: no manifest at all
     assert M.exported_slugs_for(tmp_vault, "nope", repo_root=str(repo)) == set()
 
@@ -79,31 +78,27 @@ def test_exported_slugs_only_for_claude_loaded_targets_in_that_repo(tmp_vault: P
     assert M.exported_slugs_for(tmp_vault, "cur", repo_root=str(cur_repo)) == set()
 
 
-def test_exported_slugs_falls_back_to_manifest_cwd_when_repo_root_lacks_the_file(
+def test_exported_slugs_does_not_leak_across_sibling_worktrees(
     tmp_vault: Path, tmp_path: Path
 ):
-    """The hook probes the tree it is standing in; failing that, the tree the
-    export was written from (a worktree checked out from a different path
-    than the one the manifest's ``cwd`` recorded, or vice versa)."""
+    """Worktree A has the exported file; the manifest's recorded ``cwd`` is
+    also A. A sibling worktree B, standing in its own tree with no rules
+    file, must not inherit A's export via the manifest's ``cwd`` — the hook
+    passes the tree it is actually standing in, and that is the only tree
+    probed."""
     from mnemo.core.export import manifest as M
 
-    written_from = tmp_path / "written-from" / "app"
-    rules_file = written_from / ".claude" / "rules" / "mnemo.md"
+    worktree_a = tmp_path / "worktree-a" / "app"
+    rules_file = worktree_a / ".claude" / "rules" / "mnemo.md"
     rules_file.parent.mkdir(parents=True)
     rules_file.write_text(START_MARKER + " — generated -->\nbody\n", encoding="utf-8")
 
-    M.write_manifest(tmp_vault, "app", host="claude", target="rules", cwd=str(written_from),
+    M.write_manifest(tmp_vault, "app", host="claude", target="rules", cwd=str(worktree_a),
                      path=".claude/rules/mnemo.md", rules={"a": "h", "b": "h"})
 
-    # A different repo_root that does NOT have the file: falls back to cwd.
-    standing_in = tmp_path / "standing-in" / "app"
-    standing_in.mkdir(parents=True)
-    assert M.exported_slugs_for(tmp_vault, "app", repo_root=str(standing_in)) == {"a", "b"}
-
-    # Neither repo_root nor cwd has the file: empty.
-    M.write_manifest(tmp_vault, "gone", host="claude", target="rules", cwd=str(tmp_path / "nowhere"),
-                     path=".claude/rules/mnemo.md", rules={"a": "h"})
-    assert M.exported_slugs_for(tmp_vault, "gone", repo_root=str(tmp_path / "also-nowhere")) == set()
+    worktree_b = tmp_path / "worktree-b" / "app"
+    worktree_b.mkdir(parents=True)
+    assert M.exported_slugs_for(tmp_vault, "app", repo_root=str(worktree_b)) == set()
 
 
 def test_staleness_counts_changed_added_and_removed(tmp_vault: Path):

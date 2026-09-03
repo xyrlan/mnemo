@@ -129,6 +129,19 @@ def test_emit_rate_defaults_now_to_the_clock(tmp_path: Path):
     assert numbers.reflex_emit_rate(vault) == (1, 1)
 
 
+def test_emit_rate_excludes_all_exported_rows(tmp_path: Path):
+    # A prompt served entirely by the exported rules file never was a reflex
+    # opportunity — it must not dilute the denominator.
+    vault = tmp_path / "v"
+    _write_log(vault, [
+        {"ts": _ts(1), "emitted": ["a"], "project": "p"},
+        {"ts": _ts(2), "emitted": [], "project": "p", "silence_reason": "relative_gap_fail"},
+        {"ts": _ts(3), "emitted": [], "project": "p", "silence_reason": "all_exported"},
+        {"ts": _ts(4), "emitted": [], "project": "p", "silence_reason": "all_exported"},
+    ])
+    assert numbers.reflex_emit_rate(vault, now=NOW) == (1, 2)
+
+
 def test_emit_rate_never_raises_on_a_directory_in_place_of_the_log(tmp_path: Path):
     vault = tmp_path / "v"
     (vault / ".mnemo" / "reflex-log.jsonl").mkdir(parents=True)

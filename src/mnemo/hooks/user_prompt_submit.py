@@ -70,16 +70,8 @@ def main() -> int:
 
         # Candidate slugs — project scope (local + universal).
         candidates = _candidates_for_project(index, project)
-        # Rules already exported into this tree's rules file are loaded by
-        # Claude Code itself; injecting them again is a repeat.
-        from mnemo.core.export.manifest import exported_slugs_for
-        exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
-                          & set(candidates))
-        if exported:
-            candidates = [s for s in candidates if s not in exported]
         if not candidates:
-            reason = "all_exported" if exported else "index_missing"
-            _log_silence(vault, sid, project, prompt_raw, reason=reason, exported=exported)
+            _log_silence(vault, sid, project, prompt_raw, reason="index_missing")
             return 0
 
         # Score
@@ -116,13 +108,28 @@ def main() -> int:
         if not result.accepted_slugs:
             _log_silence(vault, sid, project, prompt_raw,
                          reason=result.silence_reason or "index_missing",
+                         candidates=receipt, thresholds=gate_thresholds)
+            return 0
+
+        # Rules already exported into this tree's rules file are loaded by
+        # Claude Code itself; injecting them again is a repeat. Checked only
+        # against what the gates actually accepted — export suppresses
+        # output, it does not re-rank input (subtracting before scoring
+        # could let a weaker rule win a comparison the un-exported vault
+        # would have refused).
+        from mnemo.core.export.manifest import exported_slugs_for
+        exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
+                          & set(result.accepted_slugs))
+        accepted = [s for s in result.accepted_slugs if s not in exported]
+        if not accepted:
+            _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
                          candidates=receipt, thresholds=gate_thresholds,
                          exported=exported)
             return 0
 
         # Dedupe against injected_cache (day-lifetime)
         cache = session_state.read_injected_cache(vault)
-        survivors = [s for s in result.accepted_slugs if s not in cache]
+        survivors = [s for s in accepted if s not in cache]
         if not survivors:
             _log_silence(vault, sid, project, prompt_raw, reason="deduped",
                          candidates=receipt, thresholds=gate_thresholds,

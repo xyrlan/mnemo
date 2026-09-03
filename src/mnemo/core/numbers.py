@@ -73,7 +73,10 @@ def reflex_emit_rate(
 
     ``total`` counts every logged prompt — a silence is a row with an empty (or
     absent) ``emitted`` list — so the ratio is "how often a rule was injected",
-    not "how often reflex ran at all".
+    not "how often reflex ran at all". The one exception is a row whose
+    ``silence_reason`` is ``all_exported``: that prompt was answered by the
+    rules file Claude Code already loads, not by reflex, so it was never a
+    reflex opportunity and is excluded from both sides of the ratio.
 
     Returns ``None`` when the log is missing or holds no row inside the window,
     which the caller renders as "no line" rather than "0%".
@@ -91,6 +94,8 @@ def reflex_emit_rate(
             for row in _iter_rows(mnemo_dir / name):
                 ts = _parse_ts(row.get("ts"))
                 if ts is None or ts < cutoff:
+                    continue
+                if row.get("silence_reason") == "all_exported":
                     continue
                 total += 1
                 if row.get("emitted"):
