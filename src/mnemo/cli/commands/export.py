@@ -13,10 +13,38 @@ from pathlib import Path
 from mnemo.cli.parser import command
 
 
+def configured_universal_threshold() -> int:
+    """``scoping.universalThreshold`` from config, 2 when unset or unreadable."""
+    from mnemo.core import config as cfg_mod
+
+    try:
+        return int((cfg_mod.load_config().get("scoping") or {}).get("universalThreshold", 2))
+    except Exception:  # noqa: BLE001
+        return 2
+
+
+def print_export_notes(report) -> None:
+    """The two caveats an export can carry, on stderr — shared with ``mnemo init``.
+
+    A user-profile page can hold a name or an email and is about to be written
+    into a file the user may commit; the size warning says the block will ride
+    on every prompt. Both matter identically whichever command did the export.
+    """
+    if report.user_pages:
+        slugs = ", ".join(report.user_pages)
+        n_user = len(report.user_pages)
+        print(
+            f"note: {n_user} user-profile page(s) included ({slugs}) — they can carry "
+            "names or emails; check before committing, or pass --types feedback to omit",
+            file=sys.stderr,
+        )
+    if report.warning:
+        print(f"warning: {report.warning}", file=sys.stderr)
+
+
 @command("export")
 def cmd_export(args: argparse.Namespace) -> int:
     from mnemo import cli  # late binding, as every other command does
-    from mnemo.core import config as cfg_mod
     from mnemo.core import export as export_mod
     from mnemo.core.agent import resolve_agent, resolve_canonical_agent
 
@@ -66,10 +94,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         print("error: --limit must be at least 1", file=sys.stderr)
         return 2
 
-    try:
-        threshold = int((cfg_mod.load_config().get("scoping") or {}).get("universalThreshold", 2))
-    except Exception:  # noqa: BLE001
-        threshold = 2
+    threshold = configured_universal_threshold()
 
     remove = bool(getattr(args, "remove", False))
     try:
@@ -93,16 +118,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     if not report.rules:
         print(f"no rules to export for {project} — correct Claude, run `mnemo learn`, then export")
         return 0
-    if report.user_pages:
-        slugs = ", ".join(report.user_pages)
-        n_user = len(report.user_pages)
-        print(
-            f"note: {n_user} user-profile page(s) included ({slugs}) — they can carry "
-            "names or emails; check before committing, or pass --types feedback to omit",
-            file=sys.stderr,
-        )
-    if report.warning:
-        print(f"warning: {report.warning}", file=sys.stderr)
+    print_export_notes(report)
     n = len(report.rules)
     plural = "rule" if n == 1 else "rules"
     if not report.wrote:

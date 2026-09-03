@@ -66,6 +66,104 @@ def _ensure_gitignore(cwd: Path, entries: tuple[str, ...] = GITIGNORE_ENTRIES) -
         pass
 
 
+def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
+    """``mnemo init --host cursor|codex``: vault + MCP registration + rules file.
+
+    No hooks, no status line, no memory mirror — those are Claude Code seams.
+    Learning still happens in Claude Code; this host reads what was learned.
+    """
+    import os
+    from mnemo.cli.commands.export import configured_universal_threshold, print_export_notes
+    from mnemo.core import config as cfg_mod, export as export_mod
+    from mnemo.core.agent import resolve_agent, resolve_canonical_agent
+    from mnemo.hosts import get_host
+    from mnemo.hosts.codex import PROJECT_SCOPE_MESSAGE, CodexScopeError
+    from mnemo.install import preflight, scaffold
+
+    quiet = bool(args.quiet)
+    say = (lambda *a, **k: None) if quiet else print
+    project = bool(getattr(args, "project", False))
+    cwd = Path.cwd()
+    host = get_host(host_name)
+
+    # Scope is a usage error, so it is answered before anything is written.
+    if host_name == "codex" and project:
+        print(f"error: {PROJECT_SCOPE_MESSAGE}", file=sys.stderr)
+        return 2
+
+    # 1. Determine vault root (same precedence as the Claude path, minus the
+    #    interactive prompt: these hosts are always wired non-interactively).
+    if args.vault_root:
+        vault_root = Path(os.path.expanduser(args.vault_root))
+    elif project:
+        vault_root = cwd / ".mnemo"
+    else:
+        vault_root = Path(os.path.expanduser("~/mnemo"))
+
+    # 2. Preflight. These hosts never write a Claude settings.json, so its
+    #    writability is not theirs to fail on (`check_settings=False`).
+    say("Running preflight checks…")
+    result = preflight.run_preflight(vault_root=vault_root, check_settings=False)
+    for issue in result.issues:
+        say(f"  [{issue.severity}] {issue.kind}: {issue.message}")
+        say(f"       → {issue.remediation}")
+    if not result.ok:
+        print("Preflight failed. Resolve the issues above and retry.", file=sys.stderr)
+        return 1
+
+    # 3. Scaffold vault + persist the vault root (see cmd_init step 4b).
+    say(f"Scaffolding vault at {vault_root}…")
+    scaffold.scaffold_vault(vault_root)
+    if project:
+        cfg_mod.save_config({"vaultRoot": str(vault_root)}, path=vault_root / "mnemo.config.json")
+    else:
+        cfg_mod.save_config({"vaultRoot": str(vault_root)})
+
+    # 4. Register the MCP server in the host's own config.
+    try:
+        reg = host.register_mcp(project=project, cwd=cwd)
+    except CodexScopeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    say(f"MCP server registered for {host_name} ({reg.method}) — {reg.path}")
+    if reg.note:
+        # A note is work the user must still do by hand (the TOML to paste when
+        # `codex` is not on PATH). Swallowing it under --quiet leaves a dead
+        # install reporting success, so it prints either way.
+        print(reg.note)
+
+    # 5. Write the rules file, so the host has something to read right away.
+    project_name = resolve_canonical_agent(str(cwd)).name
+    repo_root = Path(resolve_agent(str(cwd)).repo_root).resolve()
+    try:
+        report = export_mod.run_export(vault_root, project=project_name,
+                                       repo_root=repo_root, host=host_name,
+                                       universal_threshold=configured_universal_threshold())
+    except (export_mod.TargetError, export_mod.MarkerError) as exc:
+        # The MCP server is already wired; only the rules file failed, and
+        # `mnemo export` is the command that fixes it. Don't fail the install —
+        # but say so on stderr even under --quiet, since it is unfinished work.
+        print(f"rules file not written: {exc}", file=sys.stderr)
+        print(f"  → fix that, then re-run `mnemo export --host {host_name}`", file=sys.stderr)
+        return 0
+    if report.rules:
+        print_export_notes(report)
+        rel = report.target.path.relative_to(repo_root).as_posix()
+        plural = "s" if len(report.rules) != 1 else ""
+        say(f"exported {len(report.rules)} rule{plural} → {rel}")
+    else:
+        say(f"no rules yet — learn in Claude Code (mnemo learn), "
+            f"then `mnemo export --host {host_name}`")
+
+    served = ("MCP tools + the rules file above" if report.rules
+              else "MCP tools (the rules file comes with your first export)")
+    say("")
+    say(f"mnemo learns from Claude Code sessions. In {host_name} it serves what it "
+        f"learned: {served}. Re-run "
+        f"`mnemo export --host {host_name}` after new rules.")
+    return 0
+
+
 @command("init")
 def cmd_init(args: argparse.Namespace) -> int:
     import os
@@ -75,6 +173,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     quiet = bool(args.quiet)
     say = (lambda *a, **k: None) if quiet else print
     project = bool(getattr(args, "project", False))
+    host_name = getattr(args, "host", "claude") or "claude"
+    if host_name != "claude":
+        return _init_other_host(args, host_name)
     cwd = Path.cwd()
 
     # Resolve install targets per scope

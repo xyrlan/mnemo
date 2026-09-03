@@ -164,6 +164,11 @@ and leaving mnemo costs you nothing. `--host cursor` and `--host codex` write
 the same rules where those tools look. Re-run after learning more;
 `mnemo status` says when the file is behind the vault.
 
+Using Cursor or Codex as well? `mnemo init --host cursor` (or `codex`)
+registers mnemo's MCP server there and writes the rules file that tool reads
+(`.cursor/rules/mnemo.mdc`, `AGENTS.md`). Learning still happens in Claude
+Code; those tools get what it learned.
+
 Everything else is a CLI subcommand (`mnemo help --all`): `mnemo open`,
 `mnemo fix`, `mnemo statusline`, `mnemo backfill`, `mnemo reclassify`,
 `mnemo export`, `mnemo autopilot`, `mnemo disable-rule`, and the rest.
