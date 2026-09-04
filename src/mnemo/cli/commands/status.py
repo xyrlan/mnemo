@@ -197,7 +197,8 @@ def _print_export_status(vault: Path) -> None:
         threshold = int((cfg_mod.load_config().get("scoping") or {}).get("universalThreshold", 2))
     except Exception:  # noqa: BLE001
         threshold = 2
-    current = export_mod.current_hashes(vault, project=project, universal_threshold=threshold)
+    current = export_mod.current_hashes(vault, project=project, universal_threshold=threshold,
+                                        full=manifest_mod.manifest_is_full(data))
     stale = manifest_mod.staleness(vault, project, current=current)
     if stale is None:
         return

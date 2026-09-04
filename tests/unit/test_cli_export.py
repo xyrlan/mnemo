@@ -230,3 +230,75 @@ def test_manifest_present_only_after_a_real_write(repo: Path, vault: Path):
 
     assert cli.main(["export", "--remove"]) == 0
     assert not manifest_path.exists()
+
+
+# --- compact default, --full opt-in (#129) ---------------------------------
+
+_LONG_BODY = (
+    "Use yarn in this repo.\n"
+    "\n"
+    "**Why:** npm rewrites the lockfile.\n"
+    "\n"
+    "**How to apply:** run `yarn add`.\n"
+)
+
+
+def test_full_flag_is_registered():
+    from mnemo.cli.parser import _build_parser
+    import mnemo.cli.commands  # noqa: F401
+
+    assert _build_parser().parse_args(["export"]).full is False
+    assert _build_parser().parse_args(["export", "--full"]).full is True
+
+
+def test_export_is_compact_by_default(repo: Path, vault: Path, capsys):
+    write_rule(vault, slug="use-yarn-not-npm", name="Use yarn", body=_LONG_BODY, quote="always yarn")
+    assert cli.main(["export"]) == 0
+    text = (repo / ".claude" / "rules" / "mnemo.md").read_text(encoding="utf-8")
+    assert "Use yarn in this repo." in text
+    assert "**Why:**" not in text and "**How to apply:**" not in text
+    assert '> you said: "always yarn"' in text
+    assert "read_mnemo_rule" in text
+    data = json.loads((vault / ".mnemo" / "export" / "app.json").read_text(encoding="utf-8"))
+    assert data["format"] == "compact"
+
+
+def test_full_flag_writes_the_whole_body(repo: Path, vault: Path, capsys):
+    write_rule(vault, slug="use-yarn-not-npm", name="Use yarn", body=_LONG_BODY, quote="always yarn")
+    assert cli.main(["export", "--full"]) == 0
+    text = (repo / ".claude" / "rules" / "mnemo.md").read_text(encoding="utf-8")
+    assert "**Why:**" in text and "**How to apply:**" in text
+    assert "read_mnemo_rule" not in text
+    data = json.loads((vault / ".mnemo" / "export" / "app.json").read_text(encoding="utf-8"))
+    assert data["format"] == "full"
+
+
+def test_compact_export_of_long_rules_stays_under_the_warning(repo: Path, vault: Path, capsys):
+    """Forty rules whose Why/How run long: full would warn, compact must not."""
+    for i in range(40):
+        write_rule(vault, slug=f"r{i:02d}", body="Short lead.\n\n" + ("word " * 120) + "\n")
+    assert cli.main(["export", "--dry-run"]) == 0
+    assert "tokens" not in capsys.readouterr().err
+    assert cli.main(["export", "--full", "--dry-run"]) == 0
+    assert "tokens" in capsys.readouterr().err
+
+
+def test_full_mode_warning_suggests_dropping_full_first(repo: Path, vault: Path, capsys):
+    for i in range(40):
+        write_rule(vault, slug=f"r{i:02d}", body="Short lead.\n\n" + ("word " * 120) + "\n")
+    assert cli.main(["export", "--full", "--dry-run"]) == 0
+    err = capsys.readouterr().err
+    assert "without --full" in err and "--limit 20" in err
+
+
+def test_init_host_export_is_compact(repo: Path, vault: Path, capsys, monkeypatch):
+    """``mnemo init --host`` goes through run_export with its defaults."""
+    from mnemo.core import export as export_mod
+
+    write_rule(vault, slug="r", body=_LONG_BODY)
+    report = export_mod.run_export(vault, project="app", repo_root=repo, host="cursor")
+    assert report.full is False
+    assert "**Why:**" not in report.block
+    assert "**Why:**" in export_mod.run_export(
+        vault, project="app", repo_root=repo, host="cursor", full=True, dry_run=True,
+    ).block

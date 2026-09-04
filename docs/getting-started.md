@@ -370,17 +370,22 @@ mnemo export --host cursor        # → .cursor/rules/mnemo.mdc
 mnemo export --host codex         # managed block inside AGENTS.md
 mnemo export --dry-run            # print the block, touch nothing
 mnemo export --limit 10           # keep the ten most-sourced rules
+mnemo export --full               # whole rule bodies, not just the lead sentence
 mnemo export --remove             # delete the file / strip the block
 ```
 
 What goes in: `feedback` and `user` rules attributed to this repo, plus
 universal ones, most-sourced first. `reference` pages stay out unless you
-pass `--all-types`. Each rule carries the sentence you said as
-`> you said: "…"`. User-profile pages (`type: user`) are included too and
-can carry names or emails — export tells you when one is in the block; pass
-`--types feedback` to leave them out. When the block would load more than
-about 4,000 tokens on every prompt, export says so on stderr and suggests a
-`--limit`.
+pass `--all-types`. Each rule is written as its lead sentence — the line
+before the `**Why:**` / `**How to apply:**` sections — plus the sentence you
+said as `> you said: "…"`; the block opens with a note pointing the tool at
+the `read_mnemo_rule` MCP tool for the rest. That keeps a real project's
+block under 3,000 tokens where the whole bodies ran to 6,000–7,000, and the
+block rides on every prompt. Pass `--full` for the whole bodies. User-profile
+pages (`type: user`) are included too and can carry names or emails — export
+tells you when one is in the block; pass `--types feedback` to leave them
+out. When the block would load more than about 4,000 tokens on every prompt,
+export says so on stderr and suggests a `--limit` (or dropping `--full`).
 
 The block sits between `<!-- mnemo:start` and `<!-- mnemo:end -->`; anything
 outside the markers in CLAUDE.md or AGENTS.md is never touched, and export

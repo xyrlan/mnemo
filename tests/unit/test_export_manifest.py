@@ -21,6 +21,21 @@ def test_write_and_read_round_trip(tmp_vault: Path):
     assert M.read_manifest(tmp_vault, "other") is None
 
 
+def test_manifest_records_the_format(tmp_vault: Path):
+    from mnemo.core.export import manifest as M
+
+    M.write_manifest(
+        tmp_vault, "app", host="claude", target="rules", cwd="/r/app",
+        path=".claude/rules/mnemo.md", rules={"a": "h1"}, format="compact",
+    )
+    assert M.read_manifest(tmp_vault, "app")["format"] == "compact"
+    M.write_manifest(
+        tmp_vault, "app", host="claude", target="rules", cwd="/r/app",
+        path=".claude/rules/mnemo.md", rules={"a": "h1"}, format="full",
+    )
+    assert M.read_manifest(tmp_vault, "app")["format"] == "full"
+
+
 def test_corrupt_manifest_reads_as_none(tmp_vault: Path):
     from mnemo.core.export import manifest as M
 

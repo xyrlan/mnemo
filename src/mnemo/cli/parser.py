@@ -279,6 +279,8 @@ def _build_parser() -> argparse.ArgumentParser:
     export.add_argument("--all-types", action="store_true",
                         help="include reference and project pages too (cannot combine with --types)")
     export.add_argument("--limit", type=int, default=None, metavar="N", help="keep only the first N after ordering")
+    export.add_argument("--full", action="store_true",
+                        help="write each rule's whole body (default: its first paragraph and your quote)")
     export.add_argument("--dry-run", action="store_true", help="print the block, write nothing")
     export.add_argument("--remove", action="store_true", help="delete the exported file / block and its manifest")
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")

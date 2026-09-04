@@ -103,6 +103,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             host=host, target=target,
             types=types, universal_threshold=threshold,
             limit=limit,
+            full=bool(getattr(args, "full", False)),
             dry_run=bool(getattr(args, "dry_run", False)),
             remove=remove,
             force_warning=all_types,

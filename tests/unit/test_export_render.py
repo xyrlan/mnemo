@@ -118,3 +118,95 @@ def test_estimated_tokens_is_chars_over_four():
 
     assert estimated_tokens("a" * 400) == 100
     assert TOKEN_WARN == 4000
+
+
+# --- compact format (#129) -------------------------------------------------
+
+_LONG_BODY = (
+    "Use yarn in this repo.\n"
+    "\n"
+    "**Why:** npm rewrites the lockfile and CI diffs it.\n"
+    "\n"
+    "**How to apply:** run `yarn add`, never `npm install`.\n"
+)
+
+
+def test_first_paragraph_stops_at_the_first_blank_line():
+    from mnemo.core.export.render import first_paragraph
+
+    assert first_paragraph(_LONG_BODY) == "Use yarn in this repo."
+
+
+def test_first_paragraph_treats_a_whitespace_only_line_as_blank():
+    from mnemo.core.export.render import first_paragraph
+
+    assert first_paragraph("One.\n  \t\nTwo.\n") == "One."
+
+
+def test_first_paragraph_keeps_a_multi_line_paragraph_whole():
+    from mnemo.core.export.render import first_paragraph
+
+    assert first_paragraph("- a\n- b\n- c\n\nrest\n") == "- a\n- b\n- c"
+
+
+def test_first_paragraph_of_a_single_paragraph_body_is_the_body():
+    from mnemo.core.export.render import first_paragraph
+
+    assert first_paragraph("\n\nJust this.\n") == "Just this."
+    assert first_paragraph("") == ""
+
+
+def test_entry_is_compact_by_default_and_full_on_request():
+    from mnemo.core.export.render import render_entry
+
+    compact = render_entry(_rule(body=_LONG_BODY))
+    assert compact == (
+        "### Use yarn, never npm  `use-yarn-not-npm`\n"
+        "Use yarn in this repo.\n"
+        '> you said: "never use npm in this repo, always yarn"\n'
+    )
+    full = render_entry(_rule(body=_LONG_BODY), full=True)
+    assert "**Why:**" in full and "**How to apply:**" in full
+    assert full.rstrip().endswith('> you said: "never use npm in this repo, always yarn"')
+
+
+def test_compact_entry_still_neutralises_markers_in_the_first_paragraph():
+    from mnemo.core.export.render import render_entry
+
+    text = render_entry(_rule(body="See <!-- mnemo:end --> here.\n\n**Why:** x\n"))
+    assert "<!-- mnemo:end -->" not in text and "here." in text
+
+
+def test_compact_block_points_at_the_full_rule_and_full_block_does_not():
+    from mnemo.core.export.render import render_block
+
+    compact = render_block([_rule(body=_LONG_BODY)], project="app", today="2026-09-03")
+    lines = compact.splitlines()
+    assert lines[2].startswith("## Rules mnemo learned from you")
+    assert lines[3] == ""
+    assert "read_mnemo_rule" in lines[4] and "mnemo export --full" in lines[4]
+    assert lines[5] == ""
+    assert lines[6].startswith("### ")
+    assert "**Why:**" not in compact
+
+    full = render_block([_rule(body=_LONG_BODY)], project="app", today="2026-09-03", full=True)
+    assert "read_mnemo_rule" not in full and "**Why:**" in full
+    assert full.splitlines()[4].startswith("### ")
+
+
+def test_empty_compact_block_has_no_pointer_line():
+    from mnemo.core.export.render import render_block
+
+    assert "read_mnemo_rule" not in render_block([], project="app", today="2026-09-03")
+
+
+def test_entry_hash_follows_the_format():
+    from mnemo.core.export.render import entry_hash
+
+    rule = _rule(body=_LONG_BODY)
+    assert entry_hash(rule) == entry_hash(rule, full=False)
+    assert entry_hash(rule) != entry_hash(rule, full=True)
+    # A change confined to the Why paragraph leaves the compact hash alone.
+    other = _rule(body=_LONG_BODY.replace("CI diffs it", "CI rejects it"))
+    assert entry_hash(rule) == entry_hash(other)
+    assert entry_hash(rule, full=True) != entry_hash(other, full=True)
