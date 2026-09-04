@@ -121,6 +121,51 @@ def test_generate_digest_reflex_counts(tmp_path: Path):
     assert d.reflex_top_silence_reasons[0][1] == 2
 
 
+def test_generate_digest_reflex_emit_rate_excludes_all_exported(tmp_path: Path):
+    """Issue #128: the digest denominator must agree with core/numbers.py.
+
+    10 rows: 2 ``all_exported`` silences (never a reflex opportunity), 3
+    emissions, 5 other silences. ``reflex_prompt_count`` and
+    ``reflex_emit_count`` are computed over the 8 non-``all_exported`` rows,
+    so the rate is 3/8 — matching what ``mnemo status`` reports via
+    ``core.numbers.reflex_emit_rate``. ``all_exported`` still shows up in
+    ``reflex_top_silence_reasons`` — it is a real, useful reason to surface.
+    """
+    entries = [
+        {"ts": "2026-04-25T10:00:00Z", "emitted": ["a"], "silence_reason": None},
+        {"ts": "2026-04-25T10:01:00Z", "emitted": ["b"], "silence_reason": None},
+        {"ts": "2026-04-25T10:02:00Z", "emitted": ["c"], "silence_reason": None},
+        {"ts": "2026-04-25T10:03:00Z", "emitted": [], "silence_reason": "relative_gap_fail"},
+        {"ts": "2026-04-25T10:04:00Z", "emitted": [], "silence_reason": "relative_gap_fail"},
+        {"ts": "2026-04-25T10:05:00Z", "emitted": [], "silence_reason": "relative_gap_fail"},
+        {"ts": "2026-04-25T10:06:00Z", "emitted": [], "silence_reason": "below_min_tokens"},
+        {"ts": "2026-04-25T10:07:00Z", "emitted": [], "silence_reason": "index_missing"},
+        {"ts": "2026-04-25T10:08:00Z", "emitted": [], "silence_reason": "all_exported",
+         "exported": ["x"]},
+        {"ts": "2026-04-25T10:09:00Z", "emitted": [], "silence_reason": "all_exported",
+         "exported": ["y"]},
+    ]
+    _write_reflex_log(tmp_path, entries)
+    d = generate_digest(vault_root=tmp_path, since_days=365)
+
+    assert d.reflex_prompt_count == 8
+    assert d.reflex_emit_count == 3
+    assert abs(d.reflex_emit_rate - (3 / 8)) < 1e-9
+
+    reasons = dict(d.reflex_top_silence_reasons)
+    assert reasons.get("all_exported") == 2
+
+    from mnemo.core import numbers
+
+    # Same window as generate_digest's since_days=365 above.
+    numbers_rate = numbers.reflex_emit_rate(tmp_path, days=365)
+    assert numbers_rate is not None
+    numbers_emitted, numbers_total = numbers_rate
+    assert numbers_total == d.reflex_prompt_count
+    assert numbers_emitted == d.reflex_emit_count
+    assert (numbers_emitted / numbers_total) == d.reflex_emit_rate
+
+
 def test_generate_digest_reflex_index_missing_count(tmp_path: Path):
     entries = [
         {"ts": "2026-04-25T10:00:00Z", "emitted": False,

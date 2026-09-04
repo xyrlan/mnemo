@@ -148,6 +148,26 @@ def test_emit_rate_never_raises_on_a_directory_in_place_of_the_log(tmp_path: Pat
     assert numbers.reflex_emit_rate(vault, now=NOW) is None
 
 
+# ── is_reflex_opportunity ────────────────────────────────────────────────────
+
+def test_is_reflex_opportunity_true_for_emission():
+    assert numbers.is_reflex_opportunity({"emitted": ["a"], "silence_reason": None}) is True
+
+
+def test_is_reflex_opportunity_true_for_ordinary_silence():
+    row = {"emitted": [], "silence_reason": "relative_gap_fail"}
+    assert numbers.is_reflex_opportunity(row) is True
+
+
+def test_is_reflex_opportunity_false_for_all_exported():
+    row = {"emitted": [], "silence_reason": "all_exported", "exported": ["a"]}
+    assert numbers.is_reflex_opportunity(row) is False
+
+
+def test_is_reflex_opportunity_true_when_silence_reason_missing():
+    assert numbers.is_reflex_opportunity({"emitted": ["a"]}) is True
+
+
 # ── recall_primacy ──────────────────────────────────────────────────────────
 
 def test_recall_primacy_reads_the_report(tmp_path: Path):
