@@ -77,6 +77,26 @@ def test_rule_carries_name_body_quote_and_counts(tmp_vault: Path):
     assert rule.source_count == 1 and rule.page_type == "feedback"
 
 
+ADVISORY = (
+    "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+    "> _Review the pattern and re-add manually if safe._\n"
+)
+
+
+def test_auto_promoter_advisory_never_reaches_the_export(tmp_vault: Path):
+    """#134: the stripped-enforce note is for the maintainer, not the host.
+    Pages written before the fix carry it at the top; newer ones at the
+    bottom. Neither may land in the exported rules file."""
+    from mnemo.core.export.select import select_rules
+
+    write_rule(tmp_vault, slug="old-top", body=ADVISORY + "\nUse yarn in this repo.\n")
+    write_rule(tmp_vault, slug="new-bottom", body="Use yarn in this repo.\n\n" + ADVISORY)
+
+    rules = {r.slug: r for r in select_rules(tmp_vault, project="app")}
+    assert rules["old-top"].body == "Use yarn in this repo.\n"
+    assert rules["new-bottom"].body == "Use yarn in this repo.\n"
+
+
 def test_missing_vault_yields_nothing(tmp_path: Path):
     from mnemo.core.export.select import select_rules
 

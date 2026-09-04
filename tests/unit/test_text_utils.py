@@ -4,6 +4,7 @@ from __future__ import annotations
 from mnemo.core.text_utils import (
     GRAPH_SECTION_MARKER,
     body_preview,
+    strip_advisory_notes,
     strip_graph_section,
 )
 
@@ -57,3 +58,58 @@ def test_body_preview_truncates_at_whitespace_when_over_limit():
 
 def test_body_preview_returns_body_unchanged_when_short():
     assert body_preview("short", max_chars=300) == "short"
+
+
+ADVISORY = (
+    "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+    "> _Review the pattern and re-add manually if safe._\n"
+)
+
+
+def test_strip_advisory_notes_removes_note_at_top():
+    text = ADVISORY + "\nUse yarn in this repo.\n\n**Why:** lockfile.\n"
+    assert strip_advisory_notes(text) == "Use yarn in this repo.\n\n**Why:** lockfile.\n"
+
+
+def test_strip_advisory_notes_removes_note_at_bottom():
+    text = "Use yarn in this repo.\n\n**Why:** lockfile.\n\n" + ADVISORY
+    assert strip_advisory_notes(text) == "Use yarn in this repo.\n\n**Why:** lockfile.\n"
+
+
+def test_strip_advisory_notes_unchanged_without_note():
+    text = "Use yarn in this repo.\n\n> a real blockquote the user wrote\n"
+    assert strip_advisory_notes(text) == text
+
+
+def test_strip_advisory_notes_leaves_the_users_own_blockquote_alone():
+    """Only the blockquote paragraph that opens with the mnemo prefix goes;
+    a quote the user wrote in a later paragraph is rule content."""
+    text = ADVISORY + "\nRule text.\n\n> the user's own quote\n"
+    assert strip_advisory_notes(text) == "Rule text.\n\n> the user's own quote\n"
+
+
+def test_strip_advisory_notes_idempotent():
+    text = ADVISORY + "\nRule text.\n"
+    once = strip_advisory_notes(text)
+    assert strip_advisory_notes(once) == once
+
+
+def test_strip_advisory_notes_collapses_blank_lines_left_behind():
+    """A note between two paragraphs leaves one paragraph break, not three."""
+    text = "First paragraph.\n\n" + ADVISORY + "\nSecond paragraph.\n"
+    assert strip_advisory_notes(text) == "First paragraph.\n\nSecond paragraph.\n"
+
+
+def test_body_preview_starts_at_rule_text_when_note_is_at_top():
+    """Pages written before #134 carry the note above the rule; the preview
+    handed to Claude must still start at the rule."""
+    text = "---\nname: x\npromoted_without_enforce: true\n---\n\n" + ADVISORY + "\nUse yarn, never npm.\n"
+    assert body_preview(text, max_chars=300) == "Use yarn, never npm."
+
+
+def test_body_preview_drops_trailing_note_on_short_body():
+    text = (
+        "---\nname: x\n---\n\nUse yarn, never npm.\n\n" + ADVISORY
+        + f"\n{GRAPH_SECTION_MARKER}\n## Sources\n- [[a]]\n"
+    )
+    assert body_preview(text, max_chars=300) == "Use yarn, never npm."

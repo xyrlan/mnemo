@@ -140,12 +140,16 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         })
     demoted_line = "demoted_from: feedback\n" if page.unverified_feedback else ""
 
-    body_prefix = ""
+    # Maintainer-facing note, written AFTER the rule text so the preview
+    # (first 300 chars of the body) and the export start at the rule, not at
+    # the note (#134). Retrieval strips it via text_utils.retrieval_body,
+    # keyed on the "> _mnemo " prefix; the machine-readable flag is
+    # ``promoted_without_enforce`` in frontmatter.
+    advisory_note = ""
     if enforce_stripped:
-        body_prefix = (
-            "> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
-            "> _Review the pattern and re-add manually if safe. "
-            "See docs/superpowers/plans/2026-04-23-enforce-safety-rails.md._\n\n"
+        advisory_note = (
+            "\n> _mnemo auto-promoter stripped an `enforce:` block from this rule._\n"
+            "> _Review the pattern and re-add manually if safe._\n"
         )
 
     # Append a Sources section with Obsidian wikilinks so any markdown viewer
@@ -191,7 +195,8 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"{activates_on_block}"
         f"{evidence_block}"
         "---\n\n"
-        f"{body_prefix}{page.body}\n"
+        f"{page.body}\n"
+        f"{advisory_note}"
         f"{sources_section}"
     )
 
