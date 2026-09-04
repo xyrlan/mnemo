@@ -3,7 +3,15 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.1] — 2026-09-03
+
+The follow-up to the distribution release. The exported rules file is now
+compact by default — the lead sentence and your quote per rule, under half
+the tokens on real projects, with `--full` for the whole bodies — and every
+reader of the rotating reflex and MCP access logs now sees the rotated file,
+so windowed numbers stop silently shrinking at 1 MB. The auto-promoter's
+maintainer note no longer leaks into previews and exports, and the digest
+and `mnemo status` agree on the emit rate.
 
 ### Changed
 
