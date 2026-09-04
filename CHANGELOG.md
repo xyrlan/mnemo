@@ -3,6 +3,25 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The reflex index tokenizes only the rule body into the `body` field, not
+  the whole page.** `reflex/index.py` passed the page text with its YAML
+  frontmatter into the BM25F `body` field, so every rule's `name`,
+  `description` and `evidence.quote` were counted twice (once in their own
+  weighted field, once again as body), and source paths, session ids,
+  timestamps and keys like `extraction_run` / `auto-promoted` were
+  searchable as if they were rule text. On the real vault (1,637 docs) the
+  average body length falls from 250 to 176 tokens and the vocabulary from
+  25.9k to 23.7k terms; replaying 1,828 logged prompts, the old top-1 scored
+  partly on frontmatter-only tokens 114 times (project names and session
+  UUIDs from `sources:` paths), one rule scored 48 on a prompt because its
+  own evidence quote was in the body, and the same prompt now scores 7.5.
+  Scores deflate about 8% at the median, so the per-project calibrator will
+  re-settle the emit rate over its next runs. #137
+
 ## [1.3.1] — 2026-09-03
 
 The follow-up to the distribution release. The exported rules file is now
