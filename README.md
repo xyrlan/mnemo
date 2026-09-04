@@ -160,11 +160,12 @@ waiting. Details in
 ```
 
 Your rules are yours. `mnemo export` writes the ones for the repo you're in
-to `.claude/rules/mnemo.md` — a plain file Claude Code loads by itself, with
-your own quote under each rule — so a teammate without mnemo gets them too,
-and leaving mnemo costs you nothing. `--host cursor` and `--host codex` write
-the same rules where those tools look. Re-run after learning more;
-`mnemo status` says when the file is behind the vault.
+to `.claude/rules/mnemo.md` — a plain file Claude Code loads by itself, one
+lead sentence and your own quote per rule (`--full` for the whole bodies) —
+so a teammate without mnemo gets them too, and leaving mnemo costs you
+nothing. `--host cursor` and `--host codex` write the same rules where those
+tools look. Re-run after learning more; `mnemo status` says when the file is
+behind the vault.
 
 Using Cursor or Codex as well? `mnemo init --host cursor` (or `codex`)
 registers mnemo's MCP server there and writes the rules file that tool reads

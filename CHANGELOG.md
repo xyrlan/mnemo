@@ -5,6 +5,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`mnemo export` writes each rule as its lead sentence and your quote;
+  `--full` writes the whole body.** The exported block rides on every prompt
+  the host sends, and with whole bodies it ran to 6,700 tokens on a 26-rule
+  project and 6,600 on an 18-rule one — past the 4,000-token warning for the
+  median real project, which made the warning noise. The compact block is
+  2,900 and 1,900 tokens on the same projects (−57% / −71%): the heading,
+  the paragraph before `**Why:**` / `**How to apply:**`, and the
+  `> you said:` line, with one note at the top pointing the tool at the
+  `read_mnemo_rule` MCP tool for the rest. `mnemo init --host cursor|codex`
+  writes the same compact block. The manifest records which format was
+  written so `mnemo status` compares like with like (a manifest from an
+  earlier version reads as full), and in `--full` mode the size warning
+  suggests dropping `--full` before `--limit`. The 4,000-token warning
+  itself is unchanged: on the compact block it fires around 35 rules, where
+  it means something again. #129
+
 ### Fixed
 
 - **Every reader that computes a windowed metric off a rotating log now sees

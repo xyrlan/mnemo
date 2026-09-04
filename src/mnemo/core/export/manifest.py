@@ -30,8 +30,12 @@ def manifest_path(vault_root: Path, project: str) -> Path:
 
 def write_manifest(
     vault_root: Path, project: str, *, host: str, target: str, cwd: str,
-    path: str, rules: Dict[str, str],
+    path: str, rules: Dict[str, str], format: Optional[str] = None,
 ) -> None:
+    """*format* is ``"compact"`` or ``"full"`` — the rendering the ``rules``
+    hashes were taken in, so ``staleness`` compares like with like. ``None``
+    leaves the key out, which readers treat as ``"full"``: that is what every
+    manifest written before the compact format existed was."""
     data = {
         "host": host,
         "target": target,
@@ -40,8 +44,15 @@ def write_manifest(
         "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "rules": dict(rules),
     }
+    if format is not None:
+        data["format"] = format
     atomic_write_bytes(manifest_path(vault_root, project),
                        (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+
+def manifest_is_full(data: dict) -> bool:
+    """Whether the manifest's hashes came from a full export (missing = full)."""
+    return data.get("format", "full") != "compact"
 
 
 def read_manifest(vault_root: Path, project: str) -> Optional[dict]:

@@ -81,3 +81,53 @@ def test_export_status_resolves_canonical_project_from_worktree(
 
     _print_export_status(tmp_vault)
     assert capsys.readouterr().out == "\nExport: 1 rule → .claude/rules/mnemo.md (up to date)\n"
+
+
+_LONG_BODY = "Lead.\n\n**Why:** because.\n\n**How to apply:** so.\n"
+
+
+def test_status_hashes_in_the_format_the_export_used(tmp_vault: Path, repo: Path, capsys, monkeypatch):
+    """Compact and full renderings hash differently (#129); status must compare
+    the vault against the format recorded in the manifest, or every export
+    would read as stale the moment it was written."""
+    from mnemo.core import export as export_mod
+    from mnemo.cli.commands.status import _print_export_status
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_vault)})
+    write_rule(tmp_vault, slug="a", body=_LONG_BODY)
+
+    export_mod.run_export(tmp_vault, project="app", repo_root=repo)
+    _print_export_status(tmp_vault)
+    assert "(up to date)" in capsys.readouterr().out
+
+    export_mod.run_export(tmp_vault, project="app", repo_root=repo, full=True)
+    _print_export_status(tmp_vault)
+    assert "(up to date)" in capsys.readouterr().out
+
+    # A Why-only edit changes the full export but not the compact one.
+    write_rule(tmp_vault, slug="a", body=_LONG_BODY.replace("because", "therefore"))
+    _print_export_status(tmp_vault)
+    assert "1 differ" in capsys.readouterr().out
+    export_mod.run_export(tmp_vault, project="app", repo_root=repo)
+    write_rule(tmp_vault, slug="a", body=_LONG_BODY.replace("because", "hence"))
+    _print_export_status(tmp_vault)
+    assert "(up to date)" in capsys.readouterr().out
+
+
+def test_manifest_without_format_is_read_as_full(tmp_vault: Path, repo: Path, capsys, monkeypatch):
+    """Manifests written before #129 carry no ``format`` and were full exports."""
+    from mnemo.core import export as export_mod
+    from mnemo.core.export import manifest as manifest_mod
+    from mnemo.cli.commands.status import _print_export_status
+
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_vault)})
+    write_rule(tmp_vault, slug="a", body=_LONG_BODY)
+    rules = export_mod.current_hashes(tmp_vault, project="app", full=True)
+    manifest_mod.write_manifest(
+        tmp_vault, "app", host="claude", target="rules", cwd=str(repo),
+        path=".claude/rules/mnemo.md", rules=rules,
+    )
+    data = manifest_mod.read_manifest(tmp_vault, "app")
+    assert "format" not in data
+    _print_export_status(tmp_vault)
+    assert "(up to date)" in capsys.readouterr().out

@@ -32,6 +32,7 @@ class ExportReport:
     removed: bool = False
     warning: Optional[str] = None
     user_pages: List[str] = field(default_factory=list)
+    full: bool = False
 
     @property
     def universal(self) -> int:
@@ -39,9 +40,13 @@ class ExportReport:
 
 
 def current_hashes(vault_root: Path, *, project: str, types: Sequence[str] = DEFAULT_TYPES,
-                   universal_threshold: int = 2) -> Dict[str, str]:
-    """slug → entry hash for what an export would write right now (status uses this)."""
-    return {r.slug: entry_hash(r) for r in select_rules(
+                   universal_threshold: int = 2, full: bool = False) -> Dict[str, str]:
+    """slug → entry hash for what an export would write right now (status uses this).
+
+    *full* must match the format of the export being compared against — the
+    manifest records it — since the two renderings hash differently.
+    """
+    return {r.slug: entry_hash(r, full=full) for r in select_rules(
         vault_root, project=project, types=types, universal_threshold=universal_threshold)}
 
 
@@ -59,12 +64,17 @@ def run_export(
     remove: bool = False,
     force_warning: bool = False,
     today: Optional[str] = None,
+    full: bool = False,
 ) -> ExportReport:
-    """Select, render, write (or remove). Raises TargetError / MarkerError."""
+    """Select, render, write (or remove). Raises TargetError / MarkerError.
+
+    *full* writes each rule's whole body; the default is the compact format
+    (heading, first paragraph, quote — see :mod:`render`).
+    """
     vault_root = Path(vault_root)
     repo_root = Path(repo_root).resolve()
     tgt = target_for(host, target, repo_root)
-    report = ExportReport(project=project, target=tgt)
+    report = ExportReport(project=project, target=tgt, full=full)
 
     if remove:
         report.removed = remove_target(tgt)
@@ -77,7 +87,7 @@ def run_export(
         return report
     report.user_pages = [r.slug for r in report.rules if r.page_type == "user"]
     report.block = render_block(report.rules, project=project,
-                                today=today or date.today().isoformat())
+                                today=today or date.today().isoformat(), full=full)
     report.tokens = estimated_tokens(report.block)
     n = len(report.rules)
     suggested_limit = max(1, n // 2)
@@ -88,9 +98,14 @@ def run_export(
             f"try --limit {suggested_limit}"
         )
     elif report.tokens > TOKEN_WARN:
+        # In full mode the biggest lever is the format itself: the compact
+        # block is under half the size on real projects, so name it first.
+        remedy = (
+            f"try without --full, or --limit {suggested_limit}" if full
+            else f"try --limit {suggested_limit} to keep the most-sourced ones"
+        )
         report.warning = (
-            f"about {report.tokens} tokens from {n} rules will load on every prompt — "
-            f"try --limit {suggested_limit} to keep the most-sourced ones"
+            f"about {report.tokens} tokens from {n} rules will load on every prompt — {remedy}"
         )
     if dry_run:
         return report
@@ -99,7 +114,8 @@ def run_export(
     manifest_mod.write_manifest(
         vault_root, project, host=host, target=tgt.name, cwd=str(repo_root),
         path=tgt.path.relative_to(repo_root).as_posix(),
-        rules={r.slug: entry_hash(r) for r in report.rules},
+        rules={r.slug: entry_hash(r, full=full) for r in report.rules},
+        format="full" if full else "compact",
     )
     report.wrote = True
     return report
