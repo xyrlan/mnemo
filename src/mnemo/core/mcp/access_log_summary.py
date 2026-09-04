@@ -6,10 +6,10 @@ detection — those are Phase 3 concerns and need more data volume first.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from mnemo.core import pricing as _pricing
+from mnemo.core.log_utils import iter_rotated_rows
 
 _LOG_FILENAME = "mcp-access-log.jsonl"
 _NULL_PROJECT_BUCKET = "(unresolved)"
@@ -141,25 +141,8 @@ def summarize(entries: list[dict]) -> dict:
 
 def read_log(vault_root: Path) -> list[dict]:
     """Read all JSONL lines from current + rotated access log. Skip malformed."""
-    entries: list[dict] = []
     mnemo_dir = vault_root / ".mnemo"
-    for name in (_LOG_FILENAME + ".1", _LOG_FILENAME):
-        path = mnemo_dir / name
-        if not path.exists():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return entries
+    return list(iter_rotated_rows(mnemo_dir / _LOG_FILENAME))
 
 
 def format_human(summary: dict) -> str:

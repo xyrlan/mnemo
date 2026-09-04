@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
+from mnemo.core.log_utils import iter_rotated_rows
 from mnemo.core.reflex.gates import DEFAULT_THRESHOLDS
 
 # Default config mirrors gates.DEFAULT_THRESHOLDS
@@ -125,52 +126,43 @@ def analyze_reflex_log(
         Empty dict if log is missing or empty.
     """
     log_path = vault_root / ".mnemo" / "reflex-log.jsonl"
-    if not log_path.exists():
-        return {}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     # Aggregate: project → {total, emitted, reasons}
     agg: dict[str, dict] = {}
 
-    with log_path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
+    # iter_rotated_rows also reads log_path.1: rotation at 1MB means a
+    # window_days-wide cutoff can straddle both files. It also now tolerates
+    # a torn or undecodable line by skipping it, like every other reader —
+    # previously a bad byte here raised and aborted calibration outright.
+    for entry in iter_rotated_rows(log_path):
+        proj = entry.get("project", "")
+        if project is not None and proj != project:
+            continue
+
+        # Parse timestamp and apply window filter
+        ts_str = entry.get("ts", "")
+        if ts_str:
             try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(entry, dict):
-                continue
+                ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+                if ts < cutoff:
+                    continue
+            except ValueError:
+                pass  # keep entry if unparseable
 
-            proj = entry.get("project", "")
-            if project is not None and proj != project:
-                continue
+        if proj not in agg:
+            agg[proj] = {"total": 0, "emitted": 0, "reasons": {}}
+        agg[proj]["total"] += 1
 
-            # Parse timestamp and apply window filter
-            ts_str = entry.get("ts", "")
-            if ts_str:
-                try:
-                    ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-                        tzinfo=timezone.utc
-                    )
-                    if ts < cutoff:
-                        continue
-                except ValueError:
-                    pass  # keep entry if unparseable
-
-            if proj not in agg:
-                agg[proj] = {"total": 0, "emitted": 0, "reasons": {}}
-            agg[proj]["total"] += 1
-
-            emitted = entry.get("emitted", [])
-            if emitted:  # non-empty list = emitted
-                agg[proj]["emitted"] += 1
-            else:
-                reason = entry.get("silence_reason")
-                if reason:
-                    agg[proj]["reasons"][reason] = agg[proj]["reasons"].get(reason, 0) + 1
+        emitted = entry.get("emitted", [])
+        if emitted:  # non-empty list = emitted
+            agg[proj]["emitted"] += 1
+        else:
+            reason = entry.get("silence_reason")
+            if reason:
+                agg[proj]["reasons"][reason] = agg[proj]["reasons"].get(reason, 0) + 1
 
     result: dict[str, ReflexStats] = {}
     for proj_name, data in agg.items():

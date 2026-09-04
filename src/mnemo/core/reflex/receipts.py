@@ -20,15 +20,12 @@ rules it does not break:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-# Rotation renames the live log to `.jsonl.1` the instant it crosses 1MB, so on
-# a busy vault the live file can be seconds old. Reading only it would answer
-# "the last 10 decisions" with two, which reads as "reflex stopped running".
+from mnemo.core.log_utils import iter_rotated_rows
+
 _LOG_NAME = "reflex-log.jsonl"
-_ROTATED_NAME = "reflex-log.jsonl.1"
 
 
 def read_decisions(
@@ -43,11 +40,14 @@ def read_decisions(
     ``ts``: the hook appends under a lock-free open/append/close, so file order
     is arrival order, and a hand-edited or clock-skewed timestamp cannot
     reorder history.
+
+    Rotation renames the live log to ``.jsonl.1`` the instant it crosses 1MB,
+    so on a busy vault the live file can be seconds old. Reading only it would
+    answer "the last 10 decisions" with two, which reads as "reflex stopped
+    running" — so ``iter_rotated_rows`` reads the rotated file first.
     """
     root = Path(vault_root) / ".mnemo"
-    entries: list[dict[str, Any]] = []
-    for name in (_ROTATED_NAME, _LOG_NAME):  # oldest file first
-        entries.extend(_read_file(root / name))
+    entries: list[dict[str, Any]] = list(iter_rotated_rows(root / _LOG_NAME))
 
     if project is not None:
         entries = [e for e in entries if e.get("project") == project]
@@ -56,25 +56,6 @@ def read_decisions(
     if limit is not None and limit >= 0:
         entries = entries[:limit]
     return entries
-
-
-def _read_file(path: Path) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = json.loads(raw)
-                except ValueError:
-                    continue  # a torn line from a killed append
-                if isinstance(entry, dict):
-                    out.append(entry)
-    except OSError:
-        return out
-    return out
 
 
 def format_human(decisions: list[dict[str, Any]], *, project: str | None = None) -> str:

@@ -54,6 +54,20 @@ def test_read_mcp_access_log_skips_malformed(tmp_path: Path):
     assert len(result) == 1
 
 
+def test_read_mcp_access_log_includes_the_rotated_file(tmp_path: Path):
+    """Rotation at 1MB must not truncate the digest's window."""
+    _write_jsonl(tmp_path / _MNemo / "mcp-access-log.jsonl.1", [
+        {"timestamp": "2026-04-23T08:00:00Z", "tool": "list_rules_by_topic"},
+    ])
+    _write_jsonl(tmp_path / _MNemo / "mcp-access-log.jsonl", [
+        {"timestamp": "2026-04-24T08:00:00Z", "tool": "read_mnemo_rule"},
+    ])
+    since = _iso("2026-04-22T00:00:00Z")
+    result = read_mcp_access_log(tmp_path, since_dt=since)
+    assert len(result) == 2
+    assert {e["tool"] for e in result} == {"list_rules_by_topic", "read_mnemo_rule"}
+
+
 # ── reflex-log ──────────────────────────────────────────────────────────────
 
 def test_read_reflex_log_missing(tmp_path: Path):
@@ -80,6 +94,19 @@ def test_read_reflex_log_skips_malformed(tmp_path: Path):
     since = _iso("2026-01-01T00:00:00Z")
     result = read_reflex_log(tmp_path, since_dt=since)
     assert len(result) == 1
+
+
+def test_read_reflex_log_includes_the_rotated_file(tmp_path: Path):
+    """A row that rotated into .jsonl.1 must still count toward the digest."""
+    _write_jsonl(tmp_path / _MNemo / "reflex-log.jsonl.1", [
+        {"ts": "2026-04-23T10:00:00Z", "emitted": ["a"], "session_id": "old"},
+    ])
+    _write_jsonl(tmp_path / _MNemo / "reflex-log.jsonl", [
+        {"ts": "2026-04-25T10:00:00Z", "emitted": [], "session_id": "new"},
+    ])
+    since = _iso("2026-04-22T00:00:00Z")
+    result = read_reflex_log(tmp_path, since_dt=since)
+    assert {e["session_id"] for e in result} == {"old", "new"}
 
 
 # ── denial-log ──────────────────────────────────────────────────────────────

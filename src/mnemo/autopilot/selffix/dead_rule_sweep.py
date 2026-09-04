@@ -20,7 +20,6 @@ established is never archived.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -33,6 +32,7 @@ from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 from mnemo.autopilot.selffix._perimeter import assert_perimeter
+from mnemo.core.log_utils import iter_rotated_rows
 
 _SHARED_SUBTYPES = ("feedback", "user", "reference")
 
@@ -136,29 +136,22 @@ def _rule_age_date(md_path: Path, text: str) -> Optional[datetime]:
 
 
 def _active_slugs_from_access_log(vault_root: Path, cutoff: datetime) -> Set[str]:
-    """Return set of slugs accessed after *cutoff*."""
+    """Return set of slugs accessed after *cutoff*.
+
+    Reads the rotated log (``.jsonl.1``) as well as the live one — rotation at
+    1MB means the sweep's ``days``-wide window can straddle both files, and
+    reading only the live one would silently shrink the window.
+    """
     log_path = vault_root / ".mnemo" / "mcp-access-log.jsonl"
-    if not log_path.exists():
-        return set()
     active: Set[str] = set()
-    try:
-        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = _parse_ts(entry.get("ts") or "")
-            if ts is None or ts < cutoff:
-                continue
-            for rule in entry.get("rules") or []:
-                slug = rule.get("slug") or ""
-                if slug:
-                    active.add(slug)
-    except OSError:
-        pass
+    for entry in iter_rotated_rows(log_path):
+        ts = _parse_ts(entry.get("ts") or "")
+        if ts is None or ts < cutoff:
+            continue
+        for rule in entry.get("rules") or []:
+            slug = rule.get("slug") or ""
+            if slug:
+                active.add(slug)
     return active
 
 
@@ -170,28 +163,21 @@ def _active_slugs_from_reflex_log(vault_root: Path, cutoff: datetime) -> Set[str
     export suppressed some accepted slugs) is still live — export is a
     delivery path, not an absence of one. Counting only ``emitted`` would
     sweep a rule as dead precisely because export is working (issue #128).
+
+    Reads the rotated log (``.jsonl.1``) as well as the live one — the
+    180-day default window easily outlives a single rotation, and reading
+    only the live file would silently truncate it (issue #136): a rule whose
+    last mention rotated into ``.jsonl.1`` would look dead.
     """
     log_path = vault_root / ".mnemo" / "reflex-log.jsonl"
-    if not log_path.exists():
-        return set()
     active: Set[str] = set()
-    try:
-        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = _parse_ts(entry.get("ts") or "")
-            if ts is None or ts < cutoff:
-                continue
-            for slug in (entry.get("emitted") or []) + (entry.get("exported") or []):
-                if slug:
-                    active.add(slug)
-    except OSError:
-        pass
+    for entry in iter_rotated_rows(log_path):
+        ts = _parse_ts(entry.get("ts") or "")
+        if ts is None or ts < cutoff:
+            continue
+        for slug in (entry.get("emitted") or []) + (entry.get("exported") or []):
+            if slug:
+                active.add(slug)
     return active
 
 
