@@ -322,3 +322,63 @@ class TestCountLogEntries:
         p = tmp_path / "log.jsonl"
         p.write_text('{"a":1}\n\n{"b":2}\n   \n{"c":3}\n', encoding="utf-8")
         assert count_log_entries(p) == 3
+
+    def test_count_includes_the_rotated_file(self, tmp_path: Path) -> None:
+        """#140: the phase-3 threshold counts every entry the bootstrap sees."""
+        p = tmp_path / "log.jsonl"
+        p.write_text('{"a":1}\n\n{"b":2}\n', encoding="utf-8")
+        p.with_suffix(".jsonl.1").write_text('{"c":3}\n{"d":4}\n', encoding="utf-8")
+        assert count_log_entries(p) == 4
+
+    def test_count_only_rotated_file_present(self, tmp_path: Path) -> None:
+        p = tmp_path / "log.jsonl"
+        p.with_suffix(".jsonl.1").write_text('{"c":3}\n', encoding="utf-8")
+        assert count_log_entries(p) == 1
+
+
+class TestRotatedLog:
+    """#140: the access log rotates to ``.1`` at 1 MiB; a list→read pair
+    that straddles that boundary must still be found."""
+
+    def test_pair_straddling_rotation_is_found(self, tmp_path: Path) -> None:
+        log = tmp_path / "log.jsonl"
+        _write_log(log.with_suffix(".jsonl.1"), [
+            {
+                "timestamp": "2026-04-17T10:00:00Z",
+                "tool": "list_rules_by_topic",
+                "args": {"topic": "workflow", "scope": "project"},
+                "project": "mnemo",
+                "hit_slugs": ["slug-a", "slug-b"],
+            },
+        ])
+        _write_log(log, [
+            {
+                "timestamp": "2026-04-17T10:00:10Z",
+                "tool": "read_mnemo_rule",
+                "args": {"slug": "slug-b"},
+                "project": "mnemo",
+            },
+        ])
+        cases = bootstrap_cases(log)
+        assert [c["expect_slug"] for c in cases] == ["slug-b"]
+
+    def test_pair_survives_an_undecodable_byte(self, tmp_path: Path) -> None:
+        log = tmp_path / "log.jsonl"
+        _write_log(log, [
+            {
+                "timestamp": "2026-04-17T10:00:00Z",
+                "tool": "list_rules_by_topic",
+                "args": {"topic": "workflow", "scope": "project"},
+                "project": "mnemo",
+                "hit_slugs": ["slug-a"],
+            },
+            {
+                "timestamp": "2026-04-17T10:00:05Z",
+                "tool": "read_mnemo_rule",
+                "args": {"slug": "slug-a"},
+                "project": "mnemo",
+            },
+        ])
+        with log.open("ab") as fh:
+            fh.write(b'{"tool": "read_mnemo_rule", "args": {"slug": "\xff"}}\n')
+        assert [c["expect_slug"] for c in bootstrap_cases(log)] == ["slug-a"]

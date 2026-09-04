@@ -21,6 +21,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   still deliberately reads only the live file, capped at its last 5000
   lines — a lightweight recency check, not a windowed metric.) #136
 
+- **The last three readers of the MCP access log see the rotated file too.**
+  The popularity tiebreak in `list_rules_by_topic` (a 30-day window of
+  `read_mnemo_rule` calls), the telemetry doctor's anomaly scan (which needs
+  five `llm.call` samples before it flags anything), and the recall
+  harness's list→read pairing plus its phase-3 entry count all read only
+  the live `mcp-access-log.jsonl`, so a rotation at 1MB silently shrank the
+  popularity window, reset the telemetry sample, and dropped any list→read
+  pair that straddled the boundary. All three now go through
+  `iter_rotated_rows`, which also means the popularity reader no longer
+  raises on an undecodable byte in a torn line. #140
+
 - **The auto-promoter's advisory sits below the rule and stays out of
   previews, exports and indexes.** A rule promoted without its `enforce:`
   block used to open with a two-line maintainer note ("mnemo auto-promoter

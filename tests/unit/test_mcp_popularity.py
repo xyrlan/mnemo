@@ -116,3 +116,31 @@ def test_list_rules_by_topic_source_count_still_dominates_popularity(tmp_vault):
     ])
     result = list_rules_by_topic(tmp_vault, "git")
     assert [r["slug"] for r in result] == ["broadly-supported", "fresh-but-rare"]
+
+
+def test_load_recent_read_counts_reads_the_rotated_file_too(tmp_path):
+    """#140: a 30-day window can straddle the 1 MiB rotation into ``.1``."""
+    now = datetime.now(timezone.utc)
+    log_path = _write_log(tmp_path, [
+        {"tool": "read_mnemo_rule", "timestamp": _ts(now, 1), "args": {"slug": "live"}},
+    ])
+    rotated = log_path.with_suffix(log_path.suffix + ".1")
+    rotated.write_text(
+        json.dumps({"tool": "read_mnemo_rule", "timestamp": _ts(now, 2),
+                    "args": {"slug": "old"}}) + "\n"
+        + json.dumps({"tool": "read_mnemo_rule", "timestamp": _ts(now, 3),
+                      "args": {"slug": "live"}}) + "\n",
+        encoding="utf-8",
+    )
+    assert load_recent_read_counts(tmp_path, now=now) == Counter({"live": 2, "old": 1})
+
+
+def test_load_recent_read_counts_survives_an_undecodable_byte(tmp_path):
+    """#140: a torn UTF-8 sequence must be skipped, not raise UnicodeDecodeError."""
+    now = datetime.now(timezone.utc)
+    log_path = _write_log(tmp_path, [
+        {"tool": "read_mnemo_rule", "timestamp": _ts(now, 1), "args": {"slug": "ok"}},
+    ])
+    with log_path.open("ab") as fh:
+        fh.write(b'{"tool": "read_mnemo_rule", "args": {"slug": "\xff"}}\n')
+    assert load_recent_read_counts(tmp_path, now=now) == Counter({"ok": 1})

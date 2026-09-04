@@ -23,12 +23,12 @@ Public surface:
 """
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
+from mnemo.core.log_utils import iter_rotated_rows
 from mnemo.core.mcp.tools import list_rules_by_topic
 
 _DEFAULT_PAIR_WINDOW_S = 120.0
@@ -84,28 +84,23 @@ def _parse_ts(ts: str) -> float:
 
 
 def _read_log(log_path: Path) -> list[dict]:
-    """Load JSONL access log, skipping malformed lines."""
-    if not log_path.is_file():
-        return []
-    entries: list[dict] = []
-    for raw in log_path.read_text(encoding="utf-8").splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            entries.append(json.loads(raw))
-        except json.JSONDecodeError:
-            continue
-    return entries
+    """Load the access log — rotated ``.1`` file first, then live — skipping
+    malformed lines.
+
+    The log rotates at 1 MiB, so a list→read pair inside ``pair_window_s``
+    can straddle the two files; reading only the live one would silently
+    drop that case (#140).
+    """
+    return list(iter_rotated_rows(log_path))
 
 
 def count_log_entries(log_path: Path) -> int:
-    """Count non-blank lines in the access log; 0 if missing."""
-    if not log_path.is_file():
-        return 0
-    return sum(
-        1 for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()
-    )
+    """Count entries in the access log (rotated + live); 0 if missing.
+
+    Counts exactly the rows :func:`_read_log` sees, so the phase-3 threshold
+    footer and the bootstrap agree on what "the log" is.
+    """
+    return sum(1 for _ in iter_rotated_rows(log_path))
 
 
 def _current_slugs_for_topic(
