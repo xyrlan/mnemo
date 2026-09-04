@@ -89,6 +89,26 @@ def test_scan_telemetry_detects_cost_usd_always_zero(tmp_path: Path) -> None:
     assert "cost_usd_always_zero" in kinds
 
 
+def test_scan_telemetry_counts_entries_in_the_rotated_file(tmp_path: Path) -> None:
+    """#140: entries split across ``.1`` and the live file must be pooled —
+    three in the rotated file plus two live clears the minimum and flags."""
+    live = [
+        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0}
+        for _ in range(2)
+    ]
+    _write_access_log(tmp_path, live)
+    rotated = tmp_path / ".mnemo" / "mcp-access-log.jsonl.1"
+    with rotated.open("w", encoding="utf-8") as f:
+        for _ in range(3):
+            f.write(json.dumps(
+                {"ts": "2026-04-29T10:00:00Z", "event": "llm.call", "cost_usd": 0}
+            ) + "\n")
+    anomalies = scan_telemetry(vault_root=tmp_path)
+    flagged = [a for a in anomalies if a.kind == "cost_usd_always_zero"]
+    assert len(flagged) == 1
+    assert flagged[0].affected_count == 5
+
+
 def test_scan_telemetry_no_anomaly_when_cost_nonzero(tmp_path: Path) -> None:
     entries = [
         {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0.005}

@@ -110,6 +110,11 @@ def _doctor_check_reflex_session_cap_hits(vault: Path) -> bool:
     Silent when there is no reflex-log.jsonl yet, when the file is empty, or
     when no session has fired in the last 7 days. Reading is capped at the
     last 5_000 lines to keep doctor lightweight on large vaults.
+
+    Deliberately live-file only (#140): this is a health heuristic, not a
+    windowed metric. The 5_000-line cap already bounds the sample, and the
+    live file alone covers far more than 7 days on every vault measured;
+    pulling in the rotated ``.1`` file would only add rows the cap discards.
     """
     from datetime import datetime, timedelta, timezone
 

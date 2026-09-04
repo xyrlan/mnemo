@@ -9,7 +9,6 @@ Current anomalies detected:
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import List, Optional
 from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
+from mnemo.core.log_utils import iter_rotated_rows
 
 _PROMPT_TOKENS_NULL_THRESHOLD = 0.1  # flag if > 10% of llm.call entries have null tokens
 _MIN_LLM_CALL_ENTRIES = 5  # don't flag with too few data points
@@ -41,25 +41,16 @@ def scan_telemetry(*, vault_root: Path) -> List[TelemetryAnomaly]:
     """Scan ``mcp-access-log.jsonl`` for telemetry anomalies.
 
     Returns a list of :class:`TelemetryAnomaly` objects.
+
+    Reads the rotated ``.1`` file as well as the live one: the anomaly checks
+    need ``_MIN_LLM_CALL_ENTRIES`` data points, and a rotation at 1 MiB would
+    otherwise reset that sample to whatever landed since (#140).
     """
     log_path = vault_root / ".mnemo" / "mcp-access-log.jsonl"
-    if not log_path.exists():
-        return []
-
-    llm_call_entries: List[dict] = []
-    try:
-        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("event") == "llm.call":
-                llm_call_entries.append(entry)
-    except OSError:
-        return []
+    llm_call_entries: List[dict] = [
+        entry for entry in iter_rotated_rows(log_path)
+        if entry.get("event") == "llm.call"
+    ]
 
     if not llm_call_entries:
         return []
