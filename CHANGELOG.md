@@ -7,6 +7,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Every reader that computes a windowed metric off a rotating log now sees
+  the rotated file, not just the live one.** `core/numbers.py`
+  (`mnemo status`) already read `reflex-log.jsonl.1` alongside the live log,
+  but the weekly digest, the reflex calibrator, the dead-rule sweep's two
+  liveness checks, and the MCP access-log summary read only the live file —
+  so `mnemo status` and the digest agreed on the emit rate (#128) only until
+  the log rotated at 1MB, and the dead-rule sweep's 180-day window was
+  silently truncated to whatever the live file still held, making a rule
+  whose last mention rotated into `.jsonl.1` look dead. These readers now
+  share one `core/log_utils.iter_rotated_rows` helper that yields rows from
+  the rotated file then the live one. (`mnemo doctor`'s session-cap check
+  still deliberately reads only the live file, capped at its last 5000
+  lines — a lightweight recency check, not a windowed metric.) #136
+
 - **The auto-promoter's advisory sits below the rule and stays out of
   previews, exports and indexes.** A rule promoted without its `enforce:`
   block used to open with a two-line maintainer note ("mnemo auto-promoter

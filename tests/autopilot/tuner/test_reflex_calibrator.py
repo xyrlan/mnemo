@@ -107,6 +107,26 @@ class TestAnalyzeReflexLog:
         assert "a" in result
         assert "b" in result
 
+    def test_includes_rows_from_the_rotated_log(self, tmp_path: Path):
+        """A project whose rows are all in .jsonl.1 must still be counted."""
+        d = tmp_path / ".mnemo"
+        d.mkdir(parents=True, exist_ok=True)
+        rotated_entries = [
+            {"project": "rotated-only", "ts": _ts(1), "emitted": ["x"], "silence_reason": None},
+            {"project": "rotated-only", "ts": _ts(2), "emitted": [], "silence_reason": "absolute_floor_fail"},
+        ]
+        with (d / "reflex-log.jsonl.1").open("w", encoding="utf-8") as fh:
+            for e in rotated_entries:
+                fh.write(json.dumps(e) + "\n")
+        _make_log(tmp_path, [
+            {"project": "live-only", "ts": _ts(0), "emitted": ["y"], "silence_reason": None},
+        ])
+        result = analyze_reflex_log(vault_root=tmp_path)
+        assert "rotated-only" in result
+        assert result["rotated-only"].total_prompts == 2
+        assert result["rotated-only"].emitted_count == 1
+        assert "live-only" in result
+
 
 # ---------------------------------------------------------------------------
 # T8 — calibrate_thresholds

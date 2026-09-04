@@ -20,10 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-# Rotation renames the live log at 1MB, so on a busy vault a 14-day window can
-# straddle both files. Reading only the live one would under-report the total
-# and quietly inflate the emit rate.
-_LOG_NAMES = ("reflex-log.jsonl.1", "reflex-log.jsonl")
+from mnemo.core.log_utils import iter_rotated_rows
+
 _REPORT_NAME = "recall-report.json"
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -43,24 +41,6 @@ def _parse_ts(value: Any) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def _iter_rows(path: Path):
-    """Yield dict rows from a JSONL file, skipping anything unreadable."""
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    row = json.loads(raw)
-                except ValueError:
-                    continue  # a torn line from a killed append
-                if isinstance(row, dict):
-                    yield row
-    except OSError:
-        return
 
 
 def is_reflex_opportunity(row: dict) -> bool:
@@ -113,16 +93,17 @@ def reflex_emit_rate(
         emitted = 0
         total = 0
         mnemo_dir = Path(vault_root) / ".mnemo"
-        for name in _LOG_NAMES:
-            for row in _iter_rows(mnemo_dir / name):
-                ts = _parse_ts(row.get("ts"))
-                if ts is None or ts < cutoff:
-                    continue
-                if not is_reflex_opportunity(row):
-                    continue
-                total += 1
-                if row.get("emitted"):
-                    emitted += 1
+        # Rotation renames the live log at 1MB, so on a busy vault a 14-day
+        # window can straddle both files.
+        for row in iter_rotated_rows(mnemo_dir / "reflex-log.jsonl"):
+            ts = _parse_ts(row.get("ts"))
+            if ts is None or ts < cutoff:
+                continue
+            if not is_reflex_opportunity(row):
+                continue
+            total += 1
+            if row.get("emitted"):
+                emitted += 1
         if total == 0:
             return None
         return (emitted, total)

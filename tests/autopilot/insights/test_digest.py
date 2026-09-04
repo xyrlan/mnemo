@@ -166,6 +166,39 @@ def test_generate_digest_reflex_emit_rate_excludes_all_exported(tmp_path: Path):
     assert (numbers_emitted / numbers_total) == d.reflex_emit_rate
 
 
+def test_generate_digest_reflex_emit_rate_matches_numbers_across_rotation(tmp_path: Path):
+    """Issue #136: the digest and ``mnemo status`` must still agree once the
+    log has rotated — not just when everything fits in the live file.
+    """
+    rotated_path = tmp_path / _MNemo / "reflex-log.jsonl.1"
+    rotated_path.parent.mkdir(parents=True, exist_ok=True)
+    rotated_entries = [
+        {"ts": "2026-04-20T10:00:00Z", "emitted": ["a"], "silence_reason": None},
+        {"ts": "2026-04-21T10:00:00Z", "emitted": [], "silence_reason": "relative_gap_fail"},
+    ]
+    rotated_path.write_text(
+        "\n".join(json.dumps(e) for e in rotated_entries) + "\n", encoding="utf-8"
+    )
+    live_entries = [
+        {"ts": "2026-04-25T10:00:00Z", "emitted": ["b"], "silence_reason": None},
+        {"ts": "2026-04-25T10:01:00Z", "emitted": [], "silence_reason": "below_min_tokens"},
+    ]
+    _write_reflex_log(tmp_path, live_entries)
+
+    d = generate_digest(vault_root=tmp_path, since_days=365)
+
+    from mnemo.core import numbers
+
+    numbers_rate = numbers.reflex_emit_rate(tmp_path, days=365)
+    assert numbers_rate is not None
+    numbers_emitted, numbers_total = numbers_rate
+
+    # Both readers must see all 4 rows (2 rotated + 2 live), not just the 2 live ones.
+    assert numbers_total == 4
+    assert d.reflex_prompt_count == numbers_total
+    assert d.reflex_emit_count == numbers_emitted
+
+
 def test_generate_digest_reflex_index_missing_count(tmp_path: Path):
     entries = [
         {"ts": "2026-04-25T10:00:00Z", "emitted": False,

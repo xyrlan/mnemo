@@ -380,6 +380,41 @@ def test_detect_dead_rules_skips_rule_only_seen_via_export(tmp_path: Path) -> No
     assert rules == []
 
 
+def test_detect_dead_rules_skips_rule_only_mentioned_in_rotated_reflex_log(
+    tmp_path: Path,
+) -> None:
+    """A rule whose only ``emitted`` mention rotated into .jsonl.1 is not dead.
+
+    Issue #136: rotation at 1MB renames the live log to ``.jsonl.1``. The
+    180-day sweep window easily outlives a rotation, so reading only the live
+    file would make an active rule look dead the moment its one mention
+    rotates out.
+    """
+    _make_rule(tmp_path, "rotated-only-rule", created_days_ago=100)
+    log_path = tmp_path / ".mnemo" / "reflex-log.jsonl.1"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": _ts(10), "emitted": ["rotated-only-rule"]}) + "\n")
+    rules = detect_dead_rules(vault_root=tmp_path, days=90)
+    assert rules == []
+
+
+def test_detect_dead_rules_skips_rule_only_accessed_via_rotated_access_log(
+    tmp_path: Path,
+) -> None:
+    """Same as above, for the mcp-access-log.jsonl.1 rotated file."""
+    _make_rule(tmp_path, "rotated-access-rule", created_days_ago=100)
+    log_path = tmp_path / ".mnemo" / "mcp-access-log.jsonl.1"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "ts": _ts(10),
+            "rules": [{"slug": "rotated-access-rule"}],
+        }) + "\n")
+    rules = detect_dead_rules(vault_root=tmp_path, days=90)
+    assert rules == []
+
+
 def test_detect_dead_rules_archives_rule_with_no_mentions_at_all(tmp_path: Path) -> None:
     """A rule with neither ``emitted`` nor ``exported`` mentions is still dead."""
     _make_rule(tmp_path, "truly-dead-rule", created_days_ago=100)

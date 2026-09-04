@@ -10,25 +10,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from mnemo.core.log_utils import iter_rotated_rows
+
 
 def _read_jsonl_filtered(
     path: Path,
     since_dt: datetime,
     ts_key: str,
 ) -> list:
-    """Read a JSONL file, skip malformed lines, filter by ``ts_key >= since_dt``."""
-    if not path.is_file():
-        return []
+    """Read a JSONL file (plus its rotated ``.1``), filter by ``ts_key >= since_dt``.
+
+    Rotation renames the live log to ``.jsonl.1`` at 1MB, so on a busy vault
+    the digest's window can straddle both files — reading only the live one
+    would under-report the window.
+    """
     cutoff = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     results = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            entry = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            continue
+    for entry in iter_rotated_rows(path):
         ts = entry.get(ts_key, "")
         if isinstance(ts, str) and ts >= cutoff:
             results.append(entry)
