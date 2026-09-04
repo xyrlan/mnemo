@@ -111,6 +111,26 @@ def test_build_index_keeps_auto_promoter_advisory_out_of_preview_and_tokens(tmp_
     assert "yarn" in idx["postings"]
 
 
+def test_build_index_keeps_frontmatter_out_of_body_field(tmp_vault):
+    """#137: frontmatter keys, source paths and run ids are metadata, not rule
+    text — they must not land in the ``body`` postings nor inflate its length."""
+    _write_rule(tmp_vault, "feedback", "yarn.md", name="yarn",
+                sources=["bots/mnemo/memory/zqpath-marker.md"],
+                body="Use yarn, never npm.")
+
+    idx = build_index(tmp_vault, universal_threshold=2)
+
+    body_terms = {
+        term for term, entries in idx["postings"].items()
+        if any(e["slug"] == "yarn" and e["tf"]["body"] > 0 for e in entries)
+    }
+    for tok in ("---", "sources", "stability", "zqpath-marker", "stable"):
+        assert tok not in body_terms, f"frontmatter token {tok!r} indexed as body"
+    assert "yarn" in body_terms
+    assert idx["docs"]["yarn"]["field_length"]["body"] == len(
+        ["use", "yarn", "never", "npm"])
+
+
 def test_build_index_schema_shape(tmp_vault):
     _write_rule(tmp_vault, "feedback", "a.md", name="a")
     idx = build_index(tmp_vault, universal_threshold=2)

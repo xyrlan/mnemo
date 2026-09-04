@@ -35,7 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mnemo.core.errors import load_validated_json
-from mnemo.core.filters import derive_rule_slug, is_consumer_visible, parse_frontmatter
+from mnemo.core.filters import derive_rule_slug, is_consumer_visible
+from mnemo.core.reclassify_types import split_frontmatter
 from mnemo.core.reflex.tokenizer import tokenize
 from mnemo.core.rule_activation import is_universal, projects_for_rule
 from mnemo.core.text_utils import body_preview, retrieval_body
@@ -85,7 +86,9 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             except OSError:
                 continue
 
-            fm = parse_frontmatter(text)
+            # Frontmatter is metadata (keys, source paths, run ids); only
+            # the body is rule text (#137).
+            fm, body = split_frontmatter(text)
             if not is_consumer_visible(md_path, fm, vault_root):
                 continue
 
@@ -99,7 +102,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             universal = is_universal(projects, universal_threshold)
 
             # Tokenize what retrieval sees, not the page (text_utils.retrieval_body).
-            indexed_text = retrieval_body(text)
+            indexed_text = retrieval_body(body)
             field_toks = _field_tokens(fm, indexed_text, slug)
             field_length = {f: len(field_toks[f]) for f in _FIELD_NAMES}
 
