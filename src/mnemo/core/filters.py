@@ -40,6 +40,24 @@ def derive_rule_slug(frontmatter: dict[str, Any], stem: str) -> str:
 ARCHIVE_DIR = "_archive"
 INBOX_DIR = "_inbox"
 
+# Staged rewrites, never rules. When the extractor re-consolidates a page a
+# human may have edited, it writes the new version *beside* the target instead
+# of over it, for review (``extract/inbox/branches/upgrade.py``). Such a file
+# copies the live rule's frontmatter verbatim — same ``slug``, same ``name`` —
+# so any walker keyed on slug indexes it under the real rule's identity, and
+# ``x.proposed.md`` sorting after ``x.md`` means the draft wins. That shadowed
+# 30 project rules on the real vault (#155): the approved page was unreachable
+# and Claude was served the unreviewed draft.
+#
+# ``reclassify.py`` and ``extract/prompts/existing_rules.py`` each grew their
+# own copy of this check; this is the shared one every walker reads.
+PROPOSED_SUFFIXES = (".proposed.md", ".update-proposed.md")
+
+
+def is_proposed_sibling(path: Path) -> bool:
+    """True for a staged ``.proposed.md`` / ``.update-proposed.md`` rewrite."""
+    return path.name.endswith(PROPOSED_SUFFIXES)
+
 
 def iter_shared_pages(vault_root: Path, *, include_inbox: bool = True) -> Iterator[Path]:
     """Every rule page under ``shared/``, in sorted order.
@@ -49,6 +67,8 @@ def iter_shared_pages(vault_root: Path, *, include_inbox: bool = True) -> Iterat
     live rules — the indexes and ``collect_rules`` already ignore them and
     every other walker must agree, or ``doctor`` lists 1.4k dead copies.
     ``_inbox`` is skipped only on request; staged pages are still rules.
+    ``*.proposed.md`` siblings are always skipped — see
+    :data:`PROPOSED_SUFFIXES`; they are rewrites awaiting review, not rules.
     """
     shared = Path(vault_root) / "shared"
     if not shared.is_dir():
@@ -58,6 +78,8 @@ def iter_shared_pages(vault_root: Path, *, include_inbox: bool = True) -> Iterat
         if ARCHIVE_DIR in rel_parts:
             continue
         if not include_inbox and INBOX_DIR in rel_parts:
+            continue
+        if is_proposed_sibling(md):
             continue
         yield md
 
@@ -69,9 +91,11 @@ def is_consumer_visible(
 ) -> bool:
     """Return True if the page should appear in consumer surfaces.
 
-    Two conditions, short-circuited in order:
+    Three conditions, short-circuited in order:
     1. Path filter — anything under ``shared/_inbox/`` is draft.
-    2. ``stability: evolving`` — decision still in flux.
+    2. ``*.proposed.md`` siblings — staged rewrites, see
+       :data:`PROPOSED_SUFFIXES`.
+    3. ``stability: evolving`` — decision still in flux.
 
     **Location is the authority on draft-ness, not the ``needs-review`` tag.**
     Until v0.18 this predicate also hid any page carrying ``needs-review``.
@@ -92,6 +116,8 @@ def is_consumer_visible(
     except ValueError:
         return False
     if rel.parts and rel.parts[0] == "_inbox":
+        return False
+    if is_proposed_sibling(page_path):
         return False
     if (frontmatter.get("stability") or "stable") == "evolving":
         return False

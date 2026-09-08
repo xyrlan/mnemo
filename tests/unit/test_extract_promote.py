@@ -67,8 +67,13 @@ def test_promote_sibling_when_user_edits_promoted_file(tmp_vault: Path):
     f2 = _mk_project_file(tmp_vault, "a", "project_x", body="v2")
     result = promote.promote_projects([f2], state, tmp_vault)
 
-    sibling = tmp_vault / "shared" / "project" / "a__x.proposed.md"
+    # Staged in _inbox, NOT beside the rule it proposes to replace: a sibling
+    # copies the live page's frontmatter verbatim, so one left in
+    # shared/project/ is indexed under the real rule's slug and — sorting after
+    # it — wins the collision, hiding the approved page (#155).
+    sibling = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
     assert sibling.exists()
+    assert not (tmp_vault / "shared" / "project" / "a__x.proposed.md").exists()
     assert "(user note)" in target.read_text()
     assert len(result.sibling_proposed) == 1
 

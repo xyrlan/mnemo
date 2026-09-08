@@ -102,6 +102,34 @@ def _doctor_check_missing_slugs(vault: Path) -> bool:
     return True
 
 
+def _doctor_check_stray_proposed(vault: Path) -> bool:
+    """#155: ``.proposed.md`` siblings left in ``shared/<type>/`` shadow rules.
+
+    A sibling copies the live page's frontmatter verbatim, so it is indexed
+    under the real rule's slug — and sorting after it, the draft wins. The
+    approved page then becomes unreachable and Claude reads the unreviewed
+    rewrite instead.
+
+    Dry-run only — doctor reports, ``mnemo extract`` relocates. Always
+    advisory: the files are unreviewed proposals, never garbage.
+    """
+    from mnemo.core.migrations import proposed as _proposed
+
+    rep = _proposed.relocate_proposed(vault, dry_run=True)
+    if rep.moved == 0 and not rep.skipped:
+        print("  \u2713 no staged rewrites in the live rule dirs")
+        return True
+    if rep.moved:
+        word = "rewrite" if rep.moved == 1 else "rewrites"
+        print(
+            f"  \u26a0 {rep.moved} staged {word} sitting beside the rule it "
+            "shadows \u2014 `mnemo extract` moves them to shared/_inbox/"
+        )
+    for path, reason in rep.skipped:
+        print(f"       \u2192 {path.name}: {reason}")
+    return True
+
+
 def _doctor_check_bare_deny_command(vault: Path) -> bool:
     """Warn when the activation index contains rules rejected for bare deny_command.
 

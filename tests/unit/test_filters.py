@@ -429,3 +429,52 @@ def test_iter_shared_pages_can_exclude_inbox(tmp_path):
 
 def test_iter_shared_pages_missing_shared_dir(tmp_path):
     assert list(iter_shared_pages(tmp_path)) == []
+
+
+def test_proposed_siblings_are_not_consumer_visible(tmp_path: Path) -> None:
+    """A `.proposed.md` is a staged rewrite awaiting human review, never a rule.
+
+    It carries the live rule's frontmatter verbatim — same `slug`, same `name` —
+    so anything keyed on slug indexes it under the real rule's identity. Since
+    `x.proposed.md` sorts after `x.md`, the draft wins the collision and the
+    approved rule becomes unreachable. On the real vault this shadowed 30
+    project rules (#155).
+
+    Location is the authority on draft-ness (see the docstring above), and the
+    `.proposed` suffix is a location fact: it names a file that the extractor
+    deliberately wrote *beside* a rule rather than over it.
+    """
+    d = tmp_path / "shared" / "project"
+    d.mkdir(parents=True)
+    live = d / "clubinho__deploy.md"
+    draft = d / "clubinho__deploy.proposed.md"
+    for p in (live, draft):
+        p.write_text("---\nname: Deploy\nslug: clubinho__deploy\ntype: project\n---\n\nbody\n")
+
+    assert is_consumer_visible(live, {}, tmp_path) is True
+    assert is_consumer_visible(draft, {}, tmp_path) is False
+
+
+def test_update_proposed_siblings_are_not_consumer_visible(tmp_path: Path) -> None:
+    """`.update-proposed.md` is the same mechanism from a different branch
+    (`inbox/branches/inbox_flow.py`), and must be hidden on the same grounds."""
+    d = tmp_path / "shared" / "feedback"
+    d.mkdir(parents=True)
+    draft = d / "use-yarn.update-proposed.md"
+    draft.write_text("---\nname: Use yarn\ntype: feedback\n---\n\nbody\n")
+    assert is_consumer_visible(draft, {}, tmp_path) is False
+
+
+def test_iter_shared_pages_skips_proposed_siblings(tmp_path: Path) -> None:
+    """Every walker must agree with `is_consumer_visible` here, or an index
+    built from `iter_shared_pages` re-admits the drafts that the consumer
+    predicate rejects — which is exactly how the shadowing bug reached the
+    activation index."""
+    d = tmp_path / "shared" / "project"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text("x")
+    (d / "a.proposed.md").write_text("x")
+    (d / "b.update-proposed.md").write_text("x")
+
+    found = {p.name for p in iter_shared_pages(tmp_path)}
+    assert found == {"a.md"}

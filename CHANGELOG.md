@@ -7,6 +7,27 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Staged `.proposed.md` rewrites no longer shadow the rules they propose to
+  replace.** When the extractor re-consolidates a page a human may have edited,
+  it stages the new version as a sibling for review rather than overwriting the
+  live one. `extract/inbox/paths._sibling_path` routes that sibling into
+  `shared/_inbox/<type>/` — "so the sacred dir stays free of plugin artifacts",
+  as its docstring puts it — but `extract/promote.py` used `target.with_name`
+  and wrote it beside the rule instead. Because a sibling copies the live
+  page's frontmatter verbatim (same `slug`, same `name`), every walker keyed on
+  slug indexed it under the real rule's identity, and `x.proposed.md` sorting
+  after `x.md` meant the draft won: on the vault this was found in, **30
+  project rules were served as their unreviewed draft while the approved page
+  was unreachable**. Three parts: `promote.py` now calls `_sibling_path`;
+  `core.filters` hides `*.proposed.md` / `*.update-proposed.md` from
+  `iter_shared_pages` and `is_consumer_visible`, so every walker agrees rather
+  than each growing its own check (`reclassify.py` and `existing_rules.py` had
+  one already); and `core.migrations.proposed` relocates siblings a pre-fix run
+  left behind, run from `mnemo extract` and reported by `mnemo doctor`. Strays
+  are moved, never deleted — they are unreviewed proposals — and a stray whose
+  destination is already occupied is left in place rather than clobbering a
+  proposal nobody has read. Closes #155.
+
 - **`sources:` entries holding an absolute path no longer render dead
   wikilinks.** A wikilink resolves against the vault root, so
   `[[/Users/me/mnemo/bots/proj/briefings/sessions/abc]]` resolved to nothing
