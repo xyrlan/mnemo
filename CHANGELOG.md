@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-09-08
+
 ### Fixed
 
 - **Staged `.proposed.md` rewrites no longer shadow the rules they propose to
