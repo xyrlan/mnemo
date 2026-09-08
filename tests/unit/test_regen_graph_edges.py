@@ -36,7 +36,7 @@ def test_refresh_one_appends_section_when_missing(tmp_vault):
     md = _seed_rule(tmp_vault, "alpha",
                     sources=["bots/proj/briefings/sessions/abc.md",
                              "bots/proj/briefings/sessions/def.md"])
-    assert _refresh_one(md) is True
+    assert _refresh_one(md, tmp_vault) is True
     after = md.read_text(encoding="utf-8")
     assert GRAPH_SECTION_MARKER in after
     assert "[[bots/proj/briefings/sessions/abc]]" in after
@@ -45,23 +45,23 @@ def test_refresh_one_appends_section_when_missing(tmp_vault):
 
 def test_refresh_one_is_idempotent(tmp_vault):
     md = _seed_rule(tmp_vault, "beta", sources=["bots/p/m/x.md"])
-    _refresh_one(md)
+    _refresh_one(md, tmp_vault)
     snapshot = md.read_text(encoding="utf-8")
-    assert _refresh_one(md) is False
+    assert _refresh_one(md, tmp_vault) is False
     assert md.read_text(encoding="utf-8") == snapshot
 
 
 def test_refresh_one_replaces_stale_section(tmp_vault):
     """Sources changed in frontmatter → graph section must reflect them."""
     md = _seed_rule(tmp_vault, "gamma", sources=["bots/p/m/old.md"])
-    _refresh_one(md)
+    _refresh_one(md, tmp_vault)
     # Mutate sources in-place by rewriting the file.
     text = md.read_text(encoding="utf-8")
     head = text[:text.find(GRAPH_SECTION_MARKER)]
     head = head.replace("bots/p/m/old.md", "bots/p/m/new.md")
     md.write_text(head + text[text.find(GRAPH_SECTION_MARKER):], encoding="utf-8")
 
-    assert _refresh_one(md) is True
+    assert _refresh_one(md, tmp_vault) is True
     after = md.read_text(encoding="utf-8")
     assert "[[bots/p/m/new]]" in after
     assert "[[bots/p/m/old]]" not in after
@@ -70,7 +70,7 @@ def test_refresh_one_replaces_stale_section(tmp_vault):
 
 def test_refresh_one_omits_section_when_no_sources(tmp_vault):
     md = _seed_rule(tmp_vault, "delta", sources=[])
-    _refresh_one(md)
+    _refresh_one(md, tmp_vault)
     assert GRAPH_SECTION_MARKER not in md.read_text(encoding="utf-8")
 
 
@@ -80,7 +80,7 @@ def test_refresh_one_preserves_body(tmp_vault):
                     sources=["bots/p/m/x.md"],
                     extra_body="\nMore body text with **markdown**.\n")
     original_body = strip_graph_section(md.read_text(encoding="utf-8"))
-    _refresh_one(md)
+    _refresh_one(md, tmp_vault)
     refreshed_body = strip_graph_section(md.read_text(encoding="utf-8"))
     assert refreshed_body == original_body
 
@@ -186,3 +186,38 @@ def test_cli_regen_graph_edges_command(tmp_vault, monkeypatch, capsys):
     for slug in ["rule-a", "rule-b"]:
         text = (tmp_vault / "shared" / "feedback" / f"{slug}.md").read_text(encoding="utf-8")
         assert GRAPH_SECTION_MARKER in text
+
+
+def test_refresh_relativizes_absolute_source_paths(tmp_path: Path) -> None:
+    """An Obsidian wikilink resolves relative to the vault root, so a
+    machine-absolute target (`[[/Users/me/vault/bots/...]]`) resolves to
+    nothing and the edge is silently missing from the graph.
+
+    Some rules carry absolute paths in `sources:` — written before
+    `source_paths.vault_relative_source` became the write-side chokepoint.
+    Rendering must not copy them through verbatim: on the real vault this
+    left 346 dead links across 335 rules.
+    """
+    md = _seed_rule(
+        tmp_path, "abs-source",
+        sources=[
+            str(tmp_path / "bots" / "proj" / "briefings" / "sessions" / "s1.md"),
+            "bots/proj/briefings/sessions/s2.md",
+        ],
+    )
+    _refresh_one(md, tmp_path)
+    section = md.read_text().split(GRAPH_SECTION_MARKER)[1]
+
+    assert "[[bots/proj/briefings/sessions/s1]]" in section
+    assert "[[bots/proj/briefings/sessions/s2]]" in section
+    assert str(tmp_path) not in section, "absolute path leaked into a wikilink"
+
+
+def test_refresh_leaves_paths_outside_the_vault_alone(tmp_path: Path) -> None:
+    """`vault_relative_source` deliberately returns un-anchored outside paths
+    unchanged — "better a stable odd path than a wrong guess". Rendering must
+    inherit that rather than mangle them into a bogus relative link."""
+    md = _seed_rule(tmp_path, "outside", sources=["/etc/somewhere/notes.md"])
+    _refresh_one(md, tmp_path)
+    section = md.read_text().split(GRAPH_SECTION_MARKER)[1]
+    assert "[[/etc/somewhere/notes]]" in section

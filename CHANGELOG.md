@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`sources:` entries holding an absolute path no longer render dead
+  wikilinks.** A wikilink resolves against the vault root, so
+  `[[/Users/me/mnemo/bots/proj/briefings/sessions/abc]]` resolved to nothing
+  and the rule→briefing edge was silently absent from the graph — 346 dead
+  links across 335 rules on a real vault. `_wikilink_target` stripped `.md`
+  and copied the rest through verbatim; it now routes through
+  `core.extract.source_paths.vault_relative_source`, the helper that already
+  documents itself as the write-side chokepoint for exactly this. Paths with
+  no anchor inside the vault are still left untouched. Running
+  `mnemo regen-graph-edges` repairs existing rules. Closes #152.
+
 - **The vault is legible in Obsidian.** Three separate causes made the graph
   view unreadable. (1) `HOME.md`'s generated dashboard had no caps: it listed
   every rule by trust tier and then every rule again per topic tag — 5,848
