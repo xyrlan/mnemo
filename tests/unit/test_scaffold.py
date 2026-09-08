@@ -160,3 +160,66 @@ def test_scaffold_writes_config_with_vault_root(tmp_path: Path):
     scaffold.scaffold_vault(vault)
     cfg = json.loads((vault / "mnemo.config.json").read_text())
     assert cfg["vaultRoot"] == str(vault)
+
+
+def test_scaffold_writes_graph_config(tmp_path: Path):
+    """Obsidian's graph defaults are wrong for a mnemo vault: orphans on,
+    no exclusions, no color groups. A fresh vault therefore opens as a grey
+    hairball — hundreds of unlinked `_archive`/`logs` notes ringing the real
+    content, with reference/project/feedback pages visually identical.
+
+    Scaffold already ships the graph *theme* (graph-dark-gold.css); it must
+    ship the graph *configuration* too, or the theme styles nothing useful."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    graph_path = vault / ".obsidian" / "graph.json"
+    assert graph_path.exists(), ".obsidian/graph.json must be scaffolded"
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+
+    # The dead-weight directories are excluded from the graph, and the
+    # dashboard hub (which links to every rule) does not distort the layout.
+    assert "_archive" in graph["search"]
+    assert "logs" in graph["search"]
+    assert "HOME" in graph["search"]
+    # The orphan ring is off.
+    assert graph["showOrphans"] is False
+    # Page types are visually distinguishable.
+    queries = [g["query"] for g in graph["colorGroups"]]
+    for page_type in ("reference", "project", "feedback"):
+        assert any(page_type in q for q in queries), (
+            f"shared/{page_type} must have its own color group"
+        )
+
+
+def test_scaffold_writes_obsidian_ignore_filters(tmp_path: Path):
+    """`shared/_archive/` holds reclassify originals and `bots/*/logs/` holds
+    raw logs. mnemo skips both everywhere (core.filters.iter_shared_pages),
+    but Obsidian shows them in search, quick switcher and backlinks.
+
+    `userIgnoreFilters` hides them in the editor while leaving the files on
+    disk, so archived originals stay recoverable."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    app_path = vault / ".obsidian" / "app.json"
+    assert app_path.exists(), ".obsidian/app.json must be scaffolded"
+    app = json.loads(app_path.read_text(encoding="utf-8"))
+    filters = app["userIgnoreFilters"]
+    assert any("_archive" in f for f in filters)
+    assert any("logs" in f for f in filters)
+
+
+def test_scaffold_preserves_user_tuned_obsidian_config(tmp_path: Path):
+    """Obsidian rewrites .obsidian/*.json whenever the user changes a setting.
+    Scaffold runs on every SessionStart via the plugin hook, so clobbering
+    these would silently reset the user's graph every session."""
+    vault = tmp_path / "vault"
+    scaffold.scaffold_vault(vault)
+    graph_path = vault / ".obsidian" / "graph.json"
+    app_path = vault / ".obsidian" / "app.json"
+    graph_path.write_text('{"search": "user tuned"}', encoding="utf-8")
+    app_path.write_text('{"userIgnoreFilters": []}', encoding="utf-8")
+
+    scaffold.scaffold_vault(vault)
+
+    assert json.loads(graph_path.read_text())["search"] == "user tuned"
+    assert json.loads(app_path.read_text())["userIgnoreFilters"] == []

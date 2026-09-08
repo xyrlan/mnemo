@@ -13,6 +13,19 @@ Design decisions (2026-04-14):
   direct reformats second) AND by topic tag.
 - Wikilinks are path-qualified (``[[shared/<type>/<slug>]]``) to avoid slug
   ambiguity across types.
+
+Caps (2026-09-08):
+- Every section is capped. Uncapped, the block listed the whole vault twice
+  (once by tier, once per topic tag): 5848 wikilinks over 1731 pages. Two costs
+  followed. HOME.md stopped being readable as a dashboard, and — because it
+  linked to nearly every note — the Obsidian graph rendered it as a single hub
+  with an edge to everything, erasing the per-agent and per-topic structure
+  underneath.
+- The ``source_count == 1`` tier is summarized rather than listed. It is ~98% of
+  a mature vault (2026-09-01 audit) and it is the tier with the least evidence
+  behind it, so it is the wrong thing to spend the reader's attention on. Those
+  pages stay reachable via the topic sections, search and
+  ``list_rules_by_topic``.
 """
 from __future__ import annotations
 
@@ -29,6 +42,10 @@ BLOCK_BEGIN = "<!-- mnemo:dashboard:begin -->"
 BLOCK_END = "<!-- mnemo:dashboard:end -->"
 
 _PAGE_TYPES = ("feedback", "user", "reference", "project")
+
+# Section caps. Deliberately small: this is a landing page, not an index.
+MAX_HIGH_TRUST = 20
+MAX_PER_TOPIC = 10
 
 
 @dataclass
@@ -83,6 +100,20 @@ def _format_entry_line(e: _Entry) -> str:
     return f"- {e.wikilink} — {e.source_count} {src_word}{tags_part}"
 
 
+def _append_overflow(lines: list[str], hidden: int) -> None:
+    """Append a footer naming how many rules a cap dropped. No-op when none were.
+
+    Plain text on purpose. A wikilink per hidden rule would re-create the hub
+    the caps exist to remove.
+    """
+    if hidden <= 0:
+        return
+    word = "rule" if hidden == 1 else "rules"
+    lines.append(
+        f"_… and {hidden} more {word} — search the vault or use `list_rules_by_topic`._"
+    )
+
+
 def _by_trust_tier(entries: list[_Entry]) -> tuple[list[_Entry], list[_Entry]]:
     multi = [e for e in entries if e.source_count >= 2]
     single = [e for e in entries if e.source_count < 2]
@@ -117,14 +148,20 @@ def _render_block_body(entries: list[_Entry]) -> str:
 
     if multi:
         lines.append("### Cross-agent synthesized rules (high-trust)")
-        for e in multi:
+        for e in multi[:MAX_HIGH_TRUST]:
             lines.append(_format_entry_line(e))
+        _append_overflow(lines, len(multi) - MAX_HIGH_TRUST)
         lines.append("")
 
     if single:
+        # Summary only — see the module docstring on why this tier is not listed.
+        n = len(single)
+        word = "rule" if n == 1 else "rules"
         lines.append("### Auto-promoted direct reformats")
-        for e in single:
-            lines.append(_format_entry_line(e))
+        lines.append(
+            f"_{n} {word} with a single source. Not listed here — browse them by "
+            f"topic below, or query `list_rules_by_topic`._"
+        )
         lines.append("")
 
     topics = _by_topic(entries)
@@ -134,9 +171,10 @@ def _render_block_body(entries: list[_Entry]) -> str:
             n = len(bucket)
             word = "rule" if n == 1 else "rules"
             lines.append(f"#### #{tag} ({n} {word})")
-            for e in bucket:
+            for e in bucket[:MAX_PER_TOPIC]:
                 src_word = "source" if e.source_count == 1 else "sources"
                 lines.append(f"- {e.wikilink} — {e.source_count} {src_word}")
+            _append_overflow(lines, n - MAX_PER_TOPIC)
             lines.append("")
 
     # Trim trailing blank line
