@@ -23,6 +23,7 @@ from mnemo.core.extract.scanner import (
     MemoryFile,
     StateEntry,
 )
+from mnemo.core.extract.inbox.paths import _sibling_path
 from mnemo.core.extract.source_paths import vault_relative_source
 
 
@@ -195,7 +196,13 @@ def promote_projects(
             entry.written_at = run_id
             result.overwrite_safe.append(key)
         else:
-            sibling = target.with_name(f"{_project_slug(file)}.proposed.md")
+            # _sibling_path, not target.with_name: a sibling written beside
+            # the rule copies its frontmatter verbatim, so every walker keyed
+            # on slug indexes it under the live rule's identity — and
+            # "x.proposed.md" sorting after "x.md" means the draft wins and
+            # the approved page becomes unreachable (#155).
+            sibling = _sibling_path(target, vault_root)
+            sibling.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(sibling, content)
             result.sibling_proposed.append((key, str(sibling)))
 

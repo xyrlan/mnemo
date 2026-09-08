@@ -66,8 +66,11 @@ def test_project_pages_keep_their_composite_stem(tmp_path):
     staged = _page(tmp_path, "shared/_inbox/project/a__b.md")
     feedback = _page(tmp_path, "shared/feedback/Use_Yarn.md")
     rep = slugs.stamp_slugs(tmp_path)
-    assert rep.stamped == 4
+    assert rep.stamped == 3
     assert parse_frontmatter(plain.read_text(encoding="utf-8"))["slug"] == "bingx-robot__ai-pm"
-    assert parse_frontmatter(proposed.read_text(encoding="utf-8"))["slug"] == "x__y.proposed"
     assert parse_frontmatter(staged.read_text(encoding="utf-8"))["slug"] == "a__b"
     assert parse_frontmatter(feedback.read_text(encoding="utf-8"))["slug"] == "use-yarn"
+    # A .proposed.md sibling is a staged rewrite, not a page: stamping it wrote
+    # `slug: x__y.proposed`, minting a second identity for a rule that already
+    # has one. It is skipped now, along with every other walker (#155).
+    assert "slug:" not in proposed.read_text(encoding="utf-8")

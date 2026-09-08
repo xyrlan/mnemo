@@ -472,6 +472,16 @@ def _run_extraction_body(
     except Exception as exc:  # noqa: BLE001 — fail-open by design
         errors.log_error(vault_root, "extract.slug_migration", exc)
 
+    # #155: move `.proposed.md` siblings a pre-fix run left beside the rule
+    # they shadow. Same reasoning as the slug stamp above — before this run
+    # indexes anything, since an indexed sibling takes over the live rule's
+    # slug and hides it.
+    try:
+        from mnemo.core.migrations import proposed as _proposed
+        _proposed.relocate_proposed(vault_root)
+    except Exception as exc:  # noqa: BLE001 — fail-open by design
+        errors.log_error(vault_root, "extract.proposed_migration", exc)
+
     # Scoped runs never clear the whole inbox: `only` narrows this pass to one
     # file, and wiping every staged cluster page for it would destroy work the
     # user did not ask this run to touch.
