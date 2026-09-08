@@ -1,7 +1,9 @@
 # Rule-to-rule edges for retrieval expansion
 
 **Date:** 2026-09-08
-**Status:** design approved, prototype gate pending
+**Status:** REJECTED at the measurement gate, 2026-09-08. The design rests
+on a misdiagnosis; see *Outcome* at the end. Kept as the record of what was
+measured and why the idea does not pay.
 **Issue:** #154
 
 ## Problem
@@ -245,3 +247,65 @@ separately:
   fabricated tag-hygiene problem (reported as 1399 tags / 65% singletons /
   path globs leaking into tags; the real figures are 357 tags, 29% singletons,
   no leak).
+
+
+---
+
+## Outcome: rejected
+
+The premise of this design is wrong, and the error is in the Problem section
+above: "when the query's wording misses a rule, nothing else can surface it."
+
+Checking `run_case` while writing the implementation plan:
+
+```
+cases outside top-5:                     41
+  present but buried (rank 6-44):        41
+  absent from the result (rank is None):  0
+```
+
+**The right rule is never missing.** All 71 frozen cases return it; 41 of them
+rank it below 5. The 31 "misses" in `recall-report.json` are `rank > 10`, not
+absences. Neighbourhood *expansion* appends rules that are absent, and none are
+— so the designed mechanism cannot move `primacy@5` by construction, not by
+bad luck.
+
+Two further facts make the original firing condition unreachable: the harness
+calls `list_rules_by_topic` with no `query`, so the BM25F gate never runs and
+"nothing cleared the gate" is not observable; and topic buckets are large
+(median 32, max 89, only 5 cases at ≤5), so "thin bucket" almost never fires.
+
+### The reordering variant, also rejected
+
+If the rule is present but buried, the usable mechanism is the opposite of
+expansion: let a well-ranked rule pull its neighbour *up*. Measured directly —
+of the 41 buried cases, how many have a neighbour (≥0.22) that the same query
+already places in its top 5:
+
+```
+4 of 41
+```
+
+Four is the ceiling: it assumes every edge is correct and every boost lands.
+The spec's own criterion covers this — "+1 to +3 with zero regression:
+integrate only if the production code fits in roughly 150 lines." This is three
+units plus an index schema migration. It does not fit, and the criterion was
+fixed before the number was known precisely so it could be applied rather than
+argued with.
+
+### What survives
+
+The edges themselves are real and the pairs are good
+(`prefer-global-hooks-over-per-thread` ↔
+`global-hook-is-camuflage-per-thread-is-signature` is the same idea under two
+names). What died is the theory that retrieval can use them. If rule↔rule
+edges are revisited, it should be for a purpose that survives the fact that
+retrieval already returns the right rule — the problem is ordering, and
+ordering is not short of candidates.
+
+### Method note
+
+The measurement that killed this design was available from the start:
+`rank is None` in the existing report. It was not checked until the plan forced
+a close reading of `run_case`. The reachability numbers gathered earlier (58%
+of misses have a neighbour) are correct and were never relevant.
