@@ -382,3 +382,160 @@ class TestRotatedLog:
         with log.open("ab") as fh:
             fh.write(b'{"tool": "read_mnemo_rule", "args": {"slug": "\xff"}}\n')
         assert [c["expect_slug"] for c in bootstrap_cases(log)] == ["slug-a"]
+
+
+class TestQueryCarriedThrough:
+    """#158: real callers pass ``query`` since #105; the harness must too."""
+
+    def _log_with_query(self, tmp_path: Path, query: str | None) -> Path:
+        log = tmp_path / "log.jsonl"
+        args = {"topic": "workflow", "scope": "project"}
+        if query is not None:
+            args["query"] = query
+        _write_log(log, [
+            {
+                "timestamp": "2026-08-31T10:00:00Z",
+                "tool": "list_rules_by_topic",
+                "args": args,
+                "project": "mnemo",
+                "hit_slugs": ["slug-a", "slug-b"],
+            },
+            {
+                "timestamp": "2026-08-31T10:00:10Z",
+                "tool": "read_mnemo_rule",
+                "args": {"slug": "slug-b"},
+                "project": "mnemo",
+            },
+        ])
+        return log
+
+    def test_bootstrap_records_query(self, tmp_path: Path) -> None:
+        cases = bootstrap_cases(self._log_with_query(tmp_path, "rotate log files"))
+        assert len(cases) == 1
+        assert cases[0]["query"] == "rotate log files"
+        assert cases[0]["id"] == "mnemo:workflow:slug-b?q"
+
+    def test_bootstrap_omits_query_key_when_absent(self, tmp_path: Path) -> None:
+        cases = bootstrap_cases(self._log_with_query(tmp_path, None))
+        assert len(cases) == 1
+        assert "query" not in cases[0]
+        assert cases[0]["id"] == "mnemo:workflow:slug-b"
+
+    def test_bootstrap_keeps_queried_and_unqueried_as_separate_cases(self, tmp_path: Path) -> None:
+        log = tmp_path / "log.jsonl"
+        _write_log(log, [
+            {
+                "timestamp": "2026-08-01T10:00:00Z",
+                "tool": "list_rules_by_topic",
+                "args": {"topic": "workflow"},
+                "project": "mnemo",
+                "hit_slugs": ["slug-b"],
+            },
+            {
+                "timestamp": "2026-08-01T10:00:05Z",
+                "tool": "read_mnemo_rule",
+                "args": {"slug": "slug-b"},
+                "project": "mnemo",
+            },
+            {
+                "timestamp": "2026-08-31T10:00:00Z",
+                "tool": "list_rules_by_topic",
+                "args": {"topic": "workflow", "query": "log rotation"},
+                "project": "mnemo",
+                "hit_slugs": ["slug-b"],
+            },
+            {
+                "timestamp": "2026-08-31T10:00:05Z",
+                "tool": "read_mnemo_rule",
+                "args": {"slug": "slug-b"},
+                "project": "mnemo",
+            },
+        ])
+        cases = bootstrap_cases(log)
+        assert [c["id"] for c in cases] == [
+            "mnemo:workflow:slug-b",
+            "mnemo:workflow:slug-b?q",
+        ]
+
+    def test_run_case_passes_query_to_retrieval(self, tmp_vault: Path, monkeypatch) -> None:
+        seen: dict = {}
+
+        def fake_list(vault_root, topic, *, scope, project, query=None):
+            seen["query"] = query
+            return [{"slug": "rule-one"}]
+
+        monkeypatch.setattr("mnemo.core.mcp.recall.list_rules_by_topic", fake_list)
+        case = {
+            "id": "proj-x:workflow:rule-one?q",
+            "project": "proj-x",
+            "topic": "workflow",
+            "expect_slug": "rule-one",
+            "rank_at_bootstrap": 1,
+            "query": "rotate the log",
+        }
+        r = run_case(tmp_vault, case)
+        assert seen["query"] == "rotate the log"
+        assert r["query"] == "rotate the log"
+
+    def test_run_case_without_query_sends_none(self, tmp_vault: Path, monkeypatch) -> None:
+        seen: dict = {}
+
+        def fake_list(vault_root, topic, *, scope, project, query=None):
+            seen["query"] = query
+            return []
+
+        monkeypatch.setattr("mnemo.core.mcp.recall.list_rules_by_topic", fake_list)
+        case = {
+            "id": "proj-x:workflow:rule-one",
+            "project": "proj-x",
+            "topic": "workflow",
+            "expect_slug": "rule-one",
+            "rank_at_bootstrap": 1,
+        }
+        r = run_case(tmp_vault, case)
+        assert seen["query"] is None
+        assert r["query"] is None
+
+
+class TestAggregateQuerySplit:
+    def _result(self, id_: str, rank: int | None, query: str | None):
+        return {
+            "id": id_,
+            "project": "p",
+            "topic": "t",
+            "expect_slug": "s",
+            "hit": rank is not None and rank <= 10,
+            "rank": rank,
+            "result_count": 0,
+            "elapsed_ms": 1.0,
+            "query": query,
+        }
+
+    def test_split_counts_and_rates(self) -> None:
+        r = aggregate([
+            self._result("a", 1, "q1"),
+            self._result("b", 8, "q2"),
+            self._result("c", 3, None),
+            self._result("d", None, None),
+        ])
+        assert r["queried"] == {"cases": 2, "primacy_at_5": 1, "primacy_rate_at_5": 0.5, "mrr": 0.5625}
+        assert r["unqueried"] == {"cases": 2, "primacy_at_5": 1, "primacy_rate_at_5": 0.5, "mrr": 0.1667}
+
+    def test_split_tolerates_results_without_query_key(self) -> None:
+        legacy = {
+            "id": "a", "project": "p", "topic": "t", "expect_slug": "s",
+            "hit": True, "rank": 1, "result_count": 1, "elapsed_ms": 1.0,
+        }
+        r = aggregate([legacy])
+        assert r["queried"]["cases"] == 0
+        assert r["unqueried"]["cases"] == 1
+
+    def test_format_report_shows_split_when_queried_present(self) -> None:
+        r = aggregate([self._result("a", 1, "q1"), self._result("c", 3, None)])
+        text = format_report(r)
+        assert "with query" in text
+        assert "without query" in text
+
+    def test_format_report_hides_split_when_no_queried_cases(self) -> None:
+        r = aggregate([self._result("c", 3, None)])
+        assert "with query" not in format_report(r)
