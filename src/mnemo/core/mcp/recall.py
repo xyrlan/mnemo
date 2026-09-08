@@ -15,6 +15,13 @@ Claude scans — i.e. primacy-bias exposure — not visibility. Mislabelling thi
 "hit rate" prompted a flawed follow-up proposal; the rename guards against the
 same mistake.
 
+Since #105 ``list_rules_by_topic`` accepts a ``query`` that gates a BM25F
+rerank, and every real caller passes one (#158). A case therefore carries the
+logged ``query`` when the list-call had one, and ``run_case`` replays it, so
+the harness measures the path callers actually take. Cases without a query
+(all pre-#105 traffic) still run and are reported separately as the legacy
+baseline — never synthesised, only observed.
+
 Public surface:
     bootstrap_cases(log_path, pair_window_s=120) -> list[Case]
     run_case(vault_root, case) -> CaseResult
@@ -39,7 +46,12 @@ _RANKS_REPORTED = (3, 5, 10)
 PHASE3_THRESHOLD = 50
 
 
-class Case(TypedDict):
+class _CaseOptional(TypedDict, total=False):
+    # Present only when the logged list-call passed a query (#158).
+    query: str
+
+
+class Case(_CaseOptional):
     id: str
     project: str
     topic: str
@@ -57,6 +69,14 @@ class CaseResult(TypedDict):
     rank: int | None  # None = slug not in returned list
     result_count: int
     elapsed_ms: float
+    query: str | None  # what run_case passed to retrieval
+
+
+class SplitReport(TypedDict):
+    cases: int
+    primacy_at_5: int
+    primacy_rate_at_5: float
+    mrr: float
 
 
 class Report(TypedDict):
@@ -73,6 +93,8 @@ class Report(TypedDict):
     log_entries: int | None  # size of the access log at measurement time
     phase3_threshold: int  # ranking-change unlock threshold (log entries)
     orphan_dropped: int  # bootstrap pairs whose expect_slug is no longer in the vault
+    queried: SplitReport  # cases replayed with the logged query (#158)
+    unqueried: SplitReport  # legacy cases with no query — source_count+popularity path
 
 
 def _parse_ts(ts: str) -> float:
@@ -141,9 +163,11 @@ def bootstrap_cases(
 ) -> list[Case] | tuple[list[Case], int]:
     """Scan access log; emit one case per list→read pair within ``pair_window_s``.
 
-    Dedup rule: a (project, topic, expect_slug) triple appears at most once — if
-    the same pair recurs, only the earliest observation is kept. This keeps
-    cases.json deterministic across bootstrap runs.
+    Dedup rule: a (project, topic, expect_slug, has_query) tuple appears at
+    most once — if the same pair recurs, only the earliest observation is kept.
+    This keeps cases.json deterministic across bootstrap runs. A queried and an
+    unqueried observation of the same triple are distinct cases: they exercise
+    different ranking paths, and the queried id carries a ``?q`` suffix.
 
     When *vault_root* is provided, pairs whose ``expect_slug`` is no longer
     present in the current activation index for ``(project, topic)`` are
@@ -168,10 +192,11 @@ def bootstrap_cases(
         lists_by_project.setdefault(project, []).append({
             "ts": _parse_ts(e.get("timestamp", "")),
             "topic": (e.get("args") or {}).get("topic"),
+            "query": (e.get("args") or {}).get("query") or None,
             "slugs": e.get("hit_slugs") or [],
         })
 
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, bool]] = set()
     cases: list[Case] = []
     for e in entries:
         if e.get("tool") != "read_mnemo_rule":
@@ -197,18 +222,22 @@ def bootstrap_cases(
                 best = lc
         if best is None or not best.get("topic"):
             continue
-        key = (project, best["topic"], slug)
+        query = best.get("query")
+        key = (project, best["topic"], slug, query is not None)
         if key in seen:
             continue
         seen.add(key)
         rank = best["slugs"].index(slug) + 1
-        cases.append({
-            "id": f"{project}:{best['topic']}:{slug}",
+        case: Case = {
+            "id": f"{project}:{best['topic']}:{slug}" + ("?q" if query else ""),
             "project": project,
             "topic": best["topic"],
             "expect_slug": slug,
             "rank_at_bootstrap": rank,
-        })
+        }
+        if query:
+            case["query"] = query
+        cases.append(case)
     cases.sort(key=lambda c: c["id"])
     dropped_count: int = 0
     if vault_root is not None:
@@ -237,12 +266,14 @@ def bootstrap_cases(
 
 def run_case(vault_root: Path, case: Case) -> CaseResult:
     """Execute a live retrieval for the case; record rank + latency."""
+    query = case.get("query") or None
     t0 = time.perf_counter()
     rules = list_rules_by_topic(
         vault_root,
         case["topic"],
         scope="project",
         project=case["project"],
+        query=query,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
     slugs = [r["slug"] for r in rules]
@@ -259,6 +290,7 @@ def run_case(vault_root: Path, case: Case) -> CaseResult:
         "rank": rank,
         "result_count": len(rules),
         "elapsed_ms": round(elapsed_ms, 3),
+        "query": query,
     }
 
 
@@ -273,6 +305,21 @@ def _percentile(values: list[float], pct: float) -> float:
     ordered = sorted(values)
     k = max(0, min(len(ordered) - 1, int(round((pct / 100) * len(ordered))) - 1))
     return ordered[k]
+
+
+def _split(results: list[CaseResult]) -> SplitReport:
+    total = len(results)
+    hits = _hits_at(results, 5)
+    mrr = (
+        sum(1.0 / r["rank"] for r in results if r["rank"] is not None) / total
+        if total else 0.0
+    )
+    return {
+        "cases": total,
+        "primacy_at_5": hits,
+        "primacy_rate_at_5": round(hits / total, 4) if total else 0.0,
+        "mrr": round(mrr, 4),
+    }
 
 
 def aggregate(
@@ -298,6 +345,8 @@ def aggregate(
     )
     p95 = _percentile([r["elapsed_ms"] for r in results], 95.0)
     misses = [r["id"] for r in results if r["rank"] is None or r["rank"] > 10]
+    queried = [r for r in results if r.get("query")]
+    unqueried = [r for r in results if not r.get("query")]
     return {
         "cases": total,
         "primacy_at_3": hits[3],
@@ -312,6 +361,8 @@ def aggregate(
         "log_entries": log_entries,
         "phase3_threshold": PHASE3_THRESHOLD,
         "orphan_dropped": orphan_dropped,
+        "queried": _split(queried),
+        "unqueried": _split(unqueried),
     }
 
 
@@ -324,6 +375,17 @@ def format_report(report: Report) -> str:
         f"MRR                : {report['mrr']:.4f}",
         f"p95 latency        : {report['p95_latency_ms']:.2f} ms",
     ]
+    queried = report.get("queried")
+    if queried and queried["cases"]:
+        unq = report["unqueried"]
+        lines.append(
+            f"with query         : {queried['cases']} cases, primacy@5 "
+            f"{queried['primacy_at_5']} ({queried['primacy_rate_at_5']:.2%}), MRR {queried['mrr']:.4f}"
+        )
+        lines.append(
+            f"without query      : {unq['cases']} cases, primacy@5 "
+            f"{unq['primacy_at_5']} ({unq['primacy_rate_at_5']:.2%}), MRR {unq['mrr']:.4f}"
+        )
     orphan = report.get("orphan_dropped", 0)
     if orphan:
         lines.append(f"orphan cases dropped: {orphan}")

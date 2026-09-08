@@ -5,6 +5,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The recall harness now replays the `query` real callers pass.** Since
+  #105 every `list_rules_by_topic` call from a live session carries a `query`
+  that gates the BM25F rerank — the access log shows 0 query-less calls since
+  2026-08-31 — but `mnemo recall` bootstrapped cases from `topic` alone and
+  `run_case` never sent a query, so `primacy@5` measured the
+  `source_count`+popularity path nobody takes any more (#158).
+  `bootstrap_cases` records `args.query` when the logged list-call had one
+  (the case id gains a `?q` suffix; a queried and an unqueried observation of
+  the same triple are distinct cases), `run_case` passes it through, and the
+  report splits `primacy@5`/MRR into `queried` and `unqueried` so the legacy
+  cases stay visible as a baseline rather than the target. Queries are only
+  ever observed, never synthesised.
+
 ## [1.3.2] — 2026-09-08
 
 ### Fixed
