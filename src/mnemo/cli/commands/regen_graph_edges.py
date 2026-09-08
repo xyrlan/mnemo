@@ -47,10 +47,24 @@ def _build_section(heading: str, wikilinks: list[str]) -> str:
     )
 
 
-def _wikilink_target(path_str: str) -> str:
-    """Strip the trailing ``.md`` so Obsidian's wikilink resolver picks the
-    file by its short name regardless of the user's link-format setting."""
-    return path_str[:-3] if path_str.endswith(".md") else path_str
+def _wikilink_target(path_str: str, vault_root: Path) -> str:
+    """Turn a ``sources:`` entry into a wikilink target.
+
+    Two steps. First relativize: a wikilink resolves against the vault root,
+    so a machine-absolute target resolves to nothing and the edge is silently
+    missing from the graph. Some rules still carry absolute paths in
+    ``sources:``, written before ``vault_relative_source`` became the
+    write-side chokepoint — rendering must not copy them through. Paths with
+    no anchor inside the vault are returned unchanged by that helper, which
+    is what we want here too.
+
+    Then strip the trailing ``.md``, so Obsidian resolves the file by its
+    short name regardless of the user's link-format setting.
+    """
+    from mnemo.core.extract.source_paths import vault_relative_source
+
+    rel = vault_relative_source(path_str, vault_root)
+    return rel[:-3] if rel.endswith(".md") else rel
 
 
 def _replace_or_append_section(text: str, section: str) -> str:
@@ -61,7 +75,7 @@ def _replace_or_append_section(text: str, section: str) -> str:
     return head + section
 
 
-def _refresh_rule(md: Path) -> bool:
+def _refresh_rule(md: Path, vault_root: Path) -> bool:
     """Append/refresh a ``## Sources`` section on a rule .md file.
     Returns True when the file content changed."""
     from mnemo.core.filters import parse_frontmatter
@@ -73,7 +87,7 @@ def _refresh_rule(md: Path) -> bool:
         sources_raw = [sources_raw]
     sources = [s for s in sources_raw if isinstance(s, str)]
     section = _build_section(
-        "Sources", [_wikilink_target(s) for s in sources]
+        "Sources", [_wikilink_target(s, vault_root) for s in sources]
     )
     new_text = _replace_or_append_section(text, section)
     if new_text == text:
@@ -144,7 +158,7 @@ def cmd_regen_graph_edges(args: argparse.Namespace) -> int:
         for md in sorted(d.glob("*.md")):
             rules_scanned += 1
             try:
-                if _refresh_rule(md):
+                if _refresh_rule(md, vault):
                     rules_refreshed += 1
             except (OSError, UnicodeDecodeError):
                 continue
