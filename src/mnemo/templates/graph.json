@@ -1,0 +1,43 @@
+{
+  "collapse-filter": true,
+  "search": "-path:\"shared/_archive\" -path:\"/logs/\" -file:\"HOME\"",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": true,
+  "showOrphans": false,
+  "collapse-color-groups": false,
+  "colorGroups": [
+    {
+      "query": "path:\"shared/reference\"",
+      "color": { "a": 1, "rgb": 11762810 }
+    },
+    {
+      "query": "path:\"shared/project\"",
+      "color": { "a": 1, "rgb": 5431378 }
+    },
+    {
+      "query": "path:\"shared/feedback\"",
+      "color": { "a": 1, "rgb": 14701138 }
+    },
+    {
+      "query": "path:\"shared/_inbox\"",
+      "color": { "a": 1, "rgb": 9146975 }
+    },
+    {
+      "query": "path:\"bots\"",
+      "color": { "a": 1, "rgb": 5926604 }
+    }
+  ],
+  "collapse-display": true,
+  "showArrow": false,
+  "textFadeMultiplier": -1.5,
+  "nodeSizeMultiplier": 1.2,
+  "lineSizeMultiplier": 1,
+  "collapse-forces": true,
+  "centerStrength": 0.35,
+  "repelStrength": 12,
+  "linkStrength": 0.6,
+  "linkDistance": 120,
+  "scale": 0.5,
+  "close": true
+}

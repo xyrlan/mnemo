@@ -1,0 +1,8 @@
+{
+  "userIgnoreFilters": [
+    "shared/_archive/",
+    "bots/*/logs/"
+  ],
+  "alwaysUpdateLinks": true,
+  "showUnsupportedFiles": false
+}

@@ -228,3 +228,76 @@ def test_update_home_md_no_existing_block_but_no_frontmatter(tmp_path: Path) -> 
     assert BLOCK_BEGIN in text
     assert "user content" in text
     assert text.find(BLOCK_BEGIN) < text.find("user content")
+
+
+def test_dashboard_caps_high_trust_section(tmp_path: Path) -> None:
+    """Uncapped, the dashboard listed every rule in the vault (5848 wikilinks
+    on a 1731-page vault). HOME.md then links to ~everything, which turns the
+    graph into one hub with an edge to every node and hides all real structure.
+
+    The high-trust tier is small in practice, but cap it anyway and say how
+    many were dropped."""
+    for i in range(dashboard.MAX_HIGH_TRUST + 5):
+        _write_page(tmp_path, "reference", f"multi-{i:03d}",
+                    sources=["a", "b"], tags=["auto-promoted", "git"])
+    update_home_md(_cfg(tmp_path))
+    text = (tmp_path / "HOME.md").read_text()
+    section = text.split("### ")[1]
+    assert section.count("\n- [[") == dashboard.MAX_HIGH_TRUST
+    assert "5 more" in text
+
+
+def test_dashboard_summarizes_single_source_rules_without_listing_them(tmp_path: Path) -> None:
+    """`source_count == 1` pages are 98% of a mature vault (2026-09-01 audit).
+    Listing them is what made HOME.md 6600 lines, and it adds no signal — one
+    source is exactly the tier the reader has least reason to scan.
+
+    Report the count; the rules stay reachable through the topic sections,
+    search, and `list_rules_by_topic`."""
+    _write_page(tmp_path, "reference", "solo-one",
+                sources=["a"], tags=["auto-promoted", "git"])
+    _write_page(tmp_path, "reference", "solo-two",
+                sources=["a"], tags=["auto-promoted", "git"])
+    _write_page(tmp_path, "reference", "trusted",
+                sources=["a", "b"], tags=["auto-promoted", "git"])
+    update_home_md(_cfg(tmp_path))
+    text = (tmp_path / "HOME.md").read_text()
+
+    tier = text.split("### Auto-promoted direct reformats")[1].split("###")[0]
+    assert "[[shared/reference/solo-one]]" not in tier
+    assert "[[shared/reference/solo-two]]" not in tier
+    # The tier is acknowledged, with its size.
+    assert "2 rules" in tier
+    # They remain reachable under their topic, which is the browsing path.
+    assert "[[shared/reference/solo-one]]" in text.split("#### #git")[1]
+    # High-trust rules are still linked in their own tier.
+    assert "[[shared/reference/trusted]]" in text.split("### Cross-agent")[1]
+
+
+def test_dashboard_caps_each_topic_bucket(tmp_path: Path) -> None:
+    """A topic like #testing holds hundreds of rules. Show the strongest few
+    and the bucket size, not the whole bucket."""
+    for i in range(dashboard.MAX_PER_TOPIC + 7):
+        _write_page(tmp_path, "reference", f"t-{i:03d}",
+                    sources=["a"], tags=["auto-promoted", "testing"])
+    update_home_md(_cfg(tmp_path))
+    text = (tmp_path / "HOME.md").read_text()
+    bucket = text.split("#### #testing")[1]
+    assert bucket.count("\n- [[") == dashboard.MAX_PER_TOPIC
+    # Heading states the true size, so the cap is visible rather than silent.
+    assert f"({dashboard.MAX_PER_TOPIC + 7} rules)" in text
+
+
+def test_dashboard_link_count_stays_bounded_on_a_large_vault(tmp_path: Path) -> None:
+    """The actual regression guard: the dashboard's wikilink count must not
+    scale with vault size. 300 rules across 3 topics previously produced 600+
+    links; it must now be bounded by the caps."""
+    topics = ["git", "testing", "react"]
+    for i in range(300):
+        _write_page(tmp_path, "reference", f"r-{i:03d}",
+                    sources=["a"], tags=["auto-promoted", topics[i % 3]])
+    update_home_md(_cfg(tmp_path))
+    text = (tmp_path / "HOME.md").read_text()
+    links = text.count("- [[")
+    ceiling = dashboard.MAX_HIGH_TRUST + len(topics) * dashboard.MAX_PER_TOPIC
+    assert links <= ceiling, f"dashboard emitted {links} wikilinks, ceiling {ceiling}"

@@ -7,6 +7,28 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The vault is legible in Obsidian.** Three separate causes made the graph
+  view unreadable. (1) `HOME.md`'s generated dashboard had no caps: it listed
+  every rule by trust tier and then every rule again per topic tag — 5,848
+  wikilinks over 1,731 pages on a real vault. Since HOME then linked to nearly
+  every note, the graph drew it as one hub with an edge to everything, hiding
+  the per-agent and per-topic structure underneath. Sections are now capped
+  (20 high-trust, 10 per topic, each reporting how many were dropped) and the
+  `source_count == 1` tier — 98% of a mature vault, and the tier with the
+  least evidence behind it — is summarized as a count instead of listed. The
+  block drops from ~6,600 lines to a few hundred. (2) `shared/_archive/`
+  (reclassify originals) and `bots/*/logs/` are skipped by every mnemo walker
+  (`core.filters.iter_shared_pages`) but were fully visible to Obsidian, which
+  rendered ~1,800 of them as an orphan ring around the content; scaffold now
+  writes `.obsidian/app.json` with matching `userIgnoreFilters`. (3) Scaffold
+  shipped the graph *theme* (`graph-dark-gold.css`) but never `graph.json`, so
+  every new vault opened on Obsidian's defaults — orphans shown, no
+  exclusions, and one undifferentiated color for `reference`, `project`,
+  `feedback` and `bots`. It now ships a configured `graph.json` with color
+  groups per page type. Both `.obsidian` files are written only when absent,
+  so a user's own tuning survives (scaffold runs on every SessionStart).
+  Closes #148, #149, #150.
+
 - **The reflex index tokenizes only the rule body into the `body` field, not
   the whole page.** `reflex/index.py` passed the page text with its YAML
   frontmatter into the BM25F `body` field, so every rule's `name`,
