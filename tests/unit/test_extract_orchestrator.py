@@ -749,3 +749,56 @@ def test_orchestrator_promotes_only_feedback_whose_evidence_verifies(
     assert [e["slug"] for e in pend] == ["retry-5xx-only"]
     assert pend[0]["confidence"] == "verified"
     assert pend[0]["quote"] == "never retry on 4xx, only on 5xx"
+
+
+# --- #161: LLM-supplied source_files are normalized on the way in -----------
+
+
+def _parse_with_root(rp: dict, vault_root: Path, **kw):
+    from mnemo.core.extract import _parse_pages_from_response
+    payload = json.dumps({"pages": [rp]})
+    return _parse_pages_from_response(payload, "reference", vault_root=vault_root, **kw)
+
+
+def test_parse_relativizes_absolute_source_files(tmp_path: Path) -> None:
+    """The prompt shows ``<<<FILE: /abs/vault/bots/...>>>`` and the model
+    echoes it. The stored page must carry the vault-relative form."""
+    vault = tmp_path / "vault"
+    abs_src = str(vault / "bots" / "a" / "memory" / "feedback_x.md")
+    rp = {**_BASE_PAGE, "source_files": [abs_src, "bots/a/memory/feedback_y.md"]}
+
+    (page,) = _parse_with_root(rp, vault)
+
+    assert page.source_files == [
+        "bots/a/memory/feedback_x.md",
+        "bots/a/memory/feedback_y.md",
+    ]
+
+
+def test_parse_source_hash_uses_normalized_paths(tmp_path: Path) -> None:
+    """Absolute and relative spellings of the same source hash identically,
+    so a page is not re-proposed every time the model picks a spelling."""
+    vault = tmp_path / "vault"
+    rel = "bots/a/memory/feedback_x.md"
+    abs_src = str(vault / rel)
+
+    (p_abs,) = _parse_with_root({**_BASE_PAGE, "source_files": [abs_src]}, vault)
+    (p_rel,) = _parse_with_root({**_BASE_PAGE, "source_files": [rel]}, vault)
+
+    assert p_abs.source_hash == p_rel.source_hash
+
+
+def test_parse_origin_backfill_matches_absolute_source(tmp_path: Path) -> None:
+    """``backfill_sources`` is already vault-relative; an absolute echo of the
+    same file must still be recognised as reconstructed."""
+    vault = tmp_path / "vault"
+    rel = "bots/a/memory/feedback_x.md"
+    abs_src = str(vault / rel)
+
+    (page,) = _parse_with_root(
+        {**_BASE_PAGE, "source_files": [abs_src]},
+        vault,
+        backfill_sources=frozenset({rel}),
+    )
+
+    assert page.origin_backfill is True
