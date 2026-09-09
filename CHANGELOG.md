@@ -7,6 +7,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **LLM-supplied `source_files` are normalized on the way in.** The
+  consolidation prompt renders each memory file as `<<<FILE: {path}>>>` with
+  the scanner's absolute path and the model echoes it back, so 36 rules
+  carried `/Users/.../bots/...` under `sources:` beside the vault-relative
+  spelling of the same file. `_parse_pages_from_response` now routes the
+  list through `source_paths.normalize_sources` before the hash, the
+  backfill-origin match and the page are built (#161). #152's render-time
+  fix stops being load-bearing, `source_hash` no longer depends on the
+  spelling, and an absolute echo of a reconstructed source is recognised as
+  `origin_backfill` instead of being treated as live.
 - **The recall harness now replays the `query` real callers pass.** Since
   #105 every `list_rules_by_topic` call from a live session carries a `query`
   that gates the BM25F rerank — the access log shows 0 query-less calls since
