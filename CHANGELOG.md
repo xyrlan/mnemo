@@ -5,6 +5,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`mnemo doctor` reports the `_inbox` proposal backlog.** The extractor
+  stages rewrites of hand-edited rules as `.proposed.md` files for review,
+  and promotion is a manual `mv` — but nothing ever said how many were
+  waiting. After #156 relocated the strays the pile was 33 files nobody had
+  seen. A new `staged_proposals` check counts them and names the oldest
+  (#159, step 1). Advisory only; plain staged pages are not counted.
+
 ### Fixed
 
 - **LLM-supplied `source_files` are normalized on the way in.** The

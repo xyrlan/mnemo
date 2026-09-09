@@ -130,6 +130,40 @@ def _doctor_check_stray_proposed(vault: Path) -> bool:
     return True
 
 
+def _doctor_check_staged_proposals(vault: Path) -> bool:
+    """#159: count the ``.proposed.md`` rewrites waiting in ``shared/_inbox/``.
+
+    The extractor stages a rewrite of a hand-edited rule for human review and
+    promotion is a manual ``mv``. Nothing ever said how many were waiting, so
+    after #156 relocated the strays the backlog was 33 files nobody had seen.
+
+    Advisory only: these are real proposals, never garbage. Plain staged pages
+    in ``_inbox`` (demotions, backfill) are not counted — they are not rewrites
+    of a live rule and follow their own path.
+    """
+    import time
+
+    from mnemo.core.filters import INBOX_DIR, is_proposed_sibling
+
+    inbox = vault / "shared" / INBOX_DIR
+    proposals = sorted(
+        (p for p in inbox.rglob("*.md") if is_proposed_sibling(p)),
+        key=lambda p: p.stat().st_mtime,
+    ) if inbox.is_dir() else []
+    if not proposals:
+        print("  \u2713 no staged rewrites awaiting review")
+        return True
+    n = len(proposals)
+    word = "rewrite" if n == 1 else "rewrites"
+    oldest = proposals[0]
+    age_days = int((time.time() - oldest.stat().st_mtime) // 86400)
+    print(
+        f"  \u26a0 {n} staged {word} awaiting review in shared/{INBOX_DIR}/ "
+        f"(oldest {oldest.name}, {age_days} days)"
+    )
+    return True
+
+
 def _doctor_check_bare_deny_command(vault: Path) -> bool:
     """Warn when the activation index contains rules rejected for bare deny_command.
 
