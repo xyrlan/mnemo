@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-09-09
+
 ### Added
 
 - **`mnemo doctor` reports the `_inbox` proposal backlog.** The extractor

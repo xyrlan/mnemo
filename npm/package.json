@@ -1,6 +1,6 @@
 {
   "name": "@xyrlan/mnemo",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "One-command installer for mnemo (the Obsidian that populates itself).",
   "bin": {
     "mnemo": "bin/mnemo.js"
