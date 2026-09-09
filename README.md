@@ -19,17 +19,16 @@ tells you if it is not connected.
 A rule that recurs in two different repos is promoted to universal and follows
 you everywhere.
 
-Measured on the maintainer's vault, 2026-09-02:
+Measured on the maintainer's vault, 2026-09-09:
 
 ```
-reflex: injected on 90 of 1041 prompts (8.7%)
-recall: primacy@5 41.7% over 72 cases (mnemo recall, 2026-09-01)
+reflex: injected on 88 of 1131 prompts (7.8%)
 ```
 
-`reflex` is the per-prompt recall; `primacy@5` means the rule that session
-actually needed was in the top five. On topics with more than 20 rules,
-query-aware ranking lifted primacy@5 from 16% to 31% (530 evaluations). Your
-own numbers: `mnemo status`.
+`reflex` is the per-prompt recall. When Claude asks for rules by topic
+instead, query-aware ranking lifted the share of cases with the needed rule
+in the top five from 16% to 31% on topics with more than 20 rules (530
+evaluations). Your own numbers: `mnemo status`.
 
 ## How it compares
 
@@ -206,7 +205,9 @@ Control it with `mnemo autopilot {status,pause,off,on}`.
 │   ├── feedback/         preferences and corrections
 │   ├── user/             user-profile facts
 │   ├── reference/        pointers to external systems
-│   └── project/          per-repo project context
+│   ├── project/          per-repo project context
+│   ├── _inbox/           staged for your review: backfilled pages, proposed rewrites
+│   └── _archive/         originals kept by reclassify; never read
 └── .mnemo/               internal state (indices, telemetry)
 ```
 
