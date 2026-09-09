@@ -2,9 +2,10 @@
 
 The scanner walks ``vault_root / "bots"`` with an absolute ``vault_root``, so
 ``str(mf.path)`` recorded machine-absolute source paths — brittle across vault
-moves and inconsistent with the LLM-extracted sources, which are already
-vault-relative. This module is the single chokepoint every write site routes
-through.
+moves. The LLM-extracted sources are not safe either: the consolidation prompt
+renders each file as ``<<<FILE: {mf.path}>>>`` with that same absolute path and
+the model echoes it back in ``source_files`` (#161). This module is the single
+chokepoint every write site routes through, the response parser included.
 """
 from __future__ import annotations
 

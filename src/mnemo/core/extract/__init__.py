@@ -207,6 +207,7 @@ def _parse_pages_from_response(
     default_type: str,
     *,
     backfill_sources: frozenset[str] = frozenset(),
+    vault_root: Path | None = None,
 ) -> list[inbox.ExtractedPage]:
     payload = llm._parse_llm_json(text)
     raw_pages = payload.get("pages", [])
@@ -225,6 +226,12 @@ def _parse_pages_from_response(
         source_files = [s for s in (rp.get("source_files") or []) if isinstance(s, str)]
         if not source_files:
             continue
+        # #161: the prompt renders ``<<<FILE: {mf.path}>>>`` with the scanner's
+        # absolute path and the model echoes it verbatim. Relativize here so
+        # the hash, the backfill-origin match below and the stored
+        # ``sources:`` all see the same spelling.
+        if vault_root is not None:
+            source_files = source_paths.normalize_sources(source_files, vault_root)
         src_hash = "sha256:" + hashlib.sha256(
             ("|".join(sorted(source_files)) + "||" + body).encode("utf-8")
         ).hexdigest()
@@ -588,7 +595,8 @@ def _run_extraction_body(
                     if is_backfill_frontmatter(mf.frontmatter)
                 )
                 pages = _parse_pages_from_response(
-                    response.text, type_name, backfill_sources=chunk_backfill,
+                    response.text, type_name,
+                    backfill_sources=chunk_backfill, vault_root=vault_root,
                 )
             except llm.LLMParseError as exc:
                 errors.log_error(vault_root, "extract.parse", exc)
