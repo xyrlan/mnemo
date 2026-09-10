@@ -13,7 +13,27 @@ from pathlib import Path
 from mnemo.cli.parser import COMMANDS, _build_parser
 
 
+def _force_utf8_streams() -> None:
+    """Re-encode stdout/stderr as UTF-8 before anything prints.
+
+    Every mnemo command prints ``→``, ``•`` and box glyphs. On Windows a
+    piped stdout (which is how Claude Code runs slash commands) gets the
+    ANSI codepage, usually cp1252, and the first ``→`` raises
+    UnicodeEncodeError — ``mnemo doctor`` died before running a single
+    check. PYTHONUTF8/PYTHONIOENCODING cannot fix it because the
+    PyInstaller bootloader starts CPython with environment config
+    disabled, so the shipped binary ignores both. ``errors="replace"``
+    keeps a genuinely undecodable console readable rather than fatal.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_streams()
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
