@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-09-10
+
 ### Fixed
 
 - **`mnemo doctor` crashed on Windows before running a single check.**
