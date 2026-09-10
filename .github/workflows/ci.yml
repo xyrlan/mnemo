@@ -131,3 +131,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - run: pytest tests/unit/ -v
+
+      # Unit tests alone kept passing here through four releases in which
+      # `mnemo doctor` was dead on Windows: they never run a command end to
+      # end, and never through a pipe. Claude Code pipes every slash
+      # command's stdout, which is what selected cp1252 and crashed on the
+      # first `→`. Piping the CLI is the cheapest reproduction of that.
+      - name: CLI survives a piped stdout
+        shell: bash
+        run: |
+          mkdir -p /tmp/ci-smoke && cd /tmp/ci-smoke && git init -q .
+          python -m mnemo init --project --yes --quiet
+          for cmd in status doctor; do
+            python -m mnemo "$cmd" > out.txt 2> err.txt || true
+            if grep -q "UnicodeEncodeError\|UnicodeDecodeError" err.txt; then
+              echo "::error::$cmd crashed on a piped stdout:"; cat err.txt; exit 1
+            fi
+          done
