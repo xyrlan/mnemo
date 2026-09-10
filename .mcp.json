@@ -2,7 +2,7 @@
   "mcpServers": {
     "mnemo": {
       "command": "bash",
-      "args": ["${CLAUDE_PLUGIN_ROOT:-.}/bin/launch", "mcp-server"]
+      "args": ["-c", "[ -n \"$CLAUDE_PLUGIN_ROOT\" ] && cd \"$CLAUDE_PLUGIN_ROOT\"; exec bash bin/launch mcp-server"]
     }
   }
 }

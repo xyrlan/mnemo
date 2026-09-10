@@ -48,3 +48,20 @@ def test_marketplace_json_well_formed():
     data = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text())
     assert data["name"]
     assert "plugins" in data
+
+
+def test_mcp_json_never_uses_brace_default_for_plugin_root():
+    """Claude Code substitutes the literal `${CLAUDE_PLUGIN_ROOT}` in a
+    plugin's .mcp.json; the `${CLAUDE_PLUGIN_ROOT:-.}` form is not
+    recognised and falls through to the generic expander, which resolves
+    it to `.` (the project cwd), so the launcher was never found and
+    `claude mcp list` reported CONNECTION_CLOSED on every platform.
+    Reading the variable at runtime inside `bash -c` sidesteps both
+    expanders and still covers the dev checkout (#118), where it is unset."""
+    data = json.loads((REPO / ".mcp.json").read_text())
+    args = data["mcpServers"]["mnemo"]["args"]
+    joined = " ".join(args)
+    assert "${CLAUDE_PLUGIN_ROOT" not in joined
+    assert args[0] == "-c"
+    assert '"$CLAUDE_PLUGIN_ROOT"' in args[1]
+    assert "bin/launch mcp-server" in args[1]
