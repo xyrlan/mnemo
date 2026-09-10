@@ -5,6 +5,28 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The plugin's MCP server never connected.** `.mcp.json` spawned
+  `bash ${CLAUDE_PLUGIN_ROOT:-.}/bin/launch`. Claude Code substitutes the
+  literal `${CLAUDE_PLUGIN_ROOT}` in plugin manifests but not the `:-`
+  default form, which the generic expander resolved to `.` — the project's
+  cwd, not the plugin's — so `claude mcp list` showed
+  `bash ./bin/launch mcp-server … CONNECTION_CLOSED` on macOS and Windows
+  alike (the #118 fix was only ever verified from a source checkout, where
+  the project-scope entry masked it). The entry now reads the variable at
+  runtime inside `bash -c`, which both expanders leave alone, and still
+  falls back to the cwd for a dev checkout. Verified from a marketplace
+  install on macOS in both scopes; Windows spawns `bash` fine (#121).
+- **`claude plugin install` no longer needs an SSH key.** The marketplace
+  entry used the `github` source, which clones over `git@github.com` and
+  failed on a fresh Windows machine with no `known_hosts` entry. The repo
+  is public, so the source is now an explicit HTTPS URL. (#169)
+- **The marketplace manifest passes `claude plugin validate`.** It was
+  missing the required `owner` and used the unrecognised
+  `github:owner/repo` string source; `author` is the documented object in
+  both manifests. (#168)
+
 ## [1.3.3] — 2026-09-09
 
 ### Added
