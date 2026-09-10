@@ -191,7 +191,9 @@ def test_call_builds_expected_argv(mock_subprocess_run):
     mock_subprocess_run([MockCompletedProcess(stdout=_envelope('{}'))])
     llm.call("prompt text", system="sys text", model="claude-haiku-4-5", timeout=60)
     argv = mock_subprocess_run.calls[0]["argv"]
-    assert argv[0] == "claude"
+    # Resolved through PATHEXT (Windows ships claude.cmd), so match the name,
+    # not the literal — see test_build_argv_resolves_claude_through_pathext.
+    assert Path(argv[0]).stem == "claude"
     assert "--print" in argv
     assert "--no-session-persistence" in argv
     assert "--output-format" in argv and "json" in argv
@@ -343,3 +345,18 @@ def test_call_handles_missing_raw_input_with_cache_only(mock_subprocess_run):
     mock_subprocess_run([MockCompletedProcess(stdout=envelope)])
     resp = llm.call("p", system=None, model="claude-haiku-4-5", timeout=60)
     assert resp.input_tokens == 4000
+
+
+def test_build_argv_resolves_claude_through_pathext(monkeypatch):
+    """On Windows the CLI is `claude.cmd`; subprocess.run without a shell
+    does not apply PATHEXT, so a bare "claude" raised FileNotFoundError on
+    machines where `claude` ran fine in the terminal."""
+    monkeypatch.setattr(llm.shutil, "which", lambda name: r"C:\node\claude.cmd")
+    assert llm._build_argv("claude-haiku-4-5", None)[0] == r"C:\node\claude.cmd"
+
+
+def test_build_argv_falls_back_to_the_bare_name(monkeypatch):
+    """A genuinely missing install must still reach the FileNotFoundError
+    path that produces "claude CLI not found"."""
+    monkeypatch.setattr(llm.shutil, "which", lambda name: None)
+    assert llm._build_argv("claude-haiku-4-5", None)[0] == "claude"

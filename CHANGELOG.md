@@ -7,6 +7,30 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`mnemo doctor` crashed on Windows before running a single check.**
+  Claude Code captures a slash command's stdout through a pipe, so Python
+  picks the ANSI codepage (cp1252) rather than the console's, and the
+  first `→` in a preflight remediation raised `UnicodeEncodeError`.
+  `PYTHONUTF8` and `PYTHONIOENCODING` cannot fix it: the PyInstaller
+  bootloader starts CPython with environment config disabled, so the
+  shipped binary ignores both. The CLI now reconfigures stdout and stderr
+  as UTF-8 at startup, which also clears the mojibake in `status` output.
+- **Extraction failed with "claude CLI not found" on Windows.** The CLI
+  installs as `claude.cmd` there, and `subprocess.run` without a shell
+  does not apply `PATHEXT`, so the bare `"claude"` argv raised
+  `FileNotFoundError` on a machine where `claude` ran fine in the
+  terminal — auto-brain had been failing on every run. The executable is
+  resolved with `shutil.which`, which does apply `PATHEXT`, falling back
+  to the bare name so a genuinely missing install still reports the same
+  error.
+- **`mnemo status` reported 0/4 hooks on a healthy plugin install.**
+  `CLAUDE_PLUGIN_ROOT` is only set when Claude Code invokes mnemo, so
+  running `mnemo status` in a terminal fell through to the settings.json
+  scopes, which a plugin install legitimately leaves empty. Status now
+  falls back to the newest mnemo plugin in `~/.claude/plugins/cache`.
+
+### Fixed
+
 - **The plugin's MCP server never connected.** Three spawn constraints
   collided in `.mcp.json`. Claude Code spawns stdio servers without a
   shell, so the shebang-less `bin/mnemo.cmd` is ENOEXEC on POSIX and a

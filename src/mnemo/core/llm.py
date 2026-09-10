@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -87,6 +88,20 @@ def _is_rate_limit(stderr: str) -> bool:
     return bool(re.search(r"rate.?limit", stderr or "", re.IGNORECASE))
 
 
+def _resolve_claude() -> str:
+    """Absolute path to the ``claude`` executable, or the bare name.
+
+    On Windows the CLI installs as ``claude.cmd``/``claude.ps1``.
+    ``subprocess.run`` without ``shell=True`` does not apply PATHEXT, so a
+    bare ``"claude"`` raised FileNotFoundError and every extraction failed
+    with "claude CLI not found" on a machine where ``claude`` ran fine in
+    the shell. ``shutil.which`` does apply PATHEXT. Falling back to the
+    bare name keeps the existing error path for a real missing install,
+    and keeps the argv stable for the tests that assert on it.
+    """
+    return shutil.which("claude") or "claude"
+
+
 def _build_argv(model: str, system: str | None) -> list[str]:
     # --strict-mcp-config (with no paired --mcp-config) tells the CLI to
     # ignore every MCP configuration source, producing an empty mcp_servers
@@ -98,7 +113,7 @@ def _build_argv(model: str, system: str | None) -> list[str]:
     # ANTHROPIC_API_KEY auth and refuses to read OAuth/keychain, which
     # breaks subscription users.
     argv = [
-        "claude",
+        _resolve_claude(),
         "--print",
         "--strict-mcp-config",
         "--no-session-persistence",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from mnemo.cli._helpers import (
@@ -31,6 +32,24 @@ def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) ->
     )
 
 
+def _installed_plugin_root() -> str | None:
+    """Newest installed copy of the mnemo plugin, or None.
+
+    CLAUDE_PLUGIN_ROOT is only set when Claude Code invokes mnemo, so a
+    plugin user running ``mnemo status`` in a terminal fell through to the
+    settings.json scopes and was told "0/4 hooks" while the install was
+    fine. The plugin cache is the same layout on every platform.
+    """
+    base = Path(os.path.expanduser("~/.claude/plugins/cache"))
+    roots = [
+        d for d in base.glob("*/mnemo/*")
+        if (d / "hooks" / "hooks.json").is_file()
+    ]
+    if not roots:
+        return None
+    return str(max(roots, key=lambda d: d.stat().st_mtime))
+
+
 def _count_plugin_hooks(expected_events: tuple[str, ...]) -> int | None:
     """Count hooks the plugin declares, or None when not running as one.
 
@@ -41,7 +60,7 @@ def _count_plugin_hooks(expected_events: tuple[str, ...]) -> int | None:
     import json
     import os
 
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or _installed_plugin_root()
     if not root:
         return None
     try:
