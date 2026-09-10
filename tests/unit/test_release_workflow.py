@@ -102,3 +102,36 @@ def test_checksums_are_generated_without_shasum(jobs: dict):
     assert "shasum" not in code
     assert "sha256sum" not in code
     assert "hashlib" in code
+
+
+def test_binary_build_pipes_stdout_before_publishing():
+    """A console stdout is not the shape Claude Code runs commands in.
+
+    `mnemo doctor` shipped dead on Windows through four releases: Claude Code
+    pipes a slash command's stdout, Python then picks cp1252 rather than the
+    console codepage, and the first `→` raised UnicodeEncodeError. The
+    existing smoke test missed it because it ran the binary on a terminal.
+    Redirecting to a file is what reproduces it.
+    """
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    steps = jobs["build-binaries"]["steps"]
+    piped = [s for s in steps if "piped" in str(s.get("name", "")).lower()]
+    assert piped, "the binary build must exercise a piped stdout before publishing"
+    body = piped[0]["run"]
+    assert "> out.txt" in body, "stdout must actually be redirected, not shown on a tty"
+    assert "UnicodeEncodeError" in body, "the guard must fail on an encoding crash"
+    for cmd in ("status", "doctor"):
+        assert cmd in body, f"pipe the {cmd} command — both print non-ASCII"
+
+
+def test_windows_ci_runs_a_command_end_to_end():
+    """Unit tests passed on Windows all the way through the doctor outage.
+
+    They never invoke a command end to end, so no assertion could have caught
+    it. The CI job needs at least one real run through a pipe.
+    """
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    steps = ci["jobs"]["windows-experimental"]["steps"]
+    piped = [s for s in steps if "piped" in str(s.get("name", "")).lower()]
+    assert piped, "the Windows CI job must run the CLI through a pipe, not only pytest"
+    assert "UnicodeEncodeError" in piped[0]["run"]

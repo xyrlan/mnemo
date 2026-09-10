@@ -98,6 +98,35 @@ jobs:
           "$GITHUB_WORKSPACE/$BIN" status
           test -f .mnemo/HOME.md || { echo "::error::templates missing from the bundle"; exit 1; }
 
+      # Everything above runs with a console stdout. Claude Code runs slash
+      # commands with stdout on a pipe, and on Windows Python then picks the
+      # ANSI codepage (cp1252) instead of the console's — the first `→` in
+      # doctor's output raised UnicodeEncodeError and killed the command
+      # before check 1 of 21. Shipped in four releases before a native
+      # install surfaced it, because nothing here ever piped the binary.
+      # PYTHONUTF8/PYTHONIOENCODING cannot be used to paper over it: the
+      # PyInstaller bootloader starts CPython with environment config
+      # disabled, so the frozen binary ignores both.
+      - name: Smoke test — piped stdout (non-ASCII output must survive)
+        shell: bash
+        run: |
+          BIN="$GITHUB_WORKSPACE/dist/bin/mnemo/mnemo"
+          [ "${{ runner.os }}" = "Windows" ] && BIN="$GITHUB_WORKSPACE/dist/bin/mnemo/mnemo.exe"
+          cd /tmp/smoke
+          for cmd in status doctor; do
+            "$BIN" "$cmd" > out.txt 2> err.txt
+            code=$?
+            # doctor exits non-zero on warnings, which is fine; a crash is not.
+            if grep -q "UnicodeEncodeError\|UnicodeDecodeError" err.txt; then
+              echo "::error::$cmd crashed on a piped stdout:"; cat err.txt; exit 1
+            fi
+            if [ "$cmd" = "status" ] && [ $code -ne 0 ]; then
+              echo "::error::status exited $code through a pipe:"; cat err.txt; exit 1
+            fi
+            grep -q "Vault:\|Running diagnostic" out.txt || {
+              echo "::error::$cmd produced no recognisable output through a pipe"; cat out.txt err.txt; exit 1; }
+          done
+
       - name: Package
         shell: bash
         run: |

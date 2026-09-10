@@ -5,6 +5,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI and the release build now run the CLI through a pipe.** Every check
+  that existed ran the binary on a terminal, so `mnemo doctor` being dead
+  on Windows survived four releases: Claude Code pipes a slash command's
+  stdout, and that is what selects cp1252 and crashed on the first `→`.
+  The release build pipes `status` and `doctor` on all four platforms
+  before anything is published, and the Windows CI job now runs a command
+  end to end rather than unit tests alone. Both fail on an encoding crash.
+
 ## [1.3.4] — 2026-09-10
 
 ### Fixed
