@@ -1,8 +1,12 @@
 {
   "mcpServers": {
     "mnemo": {
-      "command": "bash",
-      "args": ["-c", "[ -n \"$CLAUDE_PLUGIN_ROOT\" ] && cd \"$CLAUDE_PLUGIN_ROOT\"; exec bash bin/launch mcp-server"]
+      "command": "git",
+      "args": [
+        "-c",
+        "alias.mnemo-mcp=!d=\"$CLAUDE_PLUGIN_ROOT\"; command -v cygpath >/dev/null 2>&1 && d=\"$(cygpath -u \"$d\")\"; [ -n \"$d\" ] && cd \"$d\"; exec bash bin/launch mcp-server",
+        "mnemo-mcp"
+      ]
     }
   }
 }

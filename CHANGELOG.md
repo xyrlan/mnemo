@@ -7,17 +7,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **The plugin's MCP server never connected.** `.mcp.json` spawned
-  `bash ${CLAUDE_PLUGIN_ROOT:-.}/bin/launch`. Claude Code substitutes the
-  literal `${CLAUDE_PLUGIN_ROOT}` in plugin manifests but not the `:-`
-  default form, which the generic expander resolved to `.` — the project's
-  cwd, not the plugin's — so `claude mcp list` showed
-  `bash ./bin/launch mcp-server … CONNECTION_CLOSED` on macOS and Windows
-  alike (the #118 fix was only ever verified from a source checkout, where
-  the project-scope entry masked it). The entry now reads the variable at
-  runtime inside `bash -c`, which both expanders leave alone, and still
-  falls back to the cwd for a dev checkout. Verified from a marketplace
-  install on macOS in both scopes; Windows spawns `bash` fine (#121).
+- **The plugin's MCP server never connected.** Three spawn constraints
+  collided in `.mcp.json`. Claude Code spawns stdio servers without a
+  shell, so the shebang-less `bin/mnemo.cmd` is ENOEXEC on POSIX and a
+  `.cmd` cannot be spawned on Windows at all. `bash` is not on PATH on a
+  default Git-for-Windows install (only `Git\cmd` is), so `command: bash`
+  died with `CONNECTION_CLOSED` there. And `${CLAUDE_PLUGIN_ROOT:-.}` is
+  not recognised by the plugin loader, which resolved it to `.` — the
+  project cwd — so `claude mcp list` showed `bash ./bin/launch mcp-server …
+  CONNECTION_CLOSED` on macOS and Windows alike (the #118 fix was only
+  ever verified from a source checkout, where the project-scope entry
+  masked it). The server is now spawned through `git`, which is on PATH
+  wherever a plugin was cloned: a `!` alias runs through git's own `sh`
+  (on Windows, the one bundled with Git, which brings `bash` along) and
+  reads `$CLAUDE_PLUGIN_ROOT` at runtime, converting it with `cygpath`
+  where that exists. Verified from a marketplace install on macOS in both
+  scopes. (#121)
+- **`bin/launch` and `bin/mnemo.cmd` are pinned to LF.** With
+  `core.autocrlf=true`, the Git for Windows default, both checked out with
+  CRLF; `bash` then chokes on the stray `\r`, and because `bin/launch`
+  fails open the hooks looked fine while doing nothing.
 - **`claude plugin install` no longer needs an SSH key.** The marketplace
   entry used the `github` source, which clones over `git@github.com` and
   failed on a fresh Windows machine with no `known_hosts` entry. The repo

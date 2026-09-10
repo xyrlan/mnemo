@@ -1,2 +1,7 @@
 tests/fixtures/memory_files/*.md text eol=lf
 tests/fixtures/llm_responses/*.json text eol=lf
+# Both launchers are read by sh/bash on every platform (mnemo.cmd is a
+# polyglot); a CRLF checkout from core.autocrlf=true on Windows breaks them.
+# cmd.exe copes with LF here: mnemo.cmd uses no goto/call labels.
+bin/launch text eol=lf
+bin/mnemo.cmd text eol=lf
