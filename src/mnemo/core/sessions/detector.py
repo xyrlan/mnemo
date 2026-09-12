@@ -8,7 +8,7 @@ nothing itself.
 
 It cannot use ``timeline.jsonl``: that file records ``state`` transitions and
 never mentions ``tempo`` (measured on a real dispatch, 2026-09-12). So this
-module keeps ``lastTempo`` per session and compares against the current value.
+module keeps ``last_tempo`` per session and compares against the current value.
 
 No daemon. The sweep rides triggers that already exist — every ``mnemo
 sessions`` invocation and the ``session_end`` hook — mirroring how autopilot
@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from mnemo.core.atomic import atomic_write_bytes
 from mnemo.core.sessions.jobs import Session
 
 STATE_FILENAME = "session-queue.json"
@@ -47,11 +48,13 @@ def _load(vault_root: Path) -> dict[str, Any]:
 
 
 def _save(vault_root: Path, data: dict[str, Any]) -> None:
-    path = _state_path(vault_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    """Write through :func:`atomic_write_bytes`: it stages on a unique mkstemp
+    name (a fixed sibling ``.tmp`` is shared by concurrent sweeps) and retries
+    the replace, which Windows can lose several times before winning. It also
+    creates the parent directory itself, so this does not.
+    """
+    body = json.dumps(data, indent=2, ensure_ascii=False)
+    atomic_write_bytes(_state_path(vault_root), body.encode("utf-8"))
 
 
 def sweep(sessions: list[Session], *, vault_root: Path) -> int:
@@ -61,21 +64,23 @@ def sweep(sessions: list[Session], *, vault_root: Path) -> int:
     recorded = 0
 
     for s in sessions:
-        entry = seen.setdefault(s.short_id, {"lastTempo": None, "unblocks": []})
-        previous = entry.get("lastTempo")
+        entry = seen.setdefault(s.short_id, {"last_tempo": None, "unblocks": []})
+        previous = entry.get("last_tempo")
         if previous == "blocked" and s.tempo == "active":
             entry["unblocks"].append({
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "needs": entry.get("lastNeeds"),
-                "sessionId": s.session_id,
-                "linkScanPath": s.link_scan_path,
+                "needs": entry.get("last_needs"),
+                "session_id": s.session_id,
+                "link_scan_path": s.link_scan_path,
                 "cwd": s.cwd,
                 "extracted": False,
             })
             recorded += 1
-        entry["lastTempo"] = s.tempo
+        entry["last_tempo"] = s.tempo
+        # last_needs outlives the unblock on purpose: a session still blocked
+        # needs it on the sweep that finally sees it answered.
         if s.is_blocked and s.needs:
-            entry["lastNeeds"] = s.needs
+            entry["last_needs"] = s.needs
 
     _save(vault_root, data)
     return recorded

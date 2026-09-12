@@ -5,7 +5,7 @@ the maintainer is only consulted when it matters. The detector records where
 that answer is written so extraction can treat it as such.
 
 It cannot read timeline.jsonl — that file carries ``state`` transitions and
-never mentions ``tempo`` (measured 2026-09-12). So it keeps ``lastTempo``
+never mentions ``tempo`` (measured 2026-09-12). So it keeps ``last_tempo``
 itself and compares.
 """
 from __future__ import annotations
@@ -34,43 +34,43 @@ def _state(vault: Path) -> dict:
 
 
 def test_first_sighting_records_no_unblock(tmp_path: Path) -> None:
-    detector.sweep([_blocked()], vault_root=tmp_path)
+    assert detector.sweep([_blocked()], vault_root=tmp_path) == 0
 
-    assert _state(tmp_path)["seen"]["a3f1"]["lastTempo"] == "blocked"
+    assert _state(tmp_path)["seen"]["a3f1"]["last_tempo"] == "blocked"
     assert _state(tmp_path)["seen"]["a3f1"]["unblocks"] == []
 
 
 def test_blocked_to_active_records_an_unblock(tmp_path: Path) -> None:
-    detector.sweep([_blocked()], vault_root=tmp_path)
-    detector.sweep([_active()], vault_root=tmp_path)
+    assert detector.sweep([_blocked()], vault_root=tmp_path) == 0
+    assert detector.sweep([_active()], vault_root=tmp_path) == 1
 
     (unblock,) = _state(tmp_path)["seen"]["a3f1"]["unblocks"]
     assert unblock["needs"] == "answer: bcrypt ou argon2?"
-    assert unblock["linkScanPath"] == "/transcripts/sid-1.jsonl"
-    assert unblock["sessionId"] == "sid-1"
+    assert unblock["link_scan_path"] == "/transcripts/sid-1.jsonl"
+    assert unblock["session_id"] == "sid-1"
     assert unblock["extracted"] is False
     assert unblock["at"]
 
 
 def test_staying_blocked_records_nothing(tmp_path: Path) -> None:
     detector.sweep([_blocked()], vault_root=tmp_path)
-    detector.sweep([_blocked()], vault_root=tmp_path)
+    assert detector.sweep([_blocked()], vault_root=tmp_path) == 0
 
     assert _state(tmp_path)["seen"]["a3f1"]["unblocks"] == []
 
 
 def test_active_to_blocked_records_nothing(tmp_path: Path) -> None:
     detector.sweep([_active()], vault_root=tmp_path)
-    detector.sweep([_blocked()], vault_root=tmp_path)
+    assert detector.sweep([_blocked()], vault_root=tmp_path) == 0
 
     assert _state(tmp_path)["seen"]["a3f1"]["unblocks"] == []
 
 
 def test_repeated_sweeps_do_not_duplicate_an_unblock(tmp_path: Path) -> None:
     detector.sweep([_blocked()], vault_root=tmp_path)
-    detector.sweep([_active()], vault_root=tmp_path)
-    detector.sweep([_active()], vault_root=tmp_path)
-    detector.sweep([_active()], vault_root=tmp_path)
+    assert detector.sweep([_active()], vault_root=tmp_path) == 1
+    assert detector.sweep([_active()], vault_root=tmp_path) == 0
+    assert detector.sweep([_active()], vault_root=tmp_path) == 0
 
     assert len(_state(tmp_path)["seen"]["a3f1"]["unblocks"]) == 1
 
@@ -90,7 +90,7 @@ def test_corrupt_state_file_is_replaced_not_fatal(tmp_path: Path) -> None:
 
     detector.sweep([_blocked()], vault_root=tmp_path)
 
-    assert _state(tmp_path)["seen"]["a3f1"]["lastTempo"] == "blocked"
+    assert _state(tmp_path)["seen"]["a3f1"]["last_tempo"] == "blocked"
 
 
 def test_pending_unblocks_lists_unextracted_only(tmp_path: Path) -> None:
@@ -101,3 +101,30 @@ def test_pending_unblocks_lists_unextracted_only(tmp_path: Path) -> None:
 
     assert len(pending) == 1
     assert pending[0]["needs"] == "answer: bcrypt ou argon2?"
+
+
+def test_sweep_leaves_no_temp_file_behind(tmp_path: Path) -> None:
+    detector.sweep([_blocked()], vault_root=tmp_path)
+    detector.sweep([_active()], vault_root=tmp_path)
+
+    written = sorted(p.name for p in (tmp_path / ".mnemo").iterdir())
+
+    assert written == ["session-queue.json"]
+
+
+def test_an_old_camelcase_file_re_baselines(tmp_path: Path) -> None:
+    """No migration by design: the state is disposable and the feature is
+    unreleased, so a file written under the old keys just starts over."""
+    (tmp_path / ".mnemo").mkdir(parents=True)
+    (tmp_path / ".mnemo" / "session-queue.json").write_text(
+        json.dumps({"seen": {"a3f1": {"lastTempo": "blocked", "unblocks": []}}}),
+        encoding="utf-8",
+    )
+
+    # The stale lastTempo is invisible under the new name, so this reads as a
+    # first sighting and records nothing rather than a phantom unblock.
+    assert detector.sweep([_active()], vault_root=tmp_path) == 0
+
+    entry = _state(tmp_path)["seen"]["a3f1"]
+    assert entry["last_tempo"] == "active"
+    assert entry["unblocks"] == []
