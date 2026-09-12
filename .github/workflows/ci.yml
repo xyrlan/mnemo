@@ -118,10 +118,30 @@ jobs:
           git diff --exit-code -- .claude-plugin/ npm/package.json npm/lib/bootstrap.js \
             || { echo "::error::Generated files are stale. Run tools/sync_npm_version.py and tools/sync_plugin_manifest.py, then commit."; exit 1; }
 
-  windows-experimental:
-    name: windows-latest / py3.11 (experimental)
+  windows:
+    name: windows-latest / py3.11
     runs-on: windows-latest
-    continue-on-error: true
+    # This job carried `continue-on-error: true` and was named "(experimental)".
+    # That made it incapable of failing anything: the job reported `failure`
+    # while the run's conclusion and the PR's status rollup both said `success`,
+    # so a red Windows job was invisible at every place a merge decision is
+    # made. It is how bd71900 landed on master with Windows broken. The project
+    # claims Windows support and has verified it on a real box (#121, v1.3.4),
+    # so the result should be reported honestly: a red check is visible and
+    # fixable, a green rollup over a red job is neither.
+    #
+    # Note what this does and does not do. master has no required status checks
+    # (only code-owner review), so a failure here reports red on the PR and in
+    # the run conclusion, but does not by itself prevent a merge. Making it a
+    # required check is a repo setting, not something this file can express.
+    #
+    # The timeout replaces GitHub's 6-hour default, which is the real cost of a
+    # hang: the job holds a runner slot for hours before anyone sees a failure.
+    # Across the last 60 runs this job took 62–108s (median 77s, p90 93s), so
+    # 10 minutes is ~5.5x the slowest healthy run — wide enough that a cold pip
+    # cache or a slow runner never trips it, short enough that a hang reads as
+    # a fast, legible failure.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

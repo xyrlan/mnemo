@@ -131,7 +131,26 @@ def test_windows_ci_runs_a_command_end_to_end():
     it. The CI job needs at least one real run through a pipe.
     """
     ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
-    steps = ci["jobs"]["windows-experimental"]["steps"]
+    steps = ci["jobs"]["windows"]["steps"]
     piped = [s for s in steps if "piped" in str(s.get("name", "")).lower()]
     assert piped, "the Windows CI job must run the CLI through a pipe, not only pytest"
     assert "UnicodeEncodeError" in piped[0]["run"]
+
+
+def test_windows_ci_failure_is_not_suppressed():
+    """`continue-on-error` erased this job's failures from every merge signal.
+
+    The job reported ``failure`` while the run conclusion and the PR status
+    rollup both reported ``success``, which is how bd71900 landed on master
+    with Windows broken. A regression here is invisible by construction, so
+    assert the suppression stays gone.
+    """
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    job = ci["jobs"]["windows"]
+    assert not job.get("continue-on-error"), (
+        "the Windows job must be able to fail — `continue-on-error` hides the "
+        "failure from the run conclusion and the PR rollup"
+    )
+    # Without this the job inherits GitHub's 6-hour default, so a hang holds a
+    # runner slot for most of a day before surfacing as anything.
+    assert job.get("timeout-minutes"), "the Windows job needs a timeout"
