@@ -241,7 +241,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rewrites_p = sub.add_parser(
         "rewrites",
-        help="review and accept staged _inbox rewrites of live rules (dry-run default)",
+        help="review and accept staged _inbox rewrites of live rules (lists only; writes need a flag)",
     )
     rewrites_p.add_argument(
         "--apply-safe", action="store_true",
