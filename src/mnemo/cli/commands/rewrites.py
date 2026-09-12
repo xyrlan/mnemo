@@ -57,8 +57,15 @@ def _print_plan(rewrites: list) -> None:
             # counts for mixed/full_rewrite, label them "changed", not "+/-".
             print(f"    {r.key:<{width}}  {kind:<13} keeps {r.keep_ratio:.0%}{flag}")
         print()
-    print("(dry-run — `mnemo rewrites --apply-safe` merges the safe set; "
-          "`--show KEY` prints one diff)")
+    # State the effect of the run that just happened, not the mode it was in.
+    # The old footer read "(dry-run — `--apply-safe` merges the safe set)",
+    # printed *after* the listing, so it described the flag that would write
+    # rather than what this invocation did. #182 was filed by a reader who took
+    # three such runs as read-only (they were), watched the staged count fall
+    # from an unrelated drain, and went hunting for an external writer.
+    print("nothing was written — this is a listing only.")
+    print("  `mnemo rewrites --apply-safe` merges the safe set")
+    print("  `mnemo rewrites --show KEY` prints one diff")
 
 
 @command("rewrites")

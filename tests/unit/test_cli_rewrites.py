@@ -144,3 +144,63 @@ def test_dry_run_lists_safe_and_undecided_without_writing(tmp_vault: Path, monke
     assert "--apply-safe" in out
     # Nothing was written.
     assert (tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md").exists()
+
+
+def test_plan_says_nothing_was_written_not_just_that_it_is_a_dry_run(
+    tmp_vault: Path, monkeypatch, capsys
+):
+    """The footer reports the *mode*, and is printed after the listing — so it
+    reads as a description of a run that just happened (#182).
+
+    A reader who takes "(dry-run — `--apply-safe` merges the safe set)" as
+    "this run did not merge" is right, but only by inference: the line names
+    the flag that *would* write and never says the current invocation left the
+    vault alone. The reporter of #182 read three runs as read-only, saw the
+    staged count fall (from a separate, deliberate drain), and spent several
+    rounds hunting an external writer.
+
+    Say the outcome, not the mode.
+    """
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    args = argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None,
+        accept=None, reject=None, undo=None,
+    )
+
+    assert cmd.cmd_rewrites(args) == 0
+
+    out = capsys.readouterr().out
+    assert "nothing was written" in out, (
+        "the plan must state its own effect, not name the flag that would write"
+    )
+    # And it still has to point at what to do next.
+    assert "--apply-safe" in out and "--show" in out
+
+
+def test_plan_really_does_not_touch_the_vault(tmp_vault: Path, monkeypatch):
+    """Pins the claim the new wording makes (#182).
+
+    The #182 report suspected bare ``mnemo rewrites`` of applying. It does not
+    — it falls through to ``_print_plan`` and returns — but nothing pinned
+    that, so the next refactor could make the reassuring text a lie.
+    """
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    live = tmp_vault / "shared" / "project" / "a__x.md"
+    before = (prop.read_bytes(), live.read_bytes())
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+
+    cmd.cmd_rewrites(argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None,
+        accept=None, reject=None, undo=None,
+    ))
+
+    assert (prop.read_bytes(), live.read_bytes()) == before
+    assert not (tmp_vault / "shared" / "_archive").exists()
