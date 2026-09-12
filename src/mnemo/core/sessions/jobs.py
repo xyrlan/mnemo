@@ -112,18 +112,27 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[S
     """Every readable background session under *root* (default: real jobs dir).
 
     Unreadable or malformed entries are skipped, never raised: one corrupt
-    file must not take out the whole listing. Pass *cwd* to keep only sessions
-    started under that directory; both sides are normalized, and a session
-    with no recorded ``cwd`` never matches a scoped query.
+    file must not take out the whole listing, and a directory we cannot list
+    at all reads the same as one that is not there. Pass *cwd* to keep only
+    sessions started under that directory; both sides are normalized, and a
+    session with no recorded ``cwd`` never matches a scoped query.
     """
     base = jobs_dir() if root is None else root
     if not base.is_dir():
         return []
 
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        # The directory passed is_dir() and is still unlistable: a permission
+        # change, or it vanished between the two calls. Same answer as a
+        # missing directory — no sessions, no traceback out of the command.
+        return []
+
     scope = normalize_cwd(cwd)
 
     out: list[Session] = []
-    for entry in sorted(base.iterdir()):
+    for entry in entries:
         if not entry.is_dir():
             continue  # pins.json and friends
         try:

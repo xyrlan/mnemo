@@ -142,10 +142,11 @@ def _doctor_check_background_sessions(
 
     try:
         sessions = read_sessions(base)
-    except OSError as exc:
-        # `read_sessions` skips bad *entries*, but lists the dir a second time
-        # without guarding that call — a permission lost between the two walks
-        # surfaces here, not there.
+    except OSError as exc:  # pragma: no cover - read_sessions swallows its own
+        # `read_sessions` guards both its walk and every per-entry read, so a
+        # permission lost between our two walks comes back as an empty list and
+        # is counted as unreadable below. This stays as a backstop: the day its
+        # contract changes, doctor still reports instead of aborting the run.
         print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
         return True
 

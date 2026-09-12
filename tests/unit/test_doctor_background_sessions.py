@@ -147,9 +147,11 @@ def test_jobs_dir_unlistable_on_second_walk_does_not_raise(
 ) -> None:
     """The jobs dir is walked twice: once here, once inside ``read_sessions``.
 
-    ``read_sessions`` does not guard its own ``sorted(base.iterdir())``, so a
-    permission that disappears between the two walks (or an NFS hiccup) raises
-    out of it. Doctor must absorb that, not abort the whole run.
+    A permission that disappears between the two walks (or an NFS hiccup) is
+    absorbed by ``read_sessions``, which then returns nothing. Doctor still
+    counted the entry on its own first walk, so it reports the gap as
+    unreadable rather than silently printing a healthy zero — and the doctor
+    run continues either way.
     """
     _job(jobs, "a", state="working", tempo="active")
 
@@ -167,4 +169,6 @@ def test_jobs_dir_unlistable_on_second_walk_does_not_raise(
 
     assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
     assert calls["n"] == 2, "the second walk (inside read_sessions) must happen"
-    assert "could not read" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "1 unreadable" in out
+    assert "⚠" in out

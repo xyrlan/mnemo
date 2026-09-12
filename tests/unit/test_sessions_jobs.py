@@ -166,3 +166,23 @@ def test_session_without_a_cwd_is_filtered_out_and_never_raises(tmp_path: Path) 
     ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(tmp_path))]
 
     assert ids == ["here"]
+
+
+def test_unlistable_jobs_dir_yields_nothing(tmp_path: Path, monkeypatch) -> None:
+    # The directory passes is_dir() and then becomes unlistable — a permission
+    # change, or it vanished. The module's contract is that an upstream change
+    # degrades the render; raising OSError straight through `mnemo sessions`
+    # is the one thing it must not do. A missing directory already yields [];
+    # an unreadable one must too.
+    _job(tmp_path, "here", state="working", tempo="blocked")
+
+    real_iterdir = Path.iterdir
+
+    def _boom(self):
+        if self == tmp_path:
+            raise PermissionError(13, "Permission denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _boom)
+
+    assert jobs.read_sessions(tmp_path) == []
