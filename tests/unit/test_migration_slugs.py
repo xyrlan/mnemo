@@ -74,3 +74,107 @@ def test_project_pages_keep_their_composite_stem(tmp_path):
     # `slug: x__y.proposed`, minting a second identity for a rule that already
     # has one. It is skipped now, along with every other walker (#155).
     assert "slug:" not in proposed.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# #179: a bulk rewriter owns the bytes it writes, so it must advance
+# ``written_hash`` for the entry it just rewrote — the way
+# ``reclassify_apply.py`` already does. Without this every stamped page reads
+# as "user edited" to ``extract/inbox/branches/*`` and ``promote.py``, which is
+# the condition that stages a ``.proposed.md`` instead of updating in place.
+# ---------------------------------------------------------------------------
+
+from mnemo.core.extract.inbox.io import content_hash
+from mnemo.core.extract.inbox.state_io import atomic_write_state, load_state
+from mnemo.core.extract.scanner import ExtractionState, StateEntry
+
+STATE_REL = ".mnemo/extraction-state.json"
+
+
+def _state_with(vault, key, page_path):
+    state = ExtractionState(last_run=None, entries={
+        key: StateEntry(
+            source_files=["bots/proj/memory/project_thing.md"],
+            source_hash="s1",
+            written_hash=content_hash(page_path.read_text(encoding="utf-8")),
+            written_at="r0",
+            status="direct",
+        ),
+    })
+    atomic_write_state(state, vault / STATE_REL)
+    return state
+
+
+def test_stamping_advances_written_hash_for_the_page_it_rewrites(tmp_path):
+    p = _page(tmp_path, "shared/project/proj__thing.md")
+    _state_with(tmp_path, "project/proj__thing", p)
+
+    slugs.stamp_slugs(tmp_path)
+
+    entry = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
+    assert entry.written_hash == content_hash(p.read_text(encoding="utf-8")), (
+        "the migration owns these bytes; a stale written_hash makes the page "
+        "read as user-edited and stages a bogus .proposed.md"
+    )
+
+
+def test_dry_run_leaves_the_state_alone(tmp_path):
+    p = _page(tmp_path, "shared/project/proj__thing.md")
+    before = _state_with(tmp_path, "project/proj__thing", p).entries[
+        "project/proj__thing"].written_hash
+
+    slugs.stamp_slugs(tmp_path, dry_run=True)
+
+    after = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
+    assert after.written_hash == before
+    assert "slug:" not in p.read_text(encoding="utf-8")
+
+
+def test_reconciles_pages_a_previous_run_already_stamped(tmp_path):
+    """The marker is already on disk for real vaults, so the historical drift
+    has to heal even when this run stamps nothing (#179)."""
+    p = _page(tmp_path, "shared/project/proj__thing.md",
+              "---\nname: T\nslug: proj__thing\ntype: project\n---\nbody\n")
+    state = ExtractionState(last_run=None, entries={
+        "project/proj__thing": StateEntry(
+            source_files=["bots/proj/memory/project_thing.md"],
+            source_hash="s1",
+            written_hash="stale-hash-from-a-pre-fix-migration",
+            written_at="r0",
+            status="direct",
+        ),
+    })
+    atomic_write_state(state, tmp_path / STATE_REL)
+
+    rep = slugs.stamp_slugs(tmp_path)
+
+    assert rep.stamped == 0, "nothing to stamp; only the state needs healing"
+    entry = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
+    assert entry.written_hash == content_hash(p.read_text(encoding="utf-8"))
+    assert rep.reconciled == 1
+
+
+def test_a_genuine_user_edit_is_not_reconciled(tmp_path):
+    """The whole point of written_hash is to notice real edits. Healing must
+    not paper over a page the user actually changed."""
+    p = _page(tmp_path, "shared/project/proj__thing.md",
+              "---\nname: T\nslug: proj__thing\ntype: project\n---\nbody\n")
+    state = ExtractionState(last_run=None, entries={
+        "project/proj__thing": StateEntry(
+            source_files=["bots/proj/memory/project_thing.md"],
+            source_hash="s1",
+            written_hash=content_hash(p.read_text(encoding="utf-8")),
+            written_at="r0",
+            status="direct",
+        ),
+    })
+    atomic_write_state(state, tmp_path / STATE_REL)
+
+    # The user edits the page by hand, and no migration touches it.
+    p.write_text("---\nname: T\nslug: proj__thing\ntype: project\n---\nEDITED\n",
+                 encoding="utf-8")
+    rep = slugs.stamp_slugs(tmp_path)
+
+    entry = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
+    assert entry.written_hash != content_hash(p.read_text(encoding="utf-8"))
+    assert rep.reconciled == 0
