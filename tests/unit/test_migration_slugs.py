@@ -133,13 +133,16 @@ def test_dry_run_leaves_the_state_alone(tmp_path):
 def test_reconciles_pages_a_previous_run_already_stamped(tmp_path):
     """The marker is already on disk for real vaults, so the historical drift
     has to heal even when this run stamps nothing (#179)."""
+    # What a pre-fix vault looks like: the page carries the stamp an earlier
+    # run wrote, while written_hash still records the bytes from *before* it.
+    pre_stamp = "---\nname: T\ntype: project\n---\nbody\n"
     p = _page(tmp_path, "shared/project/proj__thing.md",
               "---\nname: T\nslug: proj__thing\ntype: project\n---\nbody\n")
     state = ExtractionState(last_run=None, entries={
         "project/proj__thing": StateEntry(
             source_files=["bots/proj/memory/project_thing.md"],
             source_hash="s1",
-            written_hash="stale-hash-from-a-pre-fix-migration",
+            written_hash=content_hash(pre_stamp),
             written_at="r0",
             status="direct",
         ),
