@@ -229,6 +229,23 @@ def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
     session-wide hard block. A proposal's ``enforce`` reaching a live rule would
     defeat that rail, and losing a live rule's own ``enforce`` would silently
     disarm a rule a human armed.
+
+    **This is a characterization test, not a guard — read before trusting it.**
+    Mutation-tested twice. A substring version (``"deny_command: rm" not in
+    out``) passed even with ``enforce`` moved to ``_PROPOSAL_WINS``, because
+    ``_set_scalar`` rewrote only the parent line and left the live nested lines
+    below a stringified dict: malformed YAML containing every asserted
+    substring. Asserting the parsed dict instead fixes that particular lie, but
+    the mutation *still* passes, because ``_build`` now excludes dicts from the
+    ``_PROPOSAL_WINS`` loop, so a nested block can never reach ``_set_scalar``
+    at all.
+
+    So nothing this test can assert will fail if someone adds ``enforce`` to
+    ``_PROPOSAL_WINS`` — the exclusion in ``_build`` makes that edit inert. The
+    real guards are ``test_set_scalar_refuses_a_nested_block`` (which fails if
+    the ``NotAScalar`` refusal is removed) and that ``_build`` exclusion. This
+    test records the resulting behavior so a regression in either shows up as a
+    surprising change here.
     """
     live = (
         "---\nname: n\nslug: s\ntype: feedback\n"
@@ -241,9 +258,25 @@ def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
 
     out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
 
-    assert "deny_command: git push" in out
-    assert "deny_pattern: --force" in out
-    assert "deny_command: rm" not in out
+    assert parse_frontmatter(out)["enforce"] == {
+        "deny_command": "git push",
+        "deny_pattern": "--force",
+    }
+
+
+def test_set_scalar_refuses_a_nested_block(tmp_vault: Path):
+    """A nested block must never be written as a scalar.
+
+    ``_set_scalar``'s regex matches only the parent ``key:`` line. Handed a dict
+    it used to stringify it there and leave the original nested lines dangling
+    below — malformed YAML that still contained every substring a naive test
+    looked for, which is how the ``enforce`` policy test passed while broken.
+    """
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("enforce:\n  deny_command: rm\n", "enforce", {"deny_command": "rm"})
+
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("tags:\n  - a\n", "tags", ["a", "b"])
 
 
 def test_demoted_from_and_timestamps_follow_their_policies(tmp_vault: Path):

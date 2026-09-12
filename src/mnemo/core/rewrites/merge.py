@@ -21,6 +21,15 @@ from mnemo.core.filters import MANAGED_TAGS, parse_frontmatter, topic_tags
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
 
 
+class NotAScalar(TypeError):
+    """:func:`_set_scalar` was handed a nested block instead of a scalar.
+
+    Raised rather than stringifying it, which produced malformed YAML: the
+    parent line became a quoted dict while the original nested lines survived
+    below it.
+    """
+
+
 class NotInsertOnly(ValueError):
     """:func:`merge_insert_only` was handed a pair that drops live content.
 
@@ -110,7 +119,19 @@ def _set_scalar(fm_text: str, key: str, value: Any) -> str:
     YAML parser — Obsidian's included — reads as ``null`` plus a comment.
     ``_yaml_scalar`` also collapses embedded newlines, which would otherwise
     close the frontmatter block early or inject a bogus top-level key.
+
+    Refuses a non-scalar outright. The regex matches only the parent ``key:``
+    line, so handing it a dict wrote a stringified dict there and left the
+    original nested lines dangling underneath — malformed YAML that still
+    contained every substring a naive test would look for. No key in
+    ``_PROPOSAL_WINS`` is nested today, but that is one tuple edit away, and
+    silent corruption is the wrong failure mode for a one-line mistake.
     """
+    if isinstance(value, (dict, list)):
+        raise NotAScalar(
+            f"{key!r} is a {type(value).__name__}; _set_scalar rewrites only the "
+            "parent line and would leave nested lines dangling"
+        )
     rendered = f"{key}: {_yaml_scalar(value)}"
     line_re = re.compile(rf"(?m)^{re.escape(key)}:[ \t]*[^\n]*$")
     if line_re.search(fm_text):
@@ -167,7 +188,9 @@ def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
 
     fm_text = live_fm_text
     for key in _PROPOSAL_WINS:
-        if key in prop_fm and not isinstance(prop_fm[key], list):
+        # Scalars only. The original guard excluded lists but let a dict through
+        # to _set_scalar, which cannot rewrite a nested block.
+        if key in prop_fm and not isinstance(prop_fm[key], (list, dict)):
             fm_text = _set_scalar(fm_text, key, prop_fm[key])
     # _LIVE_WINS needs no action: fm_text starts as the live frontmatter.
     #

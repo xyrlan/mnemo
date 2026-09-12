@@ -636,6 +636,15 @@ from mnemo.core.filters import MANAGED_TAGS, parse_frontmatter, topic_tags
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
 
 
+class NotAScalar(TypeError):
+    """:func:`_set_scalar` was handed a nested block instead of a scalar.
+
+    Raised rather than stringifying it, which produced malformed YAML: the
+    parent line became a quoted dict while the original nested lines survived
+    below it.
+    """
+
+
 class NotInsertOnly(ValueError):
     """:func:`merge_insert_only` was handed a pair that drops live content.
 
@@ -717,7 +726,19 @@ def _set_scalar(fm_text: str, key: str, value: Any) -> str:
     YAML parser — Obsidian's included — reads as ``null`` plus a comment.
     ``_yaml_scalar`` also collapses embedded newlines, which would otherwise
     close the frontmatter block early or inject a bogus top-level key.
+
+    Refuses a non-scalar outright. The regex matches only the parent ``key:``
+    line, so handing it a dict wrote a stringified dict there and left the
+    original nested lines dangling underneath — malformed YAML that still
+    contained every substring a naive test would look for. No key in
+    ``_PROPOSAL_WINS`` is nested today, but that is one tuple edit away, and
+    silent corruption is the wrong failure mode for a one-line mistake.
     """
+    if isinstance(value, (dict, list)):
+        raise NotAScalar(
+            f"{key!r} is a {type(value).__name__}; _set_scalar rewrites only the "
+            "parent line and would leave nested lines dangling"
+        )
     rendered = f"{key}: {_yaml_scalar(value)}"
     line_re = re.compile(rf"(?m)^{re.escape(key)}:[ \t]*[^\n]*$")
     if line_re.search(fm_text):
@@ -774,7 +795,9 @@ def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
 
     fm_text = live_fm_text
     for key in _PROPOSAL_WINS:
-        if key in prop_fm and not isinstance(prop_fm[key], list):
+        # Scalars only. The original guard excluded lists but let a dict through
+        # to _set_scalar, which cannot rewrite a nested block.
+        if key in prop_fm and not isinstance(prop_fm[key], (list, dict)):
             fm_text = _set_scalar(fm_text, key, prop_fm[key])
     # _LIVE_WINS needs no action: fm_text starts as the live frontmatter.
     #
@@ -963,11 +986,45 @@ def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
         "enforce:\n  deny_command: rm\n---\n\nb\nmore\n"
     )
 
+    **A characterization test, not a guard — do not trust it as one.**
+    Mutation-tested twice. A substring version (``"deny_command: rm" not in
+    out``) passed even with ``enforce`` moved to ``_PROPOSAL_WINS``, because
+    ``_set_scalar`` rewrote only the parent line and left the live nested lines
+    below a stringified dict: malformed YAML containing every asserted
+    substring. Asserting the parsed dict fixes that lie, but the mutation
+    *still* passes, because ``_build`` excludes dicts from the
+    ``_PROPOSAL_WINS`` loop so a nested block never reaches ``_set_scalar``.
+
+    Nothing this test asserts will fail if someone adds ``enforce`` to
+    ``_PROPOSAL_WINS``. The real guards are
+    ``test_set_scalar_refuses_a_nested_block`` and that ``_build`` exclusion.
+    """
     out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
 
-    assert "deny_command: git push" in out
-    assert "deny_pattern: --force" in out
-    assert "deny_command: rm" not in out
+    assert parse_frontmatter(out)["enforce"] == {
+        "deny_command": "git push",
+        "deny_pattern": "--force",
+    }
+
+
+def test_set_scalar_refuses_a_nested_block(tmp_vault: Path):
+    """A nested block must never be written as a scalar.
+
+    ``_set_scalar``'s regex matches only the parent ``key:`` line. Handed a dict
+    it used to stringify it there and leave the original nested lines dangling
+    below — malformed YAML that still contained every substring a naive test
+    looked for, which is how the ``enforce`` policy test passed while broken.
+
+    This is the real guard for the nested-block policy. Mutation-tested: with the
+    ``NotAScalar`` raise neutered, this test fails. The ``enforce`` test above
+    cannot fail for that regression, because ``_build``'s dict exclusion stops a
+    nested value reaching ``_set_scalar`` at all.
+    """
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("enforce:\n  deny_command: rm\n", "enforce", {"deny_command": "rm"})
+
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("tags:\n  - a\n", "tags", ["a", "b"])
 
 
 def test_demoted_from_and_timestamps_follow_their_policies(tmp_vault: Path):
@@ -1009,9 +1066,9 @@ def test_replace_wholesale_takes_the_proposal_body(tmp_vault: Path):
 - [ ] **Step 2: Run the tests**
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py -v`
-Expected: all 14 PASS — the 6 already in the file after Task 4 (one from its Step 1
+Expected: all 15 PASS — the 6 already in the file after Task 4 (one from its Step 1
 plus the four guard tests from its Step 4b, and `test_sources_are_normalized_and_unioned`)
-plus these 8. If `test_managed_tag_marker_is_never_copied_from_the_proposal` fails, the bug
+plus these 9. If `test_managed_tag_marker_is_never_copied_from_the_proposal` fails, the bug
 is in `_merged_tags` — `MANAGED_TAGS` must be read from the live side only.
 
 - [ ] **Step 3: Commit**
