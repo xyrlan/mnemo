@@ -32,13 +32,19 @@ def test_blocked_section_comes_first() -> None:
     assert out.index("bloqueada") < out.index("trabalhando")
 
 
-def test_oldest_blocked_first() -> None:
+def test_freshest_blocked_first() -> None:
+    """Inverted by #196. This test used to assert oldest-first, which was the bug.
+
+    ``tempo`` freezes at the moment a process stops writing, so among blocked
+    sessions the stalest is the one most likely to be a corpse. Oldest-first
+    pinned zombies to the top of the queue by construction.
+    """
     out = render_queue([
         _blocked("new", "recente", name="recente", updated_at="2026-09-12T12:30:00.000Z"),
         _blocked("old", "antiga", name="antiga", updated_at="2026-09-12T12:00:00.000Z"),
     ])
 
-    assert out.index("antiga") < out.index("recente")
+    assert out.index("recente") < out.index("antiga")
 
 
 def test_needs_is_shown_and_falls_back_to_detail() -> None:
