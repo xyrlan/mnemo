@@ -1557,7 +1557,10 @@ def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
 
     restored = A.undo(tmp_vault, plan.run_id)
 
-    assert restored == 2  # the rule + the state file
+    # The rule + the state file + the re-staged proposal. It was 2 before
+    # `undo` learned to restore the proposal it had consumed (fe35699); a stale
+    # `== 2` here would fail for the right reason and read like an undo bug.
+    assert restored == 3
     assert live.read_bytes() == live_before
     assert json.loads(state_path.read_bytes()) == json.loads(state_before)
 
