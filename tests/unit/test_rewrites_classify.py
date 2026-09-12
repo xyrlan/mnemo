@@ -8,6 +8,7 @@ discards live content in the 11, and a plain append makes the 6 assert both
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,12 @@ def test_classification_covers_every_page_type_under_inbox(tmp_vault: Path):
     assert keys == {"reference/ref-rule", "feedback/fb-rule"}
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="chmod 000 does not deny reads to an administrator on Windows, so the "
+           "fixture cannot create the condition. The guarantee itself is "
+           "platform-independent; only this way of provoking it is not.",
+)
 def test_unreadable_proposal_raises_rather_than_vanishing(tmp_vault: Path):
     """An unreadable proposal must not drop silently out of the plan.
 

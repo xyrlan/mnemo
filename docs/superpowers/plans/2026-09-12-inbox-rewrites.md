@@ -534,6 +534,24 @@ def test_classification_covers_every_page_type_under_inbox(tmp_vault: Path):
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_classify.py -v`
 Expected: all 7 PASS. The Task 2 implementation already covers these paths; if any fails, fix `classify.py` — do not weaken the test.
 
+**Windows portability, added after CI:** two of these tests provoke an
+unreadable file with `chmod 000`, which does not deny reads to an administrator
+on Windows — the job reported `DID NOT RAISE OSError`. The guarantee is
+platform-independent; only that way of provoking it is not. Both carry:
+
+```python
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="chmod 000 does not deny reads to an administrator on Windows, so the "
+           "fixture cannot create the condition. The guarantee itself is "
+           "platform-independent; only this way of provoking it is not.",
+)
+```
+
+They are `test_unreadable_proposal_raises_rather_than_vanishing` (Task 3) and
+`test_unreadable_proposal_reports_a_message_not_a_traceback` (Task 8). Both
+files need `import sys` alongside `import pytest`.
+
 - [ ] **Step 3: Commit**
 
 ```bash
@@ -1279,7 +1297,8 @@ def _apply_locked(plan_obj: ApplyPlan, vault_root: Path, report: ApplyReport) ->
     if state_path.exists():
         backup = originals / "extraction-state.json"
         shutil.copy2(state_path, backup)
-        state_backup = str(backup.relative_to(vault_root))
+        # POSIX separators for the same reason as the move paths below.
+        state_backup = backup.relative_to(vault_root).as_posix()
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1413,8 +1432,13 @@ def _apply_entries(
             "slug": rewrite.live.stem,
             "kind": rewrite.kind,
             "action": action,
-            "live_path": str(rewrite.live.relative_to(vault_root)),
-            "proposal_path": str(rewrite.proposal.relative_to(vault_root)),
+            # POSIX separators, always. ``str(Path.relative_to(...))`` yields
+            # ``shared\project\x.md`` on Windows, and the manifest is the only
+            # recovery record there is — one written on Windows must stay
+            # readable on POSIX and the reverse. ``vault_root / "a/b.md"``
+            # resolves correctly on every platform, so reading back is safe.
+            "live_path": rewrite.live.relative_to(vault_root).as_posix(),
+            "proposal_path": rewrite.proposal.relative_to(vault_root).as_posix(),
         })
         if action == "merge":
             report.merged += 1

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+import pytest
 
 from mnemo.cli.parser import ADVANCED_COMMANDS, COMMANDS, _build_parser
 
@@ -83,6 +86,12 @@ def test_reject_archives_the_proposal_before_deleting_it(tmp_vault: Path, monkey
     assert "archived to" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="chmod 000 does not deny reads to an administrator on Windows, so the "
+           "fixture cannot create the condition. The boundary catch itself is "
+           "platform-independent; only this way of provoking it is not.",
+)
 def test_unreadable_proposal_reports_a_message_not_a_traceback(
     tmp_vault: Path, monkeypatch, capsys
 ):
