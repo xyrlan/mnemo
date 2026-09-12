@@ -1240,7 +1240,48 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
             state = {"entries": {}}
     state.setdefault("entries", {})
 
+    manifest_path = arch / "manifest.json"
     moves: list[dict] = []
+
+    def _flush() -> None:
+        """Persist the manifest and the ledger to reflect exactly what has landed.
+
+        Called after every applied rewrite and once more in a ``finally``, so an
+        uncaught failure anywhere in the loop still leaves a recoverable state.
+
+        The original shape wrote both once, after the loop. A mid-loop failure —
+        ``atomic_write`` raising on rewrite 2 of 3 — therefore left rewrite 1
+        written to disk, its proposal deleted, no manifest at all, and a ledger
+        still carrying the stale hash: unrecoverable by ``undo`` and silently
+        disagreeing with disk. Verified by monkeypatching the write.
+        """
+        manifest_path.write_text(
+            json.dumps({
+                "run_id": plan_obj.run_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "moves": moves,
+                "skipped": report.skipped,
+                "state_backup": state_backup,
+            }, indent=2),
+            encoding="utf-8",
+        )
+        tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(json.dumps(state, indent=2).encode("utf-8"))
+        tmp.replace(state_path)
+
+    try:
+        _apply_entries(plan_obj, vault_root, report, state, originals, moves, _flush)
+    finally:
+        # Even an uncaught raise leaves a manifest naming exactly what landed and
+        # a ledger matching disk, so ``undo`` can recover the completed work.
+        _flush()
+
+    return report
+
+
+def _apply_entries(plan_obj, vault_root, report, state, originals, moves, _flush) -> None:
+    """The per-rewrite loop. Split out so :func:`apply` can wrap it in ``finally``."""
     for rewrite, action in plan_obj.entries:
         if action == "skip":
             report.skipped.append({"key": rewrite.key, "reason": "skipped by plan"})
@@ -1295,22 +1336,9 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
         else:
             report.replaced += 1
 
-    (arch / "manifest.json").write_text(
-        json.dumps({
-            "run_id": plan_obj.run_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "moves": moves,
-            "skipped": report.skipped,
-            "state_backup": state_backup,
-        }, indent=2),
-        encoding="utf-8",
-    )
-
-    tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_bytes(json.dumps(state, indent=2).encode("utf-8"))
-    tmp.replace(state_path)
-    return report
+        # Persist after each rewrite, not once at the end. Everything applied so
+        # far is then already recoverable if the next one dies.
+        _flush()
 
 
 def undo(vault_root: Path, run_id: str) -> int:

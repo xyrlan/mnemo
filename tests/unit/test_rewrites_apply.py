@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from mnemo.core.extract.inbox.io import content_hash
 from mnemo.core.rewrites import apply as A
 from mnemo.core.rewrites import classify as C
@@ -47,6 +49,60 @@ def _seed(vault: Path, slug: str = "a__x", *, page_type: str = "project") -> Non
         "last_sync": "2026-05-28T00:00:00",
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_a_hard_failure_mid_batch_still_leaves_the_applied_work_recoverable(
+    tmp_vault: Path, monkeypatch
+):
+    """An uncaught I/O error must not strand what already landed.
+
+    The original shape wrote the manifest and flushed the ledger once, after the
+    loop. Monkeypatching ``atomic_write`` to fail on the second of three rewrites
+    left the first written to disk with its proposal deleted, no manifest at all,
+    and a ledger still carrying the stale hash — unrecoverable by ``undo`` and
+    silently disagreeing with disk.
+
+    ``_flush`` now runs per rewrite and again in a ``finally``.
+    """
+    import mnemo.core.rewrites.apply as apply_mod
+
+    for slug in ("a__one", "a__two", "a__three"):
+        _seed(tmp_vault, slug)
+
+    real_atomic_write = apply_mod.atomic_write
+    calls = {"n": 0}
+
+    def flaky(path: Path, content: str) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk on fire")
+        real_atomic_write(path, content)
+
+    monkeypatch.setattr(apply_mod, "atomic_write", flaky)
+
+    plan = A.plan(
+        tmp_vault,
+        include={"project/a__one", "project/a__two", "project/a__three"},
+    )
+    with pytest.raises(OSError):
+        A.apply(plan, tmp_vault)
+
+    arch = tmp_vault / "shared" / "_archive" / f"rewrites-{plan.run_id}"
+    manifest = json.loads((arch / "manifest.json").read_text())
+
+    # Exactly one rewrite completed, and the manifest names it.
+    assert len(manifest["moves"]) == 1
+    done_key = manifest["moves"][0]["key"]
+
+    # The ledger on disk agrees with the file on disk for that key.
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    done_slug = done_key.split("/", 1)[1]
+    done_live = tmp_vault / "shared" / "project" / f"{done_slug}.md"
+    assert state["entries"][done_key]["written_hash"] == content_hash(done_live)
+
+    # And undo can put it back.
+    monkeypatch.setattr(apply_mod, "atomic_write", real_atomic_write)
+    assert A.undo(tmp_vault, plan.run_id) >= 2  # the rule + the state file
 
 
 def test_one_malformed_live_rule_does_not_abort_the_batch(tmp_vault: Path):
