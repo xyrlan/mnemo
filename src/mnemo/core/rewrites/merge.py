@@ -110,8 +110,22 @@ def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
         if key in prop_fm and not isinstance(prop_fm[key], list):
             fm_text = _set_scalar(fm_text, key, prop_fm[key])
     # _LIVE_WINS needs no action: fm_text starts as the live frontmatter.
-    fm_text = _rewrite_block(fm_text, "sources", _merged_sources(live_fm, prop_fm, vault_root))
-    fm_text = _rewrite_block(fm_text, "tags", _merged_tags(live_fm, prop_fm))
+    #
+    # Both blocks are rewritten only when at least one side actually had the key.
+    # An earlier draft called _rewrite_block unconditionally, and since that
+    # helper appends ``key: []`` for an absent key with no values, merging two
+    # pages that both lacked ``tags:`` invented one. Confirmed on real files:
+    # shared/project/clubinho__sprints-github.md and its staged proposal both
+    # have no ``tags:`` block, and the merge grew a ``tags: []`` line. Harmless
+    # to every reader (``parse_frontmatter`` treats ``[]`` and absent alike) but
+    # this pipeline exists because silent frontmatter churn made 35 proposals
+    # unreadable; adding keys a file never had is the same class of thing.
+    if "sources" in live_fm or "sources" in prop_fm:
+        fm_text = _rewrite_block(
+            fm_text, "sources", _merged_sources(live_fm, prop_fm, vault_root)
+        )
+    if "tags" in live_fm or "tags" in prop_fm:
+        fm_text = _rewrite_block(fm_text, "tags", _merged_tags(live_fm, prop_fm))
 
     return "---\n" + fm_text.rstrip() + "\n---\n" + prop_body
 
