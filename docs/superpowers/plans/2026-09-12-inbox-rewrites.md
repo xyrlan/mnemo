@@ -629,10 +629,30 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mnemo.core.extract.inbox.rendering import _yaml_scalar
 from mnemo.core.extract.source_paths import vault_relative_source
 from mnemo.core.filters import MANAGED_TAGS, parse_frontmatter, topic_tags
 
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
+
+
+class NotInsertOnly(ValueError):
+    """:func:`merge_insert_only` was handed a pair that drops live content.
+
+    Raised instead of silently behaving like :func:`replace_wholesale`, which is
+    what the unguarded version did.
+    """
+
+
+class NoLiveFrontmatter(ValueError):
+    """The live page has no ``---`` frontmatter block, so there is nothing to merge into.
+
+    ``dedup_rules._merge_group_inplace`` takes the same posture ("canonical has
+    no frontmatter; skip rather than corrupt"). Without it, ``_build`` starts
+    from an empty frontmatter string, appends the proposal's scalars, and wraps
+    the result in fresh fences — fabricating a rule out of a plain-text file.
+    """
+
 
 #: Keys the proposal is authoritative for.
 _PROPOSAL_WINS = (
@@ -642,13 +662,25 @@ _PROPOSAL_WINS = (
     "extraction_run",
     "extracted_at",
     "last_sync",
-    "stability",
 )
 
 #: Keys the live page is authoritative for. ``activates_on`` drives rule
 #: activation and ``demoted_from`` records a reclassify decision; neither is the
 #: extractor's to revise from a session transcript.
-_LIVE_WINS = ("confidence", "demoted_from", "activates_on", "enforce")
+#:
+#: ``stability`` sits here for a sharper reason. ``filters.is_consumer_visible``
+#: treats ``stability: evolving`` as non-visible, and the extraction prompt
+#: (``prompts/templates/few_shot_feedback.py``) shows the model emitting
+#: ``evolving`` whenever a decision reads as still in flux. Proposal-wins would
+#: therefore let one tentative-sounding transcript flip a stable, visible rule
+#: to ``evolving`` and silently drop it from recall, reflex and export — which
+#: is the exact failure #159 exists to fix, reintroduced by the fix for it.
+_LIVE_WINS = ("confidence", "demoted_from", "activates_on", "enforce", "stability")
+
+# The two policies must never overlap: a key in both would make the merge order
+# decide the winner, silently. Convention is not enough when the cost of a wrong
+# key is a corrupted rule.
+assert not set(_PROPOSAL_WINS) & set(_LIVE_WINS), "a key cannot have two policies"
 
 
 def _split(text: str) -> tuple[str, str]:
@@ -675,8 +707,18 @@ def _rewrite_block(fm_text: str, key: str, lines: list[str]) -> str:
 
 
 def _set_scalar(fm_text: str, key: str, value: Any) -> str:
-    """Replace a scalar ``key: value`` line, or append it when absent."""
-    rendered = f"{key}: {value}"
+    """Replace a scalar ``key: value`` line, or append it when absent.
+
+    The value is re-rendered through the writer's own ``_yaml_scalar`` rather
+    than interpolated raw. ``parse_frontmatter`` hands back *dequoted* values, so
+    raw interpolation silently un-quotes whatever the writer had quoted: a
+    description of ``#hashtag first`` became ``description: #hashtag first``,
+    which this codebase's own reader tolerates but every standards-compliant
+    YAML parser — Obsidian's included — reads as ``null`` plus a comment.
+    ``_yaml_scalar`` also collapses embedded newlines, which would otherwise
+    close the frontmatter block early or inject a bogus top-level key.
+    """
+    rendered = f"{key}: {_yaml_scalar(value)}"
     line_re = re.compile(rf"(?m)^{re.escape(key)}:[ \t]*[^\n]*$")
     if line_re.search(fm_text):
         return line_re.sub(lambda _m: rendered, fm_text, count=1)
@@ -715,6 +757,16 @@ def _merged_tags(live_fm: dict, prop_fm: dict) -> list[str]:
 
 
 def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
+    if not _FM_RE.match(live_text):
+        # Skip rather than corrupt, exactly as dedup_rules._merge_group_inplace
+        # does. Starting from an empty frontmatter string would append the
+        # proposal's scalars and wrap them in fresh fences, turning a plain-text
+        # or malformed live file into a rule with a fabricated name, description
+        # and sources that never existed on the live side. ``classify`` only
+        # requires the live file to exist, not to have frontmatter, so this is
+        # reachable through the sanctioned pipeline.
+        raise NoLiveFrontmatter("live page has no frontmatter block")
+
     live_fm_text, _live_body = _split(live_text)
     _prop_fm_text, prop_body = _split(proposal_text)
     live_fm = parse_frontmatter(live_text)
@@ -744,10 +796,26 @@ def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
 def merge_insert_only(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
     """Merge an ``insert_only`` rewrite.
 
-    The proposal body is a superset of the live body (every non-equal opcode is
-    an insert), so taking it preserves every live line in order — verified by
-    ``classify``, and re-asserted in this module's tests.
+    The proposal body must be a superset of the live body, so taking it preserves
+    every live line in order. That precondition is now *checked* rather than
+    merely documented: handed a ``mixed`` pair, this used to behave exactly like
+    :func:`replace_wholesale` and drop the live-only lines with no signal. The
+    sanctioned path (``apply._ACTION_FOR_KIND``) never does that, but this is a
+    plain public function and a repair script or REPL call would.
+
+    The check reuses ``classify._classify_bodies`` so "insert only" has one
+    definition in the codebase rather than two that can drift apart.
     """
+    from mnemo.core.rewrites.classify import _classify_bodies, _split_body
+
+    kind, _keep, _ins, _dropped = _classify_bodies(
+        _split_body(live_text), _split_body(proposal_text)
+    )
+    if kind != "insert_only":
+        raise NotInsertOnly(
+            f"merge_insert_only requires an insert-only pair, got {kind!r}; "
+            "use replace_wholesale if discarding live prose is intended"
+        )
     return _build(live_text, proposal_text, vault_root=vault_root)
 
 
@@ -765,6 +833,27 @@ def replace_wholesale(live_text: str, proposal_text: str, *, vault_root: Path) -
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py::test_sources_are_normalized_and_unioned -v`
 Expected: PASS
+
+- [ ] **Step 4b: Add the four guard tests**
+
+These came out of Task 4's code review, which found two Critical corruption paths
+and one reachable visibility bug in the code this task specifies. Each pins a
+guard added above, so a later refactor cannot quietly remove one. Append them to
+`tests/unit/test_rewrites_merge.py` (the file needs `import pytest` and
+`is_consumer_visible` added to its `filters` import):
+
+- `test_live_page_without_frontmatter_is_refused` — `NoLiveFrontmatter` from both
+  entry points. Use **insert-only bodies** (proposal appends, drops nothing) so
+  `merge_insert_only`'s precondition passes and execution reaches `_build`; a
+  first draft used disjoint bodies, tripped `NotInsertOnly` first, and proved
+  nothing about frontmatter.
+- `test_scalar_values_are_requoted_for_real_yaml` — a `description` of
+  `#hashtag first` must render as `description: '#hashtag first'` and round-trip.
+- `test_stability_comes_from_the_live_rule` — live `stable` + proposal `evolving`
+  must stay `stable`, and `is_consumer_visible` must stay True.
+- `test_merge_insert_only_refuses_a_pair_that_drops_live_content` —
+  `NotInsertOnly` on a mixed pair, and `replace_wholesale` still drops the
+  live-only line deliberately.
 
 - [ ] **Step 5: Commit**
 
@@ -856,6 +945,53 @@ def test_merge_is_idempotent(tmp_vault: Path):
     assert once == twice
 
 
+def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
+    """``enforce`` is a live-wins nested block, and the asymmetry matters.
+
+    ``rendering._render_page`` strips ``enforce`` from auto-promoted pages as a
+    safety rail (C3, 2026-04-23) so one briefing line cannot become a
+    session-wide hard block. A proposal's ``enforce`` reaching a live rule would
+    defeat that rail, and losing a live rule's own ``enforce`` would silently
+    disarm a rule a human armed.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: git push\n  deny_pattern: --force\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: rm\n---\n\nb\nmore\n"
+    )
+
+    out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
+
+    assert "deny_command: git push" in out
+    assert "deny_pattern: --force" in out
+    assert "deny_command: rm" not in out
+
+
+def test_demoted_from_and_timestamps_follow_their_policies(tmp_vault: Path):
+    """``demoted_from`` is live-wins; the run stamps are proposal-wins.
+
+    Both rows sat untested after Task 4. ``demoted_from`` records a reclassify
+    decision, which is not the extractor's to revise from a transcript, while the
+    stamps describe the run that produced the proposal and should follow it.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: feedback\nextraction_run: 2026-05-01T00:00:00\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: user\nextraction_run: 2026-09-12T10:00:00\n---\n\nb\nmore\n"
+    )
+
+    fm = parse_frontmatter(M.merge_insert_only(live, proposal, vault_root=tmp_vault))
+
+    assert fm["demoted_from"] == "feedback"
+    assert fm["extraction_run"] == "2026-09-12T10:00:00"
+
+
 def test_replace_wholesale_takes_the_proposal_body(tmp_vault: Path):
     live, prop = _pair_text(
         "name: n\nslug: s\ntype: project",
@@ -873,7 +1009,10 @@ def test_replace_wholesale_takes_the_proposal_body(tmp_vault: Path):
 - [ ] **Step 2: Run the tests**
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py -v`
-Expected: all 7 PASS. If `test_managed_tag_marker_is_never_copied_from_the_proposal` fails, the bug is in `_merged_tags` — `MANAGED_TAGS` must be read from the live side only.
+Expected: all 14 PASS — the 6 already in the file after Task 4 (one from its Step 1
+plus the four guard tests from its Step 4b, and `test_sources_are_normalized_and_unioned`)
+plus these 8. If `test_managed_tag_marker_is_never_copied_from_the_proposal` fails, the bug
+is in `_merged_tags` — `MANAGED_TAGS` must be read from the live side only.
 
 - [ ] **Step 3: Commit**
 
