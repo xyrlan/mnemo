@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pytest
+
 from mnemo.cli.commands import sessions as sessions_cmd
 
 
@@ -108,3 +110,78 @@ def test_an_unavailable_vault_still_prints_the_queue(monkeypatch, capsys) -> Non
     assert sessions_cmd.cmd_sessions(args) == 0
 
     assert "the queue" in capsys.readouterr().out
+
+
+def test_consume_unblocks_redeems_the_markers(monkeypatch, tmp_path: Path) -> None:
+    """``--consume-unblocks`` is the production reader ``pending_unblocks``
+    never had (#195). It must not print the queue: the hook spawns it
+    detached, and a human running it wants the ledger delta, not a listing.
+    """
+    vault = tmp_path / "vault"
+    calls: list[Path] = []
+
+    class _Report:
+        consumed, failed, skipped = 1, 0, 0
+        learned = [{"slug": "argon2-not-bcrypt", "name": "Use argon2"}]
+        errors: list[str] = []
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "mnemo.core.sessions.unblocks.consume",
+        lambda cfg, *, vault_root: calls.append(vault_root) or _Report(),
+    )
+    monkeypatch.setattr(
+        "mnemo.core.sessions.render.render_queue",
+        lambda s: pytest.fail("must not render the queue"),
+    )
+
+    args = argparse.Namespace(
+        json=False, watch=False, consume_unblocks=True, **{"all": False}
+    )
+    assert sessions_cmd.cmd_sessions(args) == 0
+    assert calls == [vault]
+
+
+def test_consume_unblocks_reports_what_it_learned(monkeypatch, capsys, tmp_path: Path) -> None:
+    class _Report:
+        consumed, failed, skipped = 1, 0, 0
+        learned = [{"slug": "argon2-not-bcrypt", "name": "Use argon2"}]
+        errors: list[str] = []
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "mnemo.core.sessions.unblocks.consume", lambda cfg, *, vault_root: _Report()
+    )
+
+    args = argparse.Namespace(
+        json=False, watch=False, consume_unblocks=True, **{"all": False}
+    )
+    sessions_cmd.cmd_sessions(args)
+
+    out = capsys.readouterr().out
+    assert "argon2-not-bcrypt" in out
+
+
+def test_consume_unblocks_says_so_when_there_is_nothing(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """Silence would read as a broken command; this is the verb a maintainer
+    runs by hand to check the wire is alive."""
+    class _Report:
+        consumed, failed, skipped = 0, 0, 0
+        learned: list = []
+        errors: list[str] = []
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "mnemo.core.sessions.unblocks.consume", lambda cfg, *, vault_root: _Report()
+    )
+
+    args = argparse.Namespace(
+        json=False, watch=False, consume_unblocks=True, **{"all": False}
+    )
+    assert sessions_cmd.cmd_sessions(args) == 0
+    assert "no unblocked session" in capsys.readouterr().out

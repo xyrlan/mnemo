@@ -303,6 +303,69 @@ def _maybe_sweep_sessions(vault_root) -> None:
             pass
 
 
+def _spawn_detached_unblock_consumption() -> None:
+    """Fire-and-forget ``mnemo sessions --consume-unblocks``.
+
+    Detached for the same reason briefing and extraction are: consuming a
+    marker runs a briefing and an extraction, both LLM-bound, and the hook
+    must not hold up the session's exit for them.
+    """
+    import subprocess
+
+    from mnemo._selfexec import self_argv
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    subprocess.Popen(self_argv("sessions", "--consume-unblocks"), **kwargs)
+
+
+def _maybe_consume_unblocks(cfg: dict, vault_root) -> None:
+    """Learn from any session that was answered while it was blocked (#195).
+
+    The sweep above records those edges; without this they were recorded and
+    discarded. It runs after the sweep on purpose — an edge this very hook
+    just recorded is redeemable in the same pass.
+
+    Gated on ``briefings.enabled`` because consuming a marker *is* a briefing
+    plus an extraction: a user who turned briefings off has opted out of the
+    LLM calls this would make.
+
+    Never raises: a missing transcript must not fail the hook.
+    """
+    try:
+        from mnemo.core import errors as err_mod
+
+        if not bool((cfg.get("briefings") or {}).get("enabled", False)):
+            return
+        from mnemo.core.sessions import detector
+
+        # Checked here rather than in the child so the common case — no
+        # unblock to redeem — costs a file read instead of a process spawn.
+        if not detector.pending_unblocks(vault_root=vault_root):
+            return
+        try:
+            _spawn_detached_unblock_consumption()
+        except OSError as exc:
+            err_mod.log_error(vault_root, "session_end.unblocks.popen", exc)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_end.unblocks", exc)
+        except Exception:
+            pass
+
+
 def _maybe_schedule_propose(
     cfg: dict,
     vault_root,
@@ -414,6 +477,10 @@ def main() -> int:
             _maybe_sweep_sessions(vault)
         except Exception as e:
             errors.log_error(vault, "session_end.sweep_sessions_wrap", e)
+        try:
+            _maybe_consume_unblocks(cfg, vault)
+        except Exception as e:
+            errors.log_error(vault, "session_end.unblocks_wrap", e)
         try:
             cwd = str(payload.get("cwd") or os.getcwd())
             _maybe_schedule_propose(

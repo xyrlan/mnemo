@@ -14,7 +14,7 @@ Two facts measured against the real roster on 2026-09-12 shape this module:
 
 - ``procStart`` is formatted in UTC while ``ps -o lstart`` prints local time
   (a 3h skew on this machine). String-comparing the two marks *every* live
-  session dead, so there is no start-time guard here — only ``os.kill(pid, 0)``.
+  session dead, so there is no start-time guard here — only :func:`pid_alive`.
   PID reuse could in principle call a dead session live; that error is the safe
   direction, and the roster is rewritten by the daemon far faster than a pid
   wraps.
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -69,16 +70,66 @@ def read_roster(home: Path | None = None) -> dict[str, int] | None:
     return out
 
 
-def pid_alive(pid: int) -> bool:
-    """True when signal 0 reaches *pid*.
+#: ``PROCESS_QUERY_LIMITED_INFORMATION`` — enough to ask whether a process is
+#: running without the right to read or touch it. ``STILL_ACTIVE`` is what
+#: ``GetExitCodeProcess`` reports for a process that has not exited.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
 
-    ``EPERM`` counts as alive: the process exists, it simply is not ours to
-    signal. Non-positive pids are rejected outright because ``kill(0, 0)`` and
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Ask the Win32 API directly, because ``os.kill`` cannot answer this.
+
+    On Windows ``os.kill(pid, 0)`` is **not** a liveness probe. ``signal 0`` is
+    ``CTRL_C_EVENT``, so CPython takes the console-control branch and calls
+    ``GenerateConsoleCtrlEvent`` — which, per Win32, "cannot be limited to a
+    specific process group": the pid is ignored and every process sharing the
+    caller's console gets a real Ctrl-C. It then returns success, so the probe
+    also always answers "alive".
+
+    Measured: this killed the test suite on the Windows runner, surfacing as a
+    ``KeyboardInterrupt`` in an unrelated test a second or two later (delivery
+    is asynchronous), at a different place each run. In production it would
+    fire a Ctrl-C at the user's own Claude Code console on every statusline
+    render, and `is_abandoned` could never be True.
+
+    A process that has exited but is still held open by a handle reports
+    ``STILL_ACTIVE == False`` here, which is the answer the queue wants: the
+    session is over.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # ERROR_ACCESS_DENIED (5) means it exists and is not ours to inspect,
+        # which is alive for our purposes — the same reading as POSIX EPERM.
+        return ctypes.get_last_error() == 5
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def pid_alive(pid: int) -> bool:
+    """True when *pid* names a running process.
+
+    Non-positive pids are rejected outright because ``kill(0, 0)`` and
     ``kill(-1, 0)`` address process *groups*, which would answer a question
     nobody asked.
+
+    POSIX asks with signal 0, where ``EPERM`` counts as alive: the process
+    exists, it simply is not ours to signal. Windows needs a different call
+    entirely — see :func:`_pid_alive_windows`.
     """
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

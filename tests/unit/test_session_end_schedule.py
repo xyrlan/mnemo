@@ -617,3 +617,106 @@ def test_session_end_sweep_failure_is_swallowed(tmp_path, monkeypatch):
     monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", _boom)
 
     session_end._maybe_sweep_sessions(tmp_path)  # must not raise
+
+
+def test_session_end_consumes_pending_unblocks(tmp_path, monkeypatch):
+    """The reader ``pending_unblocks`` never had (#195).
+
+    Spawned detached rather than run inline: consuming a marker briefs and
+    extracts, both LLM-bound, and the hook must not hold the session's exit.
+    """
+    from mnemo.hooks import session_end
+
+    spawned = []
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks",
+        lambda *, vault_root: [{"session_id": "sid-1", "cwd": "/repo"}],
+    )
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_unblock_consumption", lambda: spawned.append(True)
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+    assert spawned == [True]
+
+
+def test_session_end_does_not_spawn_when_nothing_is_pending(tmp_path, monkeypatch):
+    """The common case. A spawn per session end to find an empty list is a
+    process for nothing; the check is a file read."""
+    from mnemo.hooks import session_end
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks", lambda *, vault_root: []
+    )
+    monkeypatch.setattr(
+        session_end,
+        "_spawn_detached_unblock_consumption",
+        lambda: pytest.fail("must not spawn with nothing pending"),
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+
+def test_session_end_respects_briefings_disabled(tmp_path, monkeypatch):
+    """Consuming a marker *is* a briefing plus an extraction. A user who
+    turned briefings off has opted out of those LLM calls."""
+    from mnemo.hooks import session_end
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks",
+        lambda *, vault_root: [{"session_id": "sid-1", "cwd": "/repo"}],
+    )
+    monkeypatch.setattr(
+        session_end,
+        "_spawn_detached_unblock_consumption",
+        lambda: pytest.fail("must not spawn when briefings are disabled"),
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": False}}, tmp_path)
+
+
+def test_session_end_unblock_failure_is_swallowed(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    def _boom(*a, **kw):
+        raise RuntimeError("queue state vanished")
+
+    monkeypatch.setattr("mnemo.core.sessions.detector.pending_unblocks", _boom)
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+
+def test_every_detached_spawn_is_stubbed_by_the_conftest_guard() -> None:
+    """#195: the no-spawn guard stubs spawn functions *by name*, so a newly
+    added one is not covered and runs for real inside the suite.
+
+    That is how `_spawn_detached_unblock_consumption` slipped through and left
+    a real `mnemo sessions --consume-unblocks` child running on the Windows
+    runner, which hung the job mid-suite (1926 of ~2800 tests in, then
+    KeyboardInterrupt in subprocess.py). 2026-09-02 the same class of leak left
+    46 orphan autopilot tuners alive and the machine unusable.
+
+    Asserting the *set* rather than each name means the next spawn added to
+    this module fails here instead of on a runner.
+    """
+    import ast
+    from pathlib import Path
+
+    hook = Path(__file__).resolve().parents[2] / "src" / "mnemo" / "hooks" / "session_end.py"
+    tree = ast.parse(hook.read_text(encoding="utf-8"))
+    spawners = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("_spawn_detached")
+    }
+
+    conftest = (Path(__file__).resolve().parents[1] / "conftest.py").read_text(encoding="utf-8")
+    unstubbed = {name for name in spawners if f"session_end.{name}" not in conftest}
+
+    assert not unstubbed, (
+        f"session_end spawn(s) not stubbed by the no-spawn guard: {sorted(unstubbed)}. "
+        "Add them to _no_real_detached_jobs in tests/conftest.py or the suite will "
+        "launch real detached processes."
+    )

@@ -63,6 +63,7 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     monkeypatch.setattr("mnemo.autopilot.core.scheduler.run_detached", _fake_run_detached, raising=False)
     monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_extraction", lambda *a, **k: None)
     monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_briefing", lambda *a, **k: None)
+    monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_unblock_consumption", lambda *a, **k: None)
 
 
 @pytest.fixture
