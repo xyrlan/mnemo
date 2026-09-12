@@ -292,11 +292,11 @@ def classify(vault_root: Path) -> list[Rewrite]:
         live = _live_for(proposal, vault_root)
         if not live.is_file():
             continue
-        try:
-            live_text = live.read_text(encoding="utf-8", errors="replace")
-            prop_text = proposal.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        # Deliberately unguarded — see the note in the shipped module. Swallowing
+        # OSError here makes an unreadable proposal vanish from the plan with no
+        # signal, which is the one failure this command must not have.
+        live_text = live.read_text(encoding="utf-8", errors="replace")
+        prop_text = proposal.read_text(encoding="utf-8", errors="replace")
         kind, keep_ratio, inserted, dropped = _classify_bodies(
             _split_body(live_text), _split_body(prop_text)
         )
@@ -351,7 +351,30 @@ def test_replaced_middle_line_classifies_as_mixed(tmp_vault: Path):
 
     assert r.kind == "mixed"
     assert 0.0 < r.keep_ratio < 1.0
+    # A ``replace`` region counts on BOTH sides: one line left, one arrived.
+    # Pinned so a later change to the opcode accounting cannot quietly turn
+    # "1 line changed" into "+1" or "-1" alone.
     assert r.dropped_lines == 1
+    assert r.inserted_lines == 1
+
+
+def test_identical_body_is_insert_only_with_nothing_inserted(tmp_vault: Path):
+    """A no-op proposal is safe to merge — and must report that it adds nothing.
+
+    ``insert_only`` is ``changed <= {"insert"}``, a subset test, so an empty
+    opcode-change set qualifies. That is correct (merging a no-op loses
+    nothing), but it means ``--apply-safe`` will sweep such a proposal up, so
+    the counts it reports have to be honest. Theoretical on the real vault
+    today: all 35 staged rewrites differ substantively.
+    """
+    _pair(tmp_vault, "a__same", "one\ntwo\n", "one\ntwo\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "insert_only"
+    assert r.keep_ratio == 1.0
+    assert r.inserted_lines == 0
+    assert r.dropped_lines == 0
 
 
 def test_disjoint_body_classifies_as_full_rewrite(tmp_vault: Path):
@@ -1245,6 +1268,12 @@ def _print_plan(rewrites: list) -> None:
         for r in undecided:
             kind = "full rewrite" if r.kind == "full_rewrite" else "mixed"
             flag = "  ⚠ live rule fully superseded" if r.kind == "full_rewrite" else ""
+            # Deliberately prints keep_ratio, NOT inserted_lines/dropped_lines.
+            # A ``replace`` region counts on both sides, so one changed line
+            # reads as "+1 -1" and looks like two lines of churn. The safe
+            # bucket above is insert-only by construction (no replace opcodes),
+            # so its ``+N`` is honest. If a future ``--show`` surfaces these
+            # counts for mixed/full_rewrite, label them "changed", not "+/-".
             print(f"    {r.key:<45} {kind:<13} keeps {r.keep_ratio:.0%}{flag}")
         print()
     print("(dry-run — `mnemo rewrites --apply-safe` merges the safe set; "

@@ -25,7 +25,14 @@ def _split_body(text: str) -> str:
 
 
 def _live_for(proposal: Path, vault_root: Path) -> Path:
-    """``shared/_inbox/<type>/<slug>.proposed.md`` → ``shared/<type>/<slug>.md``."""
+    """``shared/_inbox/<type>/<slug>.proposed.md`` → ``shared/<type>/<slug>.md``.
+
+    Assumes the real layout: exactly one directory level under ``_inbox``, whose
+    name is the page type. The caller walks with ``rglob``, so a proposal nested
+    deeper would resolve its type to the wrong directory name and find no live
+    file — it is then skipped rather than mis-paired. If sub-namespaced inbox
+    folders ever land, this is the function that has to learn about them.
+    """
     page_type = proposal.parent.name
     slug = proposal.name[: -len(PROPOSED_SUFFIX)]
     return vault_root / "shared" / page_type / f"{slug}.md"
@@ -47,6 +54,10 @@ def _classify_bodies(live_body: str, proposal_body: str) -> tuple[Kind, float, i
         for tag, i1, i2, _j1, _j2 in opcodes
         if tag == "equal"
     )
+    # An empty live body keeps 1.0 vacuously: there is no live prose to lose, so
+    # "no live content dropped" holds. That routes a proposal against an empty
+    # or stub live rule to ``insert_only`` rather than ``full_rewrite``, which is
+    # the safe direction — merging cannot discard what was never there.
     keep_ratio = kept_nonblank / live_nonblank if live_nonblank else 1.0
 
     if changed <= {"insert"}:
@@ -81,11 +92,15 @@ def classify(vault_root: Path) -> list[Rewrite]:
         live = _live_for(proposal, vault_root)
         if not live.is_file():
             continue
-        try:
-            live_text = live.read_text(encoding="utf-8", errors="replace")
-            prop_text = proposal.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        # Deliberately unguarded. An earlier draft swallowed OSError and
+        # ``continue``d, which made an unreadable proposal vanish from the
+        # plan with no signal at all — nothing then distinguished "no
+        # rewrites are staged" from "every one of them failed to read." This
+        # command exists to make an invisible backlog visible, so a loud
+        # crash beats a silent gap. An unreadable file among the staged set
+        # is exceptional, not routine.
+        live_text = live.read_text(encoding="utf-8", errors="replace")
+        prop_text = proposal.read_text(encoding="utf-8", errors="replace")
         kind, keep_ratio, inserted, dropped = _classify_bodies(
             _split_body(live_text), _split_body(prop_text)
         )
