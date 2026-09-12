@@ -88,6 +88,23 @@ def _count_today_denials(vault_root: Path) -> int:
         return 0
 
 
+def _blocked_segment(jobs_root: Path | None = None) -> str:
+    """``N esperando`` when background sessions are waiting, else ''.
+
+    Latency-critical: the composer runs this on every render under a 2s
+    timeout, so it reads ``state.json`` only — never ``timeline.jsonl``, and
+    never the unblock detector. Any error degrades to an empty segment: a
+    missing count is cheap, a slow or broken status line is not.
+    """
+    try:
+        from mnemo.core.sessions.jobs import read_sessions
+
+        n = sum(1 for s in read_sessions(jobs_root) if s.is_blocked)
+    except Exception:
+        return ""
+    return f"{n} esperando" if n else ""
+
+
 def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
     """Build per-project activation statusline segments.
 
@@ -178,6 +195,10 @@ def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) 
 
     activation = _activation_segments(vault_root, cwd)
     parts.extend(activation)
+
+    blocked = _blocked_segment()
+    if blocked:
+        parts.append(blocked)
 
     return SEPARATOR.join(parts)
 
