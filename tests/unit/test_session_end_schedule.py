@@ -617,3 +617,72 @@ def test_session_end_sweep_failure_is_swallowed(tmp_path, monkeypatch):
     monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", _boom)
 
     session_end._maybe_sweep_sessions(tmp_path)  # must not raise
+
+
+def test_session_end_consumes_pending_unblocks(tmp_path, monkeypatch):
+    """The reader ``pending_unblocks`` never had (#195).
+
+    Spawned detached rather than run inline: consuming a marker briefs and
+    extracts, both LLM-bound, and the hook must not hold the session's exit.
+    """
+    from mnemo.hooks import session_end
+
+    spawned = []
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks",
+        lambda *, vault_root: [{"session_id": "sid-1", "cwd": "/repo"}],
+    )
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_unblock_consumption", lambda: spawned.append(True)
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+    assert spawned == [True]
+
+
+def test_session_end_does_not_spawn_when_nothing_is_pending(tmp_path, monkeypatch):
+    """The common case. A spawn per session end to find an empty list is a
+    process for nothing; the check is a file read."""
+    from mnemo.hooks import session_end
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks", lambda *, vault_root: []
+    )
+    monkeypatch.setattr(
+        session_end,
+        "_spawn_detached_unblock_consumption",
+        lambda: pytest.fail("must not spawn with nothing pending"),
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+
+def test_session_end_respects_briefings_disabled(tmp_path, monkeypatch):
+    """Consuming a marker *is* a briefing plus an extraction. A user who
+    turned briefings off has opted out of those LLM calls."""
+    from mnemo.hooks import session_end
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks",
+        lambda *, vault_root: [{"session_id": "sid-1", "cwd": "/repo"}],
+    )
+    monkeypatch.setattr(
+        session_end,
+        "_spawn_detached_unblock_consumption",
+        lambda: pytest.fail("must not spawn when briefings are disabled"),
+    )
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": False}}, tmp_path)
+
+
+def test_session_end_unblock_failure_is_swallowed(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    def _boom(*a, **kw):
+        raise RuntimeError("queue state vanished")
+
+    monkeypatch.setattr("mnemo.core.sessions.detector.pending_unblocks", _boom)
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)

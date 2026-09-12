@@ -2,9 +2,20 @@
 
 Answering a blocked session is the highest-signal correction the maintainer
 produces: they are only consulted when it matters. The detector notices the
-``tempo: blocked -> active`` edge and writes down where the answer lives, so
-extraction can treat that transcript region as high signal. It extracts
-nothing itself.
+``tempo: blocked -> active`` edge and writes down which session was answered.
+It extracts nothing itself — :mod:`mnemo.core.sessions.unblocks` redeems the
+markers.
+
+The original note here said the marker existed "so extraction can treat that
+transcript region as high signal". That is not what it turned out to be worth
+(#195). A briefing is built from the whole transcript in one prompt, with no
+notion of an offset or a weight, and its ``## Corrections`` section is already
+quote-verified against real user turns, so emphasis was never the constraint.
+What the marker actually buys is *reach*: ``session_end`` briefs at the
+default ``min_mutations=1``, so a session whose only product is an answer
+mutates nothing and is skipped outright. The edge is the cheap selector for
+the sessions the automatic path throws away — measured over 206 real
+transcripts, 76 have zero mutations but only 15 carry a correction.
 
 It cannot use ``timeline.jsonl``: that file records ``state`` transitions and
 never mentions ``tempo`` (measured on a real dispatch, 2026-09-12). So this

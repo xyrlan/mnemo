@@ -14,6 +14,37 @@ import argparse
 from mnemo.cli.parser import command
 
 
+def _consume_unblocks() -> int:
+    """``mnemo sessions --consume-unblocks`` — redeem the recorded markers.
+
+    The production reader ``detector.pending_unblocks`` never had (#195). The
+    ``session_end`` hook spawns this detached; a maintainer can also run it by
+    hand, which is why it reports rather than staying silent.
+
+    Unscoped, like the sweep that records the markers: an unblocked session is
+    worth learning from wherever it ran.
+    """
+    from mnemo import cli  # late binding, as the queue path does
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.sessions import unblocks
+
+    report = unblocks.consume(cfg_mod.load_config(), vault_root=cli._resolve_vault())
+
+    if not (report.consumed or report.failed or report.skipped):
+        print("no unblocked session waiting to be learned from")
+        return 0
+
+    print(f"consumed: {report.consumed} unblocked session(s)")
+    for entry in report.learned:
+        print(f"learned: {entry.get('slug')} — {entry.get('name')}")
+    if report.skipped:
+        print(f"skipped: {report.skipped} marker(s) with no resolvable transcript")
+    for line in report.errors:
+        # Left pending on purpose: these are retried on the next pass.
+        print(f"deferred: {line}")
+    return 0
+
+
 @command("sessions")
 def cmd_sessions(args: argparse.Namespace) -> int:
     """Print background sessions, blocked first."""
@@ -25,6 +56,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
     from mnemo.core.sessions.jobs import normalize_cwd, read_sessions
     from mnemo.core.sessions.render import render_queue
+
+    if bool(getattr(args, "consume_unblocks", False)):
+        return _consume_unblocks()
 
     # Normalized here too: the stored cwd may be the canonical form while the
     # live one arrives through a worktree symlink. See jobs.normalize_cwd.

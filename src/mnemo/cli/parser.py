@@ -78,6 +78,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sessions.add_argument("--json", action="store_true", help="machine-readable listing")
     sessions.add_argument("--watch", action="store_true", help="redraw every 2s until Ctrl-C (ignored with --json)")
     sessions.add_argument("--all", action="store_true", help="every repo, not just this one")
+    sessions.add_argument(
+        "--consume-unblocks",
+        dest="consume_unblocks",
+        action="store_true",
+        help="learn from every session that was answered while blocked, then print what it taught",
+    )
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")
