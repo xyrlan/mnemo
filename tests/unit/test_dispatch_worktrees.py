@@ -41,12 +41,18 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def _worktrees(repo: Path) -> list[str]:
+def _worktrees(repo: Path) -> list[Path]:
+    """The worktree paths git knows about, as Paths.
+
+    Returned as ``Path`` rather than ``str`` because on Windows ``git worktree
+    list`` prints forward slashes while ``Path`` renders backslashes, so
+    comparing the raw strings fails on a path that is in fact the same one.
+    """
     out = subprocess.run(
         ["git", "worktree", "list"], cwd=repo,
         capture_output=True, text=True, check=True,
     ).stdout
-    return [line.split()[0] for line in out.splitlines() if line.strip()]
+    return [Path(line.split()[0]).resolve() for line in out.splitlines() if line.strip()]
 
 
 # --- the happy path --------------------------------------------------------
@@ -56,7 +62,7 @@ def test_creates_a_worktree_on_its_own_branch(repo: Path) -> None:
     tree = dispatch.ensure_worktree(197, repo_root=repo)
 
     assert tree.is_dir()
-    assert str(tree) in _worktrees(repo)
+    assert tree.resolve() in _worktrees(repo)
 
     head = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=tree,
@@ -70,7 +76,7 @@ def test_each_issue_gets_its_own_tree(repo: Path) -> None:
     b = dispatch.ensure_worktree(198, repo_root=repo)
 
     assert a != b
-    assert {str(a), str(b)} <= set(_worktrees(repo))
+    assert {a.resolve(), b.resolve()} <= set(_worktrees(repo))
 
 
 # --- failure modes ---------------------------------------------------------
@@ -122,7 +128,7 @@ def test_removes_the_worktree_when_the_spawn_fails(repo: Path, monkeypatch) -> N
         dispatch.dispatch_issue(197, repo_root=repo, fetch=_fake_fetch)
 
     assert not dispatch.worktree_path(197, repo_root=repo).exists()
-    assert str(dispatch.worktree_path(197, repo_root=repo)) not in _worktrees(repo)
+    assert dispatch.worktree_path(197, repo_root=repo) not in _worktrees(repo)
 
 
 def test_refuses_an_issue_that_does_not_exist(repo: Path) -> None:
