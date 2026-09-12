@@ -14,6 +14,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     briefing,
     dedup_rules,
     disable_rule,
+    dispatch,
     doctor,
     export,
     extract,

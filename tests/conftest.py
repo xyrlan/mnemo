@@ -64,6 +64,9 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_extraction", lambda *a, **k: None)
     monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_briefing", lambda *a, **k: None)
     monkeypatch.setattr("mnemo.hooks.session_end._spawn_detached_unblock_consumption", lambda *a, **k: None)
+    # `mnemo dispatch` spawns `claude --bg`, which is an LLM session per issue.
+    # Tests that exercise the spawn contract itself patch this back.
+    monkeypatch.setattr("mnemo.core.dispatch.spawn_child", lambda *a, **k: None)
 
 
 @pytest.fixture

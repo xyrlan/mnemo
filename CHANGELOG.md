@@ -5,6 +5,44 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`mnemo dispatch <issue>...` — one background child per issue, one git
+  worktree each.** A real three-issue parallel dispatch produced three merged
+  PRs and a set of constraints that each cost a failed attempt; they are now
+  encoded rather than rediscovered. `--bg` takes the prompt **positionally**
+  and never `-p/--print` (the CLI rejects the pair, and `--print` would never
+  start the interactive session `claude attach` needs, leaving the job
+  unattachable); nothing is wrapped in `timeout`, which is not on the macOS
+  PATH; the pipe-safe reader is `mnemo sessions --json`, not `claude agents`,
+  which requires a TTY.
+
+  One worktree per child is mandatory, not advisory — sharing a tree between
+  parallel sessions has already cost three git accidents in one turn. So a
+  dispatch **refuses rather than reuses** an existing tree, which may hold
+  another session's uncommitted work, and removes anything it created if a
+  later step fails: a stray worktree blocks every later attempt at the same
+  issue, which is worse than never having started. A bad issue number is
+  refused before any git state exists, and one failing issue never strands
+  the others.
+
+  The child is handed **the issue body, a worktree and scope limits — never a
+  preferred solution**. `build_prompt` takes no "approach" parameter by
+  design: the #187 child was given one, refused it, and was right (the
+  instructed change would have reopened #177 at vault scale), so a prompt that
+  prescribes can override a correct refusal. A blocked child is likewise left
+  for a human; the dispatcher can reach one but deliberately does not answer.
+
+### Changed
+
+- **The queue labels a dispatched child by its issue.** Claude Code names a
+  session by inferring a title from the transcript (`nameSource="auto"`),
+  which reads well and drops the identifier being tracked — #193's child came
+  back as "recall harness hit_slugs migration". The number is now recovered
+  from `cwd`, which the dispatcher itself chose (`<repo>-wt-<issue>`) and
+  Claude Code already records, so **no new state file is written or
+  reconciled**. A path the dispatcher did not name is left labelled as before.
+
 ### Fixed
 
 - **The session queue can now tell a blocked session from a dead one.** `tempo`
