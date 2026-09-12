@@ -61,6 +61,32 @@ detector, it does not record the edge.
 Because hand-typed `mnemo sessions` leaves no record, the `session_end`-only
 rate is reported as a **floor**.
 
+## Sample, and what it can and cannot support
+
+This matters more than the headline number, so it comes first.
+
+| | edges |
+| --- | --- |
+| total reconstructed | 126 |
+| **before** PR #191 merged (`2026-09-12T21:30Z`) | **123** |
+| **after** PR #191 merged | **3** |
+
+PR #191 is what gave `session_end` a sweep at all. Before it, `detector.sweep`
+had one caller (`mnemo sessions`, by hand), so a 0% catch rate over those 123
+edges is **trivially true and proves nothing about today's triggers**. Quoting
+"0 of 126" as the coverage of the current design would be wrong.
+
+The honest empirical statement is therefore:
+
+> **Post-#191 sample: 3 edges, 0 caught. That is far too thin to quantify a
+> miss rate.**
+
+What carries the conclusion instead is a structural argument that does not
+depend on sample size at all (below), plus one directly observed case.
+Everything in the next section describing the pre-#191 corpus is context for
+*how edges behave* (how long sessions stay blocked, how often they occur), not
+evidence about trigger coverage.
+
 ## Results
 
 Corpus: 209 real transcripts, 31 background sessions, 337 recorded
@@ -94,6 +120,26 @@ distance of **~12 days**; the closest one ever recorded is 43s, still outside
 the window. Only 2 of the 7 days carrying edges had any `session_end` firing
 at all.
 
+### The sample-independent argument
+
+The one claim here that does **not** rest on how many edges were collected,
+because it is arithmetic on each edge's own timing:
+
+```
+126 edges
+107  provably cannot be caught by their own session's end
+ 19  are the session's final edge (own end could land in-window in principle)
+```
+
+For an edge to be caught by its *own* session ending, that session must stop
+within 10s of being answered — but it was answered precisely so it could carry
+on working, so this is the pathological case, not the normal one. For the other
+107 the session demonstrably kept going well past the window.
+
+This holds for every edge in the corpus regardless of era, and would hold for
+edges not yet recorded. It is why the thin post-#191 sample does not leave the
+question open.
+
 ### Root cause: the trigger structurally excludes itself
 
 `session_end` fires when a session *stops* — strictly after every edge that
@@ -117,7 +163,32 @@ consumer both in place, holds **1 marker across its entire history** against
 edges and recorded none. Two independent methods — transcript reconstruction
 and the detector's own live state — agree.
 
-### The one marker in history, and what caught it
+### The natural experiment: 3/3 caught by a 3s poll, 0/3 by session_end
+
+While this measurement was being written, a second Claude session happened to
+be running a hand-rolled `mnemo sessions --all --json` loop on a 3-second sleep
+(started 19:43:35 local, still alive 12m later). In that window:
+
+| | caught |
+| --- | --- |
+| the 3s poll loop | **3 of 3** edges |
+| `session_end` | **0 of 3** (it did not fire once — zero briefings written) |
+
+Same detector code, same machine, same edges, overlapping in time. The only
+variable is whether anything sampled `tempo` while the edge was up. This is a
+controlled comparison rather than an inference, and it is the strongest single
+piece of evidence in this document:
+
+- the detector is **correct** — it records reliably when sampled often enough;
+- the shipped triggers **do not sample often enough** — in 12 minutes carrying
+  3 real edges, `session_end` fired zero times;
+- the fix therefore is not in `detector.sweep` but in what drives it.
+
+Before this window the state file held 1 marker in its entire history; it now
+holds 3, all from these 12 minutes, all caught by an accidental loop that is
+not part of the product.
+
+### The first marker, and what caught it
 
 That single marker was written **during this measurement** (`9293fe7b`,
 `22:49:08Z`, the #200 child answered via `SendMessage`). It is worth being
@@ -137,12 +208,23 @@ often enough, and confirms that nothing in the shipped product does.
 
 ## Verdict
 
-**The current triggers are not sufficient in practice.** The measured floor is
-0/124, the ceiling under absurdly generous timing is 18%, the detector has
-written exactly 1 marker in its lifetime, and that one was caught by an
-accidental polling loop rather than by either shipped trigger. The cause is
-structural rather than statistical: the only automatic trigger cannot observe
-the session it fires for.
+**The current triggers are not sufficient** — but the confidence comes from the
+structure, not from a rate, and the rate should not be quoted.
+
+What the evidence actually supports:
+
+- **Not** "0 of 126 edges are caught by the current design". 123 of those 126
+  predate the sweep existing. The post-#191 sample is **3 edges, 0 caught** —
+  too thin to quantify anything.
+- **Yes** "107 of 126 edges provably cannot be caught by their own session's
+  end", by arithmetic on each edge's timing, independent of era or sample size.
+- **Yes** "in a 12-minute window carrying 3 real edges, an ad-hoc 3s poll loop
+  caught 3 of 3 and `session_end` fired zero times" — a controlled comparison
+  on the same code and machine, and the only catches in the detector's history.
+
+The cause is structural rather than statistical: the only automatic trigger
+fires after the session it would need to observe. That is why 3 edges are
+enough to act on and 123 more would not have added confidence.
 
 This does **not** revive option 3. Option 3's justification was not racing the
 edge, and #199 already established that the consumer does not race — it

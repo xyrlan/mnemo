@@ -55,6 +55,14 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+#: When PR #191 gave ``session_end`` a sweep. Before this, ``detector.sweep``
+#: had exactly one caller (``mnemo sessions``, typed by hand), so edges from
+#: the earlier era were never catchable by the hook and a 0% rate over them is
+#: trivially true. Reported as a separate era rather than averaged in: a single
+#: headline percentage over both regimes would overstate what is known about
+#: the design shipped today.
+PR_191_MERGED = datetime(2026, 9, 12, 21, 30, 41, tzinfo=timezone.utc)
+
 #: How long the edge stays observable after the maintainer's reply lands.
 #: Measured at ~10s on a real dispatch (2026-09-12): a session that is
 #: answered and then asks a follow-up is back at ``blocked`` within seconds.
@@ -251,6 +259,46 @@ def self_exclusion_check(sessions: dict[str, Path]) -> dict:
     }
 
 
+def own_end_check(sessions: dict[str, Path]) -> dict:
+    """How many edges their *own* session's end could not possibly have caught.
+
+    The sample-independent half of the argument: for a session to catch its own
+    edge it must stop within ``EDGE_WINDOW_SECONDS`` of being answered, but it
+    was answered in order to keep working. Every edge that is not the session's
+    last one is provably out of reach, by arithmetic on that session's own
+    timing — no trigger data involved, so this holds for edges not yet recorded
+    and does not depend on how many were collected.
+    """
+    unreachable = 0
+    final = 0
+    for path in sessions.values():
+        edges = read_edges(path)
+        if not edges:
+            continue
+        last = max(e["answered_at"] for e in edges).timestamp()
+        for edge in edges:
+            if edge["answered_at"].timestamp() + EDGE_WINDOW_SECONDS < last:
+                unreachable += 1
+            else:
+                final += 1
+    return {
+        "cannot_be_caught_by_own_session_end": unreachable,
+        "is_sessions_final_edge": final,
+    }
+
+
+def split_by_era(edges: list[dict]) -> dict:
+    """Edges before vs. after ``session_end`` gained a sweep (PR #191).
+
+    A catch rate over the pre-#191 edges says nothing about the design shipped
+    today, because the hook did not sweep then. Keeping the eras apart is what
+    stops the headline from overstating the evidence.
+    """
+    before = [e for e in edges if e["answered_at"] < PR_191_MERGED]
+    after = [e for e in edges if e["answered_at"] >= PR_191_MERGED]
+    return {"before_pr_191": before, "after_pr_191": after}
+
+
 def classify(edges: list[dict], triggers: list[datetime]) -> dict:
     """Split *edges* into caught and missed, given when sweeps fired.
 
@@ -301,6 +349,15 @@ def main() -> int:
 
     total = classify(all_edges, triggers)
     structural = self_exclusion_check(sessions)
+    own_end = own_end_check(sessions)
+    eras = split_by_era(all_edges)
+    era_stats = {
+        name: {
+            "edges": len(rows),
+            "caught": len(classify(rows, triggers)["caught"]),
+        }
+        for name, rows in eras.items()
+    }
     sensitivity = {}
     global EDGE_WINDOW_SECONDS
     real_window = EDGE_WINDOW_SECONDS
@@ -321,6 +378,8 @@ def main() -> int:
         "edges_requiring_a_foreign_session_end":
             structural["edges_requiring_a_foreign_session_end"],
         "markers_actually_on_disk": len(recorded),
+        "by_era": era_stats,
+        "own_end_check": own_end,
     }
 
     if args.json:
@@ -339,11 +398,22 @@ def main() -> int:
     print(f"real blocked->active edges:     {summary['edges_total']}")
     print(f"session_end firings on record:  {summary['session_end_triggers']}")
     print()
-    print(f"caught by session_end:          {summary['edges_caught_by_session_end']}")
-    print(f"missed entirely:                {summary['edges_missed']}")
-    if all_edges:
-        rate = 100.0 * summary["edges_caught_by_session_end"] / summary["edges_total"]
-        print(f"caught rate (floor):            {rate:.1f}%")
+    print("BY ERA -- only the post-#191 rows say anything about today's design:")
+    print(f"  before PR #191 (no sweep existed): "
+          f"{era_stats['before_pr_191']['edges']:3d} edges, "
+          f"{era_stats['before_pr_191']['caught']} caught  <- proves nothing")
+    print(f"  after  PR #191 (sweep is wired):   "
+          f"{era_stats['after_pr_191']['edges']:3d} edges, "
+          f"{era_stats['after_pr_191']['caught']} caught  <- too thin for a rate")
+    print()
+    print(f"caught by session_end (all eras): {summary['edges_caught_by_session_end']}"
+          f" / {summary['edges_total']}   (do not quote as coverage)")
+    print()
+    print("sample-independent check (arithmetic on each edge's own timing):")
+    print(f"  cannot be caught by their OWN session_end: "
+          f"{own_end['cannot_be_caught_by_own_session_end']}")
+    print(f"  are the session's final edge:              "
+          f"{own_end['is_sessions_final_edge']}")
     print()
     print("window sensitivity (is 0 an artefact of the 10s window?):")
     for window, hits in sensitivity.items():
