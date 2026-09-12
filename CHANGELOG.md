@@ -5,6 +5,35 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`mnemo rewrites` accepts the `_inbox` backlog, and accepting now sticks.**
+  The extractor stages a rewrite of a hand-edited rule as a `.proposed.md`
+  sibling, and promotion was a manual `mv` that never advanced
+  `written_hash` — so every later run compared the live file against a stale
+  hash, concluded "user edited", and re-proposed the same rewrite over the
+  unread draft. All 35 staged rewrites on the real vault had drifted this
+  way, some since May. Meanwhile `shared/_inbox/` is excluded from every
+  consumer surface, so recall served the un-updated rule: one said
+  `MARKETPLACE_ENABLED = false` when it had been `true` since 24/08, another
+  reported a Stripe webhook gap closed on 2026-08-11 as still open.
+
+  The new command classifies each rewrite by what it does to the live body —
+  insert-only (11 of 35), mixed (18), or a full rewrite of a superseded rule
+  (6) — merges the insert-only set with `--apply-safe`, and reconciles
+  `written_hash` so an accepted rule stops re-proposing. Frontmatter is
+  merged per key rather than taken wholesale: `sources[]` is normalized and
+  unioned (proposal-wins dropped a source in 3 of 11 cases), `description`
+  comes from the proposal (live ones were factually stale), `stability` stays
+  with the live rule (a proposal flipping it to `evolving` would silently
+  hide the rule from recall), and a staged page's `needs-review` marker is
+  never copied onto a reviewed rule. Every apply archives pristine originals
+  and the consumed proposal to `shared/_archive/rewrites-<run_id>/` with
+  `mnemo rewrites --undo <run_id>`, holds a vault lock so two runs cannot
+  clobber each other's ledger writes, and flushes the manifest per rewrite so
+  a crash mid-batch leaves the completed work recoverable. The vault is not a
+  git repository, so this is the only recovery path there is.
+
 ### Changed
 
 - **CI and the release build now run the CLI through a pipe.** Every check
