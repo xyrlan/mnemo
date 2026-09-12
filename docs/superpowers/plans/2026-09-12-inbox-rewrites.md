@@ -1,0 +1,2135 @@
+# `_inbox` Rewrites Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Drain the 35 staged `.proposed.md` rewrites in `shared/_inbox/` by classifying them, auto-merging the provably-lossless ones, and reconciling `written_hash` so the extractor stops re-proposing the same rewrite forever.
+
+**Architecture:** Three pure-ish core modules (`classify`, `merge`, `apply`) under `src/mnemo/core/rewrites/`, plus one CLI command `mnemo rewrites`. `classify` diffs each proposal against its live rule with `difflib` and labels it `insert_only` / `mixed` / `full_rewrite`. `merge` rebuilds frontmatter with per-key policies (union `sources[]`, proposal wins on `description`, live wins on `activates_on`) and takes the proposal body. `apply` archives pristine originals to `shared/_archive/rewrites-<run_id>/` with a `manifest.json` for `undo`, writes the merged rule, deletes the `.proposed.md`, and — the step that stops the regeneration loop — sets `entry.written_hash = content_hash(merged)` in `.mnemo/extraction-state.json`.
+
+**Tech Stack:** Python 3.11+, stdlib only (`difflib`, `dataclasses`, `pathlib`, `re`, `json`), pytest.
+
+**Spec:** `docs/superpowers/specs/2026-09-12-inbox-rewrites-design.md`
+
+**Baseline to hold:** `PYTHONPATH=src python3 -m pytest -q` → 2594 passed, 2 skipped, 8 deselected (measured 2026-09-12).
+
+**Decisions already made (do not re-litigate):**
+- The 6 `full_rewrite` proposals do NOT auto-apply. `--apply-safe` covers `insert_only` only.
+- No interactive per-rule TUI. Printed plan + `--show` / `--accept` / `--reject` flags, mirroring `dedup-rules` / `reclassify`.
+- Vault-wide `written_hash` drift from the slug-stamp migration is out of scope (separate issue, Task 9).
+
+---
+
+## File Structure
+
+| Path | Responsibility |
+|---|---|
+| `src/mnemo/core/rewrites/__init__.py` | Package marker; re-exports `classify`, `plan`, `apply`, `undo` for the CLI. |
+| `src/mnemo/core/rewrites/types.py` | `Rewrite`, `ApplyPlan`, `ApplyReport` dataclasses. Separate module so `classify` and `apply` can both import them without a cycle (same reason `reclassify_types.py` exists). |
+| `src/mnemo/core/rewrites/classify.py` | Read proposal + live, diff bodies, label `kind`, compute `keep_ratio`. No writes. |
+| `src/mnemo/core/rewrites/merge.py` | Build merged page text: frontmatter per-key policy + proposal body. No I/O. |
+| `src/mnemo/core/rewrites/apply.py` | Archive, write, delete proposal, reconcile ledger, `undo`. All the I/O. |
+| `src/mnemo/cli/commands/rewrites.py` | `@command("rewrites")` — print plan, `--apply-safe`, `--show`, `--accept`, `--reject`, `--undo`. |
+| `tests/unit/test_rewrites_classify.py` | Classification boundaries. |
+| `tests/unit/test_rewrites_merge.py` | Frontmatter policy + body preservation + idempotence. |
+| `tests/unit/test_rewrites_apply.py` | Ledger reconciliation (the anti-regeneration test), archive/undo, guard. |
+| `tests/unit/test_cli_rewrites.py` | Registration, flag parsing, printed output. |
+
+Modified: `src/mnemo/cli/parser.py` (subparser + `ADVANCED_COMMANDS`), `src/mnemo/cli/commands/__init__.py` (import for `@command` registration), `CHANGELOG.md`.
+
+---
+
+## Task 1: Types
+
+**Files:**
+- Create: `src/mnemo/core/rewrites/__init__.py`
+- Create: `src/mnemo/core/rewrites/types.py`
+- Test: `tests/unit/test_rewrites_classify.py` (first test lands in Task 2; this task has no test of its own — it is pure data declaration with no behavior)
+
+- [ ] **Step 1: Create the package marker**
+
+```python
+# src/mnemo/core/rewrites/__init__.py
+"""Staged `.proposed.md` rewrite reconciliation (#159).
+
+``shared/_inbox/`` accumulates ``.proposed.md`` rewrites of live rules. They are
+excluded from every consumer surface by ``filters.is_consumer_visible``, so recall
+serves the un-updated live rule instead — and the extractor re-proposes the same
+rewrite on every run because accept was a manual ``mv`` that never reconciled
+``entry.written_hash``.
+
+This package classifies each rewrite, merges the safe ones, and advances the
+ledger so an accepted rule stops re-proposing.
+"""
+from __future__ import annotations
+```
+
+- [ ] **Step 2: Write the dataclasses**
+
+```python
+# src/mnemo/core/rewrites/types.py
+"""Dataclasses shared by the rewrites halves.
+
+``classify`` (planning) and ``apply`` (execution) both need these, and importing
+either from the other would be circular — same split as ``reclassify_types.py``.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, Optional
+
+#: Body-diff classification of a staged rewrite.
+#:
+#: ``insert_only`` — every non-equal opcode is an insert, so the proposal body is
+#: a superset of the live body and merging drops nothing. Auto-mergeable.
+#: ``full_rewrite`` — the proposal preserves none of the live body. The live rule
+#: is superseded (measured: `MARKETPLACE_ENABLED` reads false when it is true).
+#: ``mixed`` — anything between. Reworded prose interleaved with new facts.
+Kind = Literal["insert_only", "mixed", "full_rewrite"]
+
+Action = Literal["merge", "replace", "skip"]
+
+
+@dataclass(frozen=True)
+class Rewrite:
+    proposal: Path
+    live: Path
+    #: ``"<type>/<slug>"`` — the ``.mnemo/extraction-state.json`` entry key.
+    key: str
+    kind: Kind
+    #: Fraction of live non-blank body lines the proposal preserves, 0.0–1.0.
+    keep_ratio: float
+    inserted_lines: int
+    dropped_lines: int
+
+
+@dataclass
+class ApplyPlan:
+    run_id: str
+    entries: list[tuple[Rewrite, Action]] = field(default_factory=list)
+
+
+@dataclass
+class ApplyReport:
+    merged: int = 0
+    replaced: int = 0
+    archive_dir: Optional[Path] = None
+    notes: list = field(default_factory=list)
+    #: Rewrites that could not be applied: ``[{"key", "reason"}, ...]``.
+    #: A no-op apply must never be silent, so the CLI prints these.
+    #:
+    #: There is deliberately no ``skipped_count`` beside this list. An earlier
+    #: draft had both, and they disagreed by construction: only the
+    #: "skipped by plan" branch bumped the counter, while a read failure
+    #: appended here without touching it. One fact, one field — callers use
+    #: ``len(report.skipped)``.
+    skipped: list = field(default_factory=list)
+```
+
+- [ ] **Step 3: Verify the module imports**
+
+Run: `PYTHONPATH=src python3 -c "from mnemo.core.rewrites.types import Rewrite, ApplyPlan, ApplyReport; print('ok')"`
+Expected: `ok`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/mnemo/core/rewrites/__init__.py src/mnemo/core/rewrites/types.py
+git commit -m "feat(rewrites): dataclasses for staged rewrite reconciliation (#159)"
+```
+
+---
+
+## Task 2: Classify — insert-only detection
+
+**Files:**
+- Create: `src/mnemo/core/rewrites/classify.py`
+- Test: `tests/unit/test_rewrites_classify.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_rewrites_classify.py
+"""Classification of staged ``.proposed.md`` rewrites (#159).
+
+The real vault's 35 proposals split 11 / 18 / 6 across insert_only / mixed /
+full_rewrite. One accept semantic cannot serve all three: a plain ``mv``
+discards live content in the 11, and a plain append makes the 6 assert both
+``MARKETPLACE_ENABLED = false`` and ``= true``.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from mnemo.core.rewrites import classify as C
+
+
+def _write(p: Path, fm: str, body: str) -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\n{fm}\n---\n\n{body}", encoding="utf-8")
+    return p
+
+
+def _pair(vault: Path, slug: str, live_body: str, prop_body: str, *, page_type: str = "project"):
+    fm = f"name: n\nslug: {slug}\ntype: {page_type}\nsources:\n  - bots/a/memory/{slug}.md"
+    _write(vault / "shared" / page_type / f"{slug}.md", fm, live_body)
+    _write(vault / "shared" / "_inbox" / page_type / f"{slug}.proposed.md", fm, prop_body)
+
+
+def test_appended_lines_classify_as_insert_only(tmp_vault: Path):
+    _pair(
+        tmp_vault,
+        "a__x",
+        "line one\nline two\n",
+        "line one\nline two\nline three\n",
+    )
+
+    rewrites = C.classify(tmp_vault)
+
+    assert len(rewrites) == 1
+    r = rewrites[0]
+    assert r.kind == "insert_only"
+    assert r.keep_ratio == 1.0
+    assert r.inserted_lines == 1
+    assert r.dropped_lines == 0
+    assert r.key == "project/a__x"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_classify.py::test_appended_lines_classify_as_insert_only -v`
+Expected: FAIL — `ImportError: cannot import name 'classify' from 'mnemo.core.rewrites'`
+
+(The test does `from mnemo.core.rewrites import classify as C`. Importing a *name
+from a package* that does not yet exist raises `ImportError: cannot import name`,
+not `ModuleNotFoundError` — the latter is what `import mnemo.core.rewrites.classify`
+would raise. If you see the `ImportError`, TDD is working correctly.)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# src/mnemo/core/rewrites/classify.py
+"""Diff each staged ``.proposed.md`` against its live rule and label it.
+
+Frontmatter is excluded from the body diff on purpose: every proposal restamps
+``extraction_run`` and ``promoted_at``, so including frontmatter would make all
+35 look like rewrites. The interesting question is what happens to the prose.
+"""
+from __future__ import annotations
+
+import difflib
+from pathlib import Path
+
+from mnemo.core.filters import INBOX_DIR, is_proposed_sibling
+from mnemo.core.rewrites.types import Kind, Rewrite
+
+PROPOSED_SUFFIX = ".proposed.md"
+
+
+def _split_body(text: str) -> str:
+    """Return everything after the closing frontmatter ``---``."""
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end != -1:
+            return text[end + 5:]
+    return text
+
+
+def _live_for(proposal: Path, vault_root: Path) -> Path:
+    """``shared/_inbox/<type>/<slug>.proposed.md`` → ``shared/<type>/<slug>.md``."""
+    page_type = proposal.parent.name
+    slug = proposal.name[: -len(PROPOSED_SUFFIX)]
+    return vault_root / "shared" / page_type / f"{slug}.md"
+
+
+def _classify_bodies(live_body: str, proposal_body: str) -> tuple[Kind, float, int, int]:
+    live = live_body.splitlines()
+    prop = proposal_body.splitlines()
+    matcher = difflib.SequenceMatcher(None, live, prop, autojunk=False)
+    opcodes = matcher.get_opcodes()
+
+    changed = {tag for tag, *_ in opcodes if tag != "equal"}
+    inserted = sum(j2 - j1 for tag, _i1, _i2, j1, j2 in opcodes if tag in ("insert", "replace"))
+    dropped = sum(i2 - i1 for tag, i1, i2, _j1, _j2 in opcodes if tag in ("delete", "replace"))
+
+    live_nonblank = len([ln for ln in live if ln.strip()])
+    kept_nonblank = sum(
+        len([ln for ln in live[i1:i2] if ln.strip()])
+        for tag, i1, i2, _j1, _j2 in opcodes
+        if tag == "equal"
+    )
+    keep_ratio = kept_nonblank / live_nonblank if live_nonblank else 1.0
+
+    if changed <= {"insert"}:
+        kind: Kind = "insert_only"
+    elif keep_ratio == 0.0:
+        kind = "full_rewrite"
+    else:
+        kind = "mixed"
+    return kind, keep_ratio, inserted, dropped
+
+
+def classify(vault_root: Path) -> list[Rewrite]:
+    """Every staged rewrite under ``shared/_inbox/`` that has a live counterpart.
+
+    A proposal with no live rule is skipped: there is nothing to merge into, and
+    such a file belongs to the plain-staged-page path, not here.
+    """
+    vault_root = Path(vault_root)
+    inbox = vault_root / "shared" / INBOX_DIR
+    if not inbox.is_dir():
+        return []
+
+    out: list[Rewrite] = []
+    for proposal in sorted(inbox.rglob("*.md")):
+        if not is_proposed_sibling(proposal):
+            continue
+        if not proposal.name.endswith(PROPOSED_SUFFIX):
+            # ``.update-proposed.md`` has a different provenance (an _inbox
+            # target that vanished while the promoted file survived) and no
+            # reliable live counterpart. Left for a follow-up.
+            continue
+        live = _live_for(proposal, vault_root)
+        if not live.is_file():
+            continue
+        # Deliberately unguarded — see the note in the shipped module. Swallowing
+        # OSError here makes an unreadable proposal vanish from the plan with no
+        # signal, which is the one failure this command must not have.
+        live_text = live.read_text(encoding="utf-8", errors="replace")
+        prop_text = proposal.read_text(encoding="utf-8", errors="replace")
+        kind, keep_ratio, inserted, dropped = _classify_bodies(
+            _split_body(live_text), _split_body(prop_text)
+        )
+        page_type = proposal.parent.name
+        slug = proposal.name[: -len(PROPOSED_SUFFIX)]
+        out.append(Rewrite(
+            proposal=proposal,
+            live=live,
+            key=f"{page_type}/{slug}",
+            kind=kind,
+            keep_ratio=keep_ratio,
+            inserted_lines=inserted,
+            dropped_lines=dropped,
+        ))
+    return out
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_classify.py::test_appended_lines_classify_as_insert_only -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mnemo/core/rewrites/classify.py tests/unit/test_rewrites_classify.py
+git commit -m "feat(rewrites): classify insert-only staged rewrites (#159)"
+```
+
+---
+
+## Task 3: Classify — mixed, full_rewrite, and exclusions
+
+**Files:**
+- Modify: `tests/unit/test_rewrites_classify.py` (append tests)
+- Modify: `src/mnemo/core/rewrites/classify.py` only if a test fails
+
+- [ ] **Step 1: Write the failing tests**
+
+First add the two imports these tests need to the top of
+`tests/unit/test_rewrites_classify.py`, beside the existing ones — the file
+Task 2 created imports only `annotations`, `Path`, and `classify as C`, and
+`test_unreadable_proposal_raises_rather_than_vanishing` below uses both bare:
+
+```python
+import os
+
+import pytest
+```
+
+Then append to `tests/unit/test_rewrites_classify.py`:
+
+```python
+def test_replaced_middle_line_classifies_as_mixed(tmp_vault: Path):
+    _pair(
+        tmp_vault,
+        "a__y",
+        "keep one\nOLD middle\nkeep two\n",
+        "keep one\nNEW middle\nkeep two\n",
+    )
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "mixed"
+    assert 0.0 < r.keep_ratio < 1.0
+    # A ``replace`` region counts on BOTH sides: one line left, one arrived.
+    # Pinned so a later change to the opcode accounting cannot quietly turn
+    # "1 line changed" into "+1" or "-1" alone.
+    assert r.dropped_lines == 1
+    assert r.inserted_lines == 1
+
+
+def test_identical_body_is_insert_only_with_nothing_inserted(tmp_vault: Path):
+    """A no-op proposal is safe to merge — and must report that it adds nothing.
+
+    ``insert_only`` is ``changed <= {"insert"}``, a subset test, so an empty
+    opcode-change set qualifies. That is correct (merging a no-op loses
+    nothing), but it means ``--apply-safe`` will sweep such a proposal up, so
+    the counts it reports have to be honest. Theoretical on the real vault
+    today: all 35 staged rewrites differ substantively.
+    """
+    _pair(tmp_vault, "a__same", "one\ntwo\n", "one\ntwo\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "insert_only"
+    assert r.keep_ratio == 1.0
+    assert r.inserted_lines == 0
+    assert r.dropped_lines == 0
+
+
+def test_disjoint_body_classifies_as_full_rewrite(tmp_vault: Path):
+    _pair(
+        tmp_vault,
+        "a__z",
+        "MARKETPLACE_ENABLED = false\naba Loja removida\n",
+        "MARKETPLACE_ENABLED = true\nliberada geral\n",
+    )
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "full_rewrite"
+    assert r.keep_ratio == 0.0
+
+
+def test_proposal_without_a_live_rule_is_excluded(tmp_vault: Path):
+    fm = "name: n\nslug: orphan\ntype: project"
+    _write(tmp_vault / "shared" / "_inbox" / "project" / "orphan.proposed.md", fm, "body\n")
+
+    assert C.classify(tmp_vault) == []
+
+
+def test_update_proposed_suffix_is_excluded(tmp_vault: Path):
+    fm = "name: n\nslug: a__u\ntype: project"
+    _write(tmp_vault / "shared" / "project" / "a__u.md", fm, "body\n")
+    _write(tmp_vault / "shared" / "_inbox" / "project" / "a__u.update-proposed.md", fm, "body2\n")
+
+    assert C.classify(tmp_vault) == []
+
+
+def test_blank_line_only_delta_is_insert_only_and_loses_nothing(tmp_vault: Path):
+    """A blank line IS an inserted line — it just costs no live content.
+
+    ``inserted_lines`` counts lines, blank ones included, so this reports 1.
+    An earlier name claimed "no inserted content" and asserted only
+    ``dropped_lines``, which made the one number the name was about the one
+    number nobody checked. What matters for ``--apply-safe`` is that nothing
+    was dropped.
+    """
+    _pair(tmp_vault, "a__b", "one\ntwo\n", "one\n\ntwo\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "insert_only"
+    assert r.keep_ratio == 1.0
+    assert r.dropped_lines == 0
+    assert r.inserted_lines == 1
+
+
+def test_unreadable_proposal_raises_rather_than_vanishing(tmp_vault: Path):
+    """An unreadable proposal must not drop silently out of the plan.
+
+    ``classify`` deliberately does not guard the reads. A swallowed OSError
+    made nothing distinguish "no rewrites are staged" from "every one of them
+    failed to read" — the one failure mode a command whose purpose is making an
+    invisible backlog visible must not have. Without this test, the next reader
+    of an unguarded read will helpfully add the guard back.
+    """
+    _pair(tmp_vault, "a__locked", "one\n", "one\ntwo\n")
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__locked.proposed.md"
+    os.chmod(prop, 0o000)
+    try:
+        with pytest.raises(OSError):
+            C.classify(tmp_vault)
+    finally:
+        os.chmod(prop, 0o644)
+
+
+def test_partial_deletion_classifies_as_mixed(tmp_vault: Path):
+    """A proposal that only removes lines is never ``insert_only``.
+
+    ``changed == {"delete"}`` fails the ``changed <= {"insert"}`` subset test,
+    so a delete-bearing proposal cannot reach ``--apply-safe``. This is the
+    dominant real shape, not an edge case: 29 of the real vault's 35 staged
+    rewrites delete live content.
+    """
+    _pair(tmp_vault, "a__del", "keep one\ndrop me\nkeep two\n", "keep one\nkeep two\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "mixed"
+    assert r.dropped_lines == 1
+    assert r.inserted_lines == 0
+
+
+def test_total_deletion_classifies_as_full_rewrite(tmp_vault: Path):
+    """Deleting every live line keeps nothing, so it is a full rewrite."""
+    _pair(tmp_vault, "a__wipe", "gone one\ngone two\n", "")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "full_rewrite"
+    assert r.keep_ratio == 0.0
+    assert r.dropped_lines == 2
+    assert r.inserted_lines == 0
+
+
+def test_barely_surviving_body_is_mixed_not_full_rewrite(tmp_vault: Path):
+    """Pins the ``mixed``/``full_rewrite`` boundary as exclusive at zero.
+
+    One surviving line out of twenty is 0.05 and must stay ``mixed``, because
+    ``full_rewrite`` is what licenses ``replace_wholesale`` to discard the live
+    body. A refactor that rounded this to ``keep_ratio < 0.05`` would pass
+    every other test in this file.
+    """
+    live = "".join(f"l{i}\n" for i in range(20))
+    _pair(tmp_vault, "a__thin", live, "l0\nbrand new\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "mixed"
+    assert r.keep_ratio == 0.05
+    assert r.dropped_lines == 19
+
+
+def test_trailing_whitespace_only_change_is_reported_as_full_rewrite(tmp_vault: Path):
+    """Documents a sharp edge: a cosmetic diff can read as ``full_rewrite``.
+
+    Whole-line diffing makes ``"x "`` and ``"x"`` a ``replace``. On a one-line
+    body that leaves zero surviving lines, so the proposal is labeled
+    ``full_rewrite`` — the label that licenses discarding the live body. Pins
+    current behavior rather than blessing it; safe today because
+    ``full_rewrite`` never enters ``--apply-safe``. Normalizing whitespace
+    before the diff is the real fix and belongs in its own change.
+    """
+    _pair(tmp_vault, "a__ws", "line two \n", "line two\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "full_rewrite"
+    assert r.keep_ratio == 0.0
+
+
+def test_classification_covers_every_page_type_under_inbox(tmp_vault: Path):
+    _pair(tmp_vault, "ref-rule", "a\n", "a\nb\n", page_type="reference")
+    _pair(tmp_vault, "fb-rule", "a\n", "a\nb\n", page_type="feedback")
+
+    keys = {r.key for r in C.classify(tmp_vault)}
+
+    assert keys == {"reference/ref-rule", "feedback/fb-rule"}
+```
+
+- [ ] **Step 2: Run the tests**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_classify.py -v`
+Expected: all 7 PASS. The Task 2 implementation already covers these paths; if any fails, fix `classify.py` — do not weaken the test.
+
+**Windows portability, added after CI:** two of these tests provoke an
+unreadable file with `chmod 000`, which does not deny reads to an administrator
+on Windows — the job reported `DID NOT RAISE OSError`. The guarantee is
+platform-independent; only that way of provoking it is not. Both carry:
+
+```python
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="chmod 000 does not deny reads to an administrator on Windows, so the "
+           "fixture cannot create the condition. The guarantee itself is "
+           "platform-independent; only this way of provoking it is not.",
+)
+```
+
+They are `test_unreadable_proposal_raises_rather_than_vanishing` (Task 3) and
+`test_unreadable_proposal_reports_a_message_not_a_traceback` (Task 8). Both
+files need `import sys` alongside `import pytest`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/unit/test_rewrites_classify.py
+git commit -m "test(rewrites): cover mixed, full_rewrite, and excluded proposals (#159)"
+```
+
+---
+
+## Task 4: Merge — frontmatter policy
+
+**Files:**
+- Create: `src/mnemo/core/rewrites/merge.py`
+- Test: `tests/unit/test_rewrites_merge.py`
+
+Per-key policy from the spec (measured on the real vault; counts are `<in the 11 insert_only>` · `<across all 35>`):
+
+| Key | Differs | Policy |
+|---|---|---|
+| `sources[]` | 11/11 · 33/35 | normalize both sides through `vault_relative_source`, then union (live order first) |
+| `description` | 5/11 · 22/35 | proposal wins |
+| `name` | 0/11 · 3/35 | proposal wins |
+| `promoted_at`, `extraction_run`, `extracted_at`, `last_sync` | 11/11 · 35/35 | proposal wins (then `apply` overwrites `written_at`/`last_sync`) |
+| `tags` | 0/11 · 5/35 | union of `filters.topic_tags` from both sides; keep the **live** page's `MANAGED_TAGS` marker |
+| `confidence`, `demoted_from`, `activates_on` | 0/11 · ≤2/35 | live wins |
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_rewrites_merge.py
+"""Frontmatter merge policy for staged rewrites (#159).
+
+Policies are not arbitrary. Measured on the real vault: ``sources[]`` deltas in
+the auto-merge set are purely the ``/Users/xyrlan/mnemo/`` absolute-path prefix
+(#163, fixed v1.3.3) — but 3 of 11 have live=2 → prop=1, so proposal-wins drops
+a source. Live ``description`` values are factually stale ("bloqueia assinante em
+dia" vs "RESOLVIDO 2026-08-11"). And ``tdd-red-green-per-feature`` flips
+``auto-promoted`` → ``needs-review``, which would re-mark a reviewed rule as a
+draft.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from mnemo.core.filters import parse_frontmatter
+from mnemo.core.rewrites import merge as M
+
+
+def test_sources_are_normalized_and_unioned(tmp_vault: Path):
+    live = (
+        "---\nname: n\nslug: s\ntype: project\n"
+        "sources:\n  - bots/a/memory/s.md\n  - bots/a/memory/extra.md\n---\n\nbody\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: project\n"
+        f"sources:\n  - {tmp_vault}/bots/a/memory/s.md\n---\n\nbody\nmore\n"
+    )
+
+    out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
+
+    assert parse_frontmatter(out)["sources"] == [
+        "bots/a/memory/s.md",
+        "bots/a/memory/extra.md",
+    ]
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py::test_sources_are_normalized_and_unioned -v`
+Expected: FAIL — `ImportError: cannot import name 'merge' from 'mnemo.core.rewrites'`
+
+(`from mnemo.core.rewrites import merge as M` imports a name from a package, so the
+error is `ImportError: cannot import name`, not `ModuleNotFoundError`. That is the
+correct RED state.)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# src/mnemo/core/rewrites/merge.py
+"""Build the merged page text for an accepted staged rewrite.
+
+Two named entry points rather than one with a flag, so the call site states which
+semantic it intends — the thing that was previously implicit in a manual ``mv``.
+
+Frontmatter is rebuilt key-by-key from a measured policy (see the plan's Task 4
+table), not taken wholesale from either side. Taking the proposal's frontmatter
+wholesale drops live ``sources[]`` entries and copies a ``needs-review`` marker
+onto a rule a human already reviewed.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+from mnemo.core.extract.inbox.rendering import _yaml_scalar
+from mnemo.core.extract.source_paths import vault_relative_source
+from mnemo.core.filters import MANAGED_TAGS, parse_frontmatter, topic_tags
+
+_FM_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
+
+
+class NotAScalar(TypeError):
+    """:func:`_set_scalar` was handed a nested block instead of a scalar.
+
+    Raised rather than stringifying it, which produced malformed YAML: the
+    parent line became a quoted dict while the original nested lines survived
+    below it.
+    """
+
+
+class NotInsertOnly(ValueError):
+    """:func:`merge_insert_only` was handed a pair that drops live content.
+
+    Raised instead of silently behaving like :func:`replace_wholesale`, which is
+    what the unguarded version did.
+    """
+
+
+class NoLiveFrontmatter(ValueError):
+    """The live page has no ``---`` frontmatter block, so there is nothing to merge into.
+
+    ``dedup_rules._merge_group_inplace`` takes the same posture ("canonical has
+    no frontmatter; skip rather than corrupt"). Without it, ``_build`` starts
+    from an empty frontmatter string, appends the proposal's scalars, and wraps
+    the result in fresh fences — fabricating a rule out of a plain-text file.
+    """
+
+
+#: Keys the proposal is authoritative for.
+_PROPOSAL_WINS = (
+    "name",
+    "description",
+    "promoted_at",
+    "extraction_run",
+    "extracted_at",
+    "last_sync",
+)
+
+#: Keys the live page is authoritative for. ``activates_on`` drives rule
+#: activation and ``demoted_from`` records a reclassify decision; neither is the
+#: extractor's to revise from a session transcript.
+#:
+#: ``stability`` sits here for a sharper reason. ``filters.is_consumer_visible``
+#: treats ``stability: evolving`` as non-visible, and the extraction prompt
+#: (``prompts/templates/few_shot_feedback.py``) shows the model emitting
+#: ``evolving`` whenever a decision reads as still in flux. Proposal-wins would
+#: therefore let one tentative-sounding transcript flip a stable, visible rule
+#: to ``evolving`` and silently drop it from recall, reflex and export — which
+#: is the exact failure #159 exists to fix, reintroduced by the fix for it.
+_LIVE_WINS = ("confidence", "demoted_from", "activates_on", "enforce", "stability")
+
+# The two policies must never overlap: a key in both would make the merge order
+# decide the winner, silently. Convention is not enough when the cost of a wrong
+# key is a corrupted rule.
+assert not set(_PROPOSAL_WINS) & set(_LIVE_WINS), "a key cannot have two policies"
+
+
+def _split(text: str) -> tuple[str, str]:
+    """``(frontmatter_text, body)``. Frontmatter text excludes the ``---`` fences."""
+    m = _FM_RE.match(text)
+    if not m:
+        return "", text
+    return m.group(1), m.group(2)
+
+
+def _rewrite_block(fm_text: str, key: str, lines: list[str]) -> str:
+    """Replace a ``key:`` block with rendered list lines, or append if absent.
+
+    Same surgical approach as ``dedup_rules._rewrite_block``: only the named
+    block is touched so every other key keeps its quoting byte-for-byte.
+    """
+    block_re = re.compile(
+        rf"(?m)^{re.escape(key)}:[ \t]*(?:\[\])?[ \t]*\n(?:[ \t]+-[^\n]*\n?)*",
+    )
+    new_block = f"{key}: []" if not lines else f"{key}:\n" + "\n".join(f"  - {v}" for v in lines)
+    if block_re.search(fm_text):
+        return block_re.sub(lambda _m: new_block + "\n", fm_text, count=1).rstrip() + "\n"
+    return fm_text.rstrip() + "\n" + new_block + "\n"
+
+
+def _set_scalar(fm_text: str, key: str, value: Any) -> str:
+    """Replace a scalar ``key: value`` line, or append it when absent.
+
+    The value is re-rendered through the writer's own ``_yaml_scalar`` rather
+    than interpolated raw. ``parse_frontmatter`` hands back *dequoted* values, so
+    raw interpolation silently un-quotes whatever the writer had quoted: a
+    description of ``#hashtag first`` became ``description: #hashtag first``,
+    which this codebase's own reader tolerates but every standards-compliant
+    YAML parser — Obsidian's included — reads as ``null`` plus a comment.
+    ``_yaml_scalar`` also collapses embedded newlines, which would otherwise
+    close the frontmatter block early or inject a bogus top-level key.
+
+    Refuses a non-scalar outright. The regex matches only the parent ``key:``
+    line, so handing it a dict wrote a stringified dict there and left the
+    original nested lines dangling underneath — malformed YAML that still
+    contained every substring a naive test would look for. No key in
+    ``_PROPOSAL_WINS`` is nested today, but that is one tuple edit away, and
+    silent corruption is the wrong failure mode for a one-line mistake.
+    """
+    if isinstance(value, (dict, list)):
+        raise NotAScalar(
+            f"{key!r} is a {type(value).__name__}; _set_scalar rewrites only the "
+            "parent line and would leave nested lines dangling"
+        )
+    rendered = f"{key}: {_yaml_scalar(value)}"
+    line_re = re.compile(rf"(?m)^{re.escape(key)}:[ \t]*[^\n]*$")
+    if line_re.search(fm_text):
+        return line_re.sub(lambda _m: rendered, fm_text, count=1)
+    return fm_text.rstrip() + "\n" + rendered + "\n"
+
+
+def _merged_sources(live_fm: dict, prop_fm: dict, vault_root: Path) -> list[str]:
+    out: list[str] = []
+    for fm in (live_fm, prop_fm):
+        raw = fm.get("sources") or []
+        if isinstance(raw, str):
+            raw = [raw]
+        for s in raw:
+            if not isinstance(s, str):
+                continue
+            norm = vault_relative_source(s, vault_root)
+            if norm not in out:
+                out.append(norm)
+    return out
+
+
+def _merged_tags(live_fm: dict, prop_fm: dict) -> list[str]:
+    """Live managed marker + union of topic tags (live order first).
+
+    The proposal's topic tags are usually better (`frontend-gotchas`: live
+    ``workflow, testing`` → proposal ``react, testing, ui, css``), but its
+    managed marker is not: a staged page always carries ``needs-review``, and
+    copying that onto a live rule re-marks a reviewed page as a draft.
+    """
+    live_managed = [t for t in (live_fm.get("tags") or []) if t in MANAGED_TAGS]
+    out = list(live_managed)
+    for t in topic_tags(live_fm) + topic_tags(prop_fm):
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
+    if not _FM_RE.match(live_text):
+        # Skip rather than corrupt, exactly as dedup_rules._merge_group_inplace
+        # does. Starting from an empty frontmatter string would append the
+        # proposal's scalars and wrap them in fresh fences, turning a plain-text
+        # or malformed live file into a rule with a fabricated name, description
+        # and sources that never existed on the live side. ``classify`` only
+        # requires the live file to exist, not to have frontmatter, so this is
+        # reachable through the sanctioned pipeline.
+        raise NoLiveFrontmatter("live page has no frontmatter block")
+
+    live_fm_text, _live_body = _split(live_text)
+    _prop_fm_text, prop_body = _split(proposal_text)
+    live_fm = parse_frontmatter(live_text)
+    prop_fm = parse_frontmatter(proposal_text)
+
+    fm_text = live_fm_text
+    for key in _PROPOSAL_WINS:
+        # Scalars only. The original guard excluded lists but let a dict through
+        # to _set_scalar, which cannot rewrite a nested block.
+        if key in prop_fm and not isinstance(prop_fm[key], (list, dict)):
+            fm_text = _set_scalar(fm_text, key, prop_fm[key])
+    # _LIVE_WINS needs no action: fm_text starts as the live frontmatter.
+    #
+    # Both blocks are rewritten only when at least one side actually had the key.
+    # ``_rewrite_block`` appends ``key: []`` for an absent key with no values, so
+    # calling it unconditionally invents a ``tags:`` block when neither page had
+    # one — confirmed on real files (shared/project/clubinho__sprints-github.md
+    # and its staged proposal both lack ``tags:``).
+    if "sources" in live_fm or "sources" in prop_fm:
+        fm_text = _rewrite_block(
+            fm_text, "sources", _merged_sources(live_fm, prop_fm, vault_root)
+        )
+    if "tags" in live_fm or "tags" in prop_fm:
+        fm_text = _rewrite_block(fm_text, "tags", _merged_tags(live_fm, prop_fm))
+
+    return "---\n" + fm_text.rstrip() + "\n---\n" + prop_body
+
+
+def merge_insert_only(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
+    """Merge an ``insert_only`` rewrite.
+
+    The proposal body must be a superset of the live body, so taking it preserves
+    every live line in order. That precondition is now *checked* rather than
+    merely documented: handed a ``mixed`` pair, this used to behave exactly like
+    :func:`replace_wholesale` and drop the live-only lines with no signal. The
+    sanctioned path (``apply._ACTION_FOR_KIND``) never does that, but this is a
+    plain public function and a repair script or REPL call would.
+
+    The check reuses ``classify._classify_bodies`` so "insert only" has one
+    definition in the codebase rather than two that can drift apart.
+    """
+    from mnemo.core.rewrites.classify import _classify_bodies, _split_body
+
+    kind, _keep, _ins, _dropped = _classify_bodies(
+        _split_body(live_text), _split_body(proposal_text)
+    )
+    if kind != "insert_only":
+        raise NotInsertOnly(
+            f"merge_insert_only requires an insert-only pair, got {kind!r}; "
+            "use replace_wholesale if discarding live prose is intended"
+        )
+    return _build(live_text, proposal_text, vault_root=vault_root)
+
+
+def replace_wholesale(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
+    """Take the proposal body for a ``mixed`` or ``full_rewrite`` acceptance.
+
+    Body handling is identical to :func:`merge_insert_only`; the separate name is
+    the point. Here the caller is knowingly discarding live prose, which is why
+    ``apply`` archives the pristine original before writing.
+    """
+    return _build(live_text, proposal_text, vault_root=vault_root)
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py::test_sources_are_normalized_and_unioned -v`
+Expected: PASS
+
+- [ ] **Step 4b: Add the four guard tests**
+
+These came out of Task 4's code review, which found two Critical corruption paths
+and one reachable visibility bug in the code this task specifies. Each pins a
+guard added above, so a later refactor cannot quietly remove one. Append them to
+`tests/unit/test_rewrites_merge.py` (the file needs `import pytest` and
+`is_consumer_visible` added to its `filters` import):
+
+- `test_live_page_without_frontmatter_is_refused` — `NoLiveFrontmatter` from both
+  entry points. Use **insert-only bodies** (proposal appends, drops nothing) so
+  `merge_insert_only`'s precondition passes and execution reaches `_build`; a
+  first draft used disjoint bodies, tripped `NotInsertOnly` first, and proved
+  nothing about frontmatter.
+- `test_scalar_values_are_requoted_for_real_yaml` — a `description` of
+  `#hashtag first` must render as `description: '#hashtag first'` and round-trip.
+- `test_stability_comes_from_the_live_rule` — live `stable` + proposal `evolving`
+  must stay `stable`, and `is_consumer_visible` must stay True.
+- `test_merge_insert_only_refuses_a_pair_that_drops_live_content` —
+  `NotInsertOnly` on a mixed pair, and `replace_wholesale` still drops the
+  live-only line deliberately.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mnemo/core/rewrites/merge.py tests/unit/test_rewrites_merge.py
+git commit -m "feat(rewrites): merge frontmatter with per-key policy (#159)"
+```
+
+---
+
+## Task 5: Merge — remaining policy tests
+
+**Files:**
+- Modify: `tests/unit/test_rewrites_merge.py`
+- Modify: `src/mnemo/core/rewrites/merge.py` only if a test fails
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/unit/test_rewrites_merge.py`:
+
+```python
+def _pair_text(live_fm: str, prop_fm: str, live_body: str = "a\n", prop_body: str = "a\nb\n"):
+    return (
+        f"---\n{live_fm}\n---\n\n{live_body}",
+        f"---\n{prop_fm}\n---\n\n{prop_body}",
+    )
+
+
+def test_description_comes_from_the_proposal(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\ndescription: only 2 of 5 events — bloqueia assinante",
+        "name: n\nslug: s\ntype: project\ndescription: RESOLVIDO 2026-08-11 (issue #285)",
+    )
+
+    out = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+
+    assert parse_frontmatter(out)["description"] == "RESOLVIDO 2026-08-11 (issue #285)"
+
+
+def test_activation_keys_come_from_the_live_rule(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\nactivates_on: git commit\nconfidence: explicit",
+        "name: n\nslug: s\ntype: project\nactivates_on: npm test\nconfidence: inferred",
+    )
+
+    fm = parse_frontmatter(M.merge_insert_only(live, prop, vault_root=tmp_vault))
+
+    assert fm["activates_on"] == "git commit"
+    assert fm["confidence"] == "explicit"
+
+
+def test_managed_tag_marker_is_never_copied_from_the_proposal(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: reference\ntags:\n  - auto-promoted\n  - testing\n  - tdd",
+        "name: n\nslug: s\ntype: reference\ntags:\n  - needs-review\n  - testing\n  - process",
+    )
+
+    tags = parse_frontmatter(M.merge_insert_only(live, prop, vault_root=tmp_vault))["tags"]
+
+    assert "auto-promoted" in tags
+    assert "needs-review" not in tags
+    # Topic tags from both sides survive.
+    assert {"testing", "tdd", "process"} <= set(tags)
+
+
+def test_insert_only_merge_preserves_every_live_body_line(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project",
+        "name: n\nslug: s\ntype: project",
+        live_body="first\nsecond\n",
+        prop_body="first\nsecond\nthird\n",
+    )
+
+    out = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+
+    for line in ("first", "second", "third"):
+        assert line in out
+
+
+def test_merge_is_idempotent(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\nsources:\n  - bots/a/memory/s.md",
+        "name: n\nslug: s\ntype: project\nsources:\n  - bots/a/memory/s.md",
+    )
+
+    once = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+    twice = M.merge_insert_only(once, prop, vault_root=tmp_vault)
+
+    assert once == twice
+
+
+def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
+    """``enforce`` is a live-wins nested block, and the asymmetry matters.
+
+    ``rendering._render_page`` strips ``enforce`` from auto-promoted pages as a
+    safety rail (C3, 2026-04-23) so one briefing line cannot become a
+    session-wide hard block. A proposal's ``enforce`` reaching a live rule would
+    defeat that rail, and losing a live rule's own ``enforce`` would silently
+    disarm a rule a human armed.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: git push\n  deny_pattern: --force\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: rm\n---\n\nb\nmore\n"
+    )
+
+    **A characterization test, not a guard — do not trust it as one.**
+    Mutation-tested twice. A substring version (``"deny_command: rm" not in
+    out``) passed even with ``enforce`` moved to ``_PROPOSAL_WINS``, because
+    ``_set_scalar`` rewrote only the parent line and left the live nested lines
+    below a stringified dict: malformed YAML containing every asserted
+    substring. Asserting the parsed dict fixes that lie, but the mutation
+    *still* passes, because ``_build`` excludes dicts from the
+    ``_PROPOSAL_WINS`` loop so a nested block never reaches ``_set_scalar``.
+
+    Nothing this test asserts will fail if someone adds ``enforce`` to
+    ``_PROPOSAL_WINS``. The real guards are
+    ``test_set_scalar_refuses_a_nested_block`` and that ``_build`` exclusion.
+    """
+    out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
+
+    assert parse_frontmatter(out)["enforce"] == {
+        "deny_command": "git push",
+        "deny_pattern": "--force",
+    }
+
+
+def test_set_scalar_refuses_a_nested_block(tmp_vault: Path):
+    """A nested block must never be written as a scalar.
+
+    ``_set_scalar``'s regex matches only the parent ``key:`` line. Handed a dict
+    it used to stringify it there and leave the original nested lines dangling
+    below — malformed YAML that still contained every substring a naive test
+    looked for, which is how the ``enforce`` policy test passed while broken.
+
+    This is the real guard for the nested-block policy. Mutation-tested: with the
+    ``NotAScalar`` raise neutered, this test fails. The ``enforce`` test above
+    cannot fail for that regression, because ``_build``'s dict exclusion stops a
+    nested value reaching ``_set_scalar`` at all.
+    """
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("enforce:\n  deny_command: rm\n", "enforce", {"deny_command": "rm"})
+
+    with pytest.raises(M.NotAScalar):
+        M._set_scalar("tags:\n  - a\n", "tags", ["a", "b"])
+
+
+def test_demoted_from_and_timestamps_follow_their_policies(tmp_vault: Path):
+    """``demoted_from`` is live-wins; the run stamps are proposal-wins.
+
+    Both rows sat untested after Task 4. ``demoted_from`` records a reclassify
+    decision, which is not the extractor's to revise from a transcript, while the
+    stamps describe the run that produced the proposal and should follow it.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: feedback\nextraction_run: 2026-05-01T00:00:00\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: user\nextraction_run: 2026-09-12T10:00:00\n---\n\nb\nmore\n"
+    )
+
+    fm = parse_frontmatter(M.merge_insert_only(live, proposal, vault_root=tmp_vault))
+
+    assert fm["demoted_from"] == "feedback"
+    assert fm["extraction_run"] == "2026-09-12T10:00:00"
+
+
+def test_replace_wholesale_takes_the_proposal_body(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project",
+        "name: n\nslug: s\ntype: project",
+        live_body="MARKETPLACE_ENABLED = false\n",
+        prop_body="MARKETPLACE_ENABLED = true\n",
+    )
+
+    out = M.replace_wholesale(live, prop, vault_root=tmp_vault)
+
+    assert "MARKETPLACE_ENABLED = true" in out
+    assert "MARKETPLACE_ENABLED = false" not in out
+```
+
+- [ ] **Step 2: Run the tests**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py -v`
+Expected: all 15 PASS — the 6 already in the file after Task 4 (one from its Step 1
+plus the four guard tests from its Step 4b, and `test_sources_are_normalized_and_unioned`)
+plus these 9. If `test_managed_tag_marker_is_never_copied_from_the_proposal` fails, the bug
+is in `_merged_tags` — `MANAGED_TAGS` must be read from the live side only.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/unit/test_rewrites_merge.py
+git commit -m "test(rewrites): pin the frontmatter merge policy (#159)"
+```
+
+---
+
+## Task 6: Apply — ledger reconciliation and archive
+
+This is the task that fixes the bug. Everything before it is preparation.
+
+**Files:**
+- Create: `src/mnemo/core/rewrites/apply.py`
+- Test: `tests/unit/test_rewrites_apply.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_rewrites_apply.py
+"""Applying staged rewrites, and the ledger reconciliation that stops the loop (#159).
+
+Four of five staging sites compare ``content_hash(live)`` against
+``entry.written_hash`` and stage a ``.proposed.md`` when they differ. Promotion
+was a manual ``mv`` that never advanced ``written_hash``, so every run re-derived
+the same rewrite — verified 35/35 drifted on the real vault, ``written_at``
+spanning 2026-05 to 2026-09. If ``apply`` does not advance the hash, the merged
+result is itself a "user edit" and re-proposes on the next run.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from mnemo.core.extract.inbox.io import content_hash
+from mnemo.core.rewrites import apply as A
+from mnemo.core.rewrites import classify as C
+
+
+def _seed(vault: Path, slug: str = "a__x", *, page_type: str = "project") -> None:
+    fm = f"name: n\nslug: {slug}\ntype: {page_type}\nsources:\n  - bots/a/memory/{slug}.md"
+    live = vault / "shared" / page_type / f"{slug}.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(f"---\n{fm}\n---\n\nline one\n", encoding="utf-8")
+
+    prop = vault / "shared" / "_inbox" / page_type / f"{slug}.proposed.md"
+    prop.parent.mkdir(parents=True, exist_ok=True)
+    prop.write_text(f"---\n{fm}\n---\n\nline one\nline two\n", encoding="utf-8")
+
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    # Merge into any existing state rather than replacing it. A fresh
+    # single-entry dict per call means seeding two rules leaves only the second
+    # in the ledger, and a test asserting on the first dies with a KeyError that
+    # looks like an apply() bug. Task 7's tests seed more than one rule.
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    else:
+        state = {"schema_version": 2, "last_run": "2026-09-01T00:00:00", "entries": {}}
+    state["entries"][f"{page_type}/{slug}"] = {
+        "source_files": [f"bots/a/memory/{slug}.md"],
+        "source_hash": "sha256:aaa",
+        # Stale on purpose: this mismatch is what stages a rewrite.
+        "written_hash": "sha256:stale",
+        "written_at": "2026-05-28T00:00:00",
+        "status": "direct",
+        "last_sync": "2026-05-28T00:00:00",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating(tmp_vault: Path):
+    _seed(tmp_vault)
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    report = A.apply(plan, tmp_vault)
+
+    assert report.merged == 1
+    live = tmp_vault / "shared" / "project" / "a__x.md"
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    entry = state["entries"]["project/a__x"]
+    assert entry["written_hash"] == content_hash(live)
+    # The proposal is gone, so a second classify finds nothing to re-propose.
+    assert C.classify(tmp_vault) == []
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_apply.py::test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating -v`
+Expected: FAIL — `ImportError: cannot import name 'apply' from 'mnemo.core.rewrites'`
+
+(`from mnemo.core.rewrites import apply as A` imports a name from a package, so the
+error is `ImportError: cannot import name`, not `ModuleNotFoundError`. That is the
+correct RED state.)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# src/mnemo/core/rewrites/apply.py
+"""Execute a rewrite plan: archive, write, delete the proposal, advance the ledger.
+
+The vault is not a git repository and only 1 of the real vault's 35 proposals has
+any archive coverage, so there is no rollback path but the one this module
+creates. Shape mirrors ``reclassify_apply``: pristine ``originals/`` plus a
+``manifest.json`` that :func:`undo` replays.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable
+
+from mnemo.core import locks
+from mnemo.core.extract.inbox.io import atomic_write, content_hash
+from mnemo.core.rewrites import merge as M
+from mnemo.core.rewrites.classify import classify
+from mnemo.core.rewrites.types import ApplyPlan, ApplyReport, Rewrite
+
+
+class VaultBusy(RuntimeError):
+    """Another ``apply`` run holds the vault lock.
+
+    Raised rather than returning an empty report, so a caller can tell "nothing
+    was staged" from "someone else is mid-write". Existing ``try_lock`` callers
+    return early on contention, which is right for a background mirror but wrong
+    here: this writes rules and reconciles the ledger, and a silent no-op would
+    read as success.
+    """
+
+_ACTION_FOR_KIND = {
+    "insert_only": "merge",
+    "mixed": "replace",
+    "full_rewrite": "replace",
+}
+
+
+def _run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+
+def _atomic_json(path: Path, payload: dict, run_id: str) -> None:
+    """Write *payload* as JSON via a run-scoped ``.tmp`` + ``os.replace``.
+
+    Shared by the manifest and the ledger so neither can be left truncated. The
+    ``run_id`` in the temp name keeps two runs from colliding on one scratch
+    path even if the lock above ever fails to hold.
+    """
+    tmp = path.with_suffix(f"{path.suffix}.{run_id}.tmp")
+    tmp.write_bytes(json.dumps(payload, indent=2).encode("utf-8"))
+    tmp.replace(path)
+
+
+def plan(vault_root: Path, *, include: set[str]) -> ApplyPlan:
+    """Build a plan covering exactly the rewrites whose ``key`` is in *include*."""
+    entries: list[tuple[Rewrite, str]] = []
+    for r in classify(vault_root):
+        if r.key in include:
+            entries.append((r, _ACTION_FOR_KIND[r.kind]))
+    return ApplyPlan(run_id=_run_id(), entries=entries)
+
+
+def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
+    """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`.
+
+    Holds a vault-wide lock for the whole run. Without it, two concurrent runs
+    each read the entire ledger, mutate a private copy, and flush a full
+    overwrite — so the second to flush silently discards the first's
+    ``written_hash`` updates while both rule files are already written. The
+    first run's proposal is deleted by then, so ``classify`` returns nothing and
+    the disagreement between ledger and disk is permanently undetectable. That
+    is strictly worse than the bug this module fixes: the original re-proposed
+    forever and was at least visible. Reproduced 3/3 with two threads before
+    the lock was added.
+    """
+    vault_root = Path(vault_root)
+    report = ApplyReport()
+    if not plan_obj.entries:
+        return report
+
+    with locks.try_lock(vault_root / ".mnemo" / "rewrites.lock") as held:
+        if not held:
+            raise VaultBusy(
+                "another mnemo rewrites run is in progress; retry when it finishes"
+            )
+        return _apply_locked(plan_obj, vault_root, report)
+
+
+def _apply_locked(plan_obj: ApplyPlan, vault_root: Path, report: ApplyReport) -> ApplyReport:
+    """The body of :func:`apply`, run with the vault lock held."""
+    arch = vault_root / "shared" / "_archive" / f"rewrites-{plan_obj.run_id}"
+    # Re-applying a run would copy already-merged files over the pristine
+    # originals and overwrite the manifest, silently destroying undo. Guard on
+    # the manifest, not the directory — same as reclassify_apply.
+    if (arch / "manifest.json").exists():
+        raise RuntimeError(f"run {plan_obj.run_id} already applied; undo it first")
+    originals = arch / "originals"
+    originals.mkdir(parents=True, exist_ok=True)
+    report.archive_dir = arch
+
+    state_path = vault_root / ".mnemo" / "extraction-state.json"
+    state: dict = {"entries": {}}
+    state_backup: str | None = None
+    if state_path.exists():
+        backup = originals / "extraction-state.json"
+        shutil.copy2(state_path, backup)
+        # POSIX separators for the same reason as the move paths below.
+        state_backup = backup.relative_to(vault_root).as_posix()
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = {"entries": {}}
+    state.setdefault("entries", {})
+
+    manifest_path = arch / "manifest.json"
+    moves: list[dict] = []
+
+    # Defined AFTER every rebinding of the names below, because it closes over
+    # them by reference: ``state`` in particular is rebound above when the ledger
+    # exists on disk. Moving this definition earlier would silently capture the
+    # placeholder dict and flush stale data with no error.
+    def _flush() -> None:
+        """Persist the manifest and the ledger to reflect exactly what has landed.
+
+        Called after every applied rewrite and once more in a ``finally``, so an
+        uncaught failure anywhere in the loop still leaves a recoverable state.
+
+        The original shape wrote both once, after the loop. A mid-loop failure —
+        ``atomic_write`` raising on rewrite 2 of 3 — therefore left rewrite 1
+        written to disk, its proposal deleted, no manifest at all, and a ledger
+        still carrying the stale hash: unrecoverable by ``undo`` and silently
+        disagreeing with disk. Verified by monkeypatching the write.
+        """
+        # Both writes go through a run-scoped .tmp + os.replace. The manifest was
+        # a plain write_text, which left a *truncated but existing* manifest if
+        # the process died mid-write — and ``undo``'s only guard is
+        # ``exists()``, so that turned "nothing to restore" into a raise. The
+        # tmp names carry the run_id so a lock failure degrades to one run
+        # refusing rather than two clobbering the same scratch file.
+        _atomic_json(manifest_path, {
+            "run_id": plan_obj.run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "moves": moves,
+            "skipped": report.skipped,
+            "notes": report.notes,
+            "state_backup": state_backup,
+        }, plan_obj.run_id)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_json(state_path, state, plan_obj.run_id)
+
+    try:
+        _apply_entries(
+            plan_obj, vault_root, report, state, originals, moves, _flush
+        )
+    finally:
+        # Even an uncaught raise leaves a manifest naming exactly what landed and
+        # a ledger matching disk, so ``undo`` can recover the completed work.
+        _flush()
+
+    return report
+
+
+def _apply_entries(
+    plan_obj: ApplyPlan,
+    vault_root: Path,
+    report: ApplyReport,
+    state: dict,
+    originals: Path,
+    moves: list[dict],
+    _flush: Callable[[], None],
+) -> None:
+    """The per-rewrite loop. Split out so :func:`apply` can wrap it in ``finally``.
+
+    Mutates ``state``, ``moves`` and ``report`` in place — never rebinds them.
+    ``_flush`` closes over the same three objects, so a rebinding here would
+    desync its view and flush stale data silently.
+    """
+    for rewrite, action in plan_obj.entries:
+        if action == "skip":
+            report.skipped.append({"key": rewrite.key, "reason": "skipped by plan"})
+            continue
+        try:
+            live_text = rewrite.live.read_text(encoding="utf-8")
+            prop_text = rewrite.proposal.read_text(encoding="utf-8")
+        except OSError as exc:
+            report.skipped.append({"key": rewrite.key, "reason": f"read: {exc}"})
+            continue
+        # No ``return report`` at the end of this function: it annotates
+        # ``-> None`` and mutates ``report`` in place. ``_apply_locked`` owns the
+        # return.
+
+        # Pristine originals first — nothing is overwritten or deleted before it
+        # is archived. A rule skipped below keeps its copies here with no
+        # ``moves`` entry, so ``undo`` ignores them. Harmless (neither file was
+        # touched) and cheaper than deciding after the fact whether to clean up.
+        #
+        # The proposal is archived too, under ``proposals/``. ``undo`` restored
+        # only the live half before, so an undone rewrite left the vault's
+        # content correct but the reviewed proposal gone for good — recoverable
+        # only by re-running extraction and hoping it rebuilt the same text.
+        shutil.copy2(rewrite.live, originals / f"{rewrite.live.stem}.md")
+        proposals_dir = originals.parent / "proposals"
+        proposals_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rewrite.proposal, proposals_dir / rewrite.proposal.name)
+
+        builder = M.merge_insert_only if action == "merge" else M.replace_wholesale
+        try:
+            merged = builder(live_text, prop_text, vault_root=vault_root)
+        except (M.NoLiveFrontmatter, M.NotAScalar) as exc:
+            # One malformed rule must not abort a batch of 35. Both conditions are
+            # properties of a single page: a live file with no frontmatter block,
+            # or a nested value reaching the scalar writer. Same shape as the
+            # read-OSError case above, so same handling — record and continue.
+            #
+            # Catching these keeps one bad page from costing the batch its
+            # progress. It is not what makes a crash recoverable, though — that
+            # is ``_flush`` running per rewrite and in a ``finally``.
+            report.skipped.append({"key": rewrite.key, "reason": f"merge: {exc}"})
+            continue
+        # NotInsertOnly is deliberately NOT caught. classify's ``kind`` and
+        # merge's precondition both call ``_classify_bodies``, so they cannot
+        # disagree — if it fires, the dispatch table is wrong rather than one
+        # page being bad, and aborting is the honest signal.
+        atomic_write(rewrite.live, merged)
+        rewrite.proposal.unlink()
+
+        # THE FIX: advance written_hash to what is now on disk. Without this the
+        # merged file reads as a user edit and the next run re-proposes it.
+        entry = state["entries"].get(rewrite.key)
+        if entry is not None:
+            entry["written_hash"] = content_hash(rewrite.live)
+            entry["written_at"] = plan_obj.run_id
+            entry["last_sync"] = plan_obj.run_id
+        else:
+            report.notes.append(f"{rewrite.key}: no state entry; hash not reconciled")
+
+        moves.append({
+            "key": rewrite.key,
+            "slug": rewrite.live.stem,
+            "kind": rewrite.kind,
+            "action": action,
+            # POSIX separators, always. ``str(Path.relative_to(...))`` yields
+            # ``shared\project\x.md`` on Windows, and the manifest is the only
+            # recovery record there is — one written on Windows must stay
+            # readable on POSIX and the reverse. ``vault_root / "a/b.md"``
+            # resolves correctly on every platform, so reading back is safe.
+            "live_path": rewrite.live.relative_to(vault_root).as_posix(),
+            "proposal_path": rewrite.proposal.relative_to(vault_root).as_posix(),
+        })
+        if action == "merge":
+            report.merged += 1
+        else:
+            report.replaced += 1
+
+        # Persist after each rewrite, not once at the end. Everything applied so
+        # far is then already recoverable if the next one dies.
+        _flush()
+
+
+def undo(vault_root: Path, run_id: str) -> int:
+    """Restore every file *run_id* touched, byte for byte. Returns files restored."""
+    vault_root = Path(vault_root)
+    arch = vault_root / "shared" / "_archive" / f"rewrites-{run_id}"
+    manifest_path = arch / "manifest.json"
+    if not manifest_path.exists():
+        return 0
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A truncated manifest means nothing usable to replay. Return 0 like the
+        # missing-manifest case rather than raising: undo is the recovery path,
+        # so it must not itself be the thing that crashes.
+        return 0
+    originals = arch / "originals"
+    restored = 0
+
+    proposals_dir = arch / "proposals"
+    for move in manifest.get("moves") or []:
+        src = originals / f"{move.get('slug')}.md"
+        dest = vault_root / str(move.get("live_path") or "")
+        if src.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(src.read_bytes())
+            restored += 1
+        # Re-stage the proposal this run consumed, so an undo is fully
+        # reversible rather than only restoring the live half.
+        prop_rel = move.get("proposal_path")
+        if prop_rel:
+            prop_dest = vault_root / str(prop_rel)
+            prop_src = proposals_dir / prop_dest.name
+            if prop_src.exists():
+                prop_dest.parent.mkdir(parents=True, exist_ok=True)
+                prop_dest.write_bytes(prop_src.read_bytes())
+                restored += 1
+
+    backup_rel = manifest.get("state_backup")
+    if backup_rel:
+        backup = vault_root / str(backup_rel)
+        if backup.exists():
+            state_path = vault_root / ".mnemo" / "extraction-state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_bytes(backup.read_bytes())
+            restored += 1
+    return restored
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_apply.py::test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating -v`
+Expected: PASS
+
+- [ ] **Step 4b: Add the three guard tests**
+
+Task 6's code review reproduced three failures with a threading script and a
+truncated file. Each needs a test or the guard can be removed without anything
+noticing. Append to `tests/unit/test_rewrites_apply.py` (the file needs
+`import pytest`):
+
+- `test_a_concurrent_run_is_refused_rather_than_racing` — hold
+  `locks.try_lock(vault/".mnemo"/"rewrites.lock")`, assert `apply` raises
+  `A.VaultBusy`, assert the proposal is still staged, then assert the same plan
+  applies once the lock is free. **Without the lock this failed 3/3:** each run
+  reads the whole ledger, flushes a full overwrite, and the second silently
+  discards the first's `written_hash` updates — while the first's proposal is
+  already deleted, so `classify` returns nothing and the disagreement is
+  permanently undetectable. Strictly worse than the bug this module fixes.
+- `test_undo_survives_a_truncated_manifest` — apply, truncate
+  `manifest.json` to half its bytes, assert `undo` returns `0`. A plain
+  `write_text` left a truncated-but-existing manifest, and `undo`'s only guard
+  is `exists()`, so recovery itself raised `JSONDecodeError`.
+- `test_undo_restages_the_consumed_proposal` — apply, assert the proposal is
+  gone, undo, assert both the live rule and the proposal are byte-identical to
+  before. `undo` restored only the live half, so an undone rewrite lost the
+  reviewed proposal for good.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mnemo/core/rewrites/apply.py tests/unit/test_rewrites_apply.py
+git commit -m "feat(rewrites): reconcile written_hash on accept so rewrites stop regenerating (#159)"
+```
+
+---
+
+## Task 7: Apply — archive, undo, and the re-apply guard
+
+**Files:**
+- Modify: `tests/unit/test_rewrites_apply.py`
+- Modify: `src/mnemo/core/rewrites/apply.py` only if a test fails
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/unit/test_rewrites_apply.py`:
+
+```python
+import pytest
+
+
+def test_originals_hold_pristine_live_bytes_and_manifest_shape(tmp_vault: Path):
+    _seed(tmp_vault)
+    before = (tmp_vault / "shared" / "project" / "a__x.md").read_bytes()
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    report = A.apply(plan, tmp_vault)
+
+    original = report.archive_dir / "originals" / "a__x.md"
+    assert original.read_bytes() == before
+
+    manifest = json.loads((report.archive_dir / "manifest.json").read_text())
+    assert manifest["run_id"] == plan.run_id
+    assert manifest["state_backup"].endswith("extraction-state.json")
+    move = manifest["moves"][0]
+    assert move["key"] == "project/a__x"
+    assert move["kind"] == "insert_only"
+    assert move["action"] == "merge"
+    assert move["live_path"] == "shared/project/a__x.md"
+
+
+def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
+    _seed(tmp_vault)
+    live = tmp_vault / "shared" / "project" / "a__x.md"
+    state_path = tmp_vault / ".mnemo" / "extraction-state.json"
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    live_before = live.read_bytes()
+    state_before = state_path.read_bytes()
+    # Captured before apply, which deletes the proposal. Reading it afterwards
+    # raises FileNotFoundError on the fixture itself.
+    prop_before = prop.read_bytes()
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    A.apply(plan, tmp_vault)
+    assert live.read_bytes() != live_before
+
+    restored = A.undo(tmp_vault, plan.run_id)
+
+    # The rule + the state file + the re-staged proposal. It was 2 before
+    # `undo` learned to restore the proposal it had consumed (fe35699); a stale
+    # `== 2` here would fail for the right reason and read like an undo bug.
+    assert restored == 3
+    assert live.read_bytes() == live_before
+    assert json.loads(state_path.read_bytes()) == json.loads(state_before)
+    # Assert the proposal is actually back, not merely counted. Mutation-tested:
+    # deleting undo's `prop_dest.write_bytes` while leaving its `restored += 1`
+    # slipped past the count-and-bytes assertions above, so a test named
+    # "exactly" was leaning on another test to catch half of what it claims.
+    assert prop.exists()
+    assert prop.read_bytes() == prop_before
+
+
+def test_undo_of_an_unknown_run_restores_nothing(tmp_vault: Path):
+    _seed(tmp_vault)
+
+    assert A.undo(tmp_vault, "20260101T000000") == 0
+
+
+def test_reapplying_the_same_run_id_is_refused(tmp_vault: Path):
+    _seed(tmp_vault)
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    A.apply(plan, tmp_vault)
+
+    _seed(tmp_vault)  # re-stage so there is something to apply
+    with pytest.raises(RuntimeError, match="already applied"):
+        A.apply(plan, tmp_vault)
+
+
+def test_proposal_is_removed_on_success(tmp_vault: Path):
+    _seed(tmp_vault)
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    A.apply(plan, tmp_vault)
+
+    assert not prop.exists()
+
+
+def test_full_rewrite_uses_replace_and_is_counted_separately(tmp_vault: Path):
+    fm = "name: n\nslug: a__z\ntype: project\nsources:\n  - bots/a/memory/a__z.md"
+    live = tmp_vault / "shared" / "project" / "a__z.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(f"---\n{fm}\n---\n\nMARKETPLACE_ENABLED = false\n", encoding="utf-8")
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__z.proposed.md"
+    prop.parent.mkdir(parents=True, exist_ok=True)
+    prop.write_text(f"---\n{fm}\n---\n\nMARKETPLACE_ENABLED = true\n", encoding="utf-8")
+    state_path = tmp_vault / ".mnemo" / "extraction-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"schema_version": 2, "entries": {}}), encoding="utf-8")
+
+    plan = A.plan(tmp_vault, include={"project/a__z"})
+    report = A.apply(plan, tmp_vault)
+
+    assert report.replaced == 1 and report.merged == 0
+    assert "MARKETPLACE_ENABLED = true" in live.read_text(encoding="utf-8")
+    # No state entry existed, so the missing reconciliation is reported, not silent.
+    assert any("hash not reconciled" in n for n in report.notes)
+
+
+def test_empty_plan_writes_no_archive(tmp_vault: Path):
+    _seed(tmp_vault)
+    plan = A.plan(tmp_vault, include=set())
+
+    report = A.apply(plan, tmp_vault)
+
+    assert report.merged == 0
+    assert report.archive_dir is None
+    assert not (tmp_vault / "shared" / "_archive").exists()
+```
+
+- [ ] **Step 2: Run the tests**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_apply.py -v`
+Expected: all 8 PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/unit/test_rewrites_apply.py
+git commit -m "test(rewrites): archive, undo, and re-apply guard (#159)"
+```
+
+---
+
+## Task 8: CLI — `mnemo rewrites`
+
+**Files:**
+- Create: `src/mnemo/cli/commands/rewrites.py`
+- Modify: `src/mnemo/cli/parser.py` (add subparser after the `dedup-rules` block at ~line 229; add `"rewrites"` to `ADVANCED_COMMANDS` at ~line 20)
+- Modify: `src/mnemo/cli/commands/__init__.py` (add `rewrites` to the import tuple)
+- Test: `tests/unit/test_cli_rewrites.py`
+
+The name is `rewrites`, not `proposals`: `mnemo autopilot proposals {list,review}` already exists and reads a different thing (`.mnemo/proposals/*.json`, `kind: rule_candidate` from `tier0.miss_collector`).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/unit/test_cli_rewrites.py
+"""``mnemo rewrites`` — review surface for staged ``.proposed.md`` rewrites (#159)."""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from mnemo.cli.parser import ADVANCED_COMMANDS, COMMANDS, _build_parser
+
+
+def test_rewrites_registered_as_advanced_command():
+    import mnemo.cli.commands  # noqa: F401 — populates COMMANDS
+    assert "rewrites" in COMMANDS and "rewrites" in ADVANCED_COMMANDS
+    ns = _build_parser().parse_args(["rewrites", "--apply-safe"])
+    assert ns.command == "rewrites" and ns.apply_safe is True
+    ns = _build_parser().parse_args(["rewrites", "--show", "project/a__x"])
+    assert ns.show == "project/a__x"
+    ns = _build_parser().parse_args(["rewrites", "--undo", "20260912T000000"])
+    assert ns.undo == "20260912T000000"
+
+
+def _seed(vault: Path) -> None:
+    fm = "name: n\nslug: a__x\ntype: project\nsources:\n  - bots/a/memory/a__x.md"
+    live = vault / "shared" / "project" / "a__x.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(f"---\n{fm}\n---\n\nline one\n", encoding="utf-8")
+    prop = vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    prop.parent.mkdir(parents=True, exist_ok=True)
+    prop.write_text(f"---\n{fm}\n---\n\nline one\nline two\n", encoding="utf-8")
+
+
+def test_dry_run_lists_safe_and_undecided_without_writing(tmp_vault: Path, monkeypatch, capsys):
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    args = argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None, accept=None, reject=None, undo=None
+    )
+
+    assert cmd.cmd_rewrites(args) == 0
+
+    out = capsys.readouterr().out
+    assert "1 staged rewrite" in out
+    assert "safe to merge (1)" in out
+    assert "--apply-safe" in out
+    # Nothing was written.
+    assert (tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md").exists()
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_cli_rewrites.py -v`
+Expected: FAIL — `assert "rewrites" in COMMANDS` fails (module does not exist yet)
+
+- [ ] **Step 3: Write the command**
+
+```python
+# src/mnemo/cli/commands/rewrites.py
+"""`mnemo rewrites` — review and accept staged ``.proposed.md`` rewrites (#159).
+
+    mnemo rewrites                     # plan: what is staged, and what is safe
+    mnemo rewrites --apply-safe        # merge every insert-only rewrite
+    mnemo rewrites --show KEY          # full diff for one rewrite
+    mnemo rewrites --accept KEY        # accept one mixed / full-rewrite
+    mnemo rewrites --reject KEY        # delete one proposal, keep the live rule
+    mnemo rewrites --undo RUN_ID       # restore every file an apply touched
+
+``--apply-safe`` is deliberately not ``--apply``: the staged set includes
+rewrites where the live rule is superseded outright, and an unqualified apply
+over those is the mistake this command exists to prevent.
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+
+from mnemo.cli.parser import command
+
+
+def _print_plan(rewrites: list) -> None:
+    n = len(rewrites)
+    word = "rewrite" if n == 1 else "rewrites"
+    print(f"{n} staged {word} in shared/_inbox/\n")
+
+    safe = [r for r in rewrites if r.kind == "insert_only"]
+    undecided = [r for r in rewrites if r.kind != "insert_only"]
+
+    # Column width from the actual rows, not a guess. Hardcoded 55/45 misaligned
+    # on the real vault, where the longest key is 70 characters.
+    width = max((len(r.key) for r in rewrites), default=0)
+
+    if safe:
+        print(f"  safe to merge ({len(safe)}) — insert-only, no live content dropped")
+        for r in safe:
+            # An insert-only rewrite can add zero body lines and still be worth
+            # merging: its change is in the frontmatter, usually a description
+            # the live rule has wrong. "+0 lines" alone reads as nothing to do.
+            added = (
+                f"+{r.inserted_lines} lines" if r.inserted_lines
+                else "frontmatter only"
+            )
+            print(f"    {r.key:<{width}}  {added}")
+        print()
+    if undecided:
+        print(f"  needs a decision ({len(undecided)})")
+        for r in undecided:
+            kind = "full rewrite" if r.kind == "full_rewrite" else "mixed"
+            flag = "  ⚠ live rule fully superseded" if r.kind == "full_rewrite" else ""
+            # Deliberately prints keep_ratio, NOT inserted_lines/dropped_lines.
+            # A ``replace`` region counts on both sides, so one changed line
+            # reads as "+1 -1" and looks like two lines of churn. The safe
+            # bucket above is insert-only by construction (no replace opcodes),
+            # so its ``+N`` is honest. If a future ``--show`` surfaces these
+            # counts for mixed/full_rewrite, label them "changed", not "+/-".
+            print(f"    {r.key:<{width}}  {kind:<13} keeps {r.keep_ratio:.0%}{flag}")
+        print()
+    print("(dry-run — `mnemo rewrites --apply-safe` merges the safe set; "
+          "`--show KEY` prints one diff)")
+
+
+@command("rewrites")
+def cmd_rewrites(args: argparse.Namespace) -> int:
+    from mnemo import cli
+    from mnemo.core.rewrites import apply as A
+    from mnemo.core.rewrites.classify import classify
+
+    vault = cli._resolve_vault()
+
+    # One action per invocation. The dispatch below resolves conflicts by
+    # precedence, which silently picks a winner: `--accept X --reject X` would
+    # reject without ever mentioning the accept. Fine for a flag that only
+    # prints, not for two that write.
+    chosen = [
+        name for name in ("undo", "show", "accept", "reject")
+        if getattr(args, name, None)
+    ]
+    if getattr(args, "apply_safe", False):
+        chosen.append("apply-safe")
+    if len(chosen) > 1:
+        print(f"pick one action, got: {', '.join('--' + c for c in chosen)}")
+        return 1
+
+    if getattr(args, "undo", None):
+        restored = A.undo(vault, args.undo)
+        if not restored:
+            print(f"no rewrites run {args.undo} found (nothing restored)")
+            return 1
+        print(f"restored {restored} file(s) from rewrites-{args.undo}")
+        return 0
+
+    # ``classify`` deliberately does not guard OSError — swallowing it made "no
+    # rewrites staged" indistinguishable from "every one failed to read". But a
+    # raw traceback is a worse kind of invisible than silence: it tells a human
+    # something broke without telling them which file or why, on a command whose
+    # whole purpose is making a hidden backlog visible. Raise in the library,
+    # report at the boundary.
+    try:
+        rewrites = classify(vault)
+    except OSError as exc:
+        path = getattr(exc, "filename", None) or vault
+        print(f"cannot read {path}: {exc.strerror or exc}")
+        return 1
+    if not rewrites:
+        print("no staged rewrites in shared/_inbox/")
+        return 0
+    by_key = {r.key: r for r in rewrites}
+
+    if getattr(args, "show", None):
+        r = by_key.get(args.show)
+        if r is None:
+            print(f"no staged rewrite for {args.show}")
+            return 1
+        live = r.live.read_text(encoding="utf-8").splitlines(keepends=True)
+        prop = r.proposal.read_text(encoding="utf-8").splitlines(keepends=True)
+        print(f"{r.key} — {r.kind}, keeps {r.keep_ratio:.0%} of live lines\n")
+        for line in difflib.unified_diff(
+            live, prop, fromfile=str(r.live.name), tofile=str(r.proposal.name)
+        ):
+            print(line, end="")
+        return 0
+
+    if getattr(args, "reject", None):
+        r = by_key.get(args.reject)
+        if r is None:
+            print(f"no staged rewrite for {args.reject}")
+            return 1
+        # Archive before deleting. ``apply`` archives every file it touches, and
+        # a reject that only unlinks is the one path in this command that
+        # destroys reviewed text with no way back. The extractor re-derives a
+        # proposal from its source, so if that source has since moved on, the
+        # rejected text is unrecoverable — which makes "reject is not permanent"
+        # true of the decision but false of the content.
+        arch = vault / "shared" / "_archive" / f"rejected-{A._run_id()}"
+        arch.mkdir(parents=True, exist_ok=True)
+        dest = arch / r.proposal.name
+        dest.write_bytes(r.proposal.read_bytes())
+        r.proposal.unlink()
+        print(f"rejected {r.key}; live rule untouched")
+        print(f"  archived to {dest.relative_to(vault)}")
+        print("note: the extractor re-proposes from the source transcript, so this "
+              "returns only while that source says the same thing")
+        return 0
+
+    if getattr(args, "accept", None):
+        r = by_key.get(args.accept)
+        if r is None:
+            print(f"no staged rewrite for {args.accept}")
+            return 1
+        include = {r.key}
+    elif getattr(args, "apply_safe", False):
+        include = {r.key for r in rewrites if r.kind == "insert_only"}
+        if not include:
+            print("no insert-only rewrites to merge")
+            return 0
+    else:
+        _print_plan(rewrites)
+        return 0
+
+    plan = A.plan(vault, include=include)
+    try:
+        report = A.apply(plan, vault)
+    except A.VaultBusy as exc:
+        # Before the generic RuntimeError: VaultBusy subclasses it, so a
+        # reversed order would swallow contention into the generic branch.
+        print(str(exc))
+        return 1
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
+    for note in report.notes:
+        print(f"  note: {note}")
+    for item in report.skipped:
+        print(f"  skipped: {item.get('key')} · {item.get('reason')}")
+    print(f"merged {report.merged} · replaced {report.replaced} · "
+          f"skipped {len(report.skipped)}")
+    print(f"undo with: mnemo rewrites --undo {plan.run_id}")
+    return 0
+```
+
+- [ ] **Step 4: Wire the parser**
+
+In `src/mnemo/cli/parser.py`, add `"rewrites"` to the `ADVANCED_COMMANDS` frozenset (~line 20), then add this block immediately after the `dedup` block (~line 232):
+
+```python
+    rewrites_p = sub.add_parser(
+        "rewrites",
+        help="review and accept staged _inbox rewrites of live rules (dry-run default)",
+    )
+    rewrites_p.add_argument(
+        "--apply-safe", action="store_true",
+        help="merge every insert-only rewrite (nothing live is dropped)",
+    )
+    rewrites_p.add_argument(
+        "--show", metavar="KEY",
+        help="print the full diff for one rewrite (e.g. project/clubinho__sprints-github)",
+    )
+    rewrites_p.add_argument(
+        "--accept", metavar="KEY",
+        help="accept one mixed or full rewrite, taking the proposal's body",
+    )
+    rewrites_p.add_argument(
+        "--reject", metavar="KEY",
+        help="delete one staged proposal, leaving the live rule untouched",
+    )
+    rewrites_p.add_argument(
+        "--undo", metavar="RUN_ID",
+        help="restore every file a previous apply touched, byte for byte",
+    )
+```
+
+- [ ] **Step 5: Register the module**
+
+In `src/mnemo/cli/commands/__init__.py`, add `rewrites,` to the import tuple, alphabetically between `regen_graph_edges,` and `statusline,`:
+
+```python
+    regen_graph_edges,
+    rewrites,
+    statusline,
+```
+
+- [ ] **Step 6: Run the tests**
+
+Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_cli_rewrites.py -v`
+Expected: all 4 PASS — registration and flag parsing, the dry-run listing, plus
+the two guards Task 8's own review added: `--accept X --reject X` is refused
+rather than resolved by precedence, and `--reject` archives the proposal before
+deleting it.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/mnemo/cli/commands/rewrites.py src/mnemo/cli/parser.py \
+        src/mnemo/cli/commands/__init__.py tests/unit/test_cli_rewrites.py
+git commit -m "feat(cli): mnemo rewrites — review surface for staged _inbox rewrites (#159)"
+```
+
+---
+
+## Task 9: Full suite, CHANGELOG, and the follow-up issue
+
+**Files:**
+- Modify: `CHANGELOG.md`
+
+- [ ] **Step 1: Run the whole suite**
+
+Run: `PYTHONPATH=src python3 -m pytest -q`
+Expected: `2640 passed, 2 skipped, 8 deselected` — the 2594 baseline this plan
+started from plus 46 new tests (13 classify, 15 merge, 13 apply, 5 CLI). No
+pre-existing test may fail. If one does, fix the cause — the merge touches
+`shared/` walkers that other tests assert on.
+
+Note: `pytest-randomly` is **not** installed, so there is no random ordering and
+`-p no:randomly` is a no-op. If a `tests/autopilot/selffix/` test fails
+intermittently, the cause is `conftest._real_vault_guard` watching
+`~/.claude/projects`, which the live Claude Code session writes to — unrelated to
+this branch.
+
+- [ ] **Step 2: Verify the dry run against the real vault (read-only)**
+
+Run: `PYTHONPATH=src python3 -m mnemo rewrites`
+Expected: `35 staged rewrites in shared/_inbox/`, with `safe to merge (11)` and
+`needs a decision (24)`. The 6 `full rewrite` rows carry the `⚠ live rule fully
+superseded` flag. Columns align to the longest key (70 chars on the real vault),
+and `project/clubinho__checkout-referral-ux` reads `frontmatter only` rather than
+`+0 lines` — it is insert-only with no body change, just a corrected
+description. Nothing is written: confirm with
+`ls /Users/xyrlan/mnemo/shared/_inbox/*/*.proposed.md | wc -l` → still 35.
+
+- [ ] **Step 3: Add the CHANGELOG entry**
+
+Under `## [Unreleased]`, add an `### Added` section above the existing `### Changed`:
+
+```markdown
+### Added
+
+- **`mnemo rewrites` accepts the `_inbox` backlog, and accepting now sticks.**
+  The extractor stages a rewrite of a hand-edited rule as a `.proposed.md`
+  sibling, and promotion was a manual `mv` that never advanced
+  `written_hash` — so every later run compared the live file against a stale
+  hash, concluded "user edited", and re-proposed the same rewrite over the
+  unread draft. All 35 staged rewrites on the real vault had drifted this
+  way, some since May. Meanwhile `shared/_inbox/` is excluded from every
+  consumer surface, so recall served the un-updated rule: one said
+  `MARKETPLACE_ENABLED = false` when it had been `true` since 24/08, another
+  reported a Stripe webhook gap closed on 2026-08-11 as still open.
+
+  The new command classifies each rewrite by what it does to the live body —
+  insert-only (11 of 35), mixed (18), or a full rewrite of a superseded rule
+  (6) — merges the insert-only set with `--apply-safe`, and reconciles
+  `written_hash` so an accepted rule stops re-proposing. Frontmatter is
+  merged per key rather than taken wholesale: `sources[]` is normalized and
+  unioned (proposal-wins dropped a source in 3 of 11 cases), `description`
+  comes from the proposal (live ones were factually stale), and a staged
+  page's `needs-review` marker is never copied onto a reviewed rule. Every
+  apply archives pristine originals to `shared/_archive/rewrites-<run_id>/`
+  with `mnemo rewrites --undo <run_id>`, because the vault is not a git
+  repository.
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add CHANGELOG.md
+git commit -m "docs(changelog): mnemo rewrites and written_hash reconciliation (#159)"
+```
+
+- [ ] **Step 5: Prepare the follow-up issue for the vault-wide drift**
+
+**Do not run `gh issue create` yourself.** Filing an issue publishes to GitHub,
+which is outward-facing and the repo owner's call. Write the title and body to
+`docs/superpowers/specs/2026-09-12-followup-written-hash-drift.md` instead and
+say in your report that it is ready, so the owner can file it with one command.
+
+The content to prepare:
+
+The slug-stamp migration (`core/migrations/slugs.py:112`) rewrites every page with
+`atomic_write_bytes` and never advances `written_hash`. On the real vault that left
+1,638 state entries drifted (`.mnemo/slugs-stamped.v1`, 2026-09-02 20:23; 1234/1234
+touched pages carry `slug:`). It is inert today only because those rules' sources are
+no longer scanned, so they never reach a staging branch.
+
+The command below is **reference only — the owner runs it, not you.** Copy its
+title and body into the file named above.
+
+```bash
+gh issue create \
+  --title "Bulk migrations rewrite rule files without reconciling written_hash" \
+  --body "$(cat <<'BODY'
+`core/migrations/slugs.py:112` stamps a `slug:` into every live page via
+`atomic_write_bytes` and never touches `entry.written_hash`. On the real vault
+that left 1,638 of 1,762 state entries hash-drifted (marker
+`.mnemo/slugs-stamped.v1` dated 2026-09-02 20:23; 1234 live pages share that
+mtime and 1234/1234 carry `slug:`).
+
+Consequence: every one of those rules reads as "user edited" to
+`extract/inbox/branches/*`, which is the condition that stages a `.proposed.md`.
+It is inert *today* only because those rules' sources are no longer scanned —
+`scanner.scan()` walks source files, and a rule whose memory file is gone never
+becomes dirty. Any future run that re-scans one of those sources will stage a
+rewrite for a rule nobody edited.
+
+Fix belongs at the migration site: a bulk rewriter that owns the new bytes should
+advance `written_hash` to `content_hash(new_text)` for the entry it just rewrote,
+the way `reclassify_apply.py:247` already does.
+
+Found while implementing #159, which fixes the same class of bug at the accept
+path. Out of scope there on purpose.
+BODY
+)"
+```
+
+---
+
+## Self-Review
+
+**Spec coverage:**
+
+| Spec section | Task |
+|---|---|
+| `core/rewrites/classify.py` + `Rewrite` | 1, 2, 3 |
+| `core/rewrites/merge.py`, both entry points | 4, 5 |
+| Frontmatter merge rules table (all 6 rows) | 4 (impl), 5 (tests) |
+| `core/rewrites/apply.py` — archive, manifest, ledger, undo | 6, 7 |
+| Manifest-existence guard | 7 |
+| `cli/commands/rewrites.py` + `ADVANCED_COMMANDS` | 8 |
+| Testing section (all 15 listed cases) | 2, 3, 5, 7 |
+| Out-of-scope: vault-wide drift → separate issue | 9 |
+
+Spec test list vs plan: classify's 5 cases → Tasks 2–3 (6 tests, one extra for page types). Merge's 4 cases → Tasks 4–5 (7 tests). Apply's 5 cases → Tasks 6–7 (9 tests). Every spec case has a task.
+
+**Placeholder scan:** no TBD/TODO. Every code step carries complete code. Every test step carries the assertion. Every run step names the command and the expected result.
+
+**Type consistency:** `Rewrite(proposal, live, key, kind, keep_ratio, inserted_lines, dropped_lines)` — declared Task 1, constructed Task 2, read in Tasks 6–8. `ApplyPlan(run_id, entries)` and `ApplyReport(merged, replaced, archive_dir, notes, skipped)` — declared Task 1, used Tasks 6–8. `skipped` is the only representation of a skip; `len(report.skipped)` is the count, so the two cannot drift. `merge_insert_only` / `replace_wholesale` — declared Task 4, dispatched in Task 6's `_ACTION_FOR_KIND`. CLI flag `--apply-safe` → `args.apply_safe` (argparse dash-to-underscore) in both Task 8's parser block and its handler. `A.plan(vault, include=...)` / `A.apply(plan, vault)` / `A.undo(vault, run_id)` — same argument order at every call site.
+
+One gap found and closed while reviewing: Task 7's `test_full_rewrite_uses_replace_and_is_counted_separately` seeds an empty `entries` dict, which exercises the `report.notes` branch for a missing state entry — a path the spec mentions but did not test.
+
+---
+
+## Execution Handoff
+
+**Plan complete and saved to `docs/superpowers/plans/2026-09-12-inbox-rewrites.md`. Two execution options:**
+
+**1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration
+
+**2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints
+
+**Which approach?**
