@@ -91,16 +91,36 @@ def _parse(short_id: str, data: dict[str, Any]) -> Session:
     )
 
 
+def normalize_cwd(path: str | None) -> str | None:
+    """Canonical form of *path*, or ``None`` when there is nothing to compare.
+
+    A worktree, or ``/tmp`` on macOS, reaches one directory through two
+    different strings. Comparing them raw empties the queue and the user reads
+    that as "nothing is running". ``realpath`` resolves symlinks and strips a
+    trailing slash, and a real path always resolves to itself, so normalizing
+    a value that is already canonical is a no-op.
+    """
+    if not path:
+        return None
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):  # pragma: no cover - realpath is total on posix
+        return path
+
+
 def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[Session]:
     """Every readable background session under *root* (default: real jobs dir).
 
     Unreadable or malformed entries are skipped, never raised: one corrupt
     file must not take out the whole listing. Pass *cwd* to keep only sessions
-    started under that directory.
+    started under that directory; both sides are normalized, and a session
+    with no recorded ``cwd`` never matches a scoped query.
     """
     base = jobs_dir() if root is None else root
     if not base.is_dir():
         return []
+
+    scope = normalize_cwd(cwd)
 
     out: list[Session] = []
     for entry in sorted(base.iterdir()):
@@ -113,7 +133,7 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[S
         if not isinstance(data, dict):
             continue
         session = _parse(entry.name, data)
-        if cwd is not None and session.cwd != cwd:
+        if cwd is not None and normalize_cwd(session.cwd) != scope:
             continue
         out.append(session)
     return out

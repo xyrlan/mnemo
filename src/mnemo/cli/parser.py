@@ -75,7 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sessions = sub.add_parser("sessions", help="live queue of Claude Code background sessions")
     sessions.add_argument("--json", action="store_true", help="machine-readable listing")
-    sessions.add_argument("--watch", action="store_true", help="redraw every 2s until Ctrl-C")
+    sessions.add_argument("--watch", action="store_true", help="redraw every 2s until Ctrl-C (ignored with --json)")
     sessions.add_argument("--all", action="store_true", help="every repo, not just this one")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")

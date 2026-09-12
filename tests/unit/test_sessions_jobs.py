@@ -112,3 +112,57 @@ def test_suggested_reply_is_optional(tmp_path: Path) -> None:
 
     assert by_id["with"].suggested_reply == "sim"
     assert by_id["without"].suggested_reply is None
+
+
+def test_cwd_match_ignores_a_trailing_slash(tmp_path: Path) -> None:
+    # The user is in /repo/a; the query arrives with a trailing slash. Raw
+    # string equality reports an empty queue and the user concludes nothing
+    # is running.
+    _job(tmp_path, "here", state="working", tempo="active", cwd=str(tmp_path / "repo"))
+    (tmp_path / "repo").mkdir()
+
+    ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(tmp_path / "repo") + "/")]
+
+    assert ids == ["here"]
+
+
+def test_cwd_match_survives_a_symlinked_path(tmp_path: Path) -> None:
+    # A git worktree — or /tmp on macOS — reaches the same directory through a
+    # symlink. The stored cwd and the live one are then different strings for
+    # one directory, and the queue silently empties.
+    real = tmp_path / "real-repo"
+    real.mkdir()
+    link = tmp_path / "linked-repo"
+    link.symlink_to(real)
+
+    _job(tmp_path, "here", state="working", tempo="active", cwd=str(real))
+
+    ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(link))]
+
+    assert ids == ["here"]
+
+
+def test_stored_symlinked_cwd_matches_a_canonical_query(tmp_path: Path) -> None:
+    # The mirror image: Claude Code recorded the symlinked form and the live
+    # process reports the resolved one. Normalizing only the query still misses.
+    real = tmp_path / "real-repo"
+    real.mkdir()
+    link = tmp_path / "linked-repo"
+    link.symlink_to(real)
+
+    _job(tmp_path, "here", state="working", tempo="active", cwd=str(link))
+
+    ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(real))]
+
+    assert ids == ["here"]
+
+
+def test_session_without_a_cwd_is_filtered_out_and_never_raises(tmp_path: Path) -> None:
+    # realpath(None) raises; a session with no recorded cwd must simply not
+    # match, not take the whole command down.
+    _job(tmp_path, "nocwd", state="working", tempo="active")
+    _job(tmp_path, "here", state="working", tempo="active", cwd=str(tmp_path))
+
+    ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(tmp_path))]
+
+    assert ids == ["here"]

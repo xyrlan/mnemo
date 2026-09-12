@@ -19,13 +19,16 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     """Print background sessions, blocked first."""
     import json as _json
     import os
+    import sys
     import time
     from dataclasses import asdict
 
-    from mnemo.core.sessions.jobs import read_sessions
+    from mnemo.core.sessions.jobs import normalize_cwd, read_sessions
     from mnemo.core.sessions.render import render_queue
 
-    scope = None if getattr(args, "all", False) else os.getcwd()
+    # Normalized here too: the stored cwd may be the canonical form while the
+    # live one arrives through a worktree symlink. See jobs.normalize_cwd.
+    scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
 
     def _read():
         return read_sessions(cwd=scope)
@@ -35,9 +38,12 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         return 0
 
     if bool(getattr(args, "watch", False)):
+        # Only a terminal understands the escape; redirected to a log it would
+        # be raw bytes on every redraw.
+        clear = "\033[2J\033[H" if sys.stdout.isatty() else ""  # clear + home
         try:
             while True:
-                print("\033[2J\033[H", end="")  # clear + home
+                print(clear, end="")
                 print(render_queue(_read()))
                 time.sleep(2)
         except KeyboardInterrupt:
