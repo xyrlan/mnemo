@@ -80,10 +80,30 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
             continue
 
         # Pristine original first — nothing is overwritten before it is archived.
+        # A rule skipped below keeps its copy here with no ``moves`` entry, so
+        # ``undo`` ignores it. Harmless (the file was never modified) and cheaper
+        # than deciding after the fact whether to clean it up.
         shutil.copy2(rewrite.live, originals / f"{rewrite.live.stem}.md")
 
         builder = M.merge_insert_only if action == "merge" else M.replace_wholesale
-        merged = builder(live_text, prop_text, vault_root=vault_root)
+        try:
+            merged = builder(live_text, prop_text, vault_root=vault_root)
+        except (M.NoLiveFrontmatter, M.NotAScalar) as exc:
+            # One malformed rule must not abort a batch of 35. Both conditions are
+            # properties of a single page: a live file with no frontmatter block,
+            # or a nested value reaching the scalar writer. Same shape as the
+            # read-OSError case above, so same handling — record and continue.
+            #
+            # Aborting was worse than it looks: the manifest is written after the
+            # loop, so a raise partway through left earlier rewrites applied with
+            # no manifest at all — destroying the rollback path for work already
+            # done, which is the one thing this archive exists to provide.
+            report.skipped.append({"key": rewrite.key, "reason": f"merge: {exc}"})
+            continue
+        # NotInsertOnly is deliberately NOT caught. classify's ``kind`` and
+        # merge's precondition both call ``_classify_bodies``, so they cannot
+        # disagree — if it fires, the dispatch table is wrong rather than one
+        # page being bad, and aborting is the honest signal.
         atomic_write(rewrite.live, merged)
         rewrite.proposal.unlink()
 

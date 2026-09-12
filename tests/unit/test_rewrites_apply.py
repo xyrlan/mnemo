@@ -27,24 +27,62 @@ def _seed(vault: Path, slug: str = "a__x", *, page_type: str = "project") -> Non
     prop.parent.mkdir(parents=True, exist_ok=True)
     prop.write_text(f"---\n{fm}\n---\n\nline one\nline two\n", encoding="utf-8")
 
-    state = {
-        "schema_version": 2,
-        "last_run": "2026-09-01T00:00:00",
-        "entries": {
-            f"{page_type}/{slug}": {
-                "source_files": [f"bots/a/memory/{slug}.md"],
-                "source_hash": "sha256:aaa",
-                # Stale on purpose: this mismatch is what stages a rewrite.
-                "written_hash": "sha256:stale",
-                "written_at": "2026-05-28T00:00:00",
-                "status": "direct",
-                "last_sync": "2026-05-28T00:00:00",
-            }
-        },
-    }
     state_path = vault / ".mnemo" / "extraction-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
+    # Merge into any existing state rather than replacing it. An earlier version
+    # wrote a fresh single-entry dict every call, so seeding two rules left only
+    # the second in the ledger and a test asserting on the first died with a
+    # KeyError that looked like an apply() bug.
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    else:
+        state = {"schema_version": 2, "last_run": "2026-09-01T00:00:00", "entries": {}}
+    state["entries"][f"{page_type}/{slug}"] = {
+        "source_files": [f"bots/a/memory/{slug}.md"],
+        "source_hash": "sha256:aaa",
+        # Stale on purpose: this mismatch is what stages a rewrite.
+        "written_hash": "sha256:stale",
+        "written_at": "2026-05-28T00:00:00",
+        "status": "direct",
+        "last_sync": "2026-05-28T00:00:00",
+    }
     state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_one_malformed_live_rule_does_not_abort_the_batch(tmp_vault: Path):
+    """A live page with no frontmatter is skipped; the rest of the batch applies.
+
+    ``merge`` raises ``NoLiveFrontmatter`` for such a page. Letting that
+    propagate aborted the whole run partway through — after earlier rewrites were
+    already written and their proposals deleted, but before the manifest existed,
+    which is the one file ``undo`` needs. One malformed rule must not cost the
+    other 34 their rollback path.
+    """
+    _seed(tmp_vault, "a__good")
+    _seed(tmp_vault, "a__bad")
+    # Strip the frontmatter from one live page, leaving its proposal staged.
+    bad_live = tmp_vault / "shared" / "project" / "a__bad.md"
+    bad_live.write_text("no frontmatter here\n", encoding="utf-8")
+
+    plan = A.plan(tmp_vault, include={"project/a__good", "project/a__bad"})
+    report = A.apply(plan, tmp_vault)
+
+    assert report.merged == 1
+    assert len(report.skipped) == 1
+    assert report.skipped[0]["key"] == "project/a__bad"
+    assert "merge:" in report.skipped[0]["reason"]
+
+    # The good one landed and its ledger advanced.
+    good_live = tmp_vault / "shared" / "project" / "a__good.md"
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    assert state["entries"]["project/a__good"]["written_hash"] == content_hash(good_live)
+
+    # The skipped one kept both its files, so it can be fixed and retried.
+    assert bad_live.exists()
+    assert (tmp_vault / "shared" / "_inbox" / "project" / "a__bad.proposed.md").exists()
+
+    # The manifest exists, so the applied rewrite is still undoable.
+    assert (report.archive_dir / "manifest.json").exists()
 
 
 def test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating(tmp_vault: Path):

@@ -1121,23 +1121,25 @@ def _seed(vault: Path, slug: str = "a__x", *, page_type: str = "project") -> Non
     prop.parent.mkdir(parents=True, exist_ok=True)
     prop.write_text(f"---\n{fm}\n---\n\nline one\nline two\n", encoding="utf-8")
 
-    state = {
-        "schema_version": 2,
-        "last_run": "2026-09-01T00:00:00",
-        "entries": {
-            f"{page_type}/{slug}": {
-                "source_files": [f"bots/a/memory/{slug}.md"],
-                "source_hash": "sha256:aaa",
-                # Stale on purpose: this mismatch is what stages a rewrite.
-                "written_hash": "sha256:stale",
-                "written_at": "2026-05-28T00:00:00",
-                "status": "direct",
-                "last_sync": "2026-05-28T00:00:00",
-            }
-        },
-    }
     state_path = vault / ".mnemo" / "extraction-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
+    # Merge into any existing state rather than replacing it. A fresh
+    # single-entry dict per call means seeding two rules leaves only the second
+    # in the ledger, and a test asserting on the first dies with a KeyError that
+    # looks like an apply() bug. Task 7's tests seed more than one rule.
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    else:
+        state = {"schema_version": 2, "last_run": "2026-09-01T00:00:00", "entries": {}}
+    state["entries"][f"{page_type}/{slug}"] = {
+        "source_files": [f"bots/a/memory/{slug}.md"],
+        "source_hash": "sha256:aaa",
+        # Stale on purpose: this mismatch is what stages a rewrite.
+        "written_hash": "sha256:stale",
+        "written_at": "2026-05-28T00:00:00",
+        "status": "direct",
+        "last_sync": "2026-05-28T00:00:00",
+    }
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
 
@@ -1254,7 +1256,19 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
         shutil.copy2(rewrite.live, originals / f"{rewrite.live.stem}.md")
 
         builder = M.merge_insert_only if action == "merge" else M.replace_wholesale
-        merged = builder(live_text, prop_text, vault_root=vault_root)
+        try:
+            merged = builder(live_text, prop_text, vault_root=vault_root)
+        except (M.NoLiveFrontmatter, M.NotAScalar) as exc:
+            # One malformed rule must not abort a batch of 35. Both conditions are
+            # properties of a single page: a live file with no frontmatter block,
+            # or a nested value reaching the scalar writer. Same shape as the
+            # read-OSError case above, so same handling — record and continue.
+            report.skipped.append({"key": rewrite.key, "reason": f"merge: {exc}"})
+            continue
+        # NotInsertOnly is deliberately NOT caught. classify's ``kind`` and
+        # merge's precondition both call ``_classify_bodies``, so they cannot
+        # disagree — if it fires, the dispatch table is wrong rather than one
+        # page being bad, and aborting is the honest signal.
         atomic_write(rewrite.live, merged)
         rewrite.proposal.unlink()
 
