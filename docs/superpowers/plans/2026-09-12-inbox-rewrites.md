@@ -2043,7 +2043,8 @@ The slug-stamp migration (`core/migrations/slugs.py:112`) rewrites every page wi
 touched pages carry `slug:`). It is inert today only because those rules' sources are
 no longer scanned, so they never reach a staging branch.
 
-Run:
+The command below is **reference only — the owner runs it, not you.** Copy its
+title and body into the file named above.
 
 ```bash
 gh issue create \
