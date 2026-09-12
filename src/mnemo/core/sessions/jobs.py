@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +47,28 @@ class Session:
     link_scan_path: str | None = None
     updated_at: str | None = None
     children: tuple[dict[str, Any], ...] = ()
+    live: bool | None = None
 
     @property
     def is_blocked(self) -> bool:
         """True when a human is needed. Driven by ``tempo``, never ``state``."""
         return self.tempo == "blocked"
+
+    @property
+    def is_abandoned(self) -> bool:
+        """Blocked on disk, but the process behind it is provably gone (#196).
+
+        ``tempo`` records the last thing a process wrote, not a fact about the
+        present, so a session that blocks and then dies asks for attention
+        forever. Only ``live is False`` — the daemon roster *proving* the pid
+        is gone — counts. ``None`` (no roster, nothing to ask) never does.
+        """
+        return self.is_blocked and self.live is False
+
+    @property
+    def is_waiting(self) -> bool:
+        """Blocked and not known to be dead: a real claim on the maintainer."""
+        return self.is_blocked and not self.is_abandoned
 
     @property
     def is_done(self) -> bool:
@@ -108,7 +125,8 @@ def normalize_cwd(path: str | None) -> str | None:
         return path
 
 
-def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[Session]:
+def read_sessions(root: Path | None = None, *, cwd: str | None = None,
+                  claude_home: Path | None = None) -> list[Session]:
     """Every readable background session under *root* (default: real jobs dir).
 
     Unreadable or malformed entries are skipped, never raised: one corrupt
@@ -116,6 +134,11 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[S
     at all reads the same as one that is not there. Pass *cwd* to keep only
     sessions started under that directory; both sides are normalized, and a
     session with no recorded ``cwd`` never matches a scoped query.
+
+    Each session is stamped with ``live`` from the daemon roster (#196). The
+    roster is read **once** for the whole listing: the statusline calls this
+    on every render under a 2s timeout, so one extra file read per queue is
+    the budget, not one per session.
     """
     base = jobs_dir() if root is None else root
     if not base.is_dir():
@@ -131,6 +154,15 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[S
 
     scope = normalize_cwd(cwd)
 
+    # One read for the whole queue. `None` means the roster was unreadable, in
+    # which case every session keeps live=None and is treated as waiting.
+    from mnemo.core.sessions import liveness as _liveness
+
+    try:
+        roster = _liveness.read_roster(claude_home)
+    except Exception:  # pragma: no cover - read_roster is already total
+        roster = None
+
     out: list[Session] = []
     for entry in entries:
         if not entry.is_dir():
@@ -144,5 +176,7 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None) -> list[S
         session = _parse(entry.name, data)
         if cwd is not None and normalize_cwd(session.cwd) != scope:
             continue
+        if roster is not None:
+            session = replace(session, live=_liveness.is_live(entry.name, roster=roster))
         out.append(session)
     return out

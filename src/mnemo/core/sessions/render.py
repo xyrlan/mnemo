@@ -3,9 +3,16 @@
 Pure: takes :class:`Session` records, returns a string. No I/O, so the
 ordering rules are testable without touching disk.
 
-The ordering is the feature. Blocked first, oldest first — the maintainer
+The ordering is the feature. Waiting first, **newest first** — the maintainer
 reads the first line and knows which session to attach to. Everything else
 is context.
+
+Newest first, not oldest: a blocked session's ``tempo`` is frozen at the
+moment its process stopped writing, so the stalest entry is the one most
+likely to be a corpse (#196). Sorting oldest-first pinned zombies to the top
+and aimed the attach hint at the worst of them. Sessions whose process is
+provably gone move to their own bucket — re-bucketed, never hidden, because
+a queue that silently drops entries cannot be trusted to be complete.
 """
 from __future__ import annotations
 
@@ -36,13 +43,28 @@ def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
     return f"{minutes // 60}h"
 
 
+NO_TIMESTAMP_DESC = ""  # sorts before every real ISO-8601 timestamp
+
+
 def _sort_key(s: Session) -> str:
     """Oldest update first; sessions without a timestamp sort last.
 
     ISO-8601 sorts lexically, so the year 9999 is simply later than any
-    timestamp a real session can carry.
+    timestamp a real session can carry. Used for the abandoned bucket, where
+    oldest-first is the right order: the stalest corpse is the one to clear.
     """
     return s.updated_at or NO_TIMESTAMP
+
+
+def _freshest_first(s: Session) -> str:
+    """Newest update first; sessions without a timestamp sort last.
+
+    Descending on the timestamp means the empty string — the absent one —
+    would otherwise sort *first* and hand the attach hint to a session we know
+    nothing about. Reversing the sort is not enough; the sentinel has to flip
+    with it.
+    """
+    return s.updated_at or NO_TIMESTAMP_DESC
 
 
 def _tokens(s: Session) -> str:
@@ -61,15 +83,16 @@ def render_queue(sessions: list[Session]) -> str:
     if not sessions:
         return EMPTY
 
-    blocked = sorted((s for s in sessions if s.is_blocked), key=_sort_key)
+    waiting = sorted((s for s in sessions if s.is_waiting), key=_freshest_first, reverse=True)
+    abandoned = sorted((s for s in sessions if s.is_abandoned), key=_sort_key)
     done = [s for s in sessions if s.is_done and not s.is_blocked]
     working = [s for s in sessions if not s.is_blocked and not s.is_done]
 
     lines: list[str] = []
 
-    if blocked:
-        lines.append(f"TE ESPERANDO ({len(blocked)})")
-        for s in blocked:
+    if waiting:
+        lines.append(f"TE ESPERANDO ({len(waiting)})")
+        for s in waiting:
             age = _age(s.updated_at)
             lines.append(f"  {s.short_id}  {s.label:<22} {age:>5}  {s.needs or s.detail or '—'}")
             if s.suggested_reply:
@@ -88,7 +111,18 @@ def render_queue(sessions: list[Session]) -> str:
             lines.append(f"  {s.short_id}  {s.label:<22} {_prs(s) or s.detail or '—':<34}{_tokens(s):>6}")
         lines.append("")
 
-    if blocked:
-        lines.append(f"  attach: claude attach {blocked[0].short_id}")
+    if abandoned:
+        # Listed, not hidden. These asked for a human and their process died
+        # before getting one; the user decides whether that still matters.
+        lines.append(f"ABANDONADAS ({len(abandoned)})")
+        for s in abandoned:
+            age = _age(s.updated_at)
+            lines.append(f"  {s.short_id}  {s.label:<22} {age:>5}  {s.needs or s.detail or '—'}")
+        lines.append("")
+
+    if waiting:
+        lines.append(f"  attach: claude attach {waiting[0].short_id}")
+    if abandoned:
+        lines.append(f"  limpar: claude rm {abandoned[0].short_id}")
 
     return "\n".join(lines).rstrip() + "\n"
