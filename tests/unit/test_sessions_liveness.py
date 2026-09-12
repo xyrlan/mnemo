@@ -177,3 +177,47 @@ def test_windows_never_probes_with_os_kill() -> None:
         "pid_alive() has no sys.platform guard — os.kill(pid, 0) on Windows "
         "sends a console Ctrl-C instead of probing the pid (#196)"
     )
+
+
+def test_windows_probe_declares_its_ctypes_signatures() -> None:
+    """Every kernel32 call must declare ``restype`` and ``argtypes``.
+
+    ctypes assumes ``c_int`` for an undeclared return, so on 64-bit Windows the
+    HANDLE from ``OpenProcess`` is truncated to 32 bits — and the code then
+    closes the wrong handle, or fails to close it at all. It survives whenever
+    a handle value happens to be small, which is why it passes CI and would
+    surface as an intermittent leak on a real machine.
+
+    Checked by parsing the source: the calls cannot run on this platform, and
+    the failure they guard against is silent rather than raising.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(liveness.__file__).read_text(encoding="utf-8"))
+    fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_pid_alive_windows"
+    )
+
+    called = {
+        node.func.attr
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "kernel32"
+    }
+    declared = {
+        node.targets[0].value.attr
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Attribute)
+        and node.targets[0].attr in ("restype", "argtypes")
+        and isinstance(node.targets[0].value, ast.Attribute)
+    }
+
+    assert called <= declared, (
+        f"kernel32 call(s) without declared restype/argtypes: {sorted(called - declared)}. "
+        "An undeclared HANDLE return is truncated to 32 bits on 64-bit Windows."
+    )
