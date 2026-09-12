@@ -52,6 +52,16 @@ class StateEntry:
     # mnemo ignores the extra key rather than refusing to load the file, and
     # a state file written before this field existed loads with False.
     origin_backfill: bool = False
+    # Sticky demotion marker, exactly parallel to ``origin_backfill`` above and
+    # for the same reason (#177). ``ExtractedPage.unverified_feedback`` is set
+    # by the evidence gate, which only runs on ``type: feedback`` pages — so
+    # the run that re-emits an already-demoted slug as a native ``reference``
+    # page produces no reading at all, and the page auto-promoted into the
+    # sacred dir leaving the _inbox copy behind. Never cleared: a page demoted
+    # once stays staged until a person reviews it.
+    #
+    # Optional and additive on disk, so it needs no schema bump.
+    unverified_feedback: bool = False
 
     def mark_written(
         self,
