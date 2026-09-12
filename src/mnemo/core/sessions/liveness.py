@@ -101,6 +101,19 @@ def _pid_alive_windows(pid: int) -> bool:
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    # Declared, not left to ctypes' defaults. A function with no ``restype``
+    # is assumed to return ``c_int``, so on 64-bit Windows the HANDLE from
+    # OpenProcess would be truncated to 32 bits — which then closes the wrong
+    # handle, or fails to. It happens to survive when a handle value is small,
+    # which is the worst kind of bug: it usually works.
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
     handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         # ERROR_ACCESS_DENIED (5) means it exists and is not ours to inspect,
