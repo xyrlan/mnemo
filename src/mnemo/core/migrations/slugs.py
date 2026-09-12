@@ -36,6 +36,10 @@ MARKER_REL = ".mnemo/slugs-stamped.v1"
 class SlugReport:
     scanned: int = 0
     stamped: int = 0
+    #: Entries whose ``written_hash`` this run advanced to match bytes the
+    #: migration itself wrote (#179). Counts both pages stamped by this run
+    #: and pages an earlier, pre-fix run stamped and left drifted.
+    reconciled: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
 
 
@@ -72,6 +76,93 @@ def _stamp(text: str, slug: str) -> str:
     return text[:start] + "\n".join(out) + "\n" + text[close:]
 
 
+def _unstamp(text: str) -> Optional[str]:
+    """Return *text* with the first frontmatter ``slug:`` line removed.
+
+    The exact inverse of :func:`_stamp`, which inserts one line and leaves
+    every other byte alone. Used by :func:`_reconcile` to ask "were these
+    bytes produced by this migration, or by a person?" — if hashing the
+    unstamped text reproduces the recorded ``written_hash``, the only change
+    since that write was the stamp, and the entry can be advanced safely.
+
+    None when there is no frontmatter or no ``slug:`` line to remove.
+    """
+    span = _fm_span(text)
+    if span is None:
+        return None
+    start, close = span
+    lines = text[start:close].splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("slug:"):
+            rest = lines[:i] + lines[i + 1:]
+            body = ("\n".join(rest) + "\n") if rest else ""
+            return text[:start] + body + text[close:]
+    return None
+
+
+def _absolutize_sources(text: str, vault_root: Path) -> Optional[str]:
+    """Return *text* with vault-relative ``sources:`` entries made absolute.
+
+    The inverse of the #161/#163 normalization, which rewrote every
+    ``sources:`` entry from the absolute path the consolidation prompt echoed
+    back to the vault-relative form. Like the slug stamp, it edited one
+    frontmatter field in place and left ``written_hash`` behind.
+
+    The prefix has to be *this* vault's own path, because that is what the
+    scanner emitted at the time.
+
+    None when no line would change, so the caller can tell "nothing to undo"
+    from "undone".
+    """
+    prefix = f"{Path(vault_root).resolve()}/"
+    out: list[str] = []
+    changed = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        if stripped.startswith("- bots/") and indent.strip() == "":
+            out.append(f"{indent}- {prefix}{stripped[2:]}")
+            changed = True
+        else:
+            out.append(line)
+    return "".join(out) if changed else None
+
+
+def _explained_by_migrations(
+    text: str, written_hash: str, vault_root: Path,
+) -> bool:
+    """True when *text* differs from the recorded bytes only by migrations.
+
+    The safety property of :func:`_reconcile`: a genuine hand edit must never
+    be reconciled, or ``written_hash`` stops meaning anything. So rather than
+    trusting that a page "looks migrated", every known bulk rewrite is
+    *undone* and the result hashed. If some combination reproduces
+    ``written_hash`` exactly, the only changes since that write were ours.
+
+    Two rewrites shipped without advancing the hash, and both are undoable
+    because each edits one frontmatter field and leaves every other byte
+    alone: the ``slug:`` stamp of this module (#114), and the ``sources:``
+    relativization of #161/#163. They are tried alone and composed, because a
+    page written before both carries both — which is the case for every one of
+    the 179 entries whose source is dirty today, so composing is what actually
+    disarms them rather than only healing inert drift.
+
+    Anything else — a reworded body, a hand-added tag — fails every candidate
+    and is left for a person.
+    """
+    from mnemo.core.extract.inbox.io import content_hash
+
+    unstamped = _unstamp(text)
+    candidates = [
+        unstamped,
+        _absolutize_sources(text, vault_root),
+        _absolutize_sources(unstamped, vault_root) if unstamped else None,
+    ]
+    return any(
+        c is not None and content_hash(c) == written_hash for c in candidates
+    )
+
+
 _PROJECT_TYPE = "project"
 
 
@@ -86,6 +177,88 @@ def _slug_for(md: Path, shared: Path) -> str:
     return _normalize_slug(md.stem)
 
 
+_STATE_REL = ".mnemo/extraction-state.json"
+
+
+def _key_for(md: Path, shared: Path) -> Optional[str]:
+    """``<type>/<slug>`` for a live page, or None when it is not one.
+
+    Mirrors the key shape ``apply_pages`` and ``promote_projects`` install:
+    the type directory and the page's slug, with the ``_inbox`` hop dropped
+    because staged and promoted pages share one entry.
+    """
+    parts = md.relative_to(shared).parts[:-1]
+    if parts and parts[0] == "_inbox":
+        parts = parts[1:]
+    if not parts:
+        return None
+    return f"{parts[0]}/{_slug_for(md, shared)}"
+
+
+def _reconcile(vault_root: Path, touched: dict[str, Path]) -> int:
+    """Advance ``written_hash`` for entries whose page this migration wrote.
+
+    A bulk rewriter owns the bytes it produces, so leaving ``written_hash``
+    behind makes every page it touched read as "user edited" to
+    ``extract/inbox/branches/*`` and ``promote.py`` — the condition that
+    stages a ``.proposed.md`` instead of updating the page in place (#179).
+    ``reclassify_apply.py`` already does this for its own writes.
+
+    Two populations are healed, because on every real vault the migration has
+    already run once without this step:
+
+    * pages *this* run stamped — ``touched`` carries them;
+    * pages an earlier run stamped and left drifted — found by walking the
+      state and testing each entry.
+
+    The safety property is that a genuine hand edit must NOT be reconciled,
+    or ``written_hash`` stops meaning anything. So an entry is advanced only
+    when :func:`_unstamp` of the page on disk hashes back to the recorded
+    ``written_hash``: i.e. the one and only difference between what the state
+    remembers and what is on disk is the stamp this migration adds. Anything
+    else — a reworded body, a new tag — fails that test and is left alone for
+    a person to resolve.
+    """
+    from mnemo.core.extract.inbox.io import content_hash
+    from mnemo.core.extract.inbox.state_io import atomic_write_state, load_state
+
+    state_path = Path(vault_root) / _STATE_REL
+    if not state_path.is_file():
+        return 0
+    try:
+        state = load_state(state_path)
+    except Exception:  # noqa: BLE001 — a broken state file is not this migration's to fix
+        return 0
+
+    shared = Path(vault_root) / "shared"
+    healed = 0
+    for key, entry in state.entries.items():
+        page = touched.get(key)
+        if page is None:
+            ty, _, slug = key.partition("/")
+            for cand in (shared / ty / f"{slug}.md",
+                         shared / "_inbox" / ty / f"{slug}.md"):
+                if cand.is_file():
+                    page = cand
+                    break
+        if page is None or not page.is_file():
+            continue
+        try:
+            text = page.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if content_hash(text) == entry.written_hash:
+            continue  # already in sync
+        if not _explained_by_migrations(text, entry.written_hash, vault_root):
+            continue  # a real edit, or drift no known migration caused
+        entry.written_hash = content_hash(text)
+        healed += 1
+
+    if healed:
+        atomic_write_state(state, state_path)
+    return healed
+
+
 def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
     """Stamp every live page (``_inbox`` included, ``_archive`` excluded) that
     lacks a non-empty string ``slug``. The slug is the file stem — normalized
@@ -93,6 +266,7 @@ def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
     was written under in the first place."""
     rep = SlugReport()
     shared = Path(vault_root) / "shared"
+    touched: dict[str, Path] = {}
     for md in iter_shared_pages(Path(vault_root), include_inbox=True):
         rep.scanned += 1
         try:
@@ -110,6 +284,14 @@ def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
         rep.stamped += 1
         if not dry_run:
             atomic_write_bytes(md, new.encode("utf-8"))
+            key = _key_for(md, shared)
+            if key is not None:
+                touched[key] = md
+    # #179: the bytes above are ours, so the state must be told. Runs even when
+    # nothing was stamped: every real vault already has the marker on disk, so
+    # its drift is historical and would otherwise never heal.
+    if not dry_run:
+        rep.reconciled = _reconcile(Path(vault_root), touched)
     return rep
 
 
