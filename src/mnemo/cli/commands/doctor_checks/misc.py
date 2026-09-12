@@ -106,7 +106,7 @@ def _doctor_check_auto_brain(vault: Path) -> bool:
 
 
 def _doctor_check_background_sessions(
-    _vault: Path | None = None, *, jobs_root: Path | None = None
+    vault: Path | None = None, *, jobs_root: Path | None = None
 ) -> bool:
     """Report Claude Code background sessions and whether we can read them.
 
@@ -115,17 +115,14 @@ def _doctor_check_background_sessions(
     schema or packaging break in this path is otherwise invisible — the queue
     would print "no sessions" and look healthy. Counting unreadable entries
     makes that visible the way piping the CLI made the Windows crash visible.
-
-    The first positional argument is the *vault*, because every entry in
-    ``DOCTOR_CHECKS`` is invoked as ``check_fn(vault)`` — and it is ignored,
-    because background sessions do not live in the vault. Binding the jobs
-    root to that parameter instead would make doctor scan the vault, find no
-    ``state.json`` anywhere, and print "no background sessions" forever:
-    registered, running, and reporting nothing, which is the exact blindness
-    this check exists to remove. Tests pass ``jobs_root`` by keyword.
     """
     from mnemo.core.sessions.jobs import jobs_dir, read_sessions
 
+    # `vault` is part of every doctor check's signature but unused here on
+    # purpose: background sessions live in Claude Code's own jobs dir, not in
+    # the vault. Binding the jobs root to that parameter instead would make
+    # doctor scan the vault, find no `state.json` anywhere, and print "no
+    # background sessions" forever. Tests pass `jobs_root` by keyword.
     base = jobs_dir() if jobs_root is None else jobs_root
     if not base.is_dir():
         print("  ✓ no background sessions")
@@ -145,13 +142,19 @@ def _doctor_check_background_sessions(
 
     try:
         sessions = read_sessions(base)
-    except OSError as exc:  # pragma: no cover - read_sessions skips bad entries
+    except OSError as exc:
+        # `read_sessions` skips bad *entries*, but lists the dir a second time
+        # without guarding that call — a permission lost between the two walks
+        # surfaces here, not there.
         print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
         return True
 
     unreadable = max(len(dirs) - len(sessions), 0)
     blocked = sum(1 for s in sessions if s.is_blocked)
     word = "session" if len(dirs) == 1 else "sessions"
+    # ⚠, not ✓: an entry we could not read is the one thing this check exists
+    # to surface, and nobody skimming for ✗/⚠/ℹ would ever stop on a ✓ line.
+    glyph = "⚠" if unreadable else "✓"
     suffix = f", {unreadable} unreadable" if unreadable else ""
-    print(f"  ✓ {len(dirs)} background {word} ({blocked} waiting{suffix})")
+    print(f"  {glyph} {len(dirs)} background {word} ({blocked} waiting{suffix})")
     return True

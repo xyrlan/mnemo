@@ -63,13 +63,20 @@ def test_unreadable_state_is_reported(jobs: Path, capsys) -> None:
     (bad / "state.json").write_text("{not json", encoding="utf-8")
 
     assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
-    assert "1 unreadable" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "1 unreadable" in out
+    # Advisory, but not an all-clear: the ✓ glyph would hide the one condition
+    # this check exists to surface from anyone skimming for ✗/⚠/ℹ.
+    assert "⚠" in out
+    assert "✓" not in out
 
 
 def test_one_session_is_singular(jobs: Path, capsys) -> None:
     _job(jobs, "a", state="working", tempo="active")
     assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
-    assert "1 background session (" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "1 background session (" in out
+    assert "✓" in out
 
 
 # --- Registration: doctor calls every check with the vault path ---
@@ -116,7 +123,9 @@ def test_state_json_that_is_a_directory_does_not_raise(jobs: Path, capsys) -> No
     (jobs / "weird" / "state.json").mkdir(parents=True)
 
     assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
-    assert "1 unreadable" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "1 unreadable" in out
+    assert "⚠" in out
 
 
 def test_unlistable_jobs_dir_does_not_raise(jobs: Path, monkeypatch, capsys) -> None:
@@ -130,4 +139,32 @@ def test_unlistable_jobs_dir_does_not_raise(jobs: Path, monkeypatch, capsys) -> 
     monkeypatch.setattr(Path, "iterdir", _boom)
 
     assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
+    assert "could not read" in capsys.readouterr().out
+
+
+def test_jobs_dir_unlistable_on_second_walk_does_not_raise(
+    jobs: Path, monkeypatch, capsys
+) -> None:
+    """The jobs dir is walked twice: once here, once inside ``read_sessions``.
+
+    ``read_sessions`` does not guard its own ``sorted(base.iterdir())``, so a
+    permission that disappears between the two walks (or an NFS hiccup) raises
+    out of it. Doctor must absorb that, not abort the whole run.
+    """
+    _job(jobs, "a", state="working", tempo="active")
+
+    real_iterdir = Path.iterdir
+    calls = {"n": 0}
+
+    def _boom_on_second(self):
+        if self == jobs:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise PermissionError(13, "Permission denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _boom_on_second)
+
+    assert doctor_misc._doctor_check_background_sessions(jobs_root=jobs) is True
+    assert calls["n"] == 2, "the second walk (inside read_sessions) must happen"
     assert "could not read" in capsys.readouterr().out
