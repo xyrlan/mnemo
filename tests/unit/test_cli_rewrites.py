@@ -83,6 +83,40 @@ def test_reject_archives_the_proposal_before_deleting_it(tmp_vault: Path, monkey
     assert "archived to" in capsys.readouterr().out
 
 
+def test_unreadable_proposal_reports_a_message_not_a_traceback(
+    tmp_vault: Path, monkeypatch, capsys
+):
+    """A hidden backlog surfaced as a stack trace is still hidden.
+
+    ``classify`` raises on an unreadable proposal rather than silently shrinking
+    the plan — that guarantee is pinned in the classify tests. But letting the
+    raise escape ``cmd_rewrites`` printed a bare ``PermissionError`` traceback,
+    which tells a human something broke without saying which file or why. The
+    boundary catches it and names the path.
+    """
+    import os
+
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    args = argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None, accept=None, reject=None, undo=None
+    )
+
+    os.chmod(prop, 0o000)
+    try:
+        assert cmd.cmd_rewrites(args) == 1
+    finally:
+        os.chmod(prop, 0o644)
+
+    out = capsys.readouterr().out
+    assert "cannot read" in out
+    assert "a__x.proposed.md" in out
+
+
 def test_dry_run_lists_safe_and_undecided_without_writing(tmp_vault: Path, monkeypatch, capsys):
     from mnemo import cli
     from mnemo.cli.commands import rewrites as cmd

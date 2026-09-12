@@ -91,7 +91,18 @@ def cmd_rewrites(args: argparse.Namespace) -> int:
         print(f"restored {restored} file(s) from rewrites-{args.undo}")
         return 0
 
-    rewrites = classify(vault)
+    # ``classify`` deliberately does not guard OSError — swallowing it made "no
+    # rewrites staged" indistinguishable from "every one failed to read". But a
+    # raw traceback is a worse kind of invisible than silence: it tells a human
+    # something broke without telling them which file or why, on a command whose
+    # whole purpose is making a hidden backlog visible. Raise in the library,
+    # report at the boundary.
+    try:
+        rewrites = classify(vault)
+    except OSError as exc:
+        path = getattr(exc, "filename", None) or vault
+        print(f"cannot read {path}: {exc.strerror or exc}")
+        return 1
     if not rewrites:
         print("no staged rewrites in shared/_inbox/")
         return 0
