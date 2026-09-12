@@ -28,6 +28,61 @@ def _seed(vault: Path) -> None:
     prop.write_text(f"---\n{fm}\n---\n\nline one\nline two\n", encoding="utf-8")
 
 
+def test_two_write_actions_are_refused_rather_than_resolved_by_precedence(
+    tmp_vault: Path, monkeypatch, capsys
+):
+    """``--accept X --reject X`` must not silently pick one.
+
+    The dispatch resolves conflicts by precedence, so reject ran and the accept
+    was never mentioned. Tolerable for flags that only print; not for two that
+    write.
+    """
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    args = argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None,
+        accept="project/a__x", reject="project/a__x", undo=None,
+    )
+
+    assert cmd.cmd_rewrites(args) == 1
+
+    out = capsys.readouterr().out
+    assert "pick one action" in out
+    # Nothing was written: the proposal survives.
+    assert (tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md").exists()
+
+
+def test_reject_archives_the_proposal_before_deleting_it(tmp_vault: Path, monkeypatch, capsys):
+    """A reject must not be the one path that destroys reviewed text.
+
+    ``apply`` archives every file it touches. ``--reject`` only unlinked, and the
+    extractor re-derives a proposal from its source — so once that source moves
+    on, the rejected text was gone for good.
+    """
+    from mnemo import cli
+    from mnemo.cli.commands import rewrites as cmd
+
+    _seed(tmp_vault)
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    before = prop.read_bytes()
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    args = argparse.Namespace(
+        command="rewrites", apply_safe=False, show=None,
+        accept=None, reject="project/a__x", undo=None,
+    )
+
+    assert cmd.cmd_rewrites(args) == 0
+    assert not prop.exists()
+
+    archived = list((tmp_vault / "shared" / "_archive").glob("rejected-*/a__x.proposed.md"))
+    assert len(archived) == 1
+    assert archived[0].read_bytes() == before
+    assert "archived to" in capsys.readouterr().out
+
+
 def test_dry_run_lists_safe_and_undecided_without_writing(tmp_vault: Path, monkeypatch, capsys):
     from mnemo import cli
     from mnemo.cli.commands import rewrites as cmd

@@ -27,10 +27,22 @@ def _print_plan(rewrites: list) -> None:
     safe = [r for r in rewrites if r.kind == "insert_only"]
     undecided = [r for r in rewrites if r.kind != "insert_only"]
 
+    # Column width from the actual rows, not a guess. Hardcoded 55/45 misaligned
+    # on the real vault, where the longest key is 70 characters
+    # (reference/deploy-database-migrations-before-code-that-depends-on-new-t).
+    width = max((len(r.key) for r in rewrites), default=0)
+
     if safe:
         print(f"  safe to merge ({len(safe)}) — insert-only, no live content dropped")
         for r in safe:
-            print(f"    {r.key:<55} +{r.inserted_lines} lines")
+            # An insert-only rewrite can add zero body lines and still be worth
+            # merging: its change is in the frontmatter, usually a description
+            # the live rule has wrong. "+0 lines" alone reads as nothing to do.
+            added = (
+                f"+{r.inserted_lines} lines" if r.inserted_lines
+                else "frontmatter only"
+            )
+            print(f"    {r.key:<{width}}  {added}")
         print()
     if undecided:
         print(f"  needs a decision ({len(undecided)})")
@@ -43,7 +55,7 @@ def _print_plan(rewrites: list) -> None:
             # bucket above is insert-only by construction (no replace opcodes),
             # so its ``+N`` is honest. If a future ``--show`` surfaces these
             # counts for mixed/full_rewrite, label them "changed", not "+/-".
-            print(f"    {r.key:<45} {kind:<13} keeps {r.keep_ratio:.0%}{flag}")
+            print(f"    {r.key:<{width}}  {kind:<13} keeps {r.keep_ratio:.0%}{flag}")
         print()
     print("(dry-run — `mnemo rewrites --apply-safe` merges the safe set; "
           "`--show KEY` prints one diff)")
@@ -56,6 +68,20 @@ def cmd_rewrites(args: argparse.Namespace) -> int:
     from mnemo.core.rewrites.classify import classify
 
     vault = cli._resolve_vault()
+
+    # One action per invocation. The dispatch below resolves conflicts by
+    # precedence, which silently picks a winner: `--accept X --reject X` would
+    # reject without ever mentioning the accept. Fine for a flag that only
+    # prints, not for two that write.
+    chosen = [
+        name for name in ("undo", "show", "accept", "reject")
+        if getattr(args, name, None)
+    ]
+    if getattr(args, "apply_safe", False):
+        chosen.append("apply-safe")
+    if len(chosen) > 1:
+        print(f"pick one action, got: {', '.join('--' + c for c in chosen)}")
+        return 1
 
     if getattr(args, "undo", None):
         restored = A.undo(vault, args.undo)
@@ -90,10 +116,21 @@ def cmd_rewrites(args: argparse.Namespace) -> int:
         if r is None:
             print(f"no staged rewrite for {args.reject}")
             return 1
+        # Archive before deleting. ``apply`` archives every file it touches, and
+        # a reject that only unlinks is the one path in this command that
+        # destroys reviewed text with no way back. The extractor re-derives a
+        # proposal from its source, so if that source has since moved on, the
+        # rejected text is unrecoverable — which makes "reject is not permanent"
+        # true of the decision but false of the content.
+        arch = vault / "shared" / "_archive" / f"rejected-{A._run_id()}"
+        arch.mkdir(parents=True, exist_ok=True)
+        dest = arch / r.proposal.name
+        dest.write_bytes(r.proposal.read_bytes())
         r.proposal.unlink()
         print(f"rejected {r.key}; live rule untouched")
-        print("note: the extractor will re-propose this until the live rule or its "
-              "source changes — reject is not a permanent decision")
+        print(f"  archived to {dest.relative_to(vault)}")
+        print("note: the extractor re-proposes from the source transcript, so this "
+              "returns only while that source says the same thing")
         return 0
 
     if getattr(args, "accept", None):
