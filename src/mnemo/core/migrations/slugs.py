@@ -100,6 +100,69 @@ def _unstamp(text: str) -> Optional[str]:
     return None
 
 
+def _absolutize_sources(text: str, vault_root: Path) -> Optional[str]:
+    """Return *text* with vault-relative ``sources:`` entries made absolute.
+
+    The inverse of the #161/#163 normalization, which rewrote every
+    ``sources:`` entry from the absolute path the consolidation prompt echoed
+    back to the vault-relative form. Like the slug stamp, it edited one
+    frontmatter field in place and left ``written_hash`` behind.
+
+    The prefix has to be *this* vault's own path, because that is what the
+    scanner emitted at the time.
+
+    None when no line would change, so the caller can tell "nothing to undo"
+    from "undone".
+    """
+    prefix = f"{Path(vault_root).resolve()}/"
+    out: list[str] = []
+    changed = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        if stripped.startswith("- bots/") and indent.strip() == "":
+            out.append(f"{indent}- {prefix}{stripped[2:]}")
+            changed = True
+        else:
+            out.append(line)
+    return "".join(out) if changed else None
+
+
+def _explained_by_migrations(
+    text: str, written_hash: str, vault_root: Path,
+) -> bool:
+    """True when *text* differs from the recorded bytes only by migrations.
+
+    The safety property of :func:`_reconcile`: a genuine hand edit must never
+    be reconciled, or ``written_hash`` stops meaning anything. So rather than
+    trusting that a page "looks migrated", every known bulk rewrite is
+    *undone* and the result hashed. If some combination reproduces
+    ``written_hash`` exactly, the only changes since that write were ours.
+
+    Two rewrites shipped without advancing the hash, and both are undoable
+    because each edits one frontmatter field and leaves every other byte
+    alone: the ``slug:`` stamp of this module (#114), and the ``sources:``
+    relativization of #161/#163. They are tried alone and composed, because a
+    page written before both carries both — which is the case for every one of
+    the 179 entries whose source is dirty today, so composing is what actually
+    disarms them rather than only healing inert drift.
+
+    Anything else — a reworded body, a hand-added tag — fails every candidate
+    and is left for a person.
+    """
+    from mnemo.core.extract.inbox.io import content_hash
+
+    unstamped = _unstamp(text)
+    candidates = [
+        unstamped,
+        _absolutize_sources(text, vault_root),
+        _absolutize_sources(unstamped, vault_root) if unstamped else None,
+    ]
+    return any(
+        c is not None and content_hash(c) == written_hash for c in candidates
+    )
+
+
 _PROJECT_TYPE = "project"
 
 
@@ -186,9 +249,8 @@ def _reconcile(vault_root: Path, touched: dict[str, Path]) -> int:
             continue
         if content_hash(text) == entry.written_hash:
             continue  # already in sync
-        without = _unstamp(text)
-        if without is None or content_hash(without) != entry.written_hash:
-            continue  # a real edit, or drift this migration did not cause
+        if not _explained_by_migrations(text, entry.written_hash, vault_root):
+            continue  # a real edit, or drift no known migration caused
         entry.written_hash = content_hash(text)
         healed += 1
 

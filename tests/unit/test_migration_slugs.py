@@ -181,3 +181,59 @@ def test_a_genuine_user_edit_is_not_reconciled(tmp_path):
     entry = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
     assert entry.written_hash != content_hash(p.read_text(encoding="utf-8"))
     assert rep.reconciled == 0
+
+
+def test_reconciles_a_page_carrying_both_bulk_rewrites(tmp_path):
+    """Pages written before 2026-09-02 carry the slug stamp *and* the #161/#163
+    `sources:` relativization. Undoing only one still misses — and on the real
+    vault those are exactly the 179 entries whose source is dirty today, so
+    composing the two reversals is what disarms them (#179)."""
+    pre_both = (
+        "---\nname: T\ntype: project\nsources:\n"
+        f"  - {tmp_path.resolve()}/bots/proj/memory/project_thing.md\n"
+        "---\nbody\n"
+    )
+    p = _page(tmp_path, "shared/project/proj__thing.md",
+              "---\nname: T\nslug: proj__thing\ntype: project\nsources:\n"
+              "  - bots/proj/memory/project_thing.md\n---\nbody\n")
+    state = ExtractionState(last_run=None, entries={
+        "project/proj__thing": StateEntry(
+            source_files=["bots/proj/memory/project_thing.md"],
+            source_hash="s1",
+            written_hash=content_hash(pre_both),
+            written_at="r0",
+            status="direct",
+        ),
+    })
+    atomic_write_state(state, tmp_path / STATE_REL)
+
+    rep = slugs.stamp_slugs(tmp_path)
+
+    assert rep.reconciled == 1
+    entry = load_state(tmp_path / STATE_REL).entries["project/proj__thing"]
+    assert entry.written_hash == content_hash(p.read_text(encoding="utf-8"))
+
+
+def test_an_edit_on_top_of_a_migrated_page_is_not_reconciled(tmp_path):
+    """Composing reversals must not become a way to wave through real edits:
+    undoing both rewrites still has to reproduce the recorded bytes exactly."""
+    pre_both = (
+        "---\nname: T\ntype: project\nsources:\n"
+        f"  - {tmp_path.resolve()}/bots/proj/memory/project_thing.md\n"
+        "---\nbody\n"
+    )
+    _page(tmp_path, "shared/project/proj__thing.md",
+          "---\nname: T\nslug: proj__thing\ntype: project\nsources:\n"
+          "  - bots/proj/memory/project_thing.md\n---\nEDITED BY HAND\n")
+    state = ExtractionState(last_run=None, entries={
+        "project/proj__thing": StateEntry(
+            source_files=["bots/proj/memory/project_thing.md"],
+            source_hash="s1",
+            written_hash=content_hash(pre_both),
+            written_at="r0",
+            status="direct",
+        ),
+    })
+    atomic_write_state(state, tmp_path / STATE_REL)
+
+    assert slugs.stamp_slugs(tmp_path).reconciled == 0
