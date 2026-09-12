@@ -31,7 +31,15 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
 
     def _read():
-        return read_sessions(cwd=scope)
+        found = read_sessions(cwd=scope)
+        try:
+            from mnemo import cli  # late binding for monkeypatched _resolve_vault
+            from mnemo.core.sessions import detector
+
+            detector.sweep(found, vault_root=cli._resolve_vault())
+        except Exception:
+            pass  # the queue must print even when the vault is unavailable
+        return found
 
     if bool(getattr(args, "json", False)):
         print(_json.dumps([asdict(s) for s in _read()], indent=2, ensure_ascii=False))
