@@ -995,10 +995,10 @@ pulling:
 v0.9.x and v0.10.x shipped in master but were never reflected in
 `pyproject.toml` (both remained at 0.8.0). This release jumps 0.8 → 0.11
 to align the package version with the already-shipped feature set. The
-v0.10 and v0.9 changelog sections below document the shipped content and
-remain `[Unreleased]` from the perspective of PyPI tagging.
+v0.10 and v0.9 changelog sections below document the shipped content;
+neither version was ever tagged on PyPI.
 
-## [Unreleased] — v0.10.0
+## [0.10.0]
 
 ### Added
 
@@ -1013,7 +1013,7 @@ remain `[Unreleased]` from the perspective of PyPI tagging.
 - `_build_injection_payload` accepts `inject_briefing: bool` parameter (default `False` for backwards compat with direct callers; SessionStart hook passes `True` by default via config).
 - `access_log_summary.summarize` returns two new top-level keys: `llm_cost`, `injection_stats`. Existing keys unchanged.
 
-## [Unreleased] — v0.9.0
+## [0.9.0]
 
 ### Changed
 
