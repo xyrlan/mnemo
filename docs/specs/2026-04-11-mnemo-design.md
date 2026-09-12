@@ -646,8 +646,10 @@ Removes hook entries from `settings.json` (restoring from backup when possible).
 GitHub Actions:
 - Matrix: Ubuntu + macOS × Python 3.8, 3.9, 3.10, 3.11, 3.12
 - Jobs: unit → integration → e2e → coverage gate (>85%)
-- Windows: runs unit tests as `continue-on-error: true` (experimental)
-- Gate: all Linux + macOS jobs must pass to merge
+- Windows: runs unit tests plus one piped CLI run; its result counts (#200)
+- Gate: every job reports its real conclusion. Note that `master` configures no
+  required status checks, so a red job is visible on the PR and in the run
+  conclusion but does not itself prevent a merge.
 
 ### 10.5 — Beta and launch
 
