@@ -125,6 +125,50 @@ def count_log_entries(log_path: Path) -> int:
     return sum(1 for _ in iter_rotated_rows(log_path))
 
 
+def _name_to_slug(vault_root: Path) -> dict[str, str] | None:
+    """Map each live rule's display name to its slug, for the #193 cutover.
+
+    ``hit_slugs`` recorded rule *names* until 2026-09-08 and slugs after, so
+    pre-cutover pairs cannot be resolved against a slug-keyed index and were
+    dropped wholesale as orphans. Rebuilding the mapping from the activation
+    index recovers them.
+
+    Only names that identify **exactly one** rule are included: a name shared
+    by two rules cannot be attributed to either, and guessing would inject a
+    case whose expected answer is unfounded. Such names are omitted, which
+    leaves the pair to be dropped by the orphan filter as before.
+
+    A second key is registered with ``'`` doubled to ``''``. Some logged names
+    escaped apostrophes that way (9 distinct names over 37 rows on the real
+    log), so the log's spelling never matches the live name and the rule reads
+    as deleted. Exact names are written last so a rule whose name genuinely
+    contains ``''`` — such as ``z.literal('')`` — always wins over another
+    rule's escaped form.
+
+    Returns ``None`` when the index is missing, matching
+    :func:`_current_slugs_for_topic` so callers can no-op the whole filter.
+    """
+    from mnemo.core import rule_activation
+
+    idx = rule_activation.load_index(vault_root)
+    if idx is None or "rules" not in idx:
+        return None
+
+    names: dict[str, list[str]] = {}
+    for slug, rule in idx["rules"].items():
+        name = rule.get("name")
+        if isinstance(name, str) and name.strip():
+            names.setdefault(name, []).append(slug)
+
+    escaped: dict[str, list[str]] = {}
+    for name, slugs in names.items():
+        if "'" in name:
+            escaped.setdefault(name.replace("'", "''"), []).extend(slugs)
+    mapping = {n: s[0] for n, s in escaped.items() if len(s) == 1}
+    mapping.update({n: s[0] for n, s in names.items() if len(s) == 1})
+    return mapping
+
+
 def _current_slugs_for_topic(
     vault_root: Path, project: str, topic: str
 ) -> set[str] | None:
@@ -176,11 +220,21 @@ def bootstrap_cases(
     pointing to a real recall defect. Backward-compatible: callers that omit
     the kwarg get every paired case (pre-filter behaviour).
 
+    *vault_root* also supplies the name→slug mapping that recovers pre-cutover
+    rows, whose ``hit_slugs`` hold rule names rather than slugs (#193). A name
+    identifying exactly one live rule is rewritten to its slug; a name matching
+    none, or more than one, is left alone and duly dropped by the orphan filter.
+    Recovery never invents a case — it only restores pairs whose target is
+    still unambiguously identifiable.
+
     When ``return_orphan_count=True``, returns ``(cases, dropped)`` where
     *dropped* is the number of pairs filtered as orphans in this single pass.
     Default False preserves the prior list-only shape for existing callers.
     """
     entries = _read_log(log_path)
+    # Name→slug mapping for pre-cutover rows; None without a vault to read it
+    # from, in which case names pass through untouched as before.
+    name_map = _name_to_slug(vault_root) if vault_root is not None else None
     # Index list-calls by project for fast lookup.
     lists_by_project: dict[str, list[dict]] = {}
     for e in entries:
@@ -223,16 +277,23 @@ def bootstrap_cases(
         if best is None or not best.get("topic"):
             continue
         query = best.get("query")
-        key = (project, best["topic"], slug, query is not None)
+        # Rank comes from the raw logged list, before any rewrite — the
+        # position is a property of that historical call.
+        rank = best["slugs"].index(slug) + 1
+        # Pre-cutover rows name the rule instead of identifying it by slug
+        # (#193). Resolve to the slug here, ahead of the dedup, so the same
+        # rule observed on both sides of the cutover collapses to one case
+        # rather than inflating the set with a duplicate.
+        expect_slug = name_map.get(slug, slug) if name_map else slug
+        key = (project, best["topic"], expect_slug, query is not None)
         if key in seen:
             continue
         seen.add(key)
-        rank = best["slugs"].index(slug) + 1
         case: Case = {
-            "id": f"{project}:{best['topic']}:{slug}" + ("?q" if query else ""),
+            "id": f"{project}:{best['topic']}:{expect_slug}" + ("?q" if query else ""),
             "project": project,
             "topic": best["topic"],
-            "expect_slug": slug,
+            "expect_slug": expect_slug,
             "rank_at_bootstrap": rank,
         }
         if query:
