@@ -17,6 +17,7 @@ visible on the next one as long as ``tempo`` has not flipped back.
 """
 from __future__ import annotations
 
+import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,8 +59,19 @@ def _save(vault_root: Path, data: dict[str, Any]) -> None:
 
 
 def sweep(sessions: list[Session], *, vault_root: Path) -> int:
-    """Record any ``blocked -> active`` edge. Returns how many were recorded."""
+    """Record any ``blocked -> active`` edge. Returns how many were recorded.
+
+    A sweep that changed nothing does not write. ``mnemo sessions --watch``
+    sweeps every two seconds, and most of those ticks find every session
+    exactly where the last one left it; writing anyway meant a mkstemp,
+    write and replace per tick, and put the atomic writer's
+    concurrent-writer retry path on a hot loop for no gain.
+
+    The return value is unrelated: it counts unblocks, and a sweep can change
+    state (a new session, a tempo move) while recording none.
+    """
     data = _load(vault_root)
+    before = copy.deepcopy(data)
     seen = data["seen"]
     recorded = 0
 
@@ -82,7 +94,12 @@ def sweep(sessions: list[Session], *, vault_root: Path) -> int:
         if s.is_blocked and s.needs:
             entry["last_needs"] = s.needs
 
-    _save(vault_root, data)
+    # Compared whole rather than tracked with a dirty flag on purpose: a flag
+    # has to be set at every mutation site and goes quietly stale the day a
+    # field is added to an entry, which would skip a write that mattered. This
+    # covers whatever the loop above touches, including fields not yet written.
+    if data != before:
+        _save(vault_root, data)
     return recorded
 
 

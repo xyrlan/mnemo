@@ -69,6 +69,29 @@ def test_reading_the_queue_sweeps_for_unblocks(monkeypatch, tmp_path: Path) -> N
     assert swept == [(found, vault)]
 
 
+def test_the_json_path_sweeps_too(monkeypatch, tmp_path: Path) -> None:
+    """``--json`` shares ``_read`` with the other two branches; nothing else
+    pins that, and a machine-read queue is as good a sweep trigger as a human
+    one."""
+    vault = tmp_path / "vault"
+    swept: list[tuple[object, Path]] = []
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.jobs.read_sessions",
+        lambda root=None, *, cwd=None: [],
+    )
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.sweep",
+        lambda sessions, *, vault_root: swept.append((sessions, vault_root)) or 0,
+    )
+
+    args = argparse.Namespace(json=True, watch=False, **{"all": True})
+    assert sessions_cmd.cmd_sessions(args) == 0
+
+    assert swept == [([], vault)]
+
+
 def test_an_unavailable_vault_still_prints_the_queue(monkeypatch, capsys) -> None:
     """A queue that refused to print because the vault moved would be useless."""
     def boom() -> Path:
