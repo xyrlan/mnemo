@@ -198,7 +198,12 @@ def test_appended_lines_classify_as_insert_only(tmp_vault: Path):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_classify.py::test_appended_lines_classify_as_insert_only -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'mnemo.core.rewrites.classify'`
+Expected: FAIL — `ImportError: cannot import name 'classify' from 'mnemo.core.rewrites'`
+
+(The test does `from mnemo.core.rewrites import classify as C`. Importing a *name
+from a package* that does not yet exist raises `ImportError: cannot import name`,
+not `ModuleNotFoundError` — the latter is what `import mnemo.core.rewrites.classify`
+would raise. If you see the `ImportError`, TDD is working correctly.)
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -471,7 +476,11 @@ def test_sources_are_normalized_and_unioned(tmp_vault: Path):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_merge.py::test_sources_are_normalized_and_unioned -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'mnemo.core.rewrites.merge'`
+Expected: FAIL — `ImportError: cannot import name 'merge' from 'mnemo.core.rewrites'`
+
+(`from mnemo.core.rewrites import merge as M` imports a name from a package, so the
+error is `ImportError: cannot import name`, not `ModuleNotFoundError`. That is the
+correct RED state.)
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -817,7 +826,11 @@ def test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating(tmp_vau
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=src python3 -m pytest tests/unit/test_rewrites_apply.py::test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'mnemo.core.rewrites.apply'`
+Expected: FAIL — `ImportError: cannot import name 'apply' from 'mnemo.core.rewrites'`
+
+(`from mnemo.core.rewrites import apply as A` imports a name from a package, so the
+error is `ImportError: cannot import name`, not `ModuleNotFoundError`. That is the
+correct RED state.)
 
 - [ ] **Step 3: Write minimal implementation**
 
