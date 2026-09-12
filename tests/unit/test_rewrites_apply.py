@@ -225,3 +225,101 @@ def test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating(tmp_vau
     assert entry["written_hash"] == content_hash(live)
     # The proposal is gone, so a second classify finds nothing to re-propose.
     assert C.classify(tmp_vault) == []
+
+
+def test_originals_hold_pristine_live_bytes_and_manifest_shape(tmp_vault: Path):
+    _seed(tmp_vault)
+    before = (tmp_vault / "shared" / "project" / "a__x.md").read_bytes()
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    report = A.apply(plan, tmp_vault)
+
+    original = report.archive_dir / "originals" / "a__x.md"
+    assert original.read_bytes() == before
+
+    manifest = json.loads((report.archive_dir / "manifest.json").read_text())
+    assert manifest["run_id"] == plan.run_id
+    assert manifest["state_backup"].endswith("extraction-state.json")
+    move = manifest["moves"][0]
+    assert move["key"] == "project/a__x"
+    assert move["kind"] == "insert_only"
+    assert move["action"] == "merge"
+    assert move["live_path"] == "shared/project/a__x.md"
+
+
+def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
+    _seed(tmp_vault)
+    live = tmp_vault / "shared" / "project" / "a__x.md"
+    state_path = tmp_vault / ".mnemo" / "extraction-state.json"
+    live_before = live.read_bytes()
+    state_before = state_path.read_bytes()
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    A.apply(plan, tmp_vault)
+    assert live.read_bytes() != live_before
+
+    restored = A.undo(tmp_vault, plan.run_id)
+
+    # The rule + the state file + the re-staged proposal. It was 2 before
+    # `undo` learned to restore the proposal it had consumed (fe35699); a stale
+    # `== 2` here would fail for the right reason and read like an undo bug.
+    assert restored == 3
+    assert live.read_bytes() == live_before
+    assert json.loads(state_path.read_bytes()) == json.loads(state_before)
+
+
+def test_undo_of_an_unknown_run_restores_nothing(tmp_vault: Path):
+    _seed(tmp_vault)
+
+    assert A.undo(tmp_vault, "20260101T000000") == 0
+
+
+def test_reapplying_the_same_run_id_is_refused(tmp_vault: Path):
+    _seed(tmp_vault)
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    A.apply(plan, tmp_vault)
+
+    _seed(tmp_vault)  # re-stage so there is something to apply
+    with pytest.raises(RuntimeError, match="already applied"):
+        A.apply(plan, tmp_vault)
+
+
+def test_proposal_is_removed_on_success(tmp_vault: Path):
+    _seed(tmp_vault)
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    A.apply(plan, tmp_vault)
+
+    assert not prop.exists()
+
+
+def test_full_rewrite_uses_replace_and_is_counted_separately(tmp_vault: Path):
+    fm = "name: n\nslug: a__z\ntype: project\nsources:\n  - bots/a/memory/a__z.md"
+    live = tmp_vault / "shared" / "project" / "a__z.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(f"---\n{fm}\n---\n\nMARKETPLACE_ENABLED = false\n", encoding="utf-8")
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__z.proposed.md"
+    prop.parent.mkdir(parents=True, exist_ok=True)
+    prop.write_text(f"---\n{fm}\n---\n\nMARKETPLACE_ENABLED = true\n", encoding="utf-8")
+    state_path = tmp_vault / ".mnemo" / "extraction-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"schema_version": 2, "entries": {}}), encoding="utf-8")
+
+    plan = A.plan(tmp_vault, include={"project/a__z"})
+    report = A.apply(plan, tmp_vault)
+
+    assert report.replaced == 1 and report.merged == 0
+    assert "MARKETPLACE_ENABLED = true" in live.read_text(encoding="utf-8")
+    # No state entry existed, so the missing reconciliation is reported, not silent.
+    assert any("hash not reconciled" in n for n in report.notes)
+
+
+def test_empty_plan_writes_no_archive(tmp_vault: Path):
+    _seed(tmp_vault)
+    plan = A.plan(tmp_vault, include=set())
+
+    report = A.apply(plan, tmp_vault)
+
+    assert report.merged == 0
+    assert report.archive_dir is None
+    assert not (tmp_vault / "shared" / "_archive").exists()
