@@ -33,6 +33,37 @@ def test_relocates_proposed_sibling_into_inbox(tmp_path: Path) -> None:
     assert live.read_text(encoding="utf-8").endswith("approved\n")
 
 
+def test_archived_proposals_are_recovery_copies_not_strays(tmp_path: Path) -> None:
+    """``_archive`` holds rollback copies, and moving them destroys the rollback.
+
+    ``mnemo rewrites`` (#159) archives the consumed proposal under
+    ``_archive/rewrites-<run>/proposals/`` so ``--undo`` can re-stage it, and
+    ``--reject`` archives under ``rejected-<run>/``. Neither shadows a live rule
+    — ``is_consumer_visible`` already excludes ``_archive`` — but this migration
+    excluded only ``_inbox``, so every archived proposal read as a stray.
+
+    Measured on the real vault after the first drain: 34 archived proposals were
+    reported by ``mnemo doctor``, and one ``mnemo extract`` would have moved all
+    34 into ``_inbox`` — deleting every undo path and re-staging 30 rewrites that
+    had already been accepted.
+    """
+    kept = _page(tmp_path, "shared/_archive/rewrites-20260912T162025/proposals/a__x.proposed.md")
+    rejected = _page(tmp_path, "shared/_archive/rejected-20260912T164010/b__y.proposed.md")
+    # A genuine stray beside a live rule still moves, so the check keeps working.
+    stray = _page(tmp_path, "shared/project/c__z.proposed.md")
+
+    rep = proposed.relocate_proposed(tmp_path)
+
+    assert rep.moved == 1
+    assert not stray.exists()
+    assert (tmp_path / "shared" / "_inbox" / "project" / "c__z.proposed.md").exists()
+    # Both archived copies are untouched where they sit.
+    assert kept.exists()
+    assert rejected.exists()
+    assert not (tmp_path / "shared" / "_inbox" / "project" / "a__x.proposed.md").exists()
+    assert not (tmp_path / "shared" / "_inbox" / "b__y.proposed.md").exists()
+
+
 def test_relocates_update_proposed_siblings_too(tmp_path: Path) -> None:
     """``.update-proposed.md`` is the same mechanism from ``inbox_flow``."""
     _page(tmp_path, "shared/feedback/use-yarn.update-proposed.md")
