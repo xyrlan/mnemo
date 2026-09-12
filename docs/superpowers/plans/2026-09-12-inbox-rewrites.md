@@ -336,7 +336,18 @@ git commit -m "feat(rewrites): classify insert-only staged rewrites (#159)"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/unit/test_rewrites_classify.py`:
+First add the two imports these tests need to the top of
+`tests/unit/test_rewrites_classify.py`, beside the existing ones — the file
+Task 2 created imports only `annotations`, `Path`, and `classify as C`, and
+`test_unreadable_proposal_raises_rather_than_vanishing` below uses both bare:
+
+```python
+import os
+
+import pytest
+```
+
+Then append to `tests/unit/test_rewrites_classify.py`:
 
 ```python
 def test_replaced_middle_line_classifies_as_mixed(tmp_vault: Path):
@@ -423,6 +434,90 @@ def test_blank_line_only_delta_is_insert_only_and_loses_nothing(tmp_vault: Path)
     assert r.keep_ratio == 1.0
     assert r.dropped_lines == 0
     assert r.inserted_lines == 1
+
+
+def test_unreadable_proposal_raises_rather_than_vanishing(tmp_vault: Path):
+    """An unreadable proposal must not drop silently out of the plan.
+
+    ``classify`` deliberately does not guard the reads. A swallowed OSError
+    made nothing distinguish "no rewrites are staged" from "every one of them
+    failed to read" — the one failure mode a command whose purpose is making an
+    invisible backlog visible must not have. Without this test, the next reader
+    of an unguarded read will helpfully add the guard back.
+    """
+    _pair(tmp_vault, "a__locked", "one\n", "one\ntwo\n")
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__locked.proposed.md"
+    os.chmod(prop, 0o000)
+    try:
+        with pytest.raises(OSError):
+            C.classify(tmp_vault)
+    finally:
+        os.chmod(prop, 0o644)
+
+
+def test_partial_deletion_classifies_as_mixed(tmp_vault: Path):
+    """A proposal that only removes lines is never ``insert_only``.
+
+    ``changed == {"delete"}`` fails the ``changed <= {"insert"}`` subset test,
+    so a delete-bearing proposal cannot reach ``--apply-safe``. This is the
+    dominant real shape, not an edge case: 29 of the real vault's 35 staged
+    rewrites delete live content.
+    """
+    _pair(tmp_vault, "a__del", "keep one\ndrop me\nkeep two\n", "keep one\nkeep two\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "mixed"
+    assert r.dropped_lines == 1
+    assert r.inserted_lines == 0
+
+
+def test_total_deletion_classifies_as_full_rewrite(tmp_vault: Path):
+    """Deleting every live line keeps nothing, so it is a full rewrite."""
+    _pair(tmp_vault, "a__wipe", "gone one\ngone two\n", "")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "full_rewrite"
+    assert r.keep_ratio == 0.0
+    assert r.dropped_lines == 2
+    assert r.inserted_lines == 0
+
+
+def test_barely_surviving_body_is_mixed_not_full_rewrite(tmp_vault: Path):
+    """Pins the ``mixed``/``full_rewrite`` boundary as exclusive at zero.
+
+    One surviving line out of twenty is 0.05 and must stay ``mixed``, because
+    ``full_rewrite`` is what licenses ``replace_wholesale`` to discard the live
+    body. A refactor that rounded this to ``keep_ratio < 0.05`` would pass
+    every other test in this file.
+    """
+    live = "".join(f"l{i}\n" for i in range(20))
+    _pair(tmp_vault, "a__thin", live, "l0\nbrand new\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "mixed"
+    assert r.keep_ratio == 0.05
+    assert r.dropped_lines == 19
+
+
+def test_trailing_whitespace_only_change_is_reported_as_full_rewrite(tmp_vault: Path):
+    """Documents a sharp edge: a cosmetic diff can read as ``full_rewrite``.
+
+    Whole-line diffing makes ``"x "`` and ``"x"`` a ``replace``. On a one-line
+    body that leaves zero surviving lines, so the proposal is labeled
+    ``full_rewrite`` — the label that licenses discarding the live body. Pins
+    current behavior rather than blessing it; safe today because
+    ``full_rewrite`` never enters ``--apply-safe``. Normalizing whitespace
+    before the diff is the real fix and belongs in its own change.
+    """
+    _pair(tmp_vault, "a__ws", "line two \n", "line two\n")
+
+    r = C.classify(tmp_vault)[0]
+
+    assert r.kind == "full_rewrite"
+    assert r.keep_ratio == 0.0
 
 
 def test_classification_covers_every_page_type_under_inbox(tmp_vault: Path):
