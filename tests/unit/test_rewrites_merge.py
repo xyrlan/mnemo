@@ -149,3 +149,134 @@ def test_sources_are_normalized_and_unioned(tmp_vault: Path):
         "bots/a/memory/s.md",
         "bots/a/memory/extra.md",
     ]
+
+
+def _pair_text(live_fm: str, prop_fm: str, live_body: str = "a\n", prop_body: str = "a\nb\n"):
+    return (
+        f"---\n{live_fm}\n---\n\n{live_body}",
+        f"---\n{prop_fm}\n---\n\n{prop_body}",
+    )
+
+
+def test_description_comes_from_the_proposal(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\ndescription: only 2 of 5 events — bloqueia assinante",
+        "name: n\nslug: s\ntype: project\ndescription: RESOLVIDO 2026-08-11 (issue #285)",
+    )
+
+    out = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+
+    assert parse_frontmatter(out)["description"] == "RESOLVIDO 2026-08-11 (issue #285)"
+
+
+def test_activation_keys_come_from_the_live_rule(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\nactivates_on: git commit\nconfidence: explicit",
+        "name: n\nslug: s\ntype: project\nactivates_on: npm test\nconfidence: inferred",
+    )
+
+    fm = parse_frontmatter(M.merge_insert_only(live, prop, vault_root=tmp_vault))
+
+    assert fm["activates_on"] == "git commit"
+    assert fm["confidence"] == "explicit"
+
+
+def test_managed_tag_marker_is_never_copied_from_the_proposal(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: reference\ntags:\n  - auto-promoted\n  - testing\n  - tdd",
+        "name: n\nslug: s\ntype: reference\ntags:\n  - needs-review\n  - testing\n  - process",
+    )
+
+    tags = parse_frontmatter(M.merge_insert_only(live, prop, vault_root=tmp_vault))["tags"]
+
+    assert "auto-promoted" in tags
+    assert "needs-review" not in tags
+    # Topic tags from both sides survive.
+    assert {"testing", "tdd", "process"} <= set(tags)
+
+
+def test_insert_only_merge_preserves_every_live_body_line(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project",
+        "name: n\nslug: s\ntype: project",
+        live_body="first\nsecond\n",
+        prop_body="first\nsecond\nthird\n",
+    )
+
+    out = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+
+    for line in ("first", "second", "third"):
+        assert line in out
+
+
+def test_merge_is_idempotent(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project\nsources:\n  - bots/a/memory/s.md",
+        "name: n\nslug: s\ntype: project\nsources:\n  - bots/a/memory/s.md",
+    )
+
+    once = M.merge_insert_only(live, prop, vault_root=tmp_vault)
+    twice = M.merge_insert_only(once, prop, vault_root=tmp_vault)
+
+    assert once == twice
+
+
+def test_enforce_block_never_crosses_from_the_proposal(tmp_vault: Path):
+    """``enforce`` is a live-wins nested block, and the asymmetry matters.
+
+    ``rendering._render_page`` strips ``enforce`` from auto-promoted pages as a
+    safety rail (C3, 2026-04-23) so one briefing line cannot become a
+    session-wide hard block. A proposal's ``enforce`` reaching a live rule would
+    defeat that rail, and losing a live rule's own ``enforce`` would silently
+    disarm a rule a human armed.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: git push\n  deny_pattern: --force\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: feedback\n"
+        "enforce:\n  deny_command: rm\n---\n\nb\nmore\n"
+    )
+
+    out = M.merge_insert_only(live, proposal, vault_root=tmp_vault)
+
+    assert "deny_command: git push" in out
+    assert "deny_pattern: --force" in out
+    assert "deny_command: rm" not in out
+
+
+def test_demoted_from_and_timestamps_follow_their_policies(tmp_vault: Path):
+    """``demoted_from`` is live-wins; the run stamps are proposal-wins.
+
+    Both rows sat untested after Task 4. ``demoted_from`` records a reclassify
+    decision, which is not the extractor's to revise from a transcript, while the
+    stamps describe the run that produced the proposal and should follow it.
+    """
+    live = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: feedback\nextraction_run: 2026-05-01T00:00:00\n---\n\nb\n"
+    )
+    proposal = (
+        "---\nname: n\nslug: s\ntype: reference\n"
+        "demoted_from: user\nextraction_run: 2026-09-12T10:00:00\n---\n\nb\nmore\n"
+    )
+
+    fm = parse_frontmatter(M.merge_insert_only(live, proposal, vault_root=tmp_vault))
+
+    assert fm["demoted_from"] == "feedback"
+    assert fm["extraction_run"] == "2026-09-12T10:00:00"
+
+
+def test_replace_wholesale_takes_the_proposal_body(tmp_vault: Path):
+    live, prop = _pair_text(
+        "name: n\nslug: s\ntype: project",
+        "name: n\nslug: s\ntype: project",
+        live_body="MARKETPLACE_ENABLED = false\n",
+        prop_body="MARKETPLACE_ENABLED = true\n",
+    )
+
+    out = M.replace_wholesale(live, prop, vault_root=tmp_vault)
+
+    assert "MARKETPLACE_ENABLED = true" in out
+    assert "MARKETPLACE_ENABLED = false" not in out
