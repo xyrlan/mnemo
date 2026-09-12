@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mnemo.core.filters import INBOX_DIR, is_proposed_sibling
+from mnemo.core.filters import ARCHIVE_DIR, INBOX_DIR, is_proposed_sibling
 
 
 @dataclass
@@ -63,6 +63,18 @@ def relocate_proposed(vault_root: Path, *, dry_run: bool = False) -> ProposedRep
         if not is_proposed_sibling(stray):
             continue
         rel_parts = stray.relative_to(shared).parts[:-1]
+        if ARCHIVE_DIR in rel_parts:
+            # ``_archive`` holds recovery copies, not drafts. ``rewrites`` (#159)
+            # archives the consumed proposal under
+            # ``_archive/rewrites-<run>/proposals/`` so ``--undo`` can re-stage
+            # it, and ``--reject`` archives under ``rejected-<run>/``. Neither
+            # shadows anything — ``is_consumer_visible`` already excludes
+            # ``_archive`` — and moving them would destroy the only rollback
+            # path the vault has, while re-staging rewrites already accepted.
+            # Measured on the real vault: 34 archived proposals were being
+            # reported as strays, and one ``mnemo extract`` would have moved
+            # every one of them. Same exclusion ``iter_shared_pages`` applies.
+            continue
         if INBOX_DIR in rel_parts:
             continue
         rep.scanned += 1
