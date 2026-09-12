@@ -7,6 +7,31 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The session queue can now tell a blocked session from a dead one.** `tempo`
+  is not a fact about the present — it records the last thing a process wrote
+  before it stopped writing. A session that blocked and then died left
+  `tempo=blocked` frozen on disk, and the queue replayed it forever as a live
+  request for attention: one real entry sat in `TE ESPERANDO` for 575h (24
+  days), another stated in its own `needs` text that its login had expired.
+
+  `state.json` carries no pid, but `~/.claude/daemon/roster.json` keys its
+  `workers` map by the same short id as the job directories and carries a real
+  one — so liveness is now probed with `os.kill(pid, 0)` rather than inferred
+  from age. There is deliberately **no age threshold**: a session waiting on a
+  human for 24h is exactly what the queue exists to surface, and only a dead
+  *process* re-buckets an entry. Liveness is tri-state, and "unknown" (no
+  readable roster) always counts as waiting — a false "dead" would hide a real
+  request, which is the worse failure.
+
+  Sessions whose process is gone move to a new `ABANDONADAS` bucket with a
+  `claude rm <id>` hint. They are re-bucketed, never hidden: a queue that
+  silently drops entries cannot be trusted to be complete. Waiting sessions now
+  sort **newest first** (the stalest blocked entry is the likeliest corpse, so
+  oldest-first pinned zombies to the top by construction) and the `attach` hint
+  follows that order. The statusline badge counts the same `is_waiting` rule the
+  list buckets on, so the number can no longer disagree with the screen; its
+  global cross-repo scope is deliberate and is unchanged.
+
 - **A rule that reappears under a different page type is now recognised as the
   same rule.** `chain-navigation-no-odometry` lived in the vault twice — once as
   `feedback`, once as `reference`, six hours apart from the same project —
