@@ -14,6 +14,7 @@ The three dispatch handlers live in :mod:`branches`:
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -40,9 +41,17 @@ from mnemo.core.extract.inbox.dedup import (
     SimilarityIndex,
     _detect_drift_slug,
     _detect_similar_existing,
+    _detect_slug_identity,
     _detect_stem_collision,
 )
-from mnemo.core.extract.inbox.paths import _is_auto_promoted_target, _target_path_for_page
+from mnemo.core.extract.inbox.io import atomic_write
+from mnemo.core.extract.inbox.paths import (
+    _is_auto_promoted_target,
+    _promoted_path,
+    _sibling_path,
+    _target_path_for_page,
+)
+from mnemo.core.extract.inbox.rendering import _render_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
 from mnemo.core.rule_activation.index import is_universal
@@ -310,6 +319,51 @@ def _stamp_entry_origin(
     entry.origin_backfill = True
 
 
+#: Frontmatter keys ``rendering._render_page`` stamps from the run id. They move
+#: on every run by construction, so they are not evidence that a page changed.
+_RUN_STAMPED_KEYS = ("extracted_at:", "extraction_run:", "last_sync:")
+
+
+def _same_but_for_run_stamps(old: str, new: str) -> bool:
+    """True when two renders differ only in their run-id stamps."""
+    def strip(text: str) -> list[str]:
+        return [
+            line for line in text.splitlines()
+            if not line.startswith(_RUN_STAMPED_KEYS)
+        ]
+
+    return strip(old) == strip(new)
+
+
+def _stage_cross_type_proposal(
+    page: ExtractedPage,
+    existing_type: str,
+    vault_root: Path,
+    run_id: str,
+    result: ApplyResult,
+) -> None:
+    """Stage a ``.proposed.md`` beside the page this slug already exists as.
+
+    The proposal is keyed to the EXISTING page's type, not the arriving one, so
+    it lands next to the page a reviewer has to compare it against rather than
+    opening a second home for the slug. Nothing else is touched: no state entry
+    is created or mutated, and the existing page is not read or rewritten — the
+    merge is a human call (#187).
+    """
+    twin = replace(page, type=existing_type)
+    content = _render_page(page, run_id=run_id, auto_promoted=False)
+    sibling = _sibling_path(_promoted_path(vault_root, twin), vault_root)
+    # Nothing here writes a state entry, so every later run re-detects the same
+    # collision and lands back on this exact path. ``_render_page`` stamps
+    # ``extracted_at``/``extraction_run`` from the run id, so an unconditional
+    # write would churn an unreviewed proposal on every extract run with only
+    # those two lines moving. Compare what the page actually says instead.
+    if sibling.exists() and _same_but_for_run_stamps(sibling.read_text(encoding="utf-8"), content):
+        return
+    atomic_write(sibling, content)
+    result.sibling_proposed.append((f"{existing_type}/{page.slug}", str(sibling)))
+
+
 def apply_pages(
     pages: list[ExtractedPage],
     state: ExtractionState,
@@ -335,6 +389,24 @@ def apply_pages(
         return sim_indexes[page_type]
 
     for page in pages:
+        # Zeroth layer: this exact slug already lives under a DIFFERENT type.
+        # The three layers below all filter state by `f"{page.type}/"`, so none
+        # of them can see it, and their shared body gate would reject it anyway
+        # (#187: the real pairs score below the p90 of unrelated noise).
+        #
+        # Staged, not redirected. A redirect would reach `_apply_auto_promoted`
+        # -> `_handle_target_exists`, which OVERWRITES the sacred file: in every
+        # real pair the existing page is the `verified` auto-promoted one and the
+        # arrival is `inferred`, so redirecting lets the weaker page destroy the
+        # stronger. Deciding which of two same-slug pages is canonical is also
+        # not a call this pipeline can make unsupervised. Note `page.type` is
+        # deliberately NOT rewritten: the state key, `_resolve_sticky_demotion`'s
+        # probe and the similarity index all read it.
+        cross_type = _detect_slug_identity(page, state, vault_root)
+        if cross_type is not None:
+            _stage_cross_type_proposal(page, cross_type, vault_root, run_id, result)
+            continue
+
         # Anti-drift guardrail: if the LLM chose a new slug for what is clearly
         # a rewrite of an existing page (same sources + similar body), redirect
         # the slug so the existing page gets updated in place instead of a

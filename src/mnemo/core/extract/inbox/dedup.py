@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from mnemo.core.extract.demotion import (
+    is_demoted_entry,
+    is_demoted_markdown,
+    is_demoted_page,
+)
 from mnemo.core.extract.inbox import paths
 from mnemo.core.extract.inbox.rendering import _extract_body
 from mnemo.core.extract.inbox.types import ExtractedPage
@@ -132,6 +137,68 @@ def _existing_target(vault_root: Path, page_type: str, slug: str) -> Path | None
     inbox = paths._inbox_path(vault_root, stub)
     if inbox.exists():
         return inbox
+    return None
+
+
+def _detect_slug_identity(
+    page: ExtractedPage,
+    state: ExtractionState,
+    vault_root: Path,
+) -> str | None:
+    """Return the type a same-slug page already lives under, or None.
+
+    The other three layers all filter state by ``key.startswith(f"{page.type}/")``,
+    so a slug that reappears under a different type is invisible to every one of
+    them — and no threshold change rescues that, because they also gate on
+    :func:`_bodies_similar` first. Measured on the real vault (#187), the live
+    cross-type duplicates score 0.136 / 0.185 Jaccard against a p90 of 0.131 for
+    unrelated pairs: the two texts say the same thing in different vocabulary,
+    and token overlap cannot see synonymy.
+
+    So this layer keys on the slug alone and never consults the body. That is
+    affordable because the slug is very nearly a primary key here: 1852 pages,
+    1849 distinct slugs. It is also *correct* rather than merely cheap — the
+    2026-09-02 reclassify moved 1320 pages to a new type, and not one left a
+    live twin behind, so the same slug under two types is never a legitimate
+    steady state in this vault.
+
+    Returns the EXISTING page's type. The caller stages a ``.proposed.md``
+    against that type; it must not rewrite ``page.type``, which downstream reads
+    for the state key, the sticky-demotion probe and the similarity index.
+
+    Three refusals, each measured:
+
+    * **Either side demoted.** ``evidence.verify_page`` demotes a failed
+      feedback page with ``replace(page, type="reference")`` and keeps the slug,
+      so every demoted page is structurally a cross-type collision — 1386 of the
+      1852 live pages carry the marker. Acting on those would walk them back
+      into the tier the reflex injects from (#177). The marker is read off the
+      markdown, which is the only reading that survives: **0 of 3675** state
+      entries carry ``unverified_feedback``.
+    * **Dismissed entries**, for the reason :class:`SimilarityIndex` skips them:
+      both apply branches bail on dismissed, so acting there destroys the page.
+    * **Stale entries** whose file is gone — three of the five cross-type slug
+      keys in the real state file are exactly that.
+    """
+    if not page.slug:
+        return None
+    # This run's verdict. A page the gate just demoted is not a duplicate of the
+    # feedback page it was demoted from — it IS that page, minus its evidence.
+    if is_demoted_page(page):
+        return None
+    for key, entry in state.entries.items():
+        existing_type, _, existing_slug = key.partition("/")
+        if existing_slug != page.slug or existing_type == page.type:
+            continue
+        if entry.status == "dismissed":
+            continue
+        existing_target = _existing_target(vault_root, existing_type, existing_slug)
+        if existing_target is None:
+            continue
+        # The durable verdict, in the two readings that outlive a single run.
+        if is_demoted_entry(entry) or is_demoted_markdown(existing_target):
+            continue
+        return existing_type
     return None
 
 

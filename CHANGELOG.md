@@ -5,6 +5,43 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rule that reappears under a different page type is now recognised as the
+  same rule.** `chain-navigation-no-odometry` lived in the vault twice — once as
+  `feedback`, once as `reference`, six hours apart from the same project —
+  saying the same thing in different words. All three dedupe layers were blind
+  to it: each filters candidates by `f"{page.type}/"`, so a slug reappearing
+  under another type is invisible to every one of them, and each also gates on
+  body similarity first. Lowering that threshold was not available. Measured on
+  the real vault, the duplicate pairs score 0.136–0.271 Jaccard while unrelated
+  pairs reach p90 = 0.131 and max 0.303: the true pair sits *below* the noise,
+  because the two texts use different vocabulary for the same idea and token
+  overlap cannot see synonymy.
+
+  The slug is the cheaper and stronger signal — 1852 pages, 1849 distinct
+  slugs — so a new first layer keys on slug identity alone and never consults
+  the body. It is safe as well as cheap: the 2026-09-02 reclassify moved 1320
+  pages to a new type and not one left a live twin behind, so the same slug
+  under two types is never a legitimate steady state.
+
+  A collision **stages a `.proposed.md`** for review rather than redirecting.
+  Redirecting would reach the auto-promote branch, which overwrites the sacred
+  file outright — and in every real pair the existing page is the `verified`
+  one and the arrival is `inferred`, so a redirect would let the weaker page
+  destroy the stronger. The proposal lands beside the page it would merge into
+  and is picked up by the existing `mnemo rewrites` flow.
+
+  The layer deliberately declines two shapes. It never fires on a page carrying
+  `demoted_from: feedback`: the evidence gate demotes with
+  `replace(page, type="reference")` and keeps the slug, so every demoted page is
+  structurally a cross-type collision, and 1386 of the 1852 live pages are in
+  that state — acting on them would walk gate-demoted rules back toward the
+  tier the reflex injects from (#177). It also leaves the promoted-vs-staged
+  copies of one type alone, which are one state key on the normal update path.
+  On the real vault it fires twice, on the one true cross-type pair, with zero
+  false positives across the other 1849 slugs. (#187)
+
 ## [1.4.0] — 2026-09-12
 
 ### Added
