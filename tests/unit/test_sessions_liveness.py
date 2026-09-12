@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
+
+import pytest
 
 from mnemo.core.sessions import liveness
 
@@ -80,20 +80,22 @@ def test_pid_alive_is_false_for_a_pid_that_cannot_exist() -> None:
     assert liveness.pid_alive(0) is False
 
 
-def _reaped_pid() -> int:
-    """A pid that certainly belonged to a process and certainly no longer does.
+def test_pid_alive_is_false_for_a_reaped_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pid the OS no longer knows is dead, not alive.
 
-    Spawned and waited on rather than invented: an arbitrary high number could
-    be in use, which would make the assertion pass for the wrong reason. Uses
-    ``subprocess`` rather than ``os.fork`` because Windows has no ``fork``.
+    The condition is injected rather than produced. Earlier revisions of this
+    test made a real corpse: ``os.fork`` does not exist on Windows, and
+    replacing it with ``subprocess.Popen`` + ``wait()`` hung the Windows runner
+    inside ``wait()`` and took the whole suite down with it. What is under test
+    is the mapping from the OS's answer to a bool, so ask ``os.kill`` to give
+    that answer.
     """
-    proc = subprocess.Popen([sys.executable, "-c", ""])
-    proc.wait()
-    return proc.pid
+    def _reaped(pid: int, sig: int) -> None:
+        raise ProcessLookupError
 
+    monkeypatch.setattr(os, "kill", _reaped)
 
-def test_pid_alive_is_false_for_a_reaped_pid() -> None:
-    assert liveness.pid_alive(_reaped_pid()) is False
+    assert liveness.pid_alive(4242) is False
 
 
 # --- classify --------------------------------------------------------------
@@ -110,8 +112,14 @@ def test_session_absent_from_a_readable_roster_is_dead(tmp_path: Path) -> None:
     assert liveness.is_live("a3f1", claude_home=tmp_path) is False
 
 
-def test_session_in_roster_with_a_dead_pid_is_dead(tmp_path: Path) -> None:
-    _roster(tmp_path, {"a3f1": {"pid": _reaped_pid()}})
+def test_session_in_roster_with_a_dead_pid_is_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _reaped(pid: int, sig: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "kill", _reaped)
+    _roster(tmp_path, {"a3f1": {"pid": 4242}})
 
     assert liveness.is_live("a3f1", claude_home=tmp_path) is False
 
