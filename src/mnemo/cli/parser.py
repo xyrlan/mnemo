@@ -27,6 +27,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "reclassify",
     "list-enforced",
     "regen-graph-edges",
+    "rewrites",
 })
 
 # Internal subparsers that should never appear in user-facing help (wired
@@ -233,6 +234,30 @@ def _build_parser() -> argparse.ArgumentParser:
     dedup.add_argument(
         "--apply", action="store_true",
         help="execute the plan (default: dry-run)",
+    )
+    rewrites_p = sub.add_parser(
+        "rewrites",
+        help="review and accept staged _inbox rewrites of live rules (dry-run default)",
+    )
+    rewrites_p.add_argument(
+        "--apply-safe", action="store_true",
+        help="merge every insert-only rewrite (nothing live is dropped)",
+    )
+    rewrites_p.add_argument(
+        "--show", metavar="KEY",
+        help="print the full diff for one rewrite (e.g. project/clubinho__sprints-github)",
+    )
+    rewrites_p.add_argument(
+        "--accept", metavar="KEY",
+        help="accept one mixed or full rewrite, taking the proposal's body",
+    )
+    rewrites_p.add_argument(
+        "--reject", metavar="KEY",
+        help="delete one staged proposal, leaving the live rule untouched",
+    )
+    rewrites_p.add_argument(
+        "--undo", metavar="RUN_ID",
+        help="restore every file a previous apply touched, byte for byte",
     )
     reclass = sub.add_parser(
         "reclassify",
