@@ -76,12 +76,31 @@ class Session:
 
     @property
     def label(self) -> str:
-        """Best available human-readable name."""
+        """Best available human-readable name, led by the issue when there is one.
+
+        Claude Code names a session itself (``nameSource="auto"``) by inferring
+        a title from the transcript. It reads well and loses the one identifier
+        the maintainer is tracking: on the 2026-09-12 dispatch, #193's child
+        came back as "recall harness hit_slugs migration".
+
+        The issue number is recovered from ``cwd``, which the dispatcher chose
+        (``<repo>-wt-<issue>``, see :mod:`mnemo.core.dispatch`) and Claude Code
+        already records — so nothing has to be written or reconciled here. A
+        path this dispatcher did not name yields ``None`` and the label is
+        unchanged.
+        """
+        from mnemo.core.dispatch import issue_for_cwd
+
+        issue = issue_for_cwd(self.cwd)
+        prefix = f"#{issue} " if issue else ""
+
         if self.name:
-            return self.name
+            # Padded to 22 columns by render_queue; keep the whole label inside
+            # a sane width so one long inferred title cannot skew every row.
+            return (prefix + self.name)[:40]
         if self.intent:
-            return self.intent[:40].replace("\n", " ")
-        return self.short_id
+            return (prefix + self.intent.replace("\n", " "))[:40]
+        return prefix.strip() or self.short_id
 
 
 def _str_or_none(value: Any) -> str | None:

@@ -84,6 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="learn from every session that was answered while blocked, then print what it taught",
     )
+    dispatch_p = sub.add_parser(
+        "dispatch", help="spawn a background child per issue, each in its own worktree")
+    dispatch_p.add_argument("issues", nargs="+", type=int, metavar="ISSUE",
+                            help="GitHub issue number(s) to dispatch")
+    dispatch_p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                            help="print the worktree and branch per issue without spawning")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")
