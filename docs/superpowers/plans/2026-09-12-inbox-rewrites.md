@@ -406,7 +406,15 @@ def test_update_proposed_suffix_is_excluded(tmp_vault: Path):
     assert C.classify(tmp_vault) == []
 
 
-def test_blank_line_only_delta_is_insert_only_with_no_inserted_content(tmp_vault: Path):
+def test_blank_line_only_delta_is_insert_only_and_loses_nothing(tmp_vault: Path):
+    """A blank line IS an inserted line — it just costs no live content.
+
+    ``inserted_lines`` counts lines, blank ones included, so this reports 1.
+    An earlier name claimed "no inserted content" and asserted only
+    ``dropped_lines``, which made the one number the name was about the one
+    number nobody checked. What matters for ``--apply-safe`` is that nothing
+    was dropped.
+    """
     _pair(tmp_vault, "a__b", "one\ntwo\n", "one\n\ntwo\n")
 
     r = C.classify(tmp_vault)[0]
@@ -414,6 +422,7 @@ def test_blank_line_only_delta_is_insert_only_with_no_inserted_content(tmp_vault
     assert r.kind == "insert_only"
     assert r.keep_ratio == 1.0
     assert r.dropped_lines == 0
+    assert r.inserted_lines == 1
 
 
 def test_classification_covers_every_page_type_under_inbox(tmp_vault: Path):
