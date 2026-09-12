@@ -32,6 +32,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("circuit_breaker",       doctor_misc._doctor_check_circuit_breaker),
     ("auto_brain",            doctor_misc._doctor_check_auto_brain),
     ("legacy_wiki_dirs",      doctor_misc._doctor_check_legacy_wiki_dirs),
+    ("background_sessions",   doctor_misc._doctor_check_background_sessions),
     ("statusline_drift",      reflex._doctor_check_statusline_drift),
     ("activation",            activation._doctor_check_activation),
     ("zero_hit",              fidelity._doctor_check_zero_hit),
