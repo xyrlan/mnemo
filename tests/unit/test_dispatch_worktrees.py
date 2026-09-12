@@ -146,6 +146,7 @@ def _fake_fetch(issue: int, *, repo_root):
     return dispatch.Issue(number=issue, title="t", body="b")
 
 
+@pytest.mark.real_spawn
 def test_spawn_passes_the_prompt_positionally_with_bg(repo: Path, monkeypatch) -> None:
     """``--bg`` and ``-p/--print`` conflict: ``--print`` never starts the
     interactive session ``claude attach`` needs, so the job is unattachable.
@@ -169,6 +170,7 @@ def test_spawn_passes_the_prompt_positionally_with_bg(repo: Path, monkeypatch) -
     assert seen["cwd"] == str(tree)
 
 
+@pytest.mark.real_spawn
 def test_spawn_runs_inside_the_child_worktree(repo: Path, monkeypatch) -> None:
     """The cwd is what later recovers the issue number, so it must be the tree."""
     seen: dict = {}
@@ -185,6 +187,7 @@ def test_spawn_runs_inside_the_child_worktree(repo: Path, monkeypatch) -> None:
     assert dispatch.issue_for_cwd(seen["cwd"]) == 197
 
 
+@pytest.mark.real_spawn
 def test_spawn_is_never_wrapped_in_timeout(repo: Path, monkeypatch) -> None:
     """``timeout`` is not on the macOS PATH."""
     seen: dict = {}
@@ -201,6 +204,7 @@ def test_spawn_is_never_wrapped_in_timeout(repo: Path, monkeypatch) -> None:
     assert "timeout" not in seen["args"]
 
 
+@pytest.mark.real_spawn
 def test_spawn_returns_the_short_id(repo: Path, monkeypatch) -> None:
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 0, stdout="  a1b2c3d4  \n", stderr="")
@@ -211,6 +215,7 @@ def test_spawn_returns_the_short_id(repo: Path, monkeypatch) -> None:
     assert dispatch.spawn_child("x", cwd=tree) == "a1b2c3d4"
 
 
+@pytest.mark.real_spawn
 def test_spawn_raises_when_claude_is_missing(repo: Path, monkeypatch) -> None:
     tree = dispatch.ensure_worktree(197, repo_root=repo)
 
@@ -223,6 +228,7 @@ def test_spawn_raises_when_claude_is_missing(repo: Path, monkeypatch) -> None:
         dispatch.spawn_child("x", cwd=tree)
 
 
+@pytest.mark.real_spawn
 def test_spawn_raises_when_claude_exits_nonzero(repo: Path, monkeypatch) -> None:
     tree = dispatch.ensure_worktree(197, repo_root=repo)
 
