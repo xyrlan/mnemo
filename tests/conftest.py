@@ -80,6 +80,28 @@ def tmp_vault(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def tmp_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """No test ever reads the real ``~/.claude/jobs``.
+
+    The statusline counts blocked background sessions, so any exact-equality
+    assertion on the composed line silently depends on what the developer's
+    machine happens to be running: two blocked jobs on this box would append
+    ``2 esperando`` and break ``test_render_with_topics_and_calls`` for
+    reasons unrelated to the code under test.
+
+    ``tmp_home`` already redirects HOME, which masks this by accident since
+    ``jobs_dir`` expands ``~``. That is incidental — it would silently stop
+    protecting us the moment ``jobs_dir`` stopped going through ``~``. Pinning
+    the function makes the guarantee explicit. Tests that want sessions pass
+    their own root to ``read_sessions``/``render(jobs_root=...)``.
+    """
+    empty = tmp_path / "jobs-empty"
+    empty.mkdir(exist_ok=True)
+    monkeypatch.setattr("mnemo.core.sessions.jobs.jobs_dir", lambda: empty)
+    return empty
+
+
+@pytest.fixture(autouse=True)
 def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test runs under a throwaway HOME.
 

@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`mnemo sessions` — a blocked-first queue of Claude Code background
+  sessions,** so several parallel sessions cost one stream of attention.
+  Sessions waiting on a human come first, oldest first, under TE ESPERANDO;
+  the rest follow. `--json` for scripts, `--watch` to leave running, `--all`
+  for every repo rather than the current one. The statusline gains
+  `N esperando`. Read-only over `~/.claude/jobs/`; nothing is exposed to
+  model context, and `mnemo doctor` reports the session count and any state
+  it could not read.
+
 - **`mnemo rewrites` accepts the `_inbox` backlog, and accepting now sticks.**
   The extractor stages a rewrite of a hand-edited rule as a `.proposed.md`
   sibling, and promotion was a manual `mv` that never advanced
