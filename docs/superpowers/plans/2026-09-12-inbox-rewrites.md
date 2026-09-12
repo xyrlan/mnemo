@@ -1968,12 +1968,27 @@ git commit -m "feat(cli): mnemo rewrites — review surface for staged _inbox re
 - [ ] **Step 1: Run the whole suite**
 
 Run: `PYTHONPATH=src python3 -m pytest -q`
-Expected: `2594 + <new tests> passed, 2 skipped, 8 deselected`. No pre-existing test may fail. If one does, fix the cause — the merge touches `shared/` walkers that other tests assert on.
+Expected: `2640 passed, 2 skipped, 8 deselected` — the 2594 baseline this plan
+started from plus 46 new tests (13 classify, 15 merge, 13 apply, 5 CLI). No
+pre-existing test may fail. If one does, fix the cause — the merge touches
+`shared/` walkers that other tests assert on.
+
+Note: `pytest-randomly` is **not** installed, so there is no random ordering and
+`-p no:randomly` is a no-op. If a `tests/autopilot/selffix/` test fails
+intermittently, the cause is `conftest._real_vault_guard` watching
+`~/.claude/projects`, which the live Claude Code session writes to — unrelated to
+this branch.
 
 - [ ] **Step 2: Verify the dry run against the real vault (read-only)**
 
 Run: `PYTHONPATH=src python3 -m mnemo rewrites`
-Expected: `35 staged rewrites in shared/_inbox/`, with `safe to merge (11)` and `needs a decision (24)`. The 6 `full rewrite` rows carry the `⚠ live rule fully superseded` flag. Nothing is written — confirm with `ls /Users/xyrlan/mnemo/shared/_inbox/*/*.proposed.md | wc -l` → still 35.
+Expected: `35 staged rewrites in shared/_inbox/`, with `safe to merge (11)` and
+`needs a decision (24)`. The 6 `full rewrite` rows carry the `⚠ live rule fully
+superseded` flag. Columns align to the longest key (70 chars on the real vault),
+and `project/clubinho__checkout-referral-ux` reads `frontmatter only` rather than
+`+0 lines` — it is insert-only with no body change, just a corrected
+description. Nothing is written: confirm with
+`ls /Users/xyrlan/mnemo/shared/_inbox/*/*.proposed.md | wc -l` → still 35.
 
 - [ ] **Step 3: Add the CHANGELOG entry**
 
@@ -2013,7 +2028,14 @@ git add CHANGELOG.md
 git commit -m "docs(changelog): mnemo rewrites and written_hash reconciliation (#159)"
 ```
 
-- [ ] **Step 5: File the follow-up issue for the vault-wide drift**
+- [ ] **Step 5: Prepare the follow-up issue for the vault-wide drift**
+
+**Do not run `gh issue create` yourself.** Filing an issue publishes to GitHub,
+which is outward-facing and the repo owner's call. Write the title and body to
+`docs/superpowers/specs/2026-09-12-followup-written-hash-drift.md` instead and
+say in your report that it is ready, so the owner can file it with one command.
+
+The content to prepare:
 
 The slug-stamp migration (`core/migrations/slugs.py:112`) rewrites every page with
 `atomic_write_bytes` and never advances `written_hash`. On the real vault that left
