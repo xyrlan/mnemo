@@ -113,11 +113,16 @@ class ApplyPlan:
 class ApplyReport:
     merged: int = 0
     replaced: int = 0
-    skipped_count: int = 0
     archive_dir: Optional[Path] = None
     notes: list = field(default_factory=list)
     #: Rewrites that could not be applied: ``[{"key", "reason"}, ...]``.
     #: A no-op apply must never be silent, so the CLI prints these.
+    #:
+    #: There is deliberately no ``skipped_count`` beside this list. An earlier
+    #: draft had both, and they disagreed by construction: only the
+    #: "skipped by plan" branch bumped the counter, while a read failure
+    #: appended here without touching it. One fact, one field — callers use
+    #: ``len(report.skipped)``.
     skipped: list = field(default_factory=list)
 ```
 
@@ -890,7 +895,6 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
     moves: list[dict] = []
     for rewrite, action in plan_obj.entries:
         if action == "skip":
-            report.skipped_count += 1
             report.skipped.append({"key": rewrite.key, "reason": "skipped by plan"})
             continue
         try:
@@ -1479,7 +1483,7 @@ Spec test list vs plan: classify's 5 cases → Tasks 2–3 (6 tests, one extra f
 
 **Placeholder scan:** no TBD/TODO. Every code step carries complete code. Every test step carries the assertion. Every run step names the command and the expected result.
 
-**Type consistency:** `Rewrite(proposal, live, key, kind, keep_ratio, inserted_lines, dropped_lines)` — declared Task 1, constructed Task 2, read in Tasks 6–8. `ApplyPlan(run_id, entries)` and `ApplyReport(merged, replaced, skipped_count, archive_dir, notes, skipped)` — declared Task 1, used Tasks 6–8. `merge_insert_only` / `replace_wholesale` — declared Task 4, dispatched in Task 6's `_ACTION_FOR_KIND`. CLI flag `--apply-safe` → `args.apply_safe` (argparse dash-to-underscore) in both Task 8's parser block and its handler. `A.plan(vault, include=...)` / `A.apply(plan, vault)` / `A.undo(vault, run_id)` — same argument order at every call site.
+**Type consistency:** `Rewrite(proposal, live, key, kind, keep_ratio, inserted_lines, dropped_lines)` — declared Task 1, constructed Task 2, read in Tasks 6–8. `ApplyPlan(run_id, entries)` and `ApplyReport(merged, replaced, archive_dir, notes, skipped)` — declared Task 1, used Tasks 6–8. `skipped` is the only representation of a skip; `len(report.skipped)` is the count, so the two cannot drift. `merge_insert_only` / `replace_wholesale` — declared Task 4, dispatched in Task 6's `_ACTION_FOR_KIND`. CLI flag `--apply-safe` → `args.apply_safe` (argparse dash-to-underscore) in both Task 8's parser block and its handler. `A.plan(vault, include=...)` / `A.apply(plan, vault)` / `A.undo(vault, run_id)` — same argument order at every call site.
 
 One gap found and closed while reviewing: Task 7's `test_full_rewrite_uses_replace_and_is_counted_separately` seeds an empty `entries` dict, which exercises the `report.notes` branch for a missing state entry — a path the spec mentions but did not test.
 

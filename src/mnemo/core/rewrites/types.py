@@ -44,9 +44,14 @@ class ApplyPlan:
 class ApplyReport:
     merged: int = 0
     replaced: int = 0
-    skipped_count: int = 0
     archive_dir: Optional[Path] = None
     notes: list = field(default_factory=list)
     #: Rewrites that could not be applied: ``[{"key", "reason"}, ...]``.
     #: A no-op apply must never be silent, so the CLI prints these.
+    #:
+    #: There is deliberately no ``skipped_count`` beside this list. An earlier
+    #: draft had both, and they disagreed by construction: only the
+    #: "skipped by plan" branch bumped the counter, while a read failure
+    #: appended here without touching it. One fact, one field — callers use
+    #: ``len(report.skipped)``.
     skipped: list = field(default_factory=list)
