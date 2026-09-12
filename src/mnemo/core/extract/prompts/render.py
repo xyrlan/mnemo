@@ -72,7 +72,7 @@ def build_consolidation_prompt(
         f"Task: consolidate these {label} memory files into canonical Tier 2 "
         f"pages. {cluster_clause}\n\n"
         f"{_existing_tags_fragment(vault_root, kind)}"
-        f"{existing_rules_fragment(vault_root, kind, agents=agents)}"
+        f"{existing_rules_fragment(vault_root, kind, agents=agents, chunk=files)}"
         f"{_SCHEMA_EXAMPLE}\n"
         f"{few_shot}\n"
         "Now consolidate these input files:\n\n"
