@@ -115,6 +115,43 @@ def test_render_handles_non_dict_claude_json(tmp_vault, tmp_path):
     assert sl.render(tmp_vault, claude_json, cwd=str(tmp_path)) == ""
 
 
+# --- the blocked-session segment, as it reaches the line ---
+
+
+def _blocked_job(jobs_root: Path, short_id: str) -> None:
+    jobs_root.mkdir(parents=True, exist_ok=True)
+    d = jobs_root / short_id
+    d.mkdir()
+    (d / "state.json").write_text(
+        json.dumps({"state": "working", "tempo": "blocked", "needs": "q?"}),
+        encoding="utf-8",
+    )
+
+
+def test_render_appends_blocked_segment(tmp_vault, tmp_path):
+    """Proves the wiring, not just the helper: the count reaches the line."""
+    claude_json = tmp_path / ".claude.json"
+    _write_claude_json_with_mnemo(claude_json)
+
+    jobs_root = tmp_path / "jobs"
+    _blocked_job(jobs_root, "a")
+    _blocked_job(jobs_root, "b")
+
+    line = sl.render(tmp_vault, claude_json, cwd=str(tmp_path), jobs_root=jobs_root)
+    assert line == "mnemo · 0 topics · 0↓ · 2 esperando"
+
+
+def test_render_omits_blocked_segment_when_nothing_waits(tmp_vault, tmp_path):
+    claude_json = tmp_path / ".claude.json"
+    _write_claude_json_with_mnemo(claude_json)
+
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+
+    line = sl.render(tmp_vault, claude_json, cwd=str(tmp_path), jobs_root=jobs_root)
+    assert line == "mnemo · 0 topics · 0↓"
+
+
 # --- write_state / read_state / clear_state ---
 
 
