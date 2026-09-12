@@ -88,13 +88,21 @@ def _count_today_denials(vault_root: Path) -> int:
         return 0
 
 
-def _blocked_segment(jobs_root: Path | None = None) -> str:
+def _blocked_segment(jobs_root: Path | None = None, *,
+                     claude_home: Path | None = None) -> str:
     """``N esperando`` when background sessions are waiting, else ''.
 
     Latency-critical: the composer runs this on every render under a 2s
-    timeout, so it reads ``state.json`` only — never ``timeline.jsonl``, and
-    never the unblock detector. Any error degrades to an empty segment: a
-    missing count is cheap, a slow or broken status line is not.
+    timeout, so it reads ``state.json`` plus one ``roster.json`` for the whole
+    queue — never ``timeline.jsonl``, and never the unblock detector. Any
+    error degrades to an empty segment: a missing count is cheap, a slow or
+    broken status line is not.
+
+    Counts ``is_waiting``, not ``is_blocked``: a session whose process is gone
+    is still ``tempo=blocked`` on disk, and counting it inflated the badge in
+    every repo, indefinitely (#196). This is deliberately the same rule
+    :func:`render_queue` buckets on — if the two ever diverge the badge
+    contradicts the list the user is looking at.
 
     The count is global on purpose — no ``cwd=`` filter even though
     :func:`read_sessions` offers one: a maintainer running sessions across
@@ -104,7 +112,7 @@ def _blocked_segment(jobs_root: Path | None = None) -> str:
     try:
         from mnemo.core.sessions.jobs import read_sessions
 
-        n = sum(1 for s in read_sessions(jobs_root) if s.is_blocked)
+        n = sum(1 for s in read_sessions(jobs_root, claude_home=claude_home) if s.is_waiting)
     except Exception:
         return ""
     return f"{n} esperando" if n else ""
