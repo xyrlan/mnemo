@@ -686,3 +686,37 @@ def test_session_end_unblock_failure_is_swallowed(tmp_path, monkeypatch):
     monkeypatch.setattr("mnemo.core.sessions.detector.pending_unblocks", _boom)
 
     session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+
+def test_every_detached_spawn_is_stubbed_by_the_conftest_guard() -> None:
+    """#195: the no-spawn guard stubs spawn functions *by name*, so a newly
+    added one is not covered and runs for real inside the suite.
+
+    That is how `_spawn_detached_unblock_consumption` slipped through and left
+    a real `mnemo sessions --consume-unblocks` child running on the Windows
+    runner, which hung the job mid-suite (1926 of ~2800 tests in, then
+    KeyboardInterrupt in subprocess.py). 2026-09-02 the same class of leak left
+    46 orphan autopilot tuners alive and the machine unusable.
+
+    Asserting the *set* rather than each name means the next spawn added to
+    this module fails here instead of on a runner.
+    """
+    import ast
+    from pathlib import Path
+
+    hook = Path(__file__).resolve().parents[2] / "src" / "mnemo" / "hooks" / "session_end.py"
+    tree = ast.parse(hook.read_text(encoding="utf-8"))
+    spawners = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("_spawn_detached")
+    }
+
+    conftest = (Path(__file__).resolve().parents[1] / "conftest.py").read_text(encoding="utf-8")
+    unstubbed = {name for name in spawners if f"session_end.{name}" not in conftest}
+
+    assert not unstubbed, (
+        f"session_end spawn(s) not stubbed by the no-spawn guard: {sorted(unstubbed)}. "
+        "Add them to _no_real_detached_jobs in tests/conftest.py or the suite will "
+        "launch real detached processes."
+    )
