@@ -88,6 +88,28 @@ def _count_today_denials(vault_root: Path) -> int:
         return 0
 
 
+def _blocked_segment(jobs_root: Path | None = None) -> str:
+    """``N esperando`` when background sessions are waiting, else ''.
+
+    Latency-critical: the composer runs this on every render under a 2s
+    timeout, so it reads ``state.json`` only — never ``timeline.jsonl``, and
+    never the unblock detector. Any error degrades to an empty segment: a
+    missing count is cheap, a slow or broken status line is not.
+
+    The count is global on purpose — no ``cwd=`` filter even though
+    :func:`read_sessions` offers one: a maintainer running sessions across
+    several repos wants one signal, and hiding the ones in other repos would
+    defeat the point of the segment.
+    """
+    try:
+        from mnemo.core.sessions.jobs import read_sessions
+
+        n = sum(1 for s in read_sessions(jobs_root) if s.is_blocked)
+    except Exception:
+        return ""
+    return f"{n} esperando" if n else ""
+
+
 def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
     """Build per-project activation statusline segments.
 
@@ -140,12 +162,22 @@ def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
         return []
 
 
-def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) -> str:
+def render(
+    vault_root: Path,
+    claude_json_path: Path,
+    *,
+    cwd: str | None = None,
+    jobs_root: Path | None = None,
+) -> str:
     """Return the mnemo statusline segment, or '' when nothing should show.
 
     MCP registration is checked against both the project-scoped ``.mcp.json``
     (under ``cwd``, if any) and the legacy global ``~/.claude.json``. Either
     one being present is enough — supports both install scopes.
+
+    ``jobs_root`` defaults to the real ``~/.claude/jobs``; tests pass a fake
+    one so an exact-equality assertion on the line cannot be perturbed by
+    whatever background sessions the machine happens to be running.
     """
     project_mcp = _project_mcp_path(cwd)
     if not (_mcp_registered(project_mcp) or _mcp_registered(claude_json_path)):
@@ -178,6 +210,10 @@ def render(vault_root: Path, claude_json_path: Path, *, cwd: str | None = None) 
 
     activation = _activation_segments(vault_root, cwd)
     parts.extend(activation)
+
+    blocked = _blocked_segment(jobs_root)
+    if blocked:
+        parts.append(blocked)
 
     return SEPARATOR.join(parts)
 

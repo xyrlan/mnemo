@@ -102,3 +102,60 @@ def _doctor_check_auto_brain(vault: Path) -> bool:
             pass
 
     return ok
+
+
+
+def _doctor_check_background_sessions(
+    vault: Path | None = None, *, jobs_root: Path | None = None
+) -> bool:
+    """Report Claude Code background sessions and whether we can read them.
+
+    Advisory, never a failure: these sessions belong to Claude Code and their
+    state is none of mnemo's business to repair. The check exists because a
+    schema or packaging break in this path is otherwise invisible — the queue
+    would print "no sessions" and look healthy. Counting unreadable entries
+    makes that visible the way piping the CLI made the Windows crash visible.
+    """
+    from mnemo.core.sessions.jobs import jobs_dir, read_sessions
+
+    # `vault` is part of every doctor check's signature but unused here on
+    # purpose: background sessions live in Claude Code's own jobs dir, not in
+    # the vault. Binding the jobs root to that parameter instead would make
+    # doctor scan the vault, find no `state.json` anywhere, and print "no
+    # background sessions" forever. Tests pass `jobs_root` by keyword.
+    base = jobs_dir() if jobs_root is None else jobs_root
+    if not base.is_dir():
+        print("  ✓ no background sessions")
+        return True
+
+    try:
+        dirs = [d for d in base.iterdir() if d.is_dir()]
+    except OSError as exc:
+        # Doctor is the thing that must survive breakage: an unreadable jobs
+        # dir is worth saying out loud, never worth aborting the whole run.
+        print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
+        return True
+
+    if not dirs:
+        print("  ✓ no background sessions")
+        return True
+
+    try:
+        sessions = read_sessions(base)
+    except OSError as exc:  # pragma: no cover - read_sessions swallows its own
+        # `read_sessions` guards both its walk and every per-entry read, so a
+        # permission lost between our two walks comes back as an empty list and
+        # is counted as unreadable below. This stays as a backstop: the day its
+        # contract changes, doctor still reports instead of aborting the run.
+        print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
+        return True
+
+    unreadable = max(len(dirs) - len(sessions), 0)
+    blocked = sum(1 for s in sessions if s.is_blocked)
+    word = "session" if len(dirs) == 1 else "sessions"
+    # ⚠, not ✓: an entry we could not read is the one thing this check exists
+    # to surface, and nobody skimming for ✗/⚠/ℹ would ever stop on a ✓ line.
+    glyph = "⚠" if unreadable else "✓"
+    suffix = f", {unreadable} unreadable" if unreadable else ""
+    print(f"  {glyph} {len(dirs)} background {word} ({blocked} waiting{suffix})")
+    return True
