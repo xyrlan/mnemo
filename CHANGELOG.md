@@ -54,8 +54,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
   `state.json` carries no pid, but `~/.claude/daemon/roster.json` keys its
   `workers` map by the same short id as the job directories and carries a real
-  one — so liveness is now probed with `os.kill(pid, 0)` rather than inferred
-  from age. There is deliberately **no age threshold**: a session waiting on a
+  one — so liveness is now probed against that pid rather than inferred from
+  age (signal 0 on POSIX; see the Windows note below). There is deliberately
+  **no age threshold**: a session waiting on a
   human for 24h is exactly what the queue exists to surface, and only a dead
   *process* re-buckets an entry. Liveness is tri-state, and "unknown" (no
   readable roster) always counts as waiting — a false "dead" would hide a real
@@ -69,6 +70,47 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   follows that order. The statusline badge counts the same `is_waiting` rule the
   list buckets on, so the number can no longer disagree with the screen; its
   global cross-repo scope is deliberate and is unchanged.
+
+- **Answering a blocked session is now learned from.** The detector recorded
+  every `blocked → active` edge with `extracted: false`, and `pending_unblocks()`
+  existed to serve them — but nothing called it and no code path ever set the
+  flag, so the markers accumulated unread. `mnemo sessions --consume-unblocks`
+  is the reader, and `session_end` runs it detached (gated on `briefings.enabled`,
+  since consuming a marker *is* a briefing plus an extraction).
+
+  What the marker turned out to be worth is **reach, not emphasis**:
+  `session_end` briefs at `min_mutations=1`, so a session whose only product was
+  the maintainer answering a question mutates no files and is skipped outright.
+  Across 206 real transcripts, 76 have zero mutations but only 15 carry
+  correction-shaped text — lowering the threshold would buy 61 wasted LLM calls
+  to find those 15. The unblock edge selects them for the price of a flag.
+
+- **Windows: the liveness probe was sending a real Ctrl-C to the console
+  instead of asking about the pid.** `os.kill(pid, 0)` is not a liveness check
+  there: signal 0 is `CTRL_C_EVENT`, so CPython takes the console-control
+  branch and calls `GenerateConsoleCtrlEvent`, which per Win32 "cannot be
+  limited to a specific process group" — the pid is ignored and **every process
+  sharing the console receives a Ctrl-C**. The call then reports success, so the
+  probe also always answered "alive".
+
+  The queue probes every rostered session and the statusline runs on every
+  render, so on Windows this fired a Ctrl-C at the user's own Claude Code
+  session repeatedly — and because the answer was always "alive", the
+  abandoned-session handling above could never trigger there at all. Windows
+  now uses `OpenProcess` + `GetExitCodeProcess`, with access-denied read as
+  alive (the same reading as POSIX `EPERM`); POSIX keeps signal 0. The
+  `kernel32` signatures are declared rather than left to ctypes' defaults,
+  which would truncate a 64-bit `HANDLE` to `c_int` and leak or mis-close it.
+
+- **The Windows CI job can fail again.** It carried `continue-on-error: true`,
+  so it reported `failure` while the run conclusion and the PR status rollup
+  both reported `success` — invisible at every place a merge decision is made,
+  and how a Windows-breaking change reached `master`. The suppression is gone
+  and locked out by a test, the job has a timeout (10 minutes against a 62–108s
+  measured runtime) so a hang reads as a fast failure rather than holding a
+  runner for hours, and the name no longer says `(experimental)`. Note `master`
+  configures no required status checks, so this reports honestly rather than
+  blocking a merge.
 
 - **A rule that reappears under a different page type is now recognised as the
   same rule.** `chain-navigation-no-odometry` lived in the vault twice — once as
