@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from mnemo.core.sessions import liveness
@@ -78,13 +80,20 @@ def test_pid_alive_is_false_for_a_pid_that_cannot_exist() -> None:
     assert liveness.pid_alive(0) is False
 
 
-def test_pid_alive_is_false_for_a_reaped_pid() -> None:
-    pid = os.fork()
-    if pid == 0:  # pragma: no cover - child never returns
-        os._exit(0)
-    os.waitpid(pid, 0)
+def _reaped_pid() -> int:
+    """A pid that certainly belonged to a process and certainly no longer does.
 
-    assert liveness.pid_alive(pid) is False
+    Spawned and waited on rather than invented: an arbitrary high number could
+    be in use, which would make the assertion pass for the wrong reason. Uses
+    ``subprocess`` rather than ``os.fork`` because Windows has no ``fork``.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", ""])
+    proc.wait()
+    return proc.pid
+
+
+def test_pid_alive_is_false_for_a_reaped_pid() -> None:
+    assert liveness.pid_alive(_reaped_pid()) is False
 
 
 # --- classify --------------------------------------------------------------
@@ -102,11 +111,7 @@ def test_session_absent_from_a_readable_roster_is_dead(tmp_path: Path) -> None:
 
 
 def test_session_in_roster_with_a_dead_pid_is_dead(tmp_path: Path) -> None:
-    pid = os.fork()
-    if pid == 0:  # pragma: no cover - child never returns
-        os._exit(0)
-    os.waitpid(pid, 0)
-    _roster(tmp_path, {"a3f1": {"pid": pid}})
+    _roster(tmp_path, {"a3f1": {"pid": _reaped_pid()}})
 
     assert liveness.is_live("a3f1", claude_home=tmp_path) is False
 
