@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-12
+
 ### Added
 
 - **`mnemo sessions` — a blocked-first queue of Claude Code background
@@ -42,6 +44,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   clobber each other's ledger writes, and flushes the manifest per rewrite so
   a crash mid-batch leaves the completed work recoverable. The vault is not a
   git repository, so this is the only recovery path there is.
+
+### Fixed
+
+- **A slug migration would have deleted every rollback path `mnemo rewrites`
+  creates.** `relocate_proposed` excluded only `shared/_inbox/` from its walk,
+  so the proposals archived under `shared/_archive/rewrites-<run>/` — the
+  copies `--undo` restores from — read as stray drafts sitting beside the rule
+  they shadow. `mnemo doctor` reported 34 of them minutes after the first
+  drain. The check is dry-run, but `mnemo extract` runs the real migration:
+  one run would have moved all 34 back into `_inbox`, re-staging rewrites that
+  had already been accepted and reconciled, and taking the only recovery with
+  it — the vault is not a git repository. The walk now skips `_archive`, the
+  way every consumer surface already does.
 
 ### Changed
 
