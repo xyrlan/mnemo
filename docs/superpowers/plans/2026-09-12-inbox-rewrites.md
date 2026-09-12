@@ -1549,8 +1549,12 @@ def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
     _seed(tmp_vault)
     live = tmp_vault / "shared" / "project" / "a__x.md"
     state_path = tmp_vault / ".mnemo" / "extraction-state.json"
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
     live_before = live.read_bytes()
     state_before = state_path.read_bytes()
+    # Captured before apply, which deletes the proposal. Reading it afterwards
+    # raises FileNotFoundError on the fixture itself.
+    prop_before = prop.read_bytes()
     plan = A.plan(tmp_vault, include={"project/a__x"})
     A.apply(plan, tmp_vault)
     assert live.read_bytes() != live_before
@@ -1563,6 +1567,12 @@ def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
     assert restored == 3
     assert live.read_bytes() == live_before
     assert json.loads(state_path.read_bytes()) == json.loads(state_before)
+    # Assert the proposal is actually back, not merely counted. Mutation-tested:
+    # deleting undo's `prop_dest.write_bytes` while leaving its `restored += 1`
+    # slipped past the count-and-bytes assertions above, so a test named
+    # "exactly" was leaning on another test to catch half of what it claims.
+    assert prop.exists()
+    assert prop.read_bytes() == prop_before
 
 
 def test_undo_of_an_unknown_run_restores_nothing(tmp_vault: Path):
