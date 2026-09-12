@@ -549,3 +549,71 @@ def test_maybe_schedule_propose_swallows_mark_analyzed_failure(tmp_path):
             cfg={}, vault_root=tmp_path, agent_name="proj-x",
             session_id="sid-mark-fail", cwd=str(tmp_path),
         )
+
+
+# --- the sweep the module docstring promises (#176) -------------------------
+#
+# ``detector`` claimed the sweep rides "every ``mnemo sessions`` invocation and
+# the ``session_end`` hook". Only the first was ever true. This makes the
+# second one true as well.
+#
+# It does not close #176: ``session_end`` fires when *this* session ends, so it
+# still cannot see an edge that opened and closed inside another session's
+# lifetime. It adds a trigger, it does not remove the race.
+
+
+def test_session_end_sweeps_the_background_session_queue(tmp_path, monkeypatch):
+    """The hook calls ``detector.sweep`` with the sessions it can see."""
+    from mnemo.hooks import session_end
+
+    calls = []
+
+    def _fake_sweep(sessions, *, vault_root):
+        calls.append((sessions, vault_root))
+        return 0
+
+    monkeypatch.setattr("mnemo.core.sessions.detector.sweep", _fake_sweep)
+    monkeypatch.setattr(
+        "mnemo.core.sessions.jobs.read_sessions", lambda **kw: ["s1", "s2"]
+    )
+
+    session_end._maybe_sweep_sessions(tmp_path)
+
+    assert calls == [(["s1", "s2"], tmp_path)]
+
+
+def test_session_end_sweep_is_unscoped(tmp_path, monkeypatch):
+    """Every background session, not just this cwd's.
+
+    The hook fires in one repo; the blocked sessions worth recording may be
+    running anywhere. ``mnemo sessions`` scopes to the cwd because a human is
+    reading a list; the detector is populating state and wants all of it.
+    """
+    from mnemo.hooks import session_end
+
+    seen = {}
+
+    monkeypatch.setattr("mnemo.core.sessions.detector.sweep", lambda s, **kw: 0)
+    monkeypatch.setattr(
+        "mnemo.core.sessions.jobs.read_sessions",
+        lambda **kw: seen.update(kw) or [],
+    )
+
+    session_end._maybe_sweep_sessions(tmp_path)
+
+    assert seen.get("cwd") is None
+
+
+def test_session_end_sweep_failure_is_swallowed(tmp_path, monkeypatch):
+    """A sweep that raises must not take the hook down.
+
+    The queue state file is disposable; the hook's other work is not.
+    """
+    from mnemo.hooks import session_end
+
+    def _boom(*a, **kw):
+        raise RuntimeError("jobs dir vanished")
+
+    monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", _boom)
+
+    session_end._maybe_sweep_sessions(tmp_path)  # must not raise

@@ -12,8 +12,21 @@ module keeps ``last_tempo`` per session and compares against the current value.
 
 No daemon. The sweep rides triggers that already exist — every ``mnemo
 sessions`` invocation and the ``session_end`` hook — mirroring how autopilot
-schedules itself. Worst case a sweep is late, never lost: the edge is still
-visible on the next one as long as ``tempo`` has not flipped back.
+schedules itself.
+
+**A late sweep loses the edge.** The original note here claimed the opposite,
+on the assumption that ``tempo`` stays ``active`` until someone looks. It does
+not: a session that is answered and then asks a follow-up is back at
+``blocked`` within seconds. Measured on a real dispatch (2026-09-12) the edge
+lasted ~10s, and a sweep run after the flip-back recorded nothing — the
+qualifier "as long as ``tempo`` has not flipped back" is doing all the work,
+and in practice it usually has. So these triggers are a floor, not a
+guarantee, and the sighting rate is bounded by how often they happen to fire.
+
+Closing that gap means not depending on the edge at all: ``state.json`` also
+carries ``linkScanPath`` and ``linkScanOffset``, which bookmark how far the
+transcript has been consumed and let a consumer diff the region instead of
+having to observe the process mid-flip. See #176.
 """
 from __future__ import annotations
 

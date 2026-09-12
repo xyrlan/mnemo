@@ -270,6 +270,39 @@ def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
             pass
 
 
+def _maybe_sweep_sessions(vault_root) -> None:
+    """Record any ``blocked -> active`` edge visible right now (#176).
+
+    ``core.sessions.detector`` documented itself as riding this hook from the
+    start; until now only ``mnemo sessions`` ever called it, so on a machine
+    where nobody runs that command by hand the detector never ran at all.
+
+    This is a second trigger, not a fix for the cadence: the hook fires when
+    *this* session ends, and an edge that opens and closes inside another
+    session's lifetime is still missed. It converts "never swept unless a
+    human typed a command" into "swept at least once per session end".
+
+    Unscoped on purpose. The hook fires in one repo, but the blocked sessions
+    worth recording may be running anywhere; ``mnemo sessions`` filters by cwd
+    because a human is reading the list, while the detector is populating
+    state and wants every session it can see.
+
+    Never raises: the queue's state file is disposable (losing it costs
+    un-extracted markers, never a rule), and the hook's other work is not.
+    """
+    try:
+        from mnemo.core.sessions import detector
+        from mnemo.core.sessions import jobs
+
+        detector.sweep(jobs.read_sessions(), vault_root=vault_root)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_end.sweep_sessions", exc)
+        except Exception:
+            pass
+
+
 def _maybe_schedule_propose(
     cfg: dict,
     vault_root,
@@ -377,6 +410,10 @@ def main() -> int:
             )
         except Exception as e:
             errors.log_error(vault, "session_end.briefing_wrap", e)
+        try:
+            _maybe_sweep_sessions(vault)
+        except Exception as e:
+            errors.log_error(vault, "session_end.sweep_sessions_wrap", e)
         try:
             cwd = str(payload.get("cwd") or os.getcwd())
             _maybe_schedule_propose(
