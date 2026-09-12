@@ -51,6 +51,77 @@ def _seed(vault: Path, slug: str = "a__x", *, page_type: str = "project") -> Non
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
 
+def test_a_concurrent_run_is_refused_rather_than_racing(tmp_vault: Path):
+    """Two runs must not both flush the ledger.
+
+    Each ``apply`` reads the whole ledger, mutates a private copy, and flushes a
+    full overwrite — so without a lock the second to flush silently discards the
+    first's ``written_hash`` updates while both rule files are already written.
+    The first run's proposal is deleted by then, so ``classify`` returns nothing
+    and the disagreement is permanently undetectable: strictly worse than the
+    bug this module fixes, which at least re-proposed visibly. Reproduced 3/3
+    with two threads before the lock landed.
+    """
+    from mnemo.core import locks
+
+    _seed(tmp_vault, "a__x")
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+
+    with locks.try_lock(tmp_vault / ".mnemo" / "rewrites.lock") as held:
+        assert held
+        with pytest.raises(A.VaultBusy):
+            A.apply(plan, tmp_vault)
+
+    # Nothing was written while refused: the proposal is still staged.
+    assert (tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md").exists()
+
+    # With the lock free, the same plan applies normally.
+    assert A.apply(plan, tmp_vault).merged == 1
+
+
+def test_undo_survives_a_truncated_manifest(tmp_vault: Path):
+    """``undo`` is the recovery path, so it must not be what crashes.
+
+    The manifest was written with a plain ``write_text``, so a process dying
+    mid-write left it truncated but *existing* — and ``undo``'s only guard is
+    ``exists()``, which turned "nothing to restore" into a ``JSONDecodeError``.
+    Strictly worse than the no-manifest case the per-rewrite flush replaced.
+    """
+    _seed(tmp_vault, "a__x")
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    report = A.apply(plan, tmp_vault)
+
+    manifest = report.archive_dir / "manifest.json"
+    manifest.write_text(manifest.read_text()[: len(manifest.read_text()) // 2])
+
+    assert A.undo(tmp_vault, plan.run_id) == 0
+
+
+def test_undo_restages_the_consumed_proposal(tmp_vault: Path):
+    """An undo must reverse both halves, not just the live file.
+
+    ``undo`` restored the live rule and the ledger but never recreated the
+    proposal ``apply`` deleted, so the reviewed text was gone for good —
+    recoverable only by re-running extraction and hoping it rebuilt the same
+    content from source facts that may since have changed.
+    """
+    _seed(tmp_vault, "a__x")
+    prop = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
+    prop_before = prop.read_bytes()
+    live = tmp_vault / "shared" / "project" / "a__x.md"
+    live_before = live.read_bytes()
+
+    plan = A.plan(tmp_vault, include={"project/a__x"})
+    A.apply(plan, tmp_vault)
+    assert not prop.exists()
+
+    A.undo(tmp_vault, plan.run_id)
+
+    assert live.read_bytes() == live_before
+    assert prop.exists()
+    assert prop.read_bytes() == prop_before
+
+
 def test_a_hard_failure_mid_batch_still_leaves_the_applied_work_recoverable(
     tmp_vault: Path, monkeypatch
 ):

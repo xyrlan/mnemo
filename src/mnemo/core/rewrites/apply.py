@@ -11,11 +11,24 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
+from mnemo.core import locks
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.rewrites import merge as M
 from mnemo.core.rewrites.classify import classify
 from mnemo.core.rewrites.types import ApplyPlan, ApplyReport, Rewrite
+
+
+class VaultBusy(RuntimeError):
+    """Another ``apply`` run holds the vault lock.
+
+    Raised rather than returning an empty report, so a caller can tell "nothing
+    was staged" from "someone else is mid-write". Existing ``try_lock`` callers
+    return early on contention, which is right for a background mirror but wrong
+    here: this writes rules and reconciles the ledger, and a silent no-op would
+    read as success.
+    """
 
 _ACTION_FOR_KIND = {
     "insert_only": "merge",
@@ -28,6 +41,18 @@ def _run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
 
+def _atomic_json(path: Path, payload: dict, run_id: str) -> None:
+    """Write *payload* as JSON via a run-scoped ``.tmp`` + ``os.replace``.
+
+    Shared by the manifest and the ledger so neither can be left truncated. The
+    ``run_id`` in the temp name keeps two runs from colliding on one scratch
+    path even if the lock above ever fails to hold.
+    """
+    tmp = path.with_suffix(f"{path.suffix}.{run_id}.tmp")
+    tmp.write_bytes(json.dumps(payload, indent=2).encode("utf-8"))
+    tmp.replace(path)
+
+
 def plan(vault_root: Path, *, include: set[str]) -> ApplyPlan:
     """Build a plan covering exactly the rewrites whose ``key`` is in *include*."""
     entries: list[tuple[Rewrite, str]] = []
@@ -38,12 +63,33 @@ def plan(vault_root: Path, *, include: set[str]) -> ApplyPlan:
 
 
 def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
-    """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`."""
+    """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`.
+
+    Holds a vault-wide lock for the whole run. Without it, two concurrent runs
+    each read the entire ledger, mutate a private copy, and flush a full
+    overwrite — so the second to flush silently discards the first's
+    ``written_hash`` updates while both rule files are already written. The
+    first run's proposal is deleted by then, so ``classify`` returns nothing and
+    the disagreement between ledger and disk is permanently undetectable. That
+    is strictly worse than the bug this module fixes: the original re-proposed
+    forever and was at least visible. Reproduced 3/3 with two threads before
+    the lock was added.
+    """
     vault_root = Path(vault_root)
     report = ApplyReport()
     if not plan_obj.entries:
         return report
 
+    with locks.try_lock(vault_root / ".mnemo" / "rewrites.lock") as held:
+        if not held:
+            raise VaultBusy(
+                "another mnemo rewrites run is in progress; retry when it finishes"
+            )
+        return _apply_locked(plan_obj, vault_root, report)
+
+
+def _apply_locked(plan_obj: ApplyPlan, vault_root: Path, report: ApplyReport) -> ApplyReport:
+    """The body of :func:`apply`, run with the vault lock held."""
     arch = vault_root / "shared" / "_archive" / f"rewrites-{plan_obj.run_id}"
     # Re-applying a run would copy already-merged files over the pristine
     # originals and overwrite the manifest, silently destroying undo. Guard on
@@ -70,6 +116,10 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
     manifest_path = arch / "manifest.json"
     moves: list[dict] = []
 
+    # Defined AFTER every rebinding of the names below, because it closes over
+    # them by reference: ``state`` in particular is rebound above when the ledger
+    # exists on disk. Moving this definition earlier would silently capture the
+    # placeholder dict and flush stale data with no error.
     def _flush() -> None:
         """Persist the manifest and the ledger to reflect exactly what has landed.
 
@@ -82,20 +132,22 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
         still carrying the stale hash: unrecoverable by ``undo`` and silently
         disagreeing with disk. Verified by monkeypatching the write.
         """
-        manifest_path.write_text(
-            json.dumps({
-                "run_id": plan_obj.run_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "moves": moves,
-                "skipped": report.skipped,
-                "state_backup": state_backup,
-            }, indent=2),
-            encoding="utf-8",
-        )
-        tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+        # Both writes go through a run-scoped .tmp + os.replace. The manifest was
+        # a plain write_text, which left a *truncated but existing* manifest if
+        # the process died mid-write — and ``undo``'s only guard is
+        # ``exists()``, so that turned "nothing to restore" into a raise. The
+        # tmp names carry the run_id so a lock failure degrades to one run
+        # refusing rather than two clobbering the same scratch file.
+        _atomic_json(manifest_path, {
+            "run_id": plan_obj.run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "moves": moves,
+            "skipped": report.skipped,
+            "notes": report.notes,
+            "state_backup": state_backup,
+        }, plan_obj.run_id)
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_bytes(json.dumps(state, indent=2).encode("utf-8"))
-        tmp.replace(state_path)
+        _atomic_json(state_path, state, plan_obj.run_id)
 
     try:
         _apply_entries(
@@ -109,8 +161,21 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
     return report
 
 
-def _apply_entries(plan_obj, vault_root, report, state, originals, moves, _flush) -> None:
-    """The per-rewrite loop. Split out so :func:`apply` can wrap it in ``finally``."""
+def _apply_entries(
+    plan_obj: ApplyPlan,
+    vault_root: Path,
+    report: ApplyReport,
+    state: dict,
+    originals: Path,
+    moves: list[dict],
+    _flush: Callable[[], None],
+) -> None:
+    """The per-rewrite loop. Split out so :func:`apply` can wrap it in ``finally``.
+
+    Mutates ``state``, ``moves`` and ``report`` in place — never rebinds them.
+    ``_flush`` closes over the same three objects, so a rebinding here would
+    desync its view and flush stale data silently.
+    """
     for rewrite, action in plan_obj.entries:
         if action == "skip":
             report.skipped.append({"key": rewrite.key, "reason": "skipped by plan"})
@@ -121,12 +186,23 @@ def _apply_entries(plan_obj, vault_root, report, state, originals, moves, _flush
         except OSError as exc:
             report.skipped.append({"key": rewrite.key, "reason": f"read: {exc}"})
             continue
+        # No ``return report`` at the end of this function: it annotates
+        # ``-> None`` and mutates ``report`` in place. ``_apply_locked`` owns the
+        # return.
 
-        # Pristine original first — nothing is overwritten before it is archived.
-        # A rule skipped below keeps its copy here with no ``moves`` entry, so
-        # ``undo`` ignores it. Harmless (the file was never modified) and cheaper
-        # than deciding after the fact whether to clean it up.
+        # Pristine originals first — nothing is overwritten or deleted before it
+        # is archived. A rule skipped below keeps its copies here with no
+        # ``moves`` entry, so ``undo`` ignores them. Harmless (neither file was
+        # touched) and cheaper than deciding after the fact whether to clean up.
+        #
+        # The proposal is archived too, under ``proposals/``. ``undo`` restored
+        # only the live half before, so an undone rewrite left the vault's
+        # content correct but the reviewed proposal gone for good — recoverable
+        # only by re-running extraction and hoping it rebuilt the same text.
         shutil.copy2(rewrite.live, originals / f"{rewrite.live.stem}.md")
+        proposals_dir = originals.parent / "proposals"
+        proposals_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rewrite.proposal, proposals_dir / rewrite.proposal.name)
 
         builder = M.merge_insert_only if action == "merge" else M.replace_wholesale
         try:
@@ -176,8 +252,6 @@ def _apply_entries(plan_obj, vault_root, report, state, originals, moves, _flush
         # far is then already recoverable if the next one dies.
         _flush()
 
-    return report
-
 
 def undo(vault_root: Path, run_id: str) -> int:
     """Restore every file *run_id* touched, byte for byte. Returns files restored."""
@@ -186,10 +260,17 @@ def undo(vault_root: Path, run_id: str) -> int:
     manifest_path = arch / "manifest.json"
     if not manifest_path.exists():
         return 0
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A truncated manifest means nothing usable to replay. Return 0 like the
+        # missing-manifest case rather than raising: undo is the recovery path,
+        # so it must not itself be the thing that crashes.
+        return 0
     originals = arch / "originals"
     restored = 0
 
+    proposals_dir = arch / "proposals"
     for move in manifest.get("moves") or []:
         src = originals / f"{move.get('slug')}.md"
         dest = vault_root / str(move.get("live_path") or "")
@@ -197,6 +278,16 @@ def undo(vault_root: Path, run_id: str) -> int:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(src.read_bytes())
             restored += 1
+        # Re-stage the proposal this run consumed, so an undo is fully
+        # reversible rather than only restoring the live half.
+        prop_rel = move.get("proposal_path")
+        if prop_rel:
+            prop_dest = vault_root / str(prop_rel)
+            prop_src = proposals_dir / prop_dest.name
+            if prop_src.exists():
+                prop_dest.parent.mkdir(parents=True, exist_ok=True)
+                prop_dest.write_bytes(prop_src.read_bytes())
+                restored += 1
 
     backup_rel = manifest.get("state_backup")
     if backup_rel:
