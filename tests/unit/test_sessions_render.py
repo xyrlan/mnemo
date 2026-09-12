@@ -5,8 +5,12 @@ reads line one and knows where to go.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from mnemo.core.sessions.jobs import Session
-from mnemo.core.sessions.render import render_queue
+from mnemo.core.sessions.render import _age, render_queue
+
+NOW = datetime(2026, 9, 12, 12, 30, tzinfo=timezone.utc)
 
 
 def _blocked(short_id: str, needs: str, *, updated_at: str = "2026-09-12T12:00:00.000Z", **kw) -> Session:
@@ -75,3 +79,36 @@ def test_no_attach_hint_when_nothing_is_blocked() -> None:
     out = render_queue([Session(short_id="w0", state="working", tempo="active", name="w")])
 
     assert "claude attach" not in out
+
+
+def test_age_says_agora_under_a_minute() -> None:
+    assert _age("2026-09-12T12:29:30.000Z", now=NOW) == "agora"
+
+
+def test_age_counts_minutes_up_to_an_hour() -> None:
+    assert _age("2026-09-12T12:29:00.000Z", now=NOW) == "1m"
+    assert _age("2026-09-12T11:31:00.000Z", now=NOW) == "59m"
+
+
+def test_age_switches_to_hours_at_sixty_minutes() -> None:
+    assert _age("2026-09-12T11:30:00.000Z", now=NOW) == "1h"
+    assert _age("2026-09-11T12:30:00.000Z", now=NOW) == "24h"
+
+
+def test_age_is_blank_without_a_timestamp() -> None:
+    assert _age(None, now=NOW) == ""
+    assert _age("", now=NOW) == ""
+
+
+def test_age_is_blank_when_the_timestamp_is_unparsable() -> None:
+    assert _age("ontem de tarde", now=NOW) == ""
+
+
+def test_age_accepts_a_timestamp_without_a_timezone() -> None:
+    """An updatedAt with no Z and no offset must degrade, not crash."""
+    assert _age("2026-09-12T12:00:00", now=NOW) == "30m"
+
+
+def test_age_of_a_future_timestamp_reads_as_agora() -> None:
+    """Documents today's behaviour: a negative delta falls in the <1min branch."""
+    assert _age("2026-09-12T13:00:00.000Z", now=NOW) == "agora"

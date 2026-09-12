@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from mnemo.core.sessions.jobs import Session
 
 EMPTY = "  nenhuma sessão em background"
+NO_TIMESTAMP = "9999"  # sorts after every real ISO-8601 timestamp
 
 
 def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
@@ -24,6 +25,8 @@ def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
         ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
     except ValueError:
         return ""
+    if ts.tzinfo is None:  # a writer that omitted the offset means UTC, as in core/numbers.py
+        ts = ts.replace(tzinfo=timezone.utc)
     delta = (now or datetime.now(timezone.utc)) - ts
     minutes = int(delta.total_seconds() // 60)
     if minutes < 1:
@@ -34,8 +37,12 @@ def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
 
 
 def _sort_key(s: Session) -> str:
-    """Oldest update first; sessions without a timestamp sort last."""
-    return s.updated_at or "9999"
+    """Oldest update first; sessions without a timestamp sort last.
+
+    ISO-8601 sorts lexically, so the year 9999 is simply later than any
+    timestamp a real session can carry.
+    """
+    return s.updated_at or NO_TIMESTAMP
 
 
 def _tokens(s: Session) -> str:
