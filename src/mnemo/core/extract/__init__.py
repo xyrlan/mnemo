@@ -16,6 +16,7 @@ from mnemo.core.backfill.origin import (
     is_backfill_markdown,
 )
 from mnemo.core.extract import evidence, inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract.demotion import is_demoted_entry, is_demoted_frontmatter
 from mnemo.core.extract.guards import is_prompt_echo
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
@@ -761,8 +762,10 @@ def _reconcile_universal_promotions(
         except OSError:
             continue
         fm, body = parse_frontmatter(text)
-        if str(fm.get("demoted_from") or "") == "feedback":
-            # Demoted feedback stays staged until a person reviews it.
+        if is_demoted_frontmatter(fm) or is_demoted_entry(entry):
+            # Demoted feedback stays staged until a person reviews it. Both
+            # readings, because the entry is the durable one (#177) and the
+            # file is what heals a state that predates the field.
             continue
         page = inbox.ExtractedPage(
             slug=slug,

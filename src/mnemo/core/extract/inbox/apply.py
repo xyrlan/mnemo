@@ -23,6 +23,11 @@ from mnemo.core.backfill.origin import (
     is_backfill_markdown,
     is_backfill_page,
 )
+from mnemo.core.extract.demotion import (
+    is_demoted_entry,
+    is_demoted_markdown,
+    is_demoted_page,
+)
 from mnemo.core.extract.inbox.branches.auto_promoted import _apply_auto_promoted
 from mnemo.core.extract.inbox.branches.inbox_flow import _apply_inbox
 from mnemo.core.extract.inbox.branches.universal_promotion import (
@@ -216,6 +221,68 @@ def _resolve_sticky_origin(
         page.origin_backfill = True
 
 
+def _resolve_sticky_demotion(
+    page: ExtractedPage,
+    entry: StateEntry | None,
+    vault_root: Path,
+) -> None:
+    """Restore a demotion the current run's gate could not tell us about.
+
+    ``page.unverified_feedback`` is set by ``evidence.verify_page``, which
+    returns early for any page that is not ``type: feedback``. A page demoted
+    on run N is staged as a ``reference`` page, so on run N+1 the LLM sees it
+    among the existing *reference* rules and re-emits it as one — the gate
+    never runs, the flag arrives False, and the page goes straight through the
+    single-source auto-promote door into ``shared/`` (#177).
+
+    Two durable sources of truth, consulted in cost order, mirroring
+    :func:`_resolve_sticky_origin`:
+
+    1. ``StateEntry.unverified_feedback`` — free, and set by
+       :func:`_stamp_entry_demotion` below;
+    2. the already-staged ``shared/_inbox/<type>/<slug>.md``, which still
+       carries ``demoted_from: feedback`` — one small read, only when the
+       entry has no answer. This heals vaults whose state file predates the
+       field.
+
+    Mutates the page in place so every downstream gate sees the same answer.
+    Never clears the flag: a page the gate refused once stays staged until a
+    person reviews it, because re-deriving the answer each run is the bug.
+    """
+    if is_demoted_page(page):
+        return
+    if is_demoted_entry(entry):
+        page.unverified_feedback = True
+        return
+    staged = vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md"
+    if is_demoted_markdown(staged):
+        page.unverified_feedback = True
+
+
+def _stamp_entry_demotion(
+    state: ExtractionState, key: str, page: ExtractedPage,
+) -> None:
+    """Persist a demotion onto whatever entry now lives at *key*.
+
+    Runs after dispatch, like :func:`_stamp_entry_origin`, so it covers the
+    branches that mutate an existing entry and the ones that install a fresh
+    one. Only ever sets True.
+
+    Unlike the origin stamp, :data:`SACRED_STATUSES` entries are **not**
+    skipped: that skip exists to keep a live auto-promoted page refreshable,
+    and a demoted page has no business being at a sacred status in the first
+    place. Stamping one that already is (a page leaked by this bug before the
+    fix) is what lets a later run see the demotion and route it back to the
+    inbox rather than keep overwriting the sacred copy.
+    """
+    if not is_demoted_page(page):
+        return
+    entry = state.entries.get(key)
+    if entry is None:
+        return
+    entry.unverified_feedback = True
+
+
 def _stamp_entry_origin(
     state: ExtractionState, key: str, page: ExtractedPage,
 ) -> None:
@@ -294,6 +361,10 @@ def apply_pages(
         # is the single-source auto-promote door, and it is the first gate a
         # laundered page reaches.
         _resolve_sticky_origin(page, entry, vault_root)
+        # Same treatment for the evidence gate's verdict, and for the same
+        # reason: it is derived per run, and the run that re-emits a demoted
+        # slug as a native reference page derives nothing at all (#177).
+        _resolve_sticky_demotion(page, entry, vault_root)
         target = _target_path_for_page(page, vault_root)
         is_auto = _is_auto_promoted_target(target, vault_root)
 
@@ -302,6 +373,7 @@ def apply_pages(
         # as a no-op handler in the table would obscure the loop control flow.
         if entry is not None and entry.source_hash == page.source_hash and not force:
             _stamp_entry_origin(state, key, page)
+            _stamp_entry_demotion(state, key, page)
             result.unchanged_skipped.append(key)
             continue
 
@@ -314,6 +386,7 @@ def apply_pages(
                 )
                 break
         _stamp_entry_origin(state, key, page)
+        _stamp_entry_demotion(state, key, page)
         # Feed the page back into the index so a later page in this same batch
         # that says the same thing redirects onto it — but only if this page
         # actually landed. A page dropped as dismissed_skipped wrote nothing, so

@@ -35,6 +35,7 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
                 "last_sync": v.last_sync,
                 "status": v.status,
                 "origin_backfill": v.origin_backfill,
+                "unverified_feedback": v.unverified_feedback,
             }
             for k, v in state.entries.items()
         },
@@ -102,6 +103,10 @@ def load_state(path: Path) -> ExtractionState:
             # ``apply._resolve_sticky_origin`` reads — which is also why
             # ``_force_clear_inbox_cluster_dirs`` must not delete it.
             origin_backfill=bool(v.get("origin_backfill", False)),
+            # Same older-binary erasure risk as origin_backfill above; the
+            # same backstop applies, via ``demotion.is_demoted_markdown``
+            # on the staged page (#177).
+            unverified_feedback=bool(v.get("unverified_feedback", False)),
         )
     return ExtractionState(
         last_run=payload.get("last_run"),

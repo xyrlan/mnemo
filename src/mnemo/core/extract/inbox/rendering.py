@@ -8,6 +8,7 @@ plus a few tests that exercise rendering directly.
 from __future__ import annotations
 
 from mnemo.core.backfill.origin import ORIGIN_LINE, is_backfill_page
+from mnemo.core.extract.demotion import DEMOTED_LINE
 from mnemo.core.extract.inbox.types import ExtractedPage
 from mnemo.core.text_utils import GRAPH_SECTION_MARKER
 
@@ -138,7 +139,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
             "quote": str(page.evidence["quote"]),
             "source": str(page.evidence["source"]),
         })
-    demoted_line = "demoted_from: feedback\n" if page.unverified_feedback else ""
+    demoted_line = DEMOTED_LINE if page.unverified_feedback else ""
 
     # Maintainer-facing note, written AFTER the rule text so the preview
     # (first 300 chars of the body) and the export start at the rule, not at
