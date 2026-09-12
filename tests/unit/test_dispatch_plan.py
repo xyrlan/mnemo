@@ -7,6 +7,8 @@ The spawn/worktree half lives in :mod:`tests.unit.test_dispatch_worktrees`.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from mnemo.core import dispatch
 
 
@@ -20,7 +22,8 @@ from mnemo.core import dispatch
 def test_worktree_path_encodes_the_issue_number() -> None:
     path = dispatch.worktree_path(197, repo_root="/Users/x/github/mnemo")
 
-    assert str(path) == "/Users/x/github/mnemo-wt-197"
+    # Path, not str: the separator is the platform's, the path is the same one.
+    assert path == Path("/Users/x/github/mnemo-wt-197")
 
 
 def test_worktree_is_a_sibling_never_inside_the_repo() -> None:
@@ -39,7 +42,7 @@ def test_worktree_of_a_worktree_anchors_on_the_main_repo() -> None:
     """
     path = dispatch.worktree_path(198, repo_root="/Users/x/github/mnemo-wt-197")
 
-    assert str(path) == "/Users/x/github/mnemo-wt-198"
+    assert path == Path("/Users/x/github/mnemo-wt-198")
 
 
 def test_issue_for_cwd_round_trips_through_worktree_path() -> None:
