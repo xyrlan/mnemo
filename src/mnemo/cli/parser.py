@@ -270,7 +270,7 @@ def _build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")
     migrate = sub.add_parser(
         "migrate-worktree-briefings",
-        help="move orphan worktree briefings to canonical dir (uses name-prefix heuristic — always --dry-run first)",
+        help="move orphan worktree briefings to canonical dir, rewriting every citation (uses name-prefix heuristic — always --dry-run first)",
     )
     migrate.add_argument(
         "--repos", nargs="+", default=[],

@@ -88,6 +88,49 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`mnemo migrate-worktree-briefings` repaired one kind of vault breakage by
+  creating another.** Moving a briefing out of `bots/<proj>-wt-*/` left every
+  reference to its old path behind, and the command knew only about `bots/` —
+  it moved files and updated nothing that pointed at them. Running it on the
+  real vault turned six `doctor` warnings on, silently, and the repair was left
+  to whoever thought to run `doctor` afterwards.
+
+  The move is the easy half; the citations are the half that makes the move
+  safe. Four populations cite a briefing path, and the issue found three of
+  them. Measured on the live vault, one migrated briefing was cited **28 times
+  across 14 rule pages**:
+
+  - **Rule markdown, in three spellings** — the frontmatter `sources:` list,
+    the `evidence.source` quote (`source: 'briefing: bots/...'`, which the
+    issue did not name), and `[[wikilink]]` bodies, whose form omits the `.md`.
+  - **`shared/_inbox/` drafts.** `doctor` cannot see these, so nothing would
+    ever have reported them — **8 of the 14 affected pages**, which is why the
+    warning count (6) understates the damage.
+  - **`.mnemo/extraction-state.json`.** Not the inert historical record it
+    looks like: `inbox/dedup.py` compares `source_files` to a new page's
+    sources for *exact set equality* to catch slug drift, and
+    `_union_with_prior_sources` merges them by string identity. Repointing the
+    frontmatter while leaving the state stale makes the two disagree and
+    defeats that guard, so both move together — `source_hash` with them.
+  - **Both derived indexes.** `rule_activation.projects_for_rule` reads a
+    rule's *project* out of the `bots/<name>/` segment of its sources. A stale
+    `-wt-` source therefore does not merely dangle: it files the rule under
+    project `mnemo-wt-187`, where no lookup for `mnemo` will ever find it —
+    the same class of invisibility as #225. Rebuilding is part of the repair,
+    not a tidy-up.
+
+  `written_hash` is advanced for the pages rewritten, because a bulk rewriter
+  owns the bytes it produces — leaving it stale makes a page read as
+  hand-edited and stages a `.proposed.md` instead of updating in place, the
+  mistake `migrations/slugs.py` already records having made once.
+
+  `--dry-run` now reports the blast radius before anything moves — which pages
+  will be rewritten, how many state entries repointed, and that the indexes
+  will be rebuilt — so the decision is informed rather than discovered by
+  `doctor` afterwards. Verified against a real vault slice: the pre-fix
+  behaviour reproduces exactly the six warnings the issue reported, and the
+  fixed path leaves zero. (#228)
+
 - **A PR opened by `mnemo deliver` did not close its issue.** `open_pr` builds
   the body with `gh pr create --fill`, so the description is the child's commit
   message — which is right, and unchanged: the child wrote the work and this
