@@ -121,3 +121,62 @@ def test_unreadable_contract_raises_contract_error(tmp_path: Path) -> None:
     target.write_bytes(b"\xff\xfe\x00broken")
     with pytest.raises(contracts.ContractError):
         contracts.parse_contract(target)
+
+
+def test_orphan_consumes_is_refused(tmp_path: Path) -> None:
+    """A signature nobody exposes means the cut is wrong, not merely untidy."""
+    text = VALID.replace("`parse_contract` from `parser`", "`missing` from ghost")
+    with pytest.raises(contracts.ContractError, match="ghost"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_duplicate_slug_is_refused(tmp_path: Path) -> None:
+    """Two pieces with one slug would collide on the same worktree path."""
+    text = VALID.replace("## dispatch-seam", "## parser")
+    with pytest.raises(contracts.ContractError, match="parser"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_unaddressable_slug_is_refused(tmp_path: Path) -> None:
+    """A slug must survive being a directory name and a branch segment."""
+    text = VALID.replace("## parser", "## Parser/One")
+    with pytest.raises(contracts.ContractError, match="slug"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_piece_without_files_is_refused(tmp_path: Path) -> None:
+    """Without a file boundary there is nothing keeping children apart."""
+    text = VALID.replace(
+        "- **files:** src/mnemo/core/contracts.py, tests/unit/test_contracts.py\n", ""
+    )
+    with pytest.raises(contracts.ContractError, match="files"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_missing_verdict_is_refused(tmp_path: Path) -> None:
+    text = VALID.replace("verdict: parallel\n", "")
+    with pytest.raises(contracts.ContractError, match="verdict"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_no_pieces_is_refused(tmp_path: Path) -> None:
+    text = VALID.split("## parser")[0]
+    with pytest.raises(contracts.ContractError, match="no pieces"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_sequential_verdict_parses_but_is_not_dispatchable(tmp_path: Path) -> None:
+    """``sequential`` is a real answer, not a failure — it parses fine."""
+    text = VALID.replace("verdict: parallel", "verdict: sequential")
+    contract = contracts.parse_contract(write(tmp_path, text))
+    assert contract.verdict == "sequential"
+    assert not contract.is_dispatchable
+
+
+def test_piece_consuming_from_itself_is_refused(tmp_path: Path) -> None:
+    """A piece's own work is not a boundary — this is a cut that did not happen."""
+    text = VALID.replace(
+        "`parse_contract` from `parser`", "`parse_contract` from `dispatch-seam`"
+    )
+    with pytest.raises(contracts.ContractError, match="itself"):
+        contracts.parse_contract(write(tmp_path, text))

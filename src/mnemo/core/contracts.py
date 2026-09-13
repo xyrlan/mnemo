@@ -71,6 +71,11 @@ class Contract:
     pieces: list[Piece] = field(default_factory=list)
     path: Path | None = None
 
+    @property
+    def is_dispatchable(self) -> bool:
+        """``sequential`` is a valid verdict that must not spawn anything."""
+        return self.verdict == "parallel"
+
 
 def _is_empty_list(cleaned: str) -> bool:
     return not cleaned or cleaned.lower() in {"nothing", "none", "-"}
@@ -111,6 +116,53 @@ def _split_signatures(value: str) -> list[str]:
     if "`" not in cleaned:
         return _split_list(cleaned)
     return [m.group(0).strip() for m in _SIG_ITEM_RE.finditer(cleaned)]
+
+
+def _validate(contract: Contract) -> None:
+    """Refuse a contract that would dispatch children against a bad boundary.
+
+    Every check runs against the whole file before the caller creates any
+    worktree, so a contract is either entirely dispatchable or entirely
+    refused — never half-spawned.
+
+    Deliberately does not check that the owner actually *exposes* the consumed
+    signature. The two are written by hand and differ cosmetically — a space, a
+    backtick, a renamed argument — so string equality would refuse well-formed
+    contracts over formatting. Whether the boundary was real is measured after
+    the fact, by whether the children collided, not asserted before it.
+    """
+    if contract.verdict not in {"parallel", "sequential"}:
+        raise ContractError(
+            f"verdict must be 'parallel' or 'sequential', got {contract.verdict!r}"
+        )
+    if not contract.pieces:
+        raise ContractError("no pieces: a contract names at least one")
+
+    seen: set[str] = set()
+    for piece in contract.pieces:
+        if not SLUG_RE.match(piece.slug):
+            raise ContractError(
+                f"slug {piece.slug!r} is not addressable: "
+                "use lowercase letters, digits and hyphens"
+            )
+        if piece.slug in seen:
+            raise ContractError(f"duplicate piece slug {piece.slug!r}")
+        seen.add(piece.slug)
+        if not piece.files:
+            raise ContractError(f"piece {piece.slug!r} declares no files boundary")
+
+    for piece in contract.pieces:
+        for signature, owner in piece.consumes:
+            if owner == piece.slug:
+                raise ContractError(
+                    f"piece {piece.slug!r} consumes {signature} from itself: "
+                    "a piece's own work is not a boundary it can depend on"
+                )
+            if owner not in seen:
+                raise ContractError(
+                    f"piece {piece.slug!r} consumes {signature} from unknown "
+                    f"piece {owner!r}"
+                )
 
 
 def parse_contract(path: Path | str) -> Contract:
@@ -173,4 +225,6 @@ def parse_contract(path: Path | str) -> Contract:
                     consumes.append((item, ""))
     flush()
 
-    return Contract(feature=feature, verdict=verdict, pieces=pieces, path=target)
+    contract = Contract(feature=feature, verdict=verdict, pieces=pieces, path=target)
+    _validate(contract)
+    return contract
