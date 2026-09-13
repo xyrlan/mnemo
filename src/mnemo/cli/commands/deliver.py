@@ -131,7 +131,9 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
 
     title = f"{state.label}: {state.branch}"
     try:
-        url = delivery.open_pr(state.branch, worktree=tree, title=title)
+        url = delivery.open_pr(
+            state.branch, worktree=tree, title=title, target=state.target,
+        )
     except delivery.DeliveryError as exc:
         # The push landed. Saying so matters: the branch is on the remote and
         # a retry must not read as though nothing happened.

@@ -26,6 +26,15 @@ from mnemo.core.sessions import delivery
 REAL_GH_PR = '[{"number":214,"url":"https://github.com/xyrlan/mnemo/pull/214"}]\n'
 REAL_GH_NONE = "[]\n"
 
+# The head of the body `--fill` actually wrote on PR #223, captured verbatim
+# with `gh pr view 223 --json body`. The case of #224: prose the child wrote,
+# naming its issue as `(#222)` in the commit subject — a reference GitHub does
+# not act on — and carrying no closing keyword anywhere.
+REAL_FILLED_BODY = (
+    "`Session` answers the question consumers actually ask — is this waiting "
+    "on\nme, is it finished — correctly and in one place."
+)
+
 
 def _run(args, *, cwd) -> None:
     subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=True)
@@ -506,6 +515,213 @@ def test_open_pr_fills_the_body_from_the_commits(monkeypatch) -> None:
     assert url == "https://github.com/xyrlan/mnemo/pull/220"
     assert "--fill" in calls[0]
     assert "--title" in calls[0]
+
+
+def test_open_pr_appends_a_closing_trailer_for_an_issue(monkeypatch) -> None:
+    """#224: merging PR #223 did not close #222.
+
+    ``--fill`` carried the child's commit message, which named the issue as
+    ``fix(sessions): ... (#222)`` — a *reference*, not one of GitHub's closing
+    keywords. The issue number is the one fact this process owns and the body
+    does not carry, so it is appended after the body ``--fill`` wrote.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        argv = list(args)
+        if argv[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(args, 0, REAL_FILLED_BODY, "")
+        return subprocess.CompletedProcess(
+            args, 0, "https://github.com/xyrlan/mnemo/pull/223\n", "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    url = delivery.open_pr(
+        "fix/issue-222", worktree="/tree", title="#222: fix/issue-222", target=222,
+    )
+
+    assert url == "https://github.com/xyrlan/mnemo/pull/223"
+    # create keeps --fill authoritative; the edit adds only the trailer.
+    # `--body` alongside `--fill` would *overwrite* the filled body rather
+    # than extend it, which is why this cannot be a single call.
+    assert "--fill" in calls[0]
+    edit = next(argv for argv in calls if argv[:3] == ["gh", "pr", "edit"])
+    body = edit[edit.index("--body") + 1]
+    assert body.endswith("Closes #222")
+    # The child's prose is kept, not replaced.
+    assert body.startswith(REAL_FILLED_BODY)
+
+
+def test_open_pr_edits_the_pr_it_just_created_not_the_branchs(monkeypatch) -> None:
+    """The edit is addressed by the URL ``create`` returned.
+
+    ``gh pr edit`` with no argument resolves the PR from the *current branch*,
+    which in a dispatch worktree is the right one only by coincidence — and
+    silently the wrong one if the worktree is ever not on the branch pushed.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        argv = list(args)
+        if argv[:3] == ["gh", "pr", "view"]:
+            # Deliberately not the URL: a body echoing it would let an edit
+            # addressed by branch pass this test on the `--body` value alone.
+            return subprocess.CompletedProcess(args, 0, "did the work\n", "")
+        return subprocess.CompletedProcess(
+            args, 0, "https://github.com/xyrlan/mnemo/pull/223\n", "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    delivery.open_pr("fix/issue-222", worktree="/tree", title="t", target=222)
+
+    url = "https://github.com/xyrlan/mnemo/pull/223"
+    for verb in ("view", "edit"):
+        argv = next(a for a in calls if a[:3] == ["gh", "pr", verb])
+        # Positional, before any flag: `gh pr <verb> <url>`.
+        assert argv[3] == url
+
+
+def test_open_pr_adds_no_trailer_for_a_contract_piece(monkeypatch) -> None:
+    """A ``c-<slug>`` piece has no issue to close.
+
+    ``Closes #<n>`` is conditional on the target being an issue number, as
+    #224 requires. A slug reaching the trailer would be a malformed reference
+    or, worse, a number that closes an unrelated issue.
+    """
+    calls = _gh(monkeypatch, "https://github.com/xyrlan/mnemo/pull/220\n")
+
+    delivery.open_pr(
+        "feat/f/delivery", worktree="/tree", title="c-delivery", target="c-delivery",
+    )
+
+    assert len(calls) == 1
+    assert "--fill" in calls[0]
+
+
+def test_open_pr_without_a_target_stays_a_single_call(monkeypatch) -> None:
+    """No target is the pre-#224 behaviour, unchanged."""
+    calls = _gh(monkeypatch, "https://github.com/xyrlan/mnemo/pull/220\n")
+
+    delivery.open_pr("feat/f/delivery", worktree="/tree", title="t")
+
+    assert len(calls) == 1
+
+
+def test_open_pr_keeps_the_pr_when_the_trailer_edit_fails(monkeypatch) -> None:
+    """A failed edit must not read as a failed delivery.
+
+    The PR exists and the branch is pushed. Raising here would send the
+    maintainer to retry a ``deliver`` that would refuse as a duplicate, and
+    the only thing actually missing is a line they can add in the UI.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        if list(args)[:3] == ["gh", "pr", "edit"]:
+            return subprocess.CompletedProcess(args, 1, "", "could not update")
+        return subprocess.CompletedProcess(
+            args, 0, "https://github.com/xyrlan/mnemo/pull/223\n", "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    url = delivery.open_pr(
+        "fix/issue-222", worktree="/tree", title="t", target=222,
+    )
+
+    assert url == "https://github.com/xyrlan/mnemo/pull/223"
+    # The edit was attempted and refused, and the URL survived it.
+    assert any(argv[:3] == ["gh", "pr", "edit"] for argv in calls)
+
+
+@pytest.mark.parametrize(
+    "body, closes",
+    [
+        # The two that define the bug. A conventional-commit subject naming
+        # its issue is a *reference*; GitHub acts only on a keyword.
+        ("fix(sessions): emit the derived booleans (#222)", False),
+        ("Closes #222", True),
+        ("closes #222", True),
+        ("Fixes #222", True),
+        ("Resolves: #222", True),
+        ("Closed #222", True),
+        # `#2220` shares a prefix with `#222` and must not read as it.
+        ("Closes #2220", False),
+        ("Closes #999", False),
+        # `Discloses` ends in `closes` without being the keyword.
+        ("Discloses #222", False),
+    ],
+)
+def test_closes_already_reads_keywords_not_references(body, closes) -> None:
+    """What separates a body that closes #222 from one that only names it."""
+    assert delivery._closes_already(body, 222) is closes
+
+
+def test_the_real_pr_223_body_carries_no_closing_keyword() -> None:
+    """The regression, stated against the artifact that produced #224.
+
+    If this ever reads True, the detection is over-matching and a real
+    delivery would silently skip the trailer it exists to add.
+    """
+    assert delivery._closes_already(REAL_FILLED_BODY, 222) is False
+
+
+def test_open_pr_keeps_the_pr_when_the_body_cannot_be_read(monkeypatch) -> None:
+    """An unreadable body is not an excuse to edit blind, nor to raise.
+
+    Appending to a body that could not be read would mean writing the trailer
+    over whatever ``--fill`` wrote — destroying the child's prose to add one
+    line. Doing nothing leaves the PR exactly as ``--fill`` made it.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        if list(args)[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(args, 1, "", "no such PR")
+        return subprocess.CompletedProcess(
+            args, 0, "https://github.com/xyrlan/mnemo/pull/223\n", "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    url = delivery.open_pr("fix/issue-222", worktree="/tree", title="t", target=222)
+
+    assert url == "https://github.com/xyrlan/mnemo/pull/223"
+    assert not any(argv[:3] == ["gh", "pr", "edit"] for argv in calls)
+
+
+def test_open_pr_skips_the_trailer_when_the_body_already_closes_it(
+    monkeypatch,
+) -> None:
+    """A child that wrote the trailer itself is not corrected into a double.
+
+    ``build_prompt`` does not ask for it, but a child may write one anyway,
+    and GitHub shows a repeated trailer verbatim.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        argv = list(args)
+        if argv[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(
+                args, 0, "did the work\n\nCloses #222\n", "",
+            )
+        return subprocess.CompletedProcess(
+            args, 0, "https://github.com/xyrlan/mnemo/pull/223\n", "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    delivery.open_pr("fix/issue-222", worktree="/tree", title="t", target=222)
+
+    assert not any(argv[:3] == ["gh", "pr", "edit"] for argv in calls)
 
 
 def test_open_pr_raises_when_gh_refuses(monkeypatch) -> None:

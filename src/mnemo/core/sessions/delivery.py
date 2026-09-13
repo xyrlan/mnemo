@@ -408,7 +408,62 @@ def push(branch: str, *, worktree: Path | str) -> None:
         )
 
 
-def open_pr(branch: str, *, worktree: Path | str, title: str) -> str:
+# GitHub's closing keywords, as it documents them. Matched to decide whether
+# a body already closes the issue, so a child that wrote its own trailer is
+# not corrected into a duplicate one. `#<n>` alone is deliberately not here:
+# a bare reference is exactly what did *not* close #222.
+_CLOSES_RE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+#(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _closes_already(body: str, issue: int) -> bool:
+    """True when *body* already carries a closing keyword for *issue*."""
+    return any(int(n) == issue for n in _CLOSES_RE.findall(body))
+
+
+def _append_closing_trailer(url: str, *, issue: int, worktree: Path | str) -> None:
+    """Append ``Closes #<issue>`` to the body ``--fill`` wrote. Never raises.
+
+    Two calls rather than one because ``--body`` passed alongside ``--fill``
+    *overwrites* the filled body rather than extending it — ``gh`` documents
+    that precedence — so the child's prose can only be preserved by reading it
+    back and editing it.
+
+    Addressed by *url* and not by the branch: ``gh pr edit`` with no argument
+    resolves the PR from the current branch, which is the right one only
+    because the worktree happens to be on it.
+
+    Failure is swallowed on purpose. The PR exists and the branch is pushed;
+    raising would send the maintainer to retry a ``deliver`` that refuses as a
+    duplicate, when the only thing missing is one line they can add in the UI.
+    """
+    try:
+        got = subprocess.run(
+            ["gh", "pr", "view", url, "--json", "body", "--jq", ".body"],
+            cwd=str(worktree), capture_output=True, text=True,
+        )
+        if got.returncode != 0:
+            return
+        body = got.stdout.strip("\n")
+        if _closes_already(body, issue):
+            return
+        subprocess.run(
+            ["gh", "pr", "edit", url, "--body", f"{body}\n\nCloses #{issue}"],
+            cwd=str(worktree), capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return
+
+
+def open_pr(
+    branch: str,
+    *,
+    worktree: Path | str,
+    title: str,
+    target: object | None = None,
+) -> str:
     """Open a PR for *branch* with ``gh``. Returns its URL. Raises on failure.
 
     ``--fill`` rather than a generated body: the commits are the description,
@@ -419,6 +474,21 @@ def open_pr(branch: str, *, worktree: Path | str, title: str) -> str:
     reversed. ``--title`` is passed because ``--fill`` alone titles a
     multi-commit PR after its first commit, which on a dispatch piece is
     usually its least representative one.
+
+    That reasoning is unchanged by #224, and the fix respects it: the body
+    stays the child's, and the *one* fact this process owns and the body does
+    not carry — the issue number, recovered from the worktree path by
+    :func:`issue_for_cwd` — is appended as a ``Closes #<n>`` trailer.
+
+    Merging PR #223 did not close #222 because the child's subject read
+    ``fix(sessions): ... (#222)``, which GitHub treats as a reference and not
+    as a closing keyword. Asking the child to write the trailer was rejected:
+    it makes the dispatcher trust a child to report something the dispatcher
+    already knows, the fragility #217 named — and #223 is the demonstration,
+    a child that named its issue and still did not close it.
+
+    *target* is what :func:`issue_for_cwd` returned. Only an ``int`` gets a
+    trailer; a ``c-<slug>`` contract piece has no issue to close.
     """
     try:
         result = subprocess.run(
@@ -432,10 +502,17 @@ def open_pr(branch: str, *, worktree: Path | str, title: str) -> str:
             result.stderr.strip() or result.stdout.strip() or "gh pr create failed"
         )
 
+    url = ""
     for token in result.stdout.split():
         if token.startswith("http"):
-            return token
+            url = token
+            break
     # Shape-matched, like `dispatch._short_id_from`, and empty rather than
     # guessed when nothing matches: the PR was created either way, and a
     # blank URL reads as missing where a wrong one reads as actionable.
-    return ""
+
+    # `isinstance(True, int)` is True, and `target` crosses a dataclass field
+    # typed `object`; a bool here would name issue #1.
+    if url and isinstance(target, int) and not isinstance(target, bool):
+        _append_closing_trailer(url, issue=target, worktree=worktree)
+    return url

@@ -88,6 +88,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A PR opened by `mnemo deliver` did not close its issue.** `open_pr` builds
+  the body with `gh pr create --fill`, so the description is the child's commit
+  message — which is right, and unchanged: the child wrote the work and this
+  process knows strictly less about the diff than it does. But a commit subject
+  in the conventional style, `fix(sessions): ... (#222)`, names the issue as a
+  *reference*, and GitHub acts only on a closing keyword. Merging PR #223 left
+  #222 open, and it was closed by hand — the manual step `deliver` exists to
+  remove. The issue number is the one fact this process owns and the body does
+  not carry, recovered from the worktree path by `issue_for_cwd`, so it is now
+  appended to the filled body as a `Closes #<n>` trailer. Conditional on the
+  target being an issue: a `c-<slug>` contract piece has no issue to close. A
+  body that already closes the issue is left alone, and a failed append leaves
+  the PR exactly as `--fill` made it rather than failing a delivery that
+  already landed. Asking the child to write the trailer was rejected — it makes
+  the dispatcher trust a child to report what the dispatcher already knows,
+  the fragility #217 named, and #223 is the demonstration. (#224)
+
 - **A `stopped` session was filed under "working" forever.** `is_done` tested
   `state == "done"` alone, but Claude Code also writes `stopped` for a process
   that ended without finishing its turn — two of nine real sessions on
