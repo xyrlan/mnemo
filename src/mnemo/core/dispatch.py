@@ -42,14 +42,31 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Union
+
+from mnemo.core import contracts
 
 WORKTREE_SUFFIX = "-wt-"
 
-# `<anything>-wt-<digits>`, optional trailing slash. Anchored on both ends so
-# `mnemo-wt-feature` — a hand-made worktree that is not a dispatch — is not
-# mistaken for one.
-_WT_RE = re.compile(r"-wt-(\d+)/?$")
+# `<anything>-wt-<digits>` or `<anything>-wt-c-<slug>`, optional trailing
+# slash. Anchored on both ends so `mnemo-wt-feature` — a hand-made worktree
+# that is not a dispatch — is not mistaken for one.
+#
+# The alternation is the whole point: a wildcard `(.+)` would name every
+# directory ending in `-wt-<anything>` a dispatch child, and `mnemo sessions`
+# would then label an unrelated session as one of ours. Only two shapes this
+# module itself writes are admitted — a bare issue number, and a contract
+# piece under the reserved `c-` prefix, which no hand-made branch name uses.
+_WT_RE = re.compile(r"-wt-(\d+|c-[a-z0-9-]+)/?$")
+
+# What names a child: a GitHub issue number, or a contract piece slug.
+#
+# ``Union`` rather than ``int | str``: this is an assignment, evaluated when
+# the module is imported, and the ``|`` operator on types only exists from
+# 3.10. ``from __future__ import annotations`` does not help — it defers
+# *annotations*, not expressions. The package supports 3.8, so the shorthand
+# fails at import on two of the versions CI builds.
+Target = Union[int, str]
 
 
 class DispatchError(RuntimeError):
@@ -69,9 +86,15 @@ class Issue:
 
 @dataclass(frozen=True)
 class Dispatched:
-    """One issue's outcome. ``error`` is set iff the dispatch failed."""
+    """One child's outcome. ``error`` is set iff the dispatch failed.
 
-    issue: int
+    ``issue`` holds whatever named the child: a GitHub issue number, or a
+    contract piece addressed by its ``c-<slug>`` target. The field keeps its
+    name because it is what :func:`issue_for_cwd` reads back out of the
+    worktree path, and both shapes travel that same route.
+    """
+
+    issue: Target
     worktree: Path | None = None
     short_id: str | None = None
     error: str | None = None
@@ -80,8 +103,8 @@ class Dispatched:
 # --- naming: the mapping, as a convention ----------------------------------
 
 
-def worktree_path(issue: int, *, repo_root: Path | str) -> Path:
-    """Where issue *issue*'s child works: a **sibling** of the repo.
+def worktree_path(target: Target, *, repo_root: Path | str) -> Path:
+    """Where *target*'s child works: a **sibling** of the repo.
 
     A sibling, never a subdirectory: a worktree inside the repo is swept by
     ``git add -A``, walked by the extractor, and shows up in every ``grep``
@@ -90,18 +113,43 @@ def worktree_path(issue: int, *, repo_root: Path | str) -> Path:
     The repo's own ``-wt-<n>`` suffix is stripped first, so dispatching from
     inside a child's tree yields ``mnemo-wt-198`` rather than stacking into
     ``mnemo-wt-197-wt-198`` and nesting again on the generation after that.
+    The same holds for a slug-named tree: a dispatch out of
+    ``mnemo-wt-c-parser`` yields ``mnemo-wt-c-seam``, because the suffix that
+    is stripped is whatever ``_WT_RE`` admits, not just a number.
     """
     root = Path(repo_root)
     base = _WT_RE.sub("", root.name)
-    return root.parent / f"{base}{WORKTREE_SUFFIX}{issue}"
+    return root.parent / f"{base}{WORKTREE_SUFFIX}{target}"
 
 
-def branch_name(issue: int) -> str:
-    return f"fix/issue-{issue}"
+def branch_name(target: Target, *, feature: str | None = None) -> str:
+    """The branch a child works on.
+
+    An issue keeps ``fix/issue-<n>``, unchanged. A contract piece is namespaced
+    under its feature — ``feat/<feature>/<slug>`` — so that the branches of one
+    decomposition sort together and a piece slug as ordinary as ``parser`` does
+    not collide across features.
+
+    A slug without its feature is refused rather than formatted. The loose
+    signature would render ``fix/issue-c-parser``, naming an issue that does
+    not exist — and nothing downstream would object, because ``git branch``
+    accepts the name happily. The mistake would surface days later as an
+    inexplicable branch in the repo instead of at the call that made it.
+    """
+    if feature:
+        slug = str(target)
+        slug = slug[2:] if slug.startswith("c-") else slug
+        return f"feat/{feature}/{slug}"
+    if not isinstance(target, int):
+        raise ValueError(
+            f"piece {target!r} needs its feature to name a branch: "
+            "an issue branch is fix/issue-<n>, and a slug is not an issue"
+        )
+    return f"fix/issue-{target}"
 
 
-def issue_for_cwd(cwd: str | Path | None) -> int | None:
-    """The issue number a dispatched worktree encodes, or ``None``.
+def issue_for_cwd(cwd: str | Path | None) -> Target | None:
+    """The issue number or piece slug a dispatched worktree encodes, or ``None``.
 
     The inverse of :func:`worktree_path`. Returns ``None`` for any path this
     module did not name — an ordinary checkout, or a worktree someone created
@@ -110,7 +158,10 @@ def issue_for_cwd(cwd: str | Path | None) -> int | None:
     if not cwd:
         return None
     match = _WT_RE.search(str(cwd))
-    return int(match.group(1)) if match else None
+    if not match:
+        return None
+    captured = match.group(1)
+    return int(captured) if captured.isdigit() else captured
 
 
 # --- the prompt: context and scope, never a solution -----------------------
@@ -163,6 +214,70 @@ def build_prompt(issue: int, *, title: str, body: str) -> str:
     )
 
 
+_PIECE_PROMPT = """You are building one piece of the feature "{feature}": {slug}
+
+The decomposition was reviewed and agreed before you started. Your piece:
+
+**Files you may change** — this is a hard boundary. Work outside it belongs to
+another child working in parallel right now, and editing it causes a conflict
+that costs more than the parallelism saved:
+{files}
+
+New files are yours to create when this piece needs them — a test module, a
+helper — as long as nothing outside the boundary has to change to reach them.
+
+**What your piece must deliver** — other pieces are being written against these
+signatures right now, so do not change them silently. If one cannot be
+delivered as written, stop and say so:
+{exposes}
+
+{consumes}You are on branch `{branch}` in your own worktree.
+
+Nothing about *how* to build this is specified, deliberately. If the contract's
+boundary turns out to be wrong — the work does not divide where it says, or a
+signature cannot be delivered as written — stop and say so rather than widening
+your boundary to make it fit.
+
+Run the full test suite before you finish. Do not merge or push without asking.
+"""
+
+_CONSUMES_PROMPT = """**What you may assume exists** — another piece is delivering
+these. They may not exist in your worktree yet: write against the signature,
+stub locally if you must, and the merge resolves it. Do not wait for them, and
+do not implement them yourself:
+{items}
+
+"""
+
+
+def build_piece_prompt(piece: contracts.Piece, *, feature: str) -> str:
+    """A contract piece's opening prompt: its boundary and its interfaces.
+
+    Like :func:`build_prompt`, this takes no "approach" parameter, and for the
+    same reason (see that function's rationale). The distinction the contract
+    relies on is thin but real: *"do not touch X, consume ``Y.parse()``"* is a
+    **boundary** and belongs here, while *"use a regex to parse it"* is an
+    **approach** and must not be expressible. Blurring the two reintroduces the
+    #187 failure at N children instead of one.
+    """
+    consumes = ""
+    if piece.consumes:
+        items = "\n".join(
+            f"- {signature} — from the piece `{owner}`"
+            for signature, owner in piece.consumes
+        )
+        consumes = _CONSUMES_PROMPT.format(items=items)
+
+    return _PIECE_PROMPT.format(
+        feature=feature,
+        slug=piece.slug,
+        files="\n".join(f"- {path}" for path in piece.files),
+        exposes="\n".join(f"- {item}" for item in piece.exposes) or "- (nothing)",
+        consumes=consumes,
+        branch=branch_name(piece.slug, feature=feature),
+    )
+
+
 # --- github ----------------------------------------------------------------
 
 
@@ -200,23 +315,34 @@ def fetch_issue(issue: int, *, repo_root: Path | str) -> Issue:
 # --- worktrees -------------------------------------------------------------
 
 
-def ensure_worktree(issue: int, *, repo_root: Path | str) -> Path:
-    """Create issue *issue*'s worktree on its own branch, or refuse.
+def ensure_worktree(
+    issue: Target, *, repo_root: Path | str, feature: str | None = None
+) -> Path:
+    """Create *issue*'s worktree on its own branch, or refuse.
+
+    *issue* is a GitHub issue number or a piece target (``c-<slug>``). A piece
+    must pass its *feature* as well, because that is what
+    :func:`branch_name` needs to render ``feat/<feature>/<slug>``; the
+    parameter is forwarded verbatim rather than defaulted, so a slug arriving
+    without its feature still hits ``branch_name``'s guard and fails loudly
+    here — before any git state exists — instead of silently creating a branch
+    named after an issue that does not exist.
 
     Refuses rather than reuses when the path already exists: a live tree may
     hold another session's uncommitted work, and its branch may point
-    somewhere entirely unrelated to this issue.
+    somewhere entirely unrelated to this target.
 
     On failure no directory is left behind — a stray tree blocks every later
-    attempt at the same issue, which is worse than never having started.
+    attempt at the same target, which is worse than never having started.
     """
     target = worktree_path(issue, repo_root=repo_root)
+    branch = branch_name(issue, feature=feature)  # before the path is touched
+
     if target.exists():
         raise DispatchError(
             f"{target} already exists — refusing to reuse another session's tree"
         )
 
-    branch = branch_name(issue)
     try:
         result = subprocess.run(
             ["git", "worktree", "add", "-b", branch, str(target)],
@@ -230,17 +356,36 @@ def ensure_worktree(issue: int, *, repo_root: Path | str) -> Path:
         # partial `worktree add` may have left so the next attempt is clean.
         remove_worktree(target, repo_root=repo_root)
         raise DispatchError(
-            f"could not create worktree for #{issue}: "
+            f"could not create worktree for {issue if feature else f'#{issue}'}: "
             f"{result.stderr.strip() or 'git worktree add failed'}"
         )
     return target
 
 
-def remove_worktree(target: Path, *, repo_root: Path | str) -> None:
+def remove_worktree(
+    target: Path, *, repo_root: Path | str, branch: str | None = None
+) -> None:
     """Undo :func:`ensure_worktree`, as far as it got. Never raises.
 
     Used on the rollback path, where a second failure must not mask the error
     that is actually being reported.
+
+    *branch* is the branch this rollback created, and is deleted along with the
+    directory. Removing the tree alone is not a rollback: the branch survives,
+    and the retry of the same target then dies on ``a branch named ... already
+    exists`` — a different failure from the one that was rolled back, and one
+    no amount of retrying clears.
+
+    Opt-in rather than derived from *target*, because the caller is the only
+    one that knows whether the branch was **ours**. :func:`ensure_worktree`'s
+    own failure path must not pass it: the usual reason ``git worktree add``
+    refuses is that the branch already existed, i.e. it belongs to someone
+    else, and deleting it there would destroy work this module never created.
+
+    Deleted with ``-d``, never ``-D``: ``-d`` refuses a branch holding
+    unmerged commits. A rollback runs moments after ``worktree add``, so the
+    branch is empty and ``-d`` succeeds; if it somehow is not empty, keeping
+    the branch is the right outcome and the refusal is silent by design.
     """
     try:
         subprocess.run(
@@ -258,6 +403,14 @@ def remove_worktree(target: Path, *, repo_root: Path | str) -> None:
         )
     except (FileNotFoundError, OSError):
         pass
+    if branch:
+        try:
+            subprocess.run(
+                ["git", "branch", "-d", branch], cwd=str(repo_root),
+                capture_output=True, text=True,
+            )
+        except (FileNotFoundError, OSError):
+            pass
 
 
 # --- spawn -----------------------------------------------------------------
@@ -306,8 +459,8 @@ def dispatch_issue(
         )
     except BaseException:
         # Including KeyboardInterrupt: a Ctrl-C between the two steps must not
-        # leave a tree that blocks the retry.
-        remove_worktree(tree, repo_root=repo_root)
+        # leave a tree — or a branch — that blocks the retry.
+        remove_worktree(tree, repo_root=repo_root, branch=branch_name(issue))
         raise
     return Dispatched(issue=issue, worktree=tree, short_id=short_id)
 
@@ -327,4 +480,66 @@ def dispatch_all(
             out.append(dispatch_issue(issue, repo_root=repo_root, fetch=fetch))
         except DispatchError as exc:
             out.append(Dispatched(issue=issue, error=str(exc)))
+    return out
+
+
+def dispatch_piece(
+    piece: contracts.Piece, *, feature: str, repo_root: Path | str
+) -> Dispatched:
+    """Dispatch one contract piece: make its tree, spawn its child.
+
+    The mirror of :func:`dispatch_issue` with the fetch step already done —
+    the contract was read and validated in one pass before any of this ran.
+
+    *feature* reaches :func:`ensure_worktree` because it is what names the
+    branch (``feat/<feature>/<slug>``); the target alone cannot.
+    """
+    target = f"c-{piece.slug}"
+    tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
+    try:
+        short_id = spawn_child(
+            build_piece_prompt(piece, feature=feature), cwd=tree
+        )
+    except BaseException:
+        # Including KeyboardInterrupt: a Ctrl-C between the two steps must not
+        # leave a tree — or a branch — that blocks the retry.
+        remove_worktree(
+            tree, repo_root=repo_root,
+            branch=branch_name(target, feature=feature),
+        )
+        raise
+    return Dispatched(issue=target, worktree=tree, short_id=short_id)
+
+
+def dispatch_contract(
+    contract: contracts.Contract, *, repo_root: Path | str
+) -> list[Dispatched]:
+    """Dispatch every piece of a contract, independently.
+
+    Refuses a ``sequential`` verdict outright: that verdict is the
+    decomposition reporting that the work does not divide, and spawning
+    children against it produces exactly the merge conflicts the contract
+    exists to prevent.
+
+    Past the verdict, one failing piece is reported and skipped rather than
+    aborting the ones that would have worked — the pieces are independent by
+    construction (separate trees, separate branches), exactly as in
+    :func:`dispatch_all`.
+    """
+    if not contract.is_dispatchable:
+        raise DispatchError(
+            f"contract verdict is {contract.verdict!r}, not 'parallel' — "
+            "this work does not divide; run it in one session"
+        )
+
+    out: list[Dispatched] = []
+    for piece in contract.pieces:
+        try:
+            out.append(
+                dispatch_piece(
+                    piece, feature=contract.feature, repo_root=repo_root
+                )
+            )
+        except DispatchError as exc:
+            out.append(Dispatched(issue=f"c-{piece.slug}", error=str(exc)))
     return out

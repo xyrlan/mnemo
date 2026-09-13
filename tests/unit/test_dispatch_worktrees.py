@@ -268,3 +268,188 @@ def test_one_bad_issue_does_not_strand_the_others(repo: Path, monkeypatch) -> No
     assert [r.issue for r in bad] == [4242]
     assert dispatch.worktree_path(197, repo_root=repo).is_dir()
     assert not dispatch.worktree_path(4242, repo_root=repo).exists()
+
+
+# --- addressing a child by a contract piece --------------------------------
+
+
+def test_piece_slug_names_a_worktree(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo"
+    tree = dispatch.worktree_path("c-parser", repo_root=root)
+    assert tree.name == "mnemo-wt-c-parser"
+    assert tree.parent == root.parent
+
+
+def test_issue_number_still_names_a_worktree(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo"
+    assert dispatch.worktree_path(193, repo_root=root).name == "mnemo-wt-193"
+
+
+def test_slug_worktree_does_not_nest(tmp_path: Path) -> None:
+    """Dispatching from inside a slug-named child must not stack suffixes."""
+    root = tmp_path / "mnemo-wt-c-parser"
+    tree = dispatch.worktree_path("c-seam", repo_root=root)
+    assert tree.name == "mnemo-wt-c-seam"
+
+
+def test_issue_worktree_still_does_not_nest(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo-wt-197"
+    assert dispatch.worktree_path(198, repo_root=root).name == "mnemo-wt-198"
+
+
+def test_issue_for_cwd_reads_a_slug_back(tmp_path: Path) -> None:
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-c-parser") == "c-parser"
+
+
+def test_issue_for_cwd_still_reads_an_int_back(tmp_path: Path) -> None:
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-193") == 193
+
+
+def test_hand_made_worktree_is_still_not_a_dispatch(tmp_path: Path) -> None:
+    """The guard the ``\\d+`` anchor existed to provide, preserved.
+
+    A directory someone named by hand must not be reported as a dispatch
+    child — a false positive mislabels an unrelated session in the queue.
+    """
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-feature") is None
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-My-Branch") is None
+
+
+def test_piece_branch_is_namespaced_by_feature() -> None:
+    name = dispatch.branch_name("c-parser", feature="contract-dispatch")
+    assert name == "feat/contract-dispatch/parser"
+
+
+def test_issue_branch_is_unchanged() -> None:
+    assert dispatch.branch_name(193) == "fix/issue-193"
+
+
+def test_a_piece_slug_without_its_feature_is_refused() -> None:
+    """`fix/issue-c-parser` names an issue that does not exist — fail loudly."""
+    with pytest.raises(ValueError, match="feature"):
+        dispatch.branch_name("c-parser")
+
+
+# --- dispatching a whole contract ------------------------------------------
+
+
+def _contract(tmp_path: Path, verdict: str = "parallel"):
+    from mnemo.core import contracts
+
+    return contracts.Contract(
+        feature="demo",
+        verdict=verdict,
+        pieces=[
+            contracts.Piece(slug="one", files=["a.py"], exposes=["`f()`"]),
+            contracts.Piece(slug="two", files=["b.py"], exposes=["`g()`"]),
+        ],
+        path=tmp_path / "contract.md",
+    )
+
+
+def _boom(prompt, *, cwd):
+    raise dispatch.DispatchError("boom")
+
+
+def test_dispatch_contract_spawns_one_child_per_piece(repo: Path, monkeypatch) -> None:
+    spawned: list[Path] = []
+
+    def fake_spawn(prompt, *, cwd):
+        spawned.append(cwd)
+        return "id1"
+
+    monkeypatch.setattr(dispatch, "spawn_child", fake_spawn)
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.issue for r in results] == ["c-one", "c-two"]
+    assert [p.name for p in spawned] == ["proj-wt-c-one", "proj-wt-c-two"]
+
+
+def test_dispatch_contract_refuses_a_sequential_verdict(repo: Path, monkeypatch) -> None:
+    """``sequential`` means the work does not divide — spawning would be wrong."""
+    monkeypatch.setattr(dispatch, "spawn_child", lambda *a, **k: pytest.fail("spawned"))
+    with pytest.raises(dispatch.DispatchError, match="sequential"):
+        dispatch.dispatch_contract(_contract(repo, verdict="sequential"), repo_root=repo)
+
+
+def test_one_failing_piece_does_not_strand_the_others(repo: Path, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def flaky(prompt, *, cwd):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise dispatch.DispatchError("boom")
+        return "id2"
+
+    monkeypatch.setattr(dispatch, "spawn_child", flaky)
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert results[0].error == "boom"
+    assert results[1].short_id == "id2"
+    assert not (repo.parent / "proj-wt-c-one").exists()  # rolled back
+
+
+def _branches(repo: Path) -> set[str]:
+    out = subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"], cwd=repo,
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def test_rollback_deletes_the_branch_so_the_retry_can_run(repo: Path, monkeypatch) -> None:
+    """Removing the tree alone is not a rollback.
+
+    The branch outlives it, and the retry then dies on ``a branch named ...
+    already exists`` — a *different* failure from the one rolled back, and one
+    no amount of retrying clears.
+    """
+    monkeypatch.setattr(dispatch, "spawn_child", _boom)
+
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.error for r in results] == ["boom", "boom"]
+    assert "feat/demo/one" not in _branches(repo)
+    assert "feat/demo/two" not in _branches(repo)
+
+    # The real proof: the same contract dispatches cleanly afterwards.
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd: "ok1")
+    retry = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.error for r in retry] == [None, None]
+    assert {"feat/demo/one", "feat/demo/two"} <= _branches(repo)
+
+
+def test_an_issue_rollback_also_deletes_its_branch(repo: Path, monkeypatch) -> None:
+    """The same guarantee on the issue path, which had the same leak."""
+    monkeypatch.setattr(dispatch, "spawn_child", _boom)
+
+    with pytest.raises(dispatch.DispatchError):
+        dispatch.dispatch_issue(197, repo_root=repo, fetch=_fake_fetch)
+
+    assert "fix/issue-197" not in _branches(repo)
+
+
+def test_rollback_never_deletes_a_branch_it_did_not_create(repo: Path) -> None:
+    """``worktree add`` most often refuses *because* the branch already exists.
+
+    That branch is someone else's. The rollback for it must remove the
+    half-made directory and nothing more.
+    """
+    subprocess.run(["git", "branch", "fix/issue-197"], cwd=repo, check=True,
+                   capture_output=True, text=True)
+
+    with pytest.raises(dispatch.DispatchError):
+        dispatch.ensure_worktree(197, repo_root=repo)
+
+    assert "fix/issue-197" in _branches(repo)
+
+
+def test_a_piece_prompt_reaches_its_child(repo: Path, monkeypatch) -> None:
+    """The child must receive its own boundary, not another piece's."""
+    seen: dict[str, str] = {}
+
+    def fake_spawn(prompt, *, cwd):
+        seen[cwd.name] = prompt
+        return "id"
+
+    monkeypatch.setattr(dispatch, "spawn_child", fake_spawn)
+    dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert "a.py" in seen["proj-wt-c-one"]
+    assert "a.py" not in seen["proj-wt-c-two"]

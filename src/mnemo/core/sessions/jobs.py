@@ -88,11 +88,20 @@ class Session:
         already records — so nothing has to be written or reconciled here. A
         path this dispatcher did not name yields ``None`` and the label is
         unchanged.
+
+        ``cwd`` can also encode a contract piece slug (``<repo>-wt-c-<slug>``)
+        rather than an issue. ``#`` means "GitHub issue"; a slug shown as
+        ``#c-parser`` would read as a missing issue, so it is prefixed bare.
         """
         from mnemo.core.dispatch import issue_for_cwd
 
-        issue = issue_for_cwd(self.cwd)
-        prefix = f"#{issue} " if issue else ""
+        target = issue_for_cwd(self.cwd)
+        if isinstance(target, int):
+            prefix = f"#{target} "
+        elif target:
+            prefix = f"{target} "
+        else:
+            prefix = ""
 
         if self.name:
             # Padded to 22 columns by render_queue; keep the whole label inside

@@ -168,6 +168,25 @@ def test_session_without_a_cwd_is_filtered_out_and_never_raises(tmp_path: Path) 
     assert ids == ["here"]
 
 
+def test_label_shows_an_issue_number() -> None:
+    s = jobs.Session(short_id="ab12", cwd="/x/mnemo-wt-193", name="fix the thing")
+    assert s.label.startswith("#193 ")
+
+
+def test_label_shows_a_piece_slug_without_a_hash() -> None:
+    # ``#c-parser`` reads as an issue that does not exist; the slug alone
+    # does not.
+    s = jobs.Session(short_id="ab12", cwd="/x/mnemo-wt-c-parser", name="parse it")
+    assert s.label.startswith("c-parser ")
+    assert not s.label.startswith("#")
+
+
+def test_label_of_an_undispatched_session_has_no_prefix() -> None:
+    # An ordinary checkout is not a dispatch child and gets no marker.
+    s = jobs.Session(short_id="ab12", cwd="/x/mnemo", name="just working")
+    assert s.label == "just working"
+
+
 def test_unlistable_jobs_dir_yields_nothing(tmp_path: Path, monkeypatch) -> None:
     # The directory passes is_dir() and then becomes unlistable — a permission
     # change, or it vanished. The module's contract is that an upstream change
