@@ -18,6 +18,50 @@ import pytest
 
 from mnemo.core import dispatch
 
+# Verbatim ``claude --bg`` stdout, captured from a live spawn on 2026-09-13
+# under ``FORCE_COLOR`` — which a background child inherits, so this is what
+# the dispatcher itself sees. Without that variable the same command prints
+# the block with a bare id, which is why an interactive probe of it and the
+# real dispatch disagree about the bytes. Both shapes are exercised below.
+#
+# Two things a hand-written fixture gets wrong, and both are #211's actual
+# lesson. Five lines, not one: the blob's last token is the word ``session``,
+# which is what the original ``split()[-1]`` returned and printed as the
+# attach hint. And the id's first occurrence is wrapped in SGR color, making
+# ``\x1b[36m...\x1b[39m`` a single token that matches no id shape at all — so
+# a parse that does not strip escapes survives only on the hint lines
+# happening to be unstyled.
+#
+# Kept byte-for-byte because a fixture that cannot fail is what let #211 ship
+# green through 2996 passing tests.
+REAL_BG_STDOUT = (
+    "backgrounded · \x1b[36ma1b2c3d4\x1b[39m\n"
+    "\x1b[2m  claude agents             list sessions\x1b[22m\n"
+    "\x1b[2m  claude attach a1b2c3d4    open in this terminal\x1b[22m\n"
+    "\x1b[2m  claude logs a1b2c3d4      show recent output\x1b[22m\n"
+    "\x1b[2m  claude stop a1b2c3d4      stop this session\x1b[22m\n"
+)
+
+# The same block with no color at all — what the command prints when the
+# environment does not ask for it. A real production shape, not a synthetic
+# one: an interactive run sees exactly this.
+PLAIN_BG_STDOUT = (
+    "backgrounded · a1b2c3d4\n"
+    "  claude agents             list sessions\n"
+    "  claude attach a1b2c3d4    open in this terminal\n"
+    "  claude logs a1b2c3d4      show recent output\n"
+    "  claude stop a1b2c3d4      stop this session\n"
+)
+
+# The same block with **every** occurrence colored, including the hints.
+# Nothing emits this today; it is the one styling change that would silently
+# break a parse relying on an unstyled hint line, which is exactly how #211
+# broke in the first place.
+FULLY_STYLED_BG_STDOUT = (
+    "backgrounded · \x1b[36ma1b2c3d4\x1b[39m\n"
+    "\x1b[2m  claude attach \x1b[36ma1b2c3d4\x1b[39m    open in this terminal\x1b[22m\n"
+)
+
 
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
@@ -162,7 +206,7 @@ def test_spawn_passes_the_prompt_positionally_with_bg(repo: Path, monkeypatch) -
     def fake_run(args, **kwargs):
         seen["args"] = args
         seen["cwd"] = kwargs.get("cwd")
-        return subprocess.CompletedProcess(args, 0, stdout="a1b2c3d4\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=REAL_BG_STDOUT, stderr="")
 
     tree = dispatch.ensure_worktree(197, repo_root=repo)
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
@@ -183,7 +227,7 @@ def test_spawn_runs_inside_the_child_worktree(repo: Path, monkeypatch) -> None:
 
     def fake_run(args, **kwargs):
         seen["cwd"] = kwargs.get("cwd")
-        return subprocess.CompletedProcess(args, 0, stdout="a1b2c3d4\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=REAL_BG_STDOUT, stderr="")
 
     tree = dispatch.ensure_worktree(197, repo_root=repo)
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
@@ -200,7 +244,7 @@ def test_spawn_is_never_wrapped_in_timeout(repo: Path, monkeypatch) -> None:
 
     def fake_run(args, **kwargs):
         seen["args"] = args
-        return subprocess.CompletedProcess(args, 0, stdout="a1b2c3d4\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=REAL_BG_STDOUT, stderr="")
 
     tree = dispatch.ensure_worktree(197, repo_root=repo)
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
@@ -212,13 +256,111 @@ def test_spawn_is_never_wrapped_in_timeout(repo: Path, monkeypatch) -> None:
 
 @pytest.mark.real_spawn
 def test_spawn_returns_the_short_id(repo: Path, monkeypatch) -> None:
+    """The id comes out of the real five-line help block, not a bare line.
+
+    This is #211: the whole blob's last token is the word ``session``, so the
+    attach hint read ``claude attach session`` for both children of the first
+    real contract dispatch.
+    """
     def fake_run(args, **kwargs):
-        return subprocess.CompletedProcess(args, 0, stdout="  a1b2c3d4  \n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=REAL_BG_STDOUT, stderr="")
 
     tree = dispatch.ensure_worktree(197, repo_root=repo)
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
 
     assert dispatch.spawn_child("x", cwd=tree) == "a1b2c3d4"
+
+
+@pytest.mark.real_spawn
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        pytest.param(REAL_BG_STDOUT, id="real-help-block-colored"),
+        pytest.param(PLAIN_BG_STDOUT, id="real-help-block-uncolored"),
+        pytest.param(FULLY_STYLED_BG_STDOUT, id="every-occurrence-colored"),
+        pytest.param("  a1b2c3d4  \n", id="bare-id"),
+        pytest.param(
+            "warning: config is stale\n" + REAL_BG_STDOUT, id="noise-before"
+        ),
+        pytest.param(REAL_BG_STDOUT + "\nall set\n", id="noise-after"),
+    ],
+)
+def test_spawn_finds_the_id_whatever_surrounds_it(
+    repo: Path, monkeypatch, stdout: str
+) -> None:
+    """Position is not load-bearing; the id's *shape* is.
+
+    Anchoring on a line number is what broke here once already. A warning on
+    stdout would move the block down, and reading "the last token of the
+    first line" would then return ``stale`` — a non-id printed as an attach
+    hint, which is #211 again under a different cause.
+
+    Nor are the bytes fixed: the colored and uncolored blocks here are both
+    real, emitted by the same command depending on whether the environment
+    asks for color (``FORCE_COLOR``, which a background child inherits). A
+    parse tuned to whichever one the author happened to probe is correct on
+    half the runs. The id is the only 8-hex token either way, so that is what
+    is matched.
+    """
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+    tree = dispatch.ensure_worktree(197, repo_root=repo)
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+
+    assert dispatch.spawn_child("x", cwd=tree) == "a1b2c3d4"
+
+
+@pytest.mark.real_spawn
+def test_spawn_never_truncates_a_longer_hex_run_into_an_id(
+    repo: Path, monkeypatch
+) -> None:
+    """A commit sha is not a short id, and must not be cut down into one.
+
+    The prompt is echoed in some output, so a 40-char sha can precede the
+    block. Matched without anchors, its first eight characters are hex and
+    would be returned as ``3a14bdd9`` — a well-formed id that addresses no
+    session, which is the #211 failure exactly: a plausible token printed as
+    an attach hint. The token must be eight hex digits *entire*.
+    """
+    sha = "3a14bdd9ff01c2b4e5d6a7b8c9d0e1f2a3b4c5d6"
+
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args, 0, stdout=f"resuming {sha}\n{REAL_BG_STDOUT}", stderr=""
+        )
+
+    tree = dispatch.ensure_worktree(197, repo_root=repo)
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+
+    assert dispatch.spawn_child("x", cwd=tree) == "a1b2c3d4"
+
+
+@pytest.mark.real_spawn
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("Started your session in the background.\n", id="prose-only"),
+    ],
+)
+def test_spawn_returns_empty_when_no_id_is_printed(
+    repo: Path, monkeypatch, stdout: str
+) -> None:
+    """No id beats a wrong id.
+
+    ``spawn_child`` returning ``""`` makes the report print a blank column,
+    which reads as missing. Returning ``background.`` reads as an id and
+    sends the maintainer to a command that cannot work — the failure #211
+    was actually made of.
+    """
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+    tree = dispatch.ensure_worktree(197, repo_root=repo)
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+
+    assert dispatch.spawn_child("x", cwd=tree) == ""
 
 
 @pytest.mark.real_spawn
