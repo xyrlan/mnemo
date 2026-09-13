@@ -322,3 +322,9 @@ def test_piece_branch_is_namespaced_by_feature() -> None:
 
 def test_issue_branch_is_unchanged() -> None:
     assert dispatch.branch_name(193) == "fix/issue-193"
+
+
+def test_a_piece_slug_without_its_feature_is_refused() -> None:
+    """`fix/issue-c-parser` names an issue that does not exist — fail loudly."""
+    with pytest.raises(ValueError, match="feature"):
+        dispatch.branch_name("c-parser")

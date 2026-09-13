@@ -115,11 +115,22 @@ def branch_name(target: Target, *, feature: str | None = None) -> str:
     under its feature — ``feat/<feature>/<slug>`` — so that the branches of one
     decomposition sort together and a piece slug as ordinary as ``parser`` does
     not collide across features.
+
+    A slug without its feature is refused rather than formatted. The loose
+    signature would render ``fix/issue-c-parser``, naming an issue that does
+    not exist — and nothing downstream would object, because ``git branch``
+    accepts the name happily. The mistake would surface days later as an
+    inexplicable branch in the repo instead of at the call that made it.
     """
     if feature:
         slug = str(target)
         slug = slug[2:] if slug.startswith("c-") else slug
         return f"feat/{feature}/{slug}"
+    if not isinstance(target, int):
+        raise ValueError(
+            f"piece {target!r} needs its feature to name a branch: "
+            "an issue branch is fix/issue-<n>, and a slug is not an issue"
+        )
     return f"fix/issue-{target}"
 
 
