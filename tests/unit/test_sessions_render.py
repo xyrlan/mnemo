@@ -132,7 +132,14 @@ def _working(short_id="abc", **kw):
 
 
 def test_render_without_activities_is_unchanged():
-    """The backward-compatibility test: the old call must produce old bytes."""
+    """Passing no activities costs nothing: same bytes as None, as {}.
+
+    Note what this does *not* assert. Its name once implied byte-identity with
+    the queue v1.4.0 shipped, but it only ever compared the three present-tense
+    calls to each other — so it stayed green when the label field widened from
+    22 columns to LABEL_WIDTH. That widening is the fix for the overflow bug,
+    not a regression: v1.4.0 padded the label without truncating it.
+    """
     sessions = [_working(detail="building")]
 
     assert render_queue(sessions) == render_queue(sessions, None)
@@ -278,3 +285,171 @@ def test_the_table_stays_aligned_when_activity_is_long():
 
     assert len(rows) == 2
     assert len(rows[0]) == len(rows[1]), rows
+
+
+# --- label column budget -----------------------------------------------------
+#
+# The same bug the activity column already fixed, one column to its left.
+# `{s.label:<22}` pads but never truncates, and `jobs.py` caps `label` at 40:
+# the real labels a maintainer sees run 30-40 and shoved everything after them.
+# Reproduced from real dispatch state.json files, 2026-09-13.
+
+REAL_LABELS = [
+    "#197 dispatch a feature's pieces",          # 32
+    "#203 measure unblock edge coverage",        # 34
+    "#193 recall harness hit_slugs migration",   # 39
+    "c-label-column label-column implementati",  # 40, the jobs.py cap
+]
+
+
+def _labelled(short_id: str, label: str, **kw) -> Session:
+    """A session whose rendered label is exactly *label*.
+
+    `Session.label` prefixes from `cwd`; passing the whole string as `name`
+    with no `cwd` makes the label verbatim, so a test can state the width it
+    means rather than recomputing the prefix rule.
+    """
+    kw.setdefault("tempo", "active")
+    return Session(short_id=short_id, name=label, **kw)
+
+
+def test_a_long_label_does_not_shove_the_column_after_it():
+    """The reproduction: real labels, every row the same width."""
+    sessions = [
+        _labelled(f"s{i}", label, tokens=1500)
+        for i, label in enumerate(REAL_LABELS)
+    ]
+
+    out = render_queue(sessions)
+    rows = [l for l in out.splitlines() if l.startswith("  s")]
+
+    assert len(rows) == len(REAL_LABELS)
+    assert len(set(len(r) for r in rows)) == 1, rows
+
+
+def test_the_label_budget_holds_in_every_bucket():
+    """All four buckets pad the same field, so all four have the same bug."""
+    from mnemo.core.sessions.render import LABEL_WIDTH
+
+    label = "#193 recall harness hit_slugs migration"
+    buckets = {
+        "waiting": _labelled("w1", label, tempo="blocked", needs="q?"),
+        "working": _labelled("k1", label, tokens=1500),
+        "done": _labelled("d1", label, state="done", tempo="idle",
+                          children=({"id": "307", "kind": "pr"},)),
+        "abandoned": _labelled("a1", label, tempo="blocked", needs="q?", live=False),
+    }
+    short = {
+        "waiting": _labelled("w2", "x", tempo="blocked", needs="q?"),
+        "working": _labelled("k2", "x", tokens=1500),
+        "done": _labelled("d2", "x", state="done", tempo="idle",
+                          children=({"id": "307", "kind": "pr"},)),
+        "abandoned": _labelled("a2", "x", tempo="blocked", needs="q?", live=False),
+    }
+
+    for bucket, long_session in buckets.items():
+        out = render_queue([long_session, short[bucket]])
+        rows = [l for l in out.splitlines() if l.startswith(("  w", "  k", "  d", "  a"))
+                and not l.startswith("  attach") and not l.startswith("  limpar")]
+
+        assert len(rows) == 2, (bucket, out)
+        # Every row must reserve the same number of columns for the label, so
+        # whatever follows lands at one offset. Rows are
+        # "  <short_id>  <label padded to LABEL_WIDTH> <rest>".
+        for row in rows:
+            field = row[len("  w1  "):][:LABEL_WIDTH]
+            assert len(field.rstrip()) <= LABEL_WIDTH, (bucket, row)
+            assert row[len("  w1  ") + LABEL_WIDTH] == " ", (bucket, row)
+
+
+def test_the_issue_number_survives_a_cut_label():
+    """The number is the identifier tracked across a dispatch; the title is not."""
+    from mnemo.core.sessions.render import _label
+
+    cut = _label(_labelled("s", "#193 recall harness hit_slugs migration"))
+
+    assert cut.startswith("#193 ")
+    assert "…" in cut
+
+
+def test_a_piece_slug_survives_a_cut_label():
+    """`#` means GitHub issue, so a contract piece is prefixed bare (jobs.py)."""
+    from mnemo.core.sessions.render import _label
+
+    cut = _label(_labelled("s", "c-label-column label-column implementati"))
+
+    assert cut.startswith("c-label-column ")
+
+
+def test_a_short_label_is_not_touched():
+    from mnemo.core.sessions.render import _label
+
+    assert _label(_labelled("s", "child")) == "child"
+
+
+def test_a_cut_label_fits_the_budget():
+    from mnemo.core.sessions.render import LABEL_WIDTH, _label
+
+    for label in REAL_LABELS:
+        assert len(_label(_labelled("s", label))) <= LABEL_WIDTH, label
+
+
+def test_an_identifier_that_fills_the_column_is_still_cut():
+    """No label may exceed the budget — not even one that is all identifier.
+
+    `jobs.py` caps `label` at 40, so a 40-char label with no room left for a
+    title still has to be cut to LABEL_WIDTH or it shoves the column again.
+    """
+    from mnemo.core.sessions.render import LABEL_WIDTH, _label
+
+    # A title so starved that MIN_TITLE refuses to spend the column on it.
+    rendered = _label(_labelled("s", "#12345678901234567890123456789012 ab"))
+
+    assert len(rendered) == LABEL_WIDTH
+    assert rendered.endswith("…")
+
+
+def test_a_label_with_no_title_at_all_is_cut():
+    """A single unbroken token has no expendable half; it is cut regardless."""
+    from mnemo.core.sessions.render import LABEL_WIDTH, _label
+
+    rendered = _label(_labelled("s", "x" * 40))
+
+    assert len(rendered) == LABEL_WIDTH
+    assert rendered.endswith("…")
+
+
+def test_a_cut_label_never_exceeds_the_budget_by_one():
+    """Guards the ellipsis arithmetic: the cut label plus `…` must still fit.
+
+    An off-by-one in the room calculation reads as a rounding detail and costs
+    exactly one column — which is all it takes to shove the table.
+    """
+    from mnemo.core.sessions.render import LABEL_WIDTH, _label
+
+    # Widths chosen to walk the title across the budget boundary.
+    for n in range(1, 40):
+        label = "#203 " + ("a" * n)
+        if len(label) <= LABEL_WIDTH:
+            continue
+        rendered = _label(_labelled("s", label))
+        assert len(rendered) <= LABEL_WIDTH, (label, rendered)
+
+
+def test_a_label_that_exactly_fills_the_column_is_not_cut():
+    """34 columns is 34 columns. `#203 measure unblock edge coverage` is 34."""
+    from mnemo.core.sessions.render import LABEL_WIDTH, _label
+
+    label = "#203 measure unblock edge coverage"
+    assert len(label) == LABEL_WIDTH
+
+    assert _label(_labelled("s", label)) == label
+
+
+def test_the_label_is_cut_on_a_word_boundary():
+    """Same rule as the activity column, so both columns read alike."""
+    from mnemo.core.sessions.render import _label
+
+    cut = _label(_labelled("s", "#193 recall harness hit_slugs migration"))
+
+    assert cut == "#193 recall harness hit_slugs…"

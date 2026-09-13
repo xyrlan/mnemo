@@ -31,6 +31,17 @@ DETAIL_WIDTH = 34
 # signals take the whole column instead.
 MIN_TARGET = 8
 
+# The label column, budgeted for the same reason and in the same way. The old
+# `{s.label:<22}` padded but never truncated, while `jobs.py` caps `label` at
+# 40 — so every real label overflowed and shoved the column after it. Measured
+# on the 2026-09-13 dispatch: labels run 32-40 (`"#197 dispatch a feature's
+# pieces"` = 32, `"#203 measure unblock edge coverage"` = 34) and only the
+# fixtures were short enough to fit.
+LABEL_WIDTH = 34
+# Below this, a cut title says nothing ("#193 rec…"), so the identifier takes
+# the column alone rather than spending it on one unreadable syllable.
+MIN_TITLE = 6
+
 
 def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
     """Human age of the last update, or '' when unknown."""
@@ -127,12 +138,46 @@ def _activity(act, budget: int = DETAIL_WIDTH) -> str:
     return f"{act.tool} {cut.rstrip()}…{tail}"
 
 
+def _label(s: Session, budget: int = LABEL_WIDTH) -> str:
+    """The session's label, budgeted to *budget* columns.
+
+    Cuts the **inferred title**, never the identifier — the same trade
+    `_activity` makes one column to the right, where the target gives way and
+    the signals survive.
+
+    ``Session.label`` leads with what ``cwd`` encodes (``#197 …`` for an issue,
+    ``c-label-column …`` for a contract piece) and follows it with a title
+    Claude Code inferred from the transcript. The number is what a maintainer
+    tracks across a dispatch; the title reads well and is the expendable half.
+    An identifier long enough to fill the column on its own is still cut, so
+    that no label can shove the column after it.
+    """
+    if len(s.label) <= budget:
+        return s.label
+
+    head, sep, title = s.label.partition(" ")
+    room = budget - len(head) - 2  # space before, ellipsis after
+    if not sep or room < MIN_TITLE:
+        # No title to spend, or too little left of the column for one to say
+        # anything. The identifier takes what there is.
+        return s.label[: budget - 1] + "…"
+    cut = title[:room]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return f"{head} {cut.rstrip()}…"
+
+
 def render_queue(sessions: list[Session], activities=None) -> str:
     """Render the whole queue, blocked first.
 
     *activities* maps ``short_id`` to :class:`~mnemo.core.activity.Activity`.
-    Omitted, the output is byte-identical to the queue that shipped in v1.4.0 —
-    the column is additive, and every caller that predates it keeps working.
+    Omitted, the activity column costs nothing: the call is byte-identical to
+    passing ``None`` or ``{}``, so every caller that predates it keeps working.
+
+    It is no longer byte-identical to v1.4.0, and deliberately so. v1.4.0 pinned
+    the label to 22 columns and *padded without truncating*, which is the bug
+    this column budget fixes — matching those bytes would mean keeping it. Short
+    labels now sit in a wider field; long ones are cut instead of overflowing.
 
     Only the working bucket uses it. A blocked session's claim on the
     maintainer is ``needs``; burying that under a tool name would invert the
@@ -154,7 +199,7 @@ def render_queue(sessions: list[Session], activities=None) -> str:
         lines.append(f"TE ESPERANDO ({len(waiting)})")
         for s in waiting:
             age = _age(s.updated_at)
-            lines.append(f"  {s.short_id}  {s.label:<22} {age:>5}  {s.needs or s.detail or '—'}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {s.needs or s.detail or '—'}")
             if s.suggested_reply:
                 lines.append(f"        ↳ sugerido: \"{s.suggested_reply}\"")
         lines.append("")
@@ -163,13 +208,13 @@ def render_queue(sessions: list[Session], activities=None) -> str:
         lines.append(f"TRABALHANDO ({len(working)})")
         for s in working:
             detail = _activity(acts.get(s.short_id)) or s.detail or "—"
-            lines.append(f"  {s.short_id}  {s.label:<22} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}")
         lines.append("")
 
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
-            lines.append(f"  {s.short_id}  {s.label:<22} {_prs(s) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
         lines.append("")
 
     if abandoned:
@@ -178,7 +223,7 @@ def render_queue(sessions: list[Session], activities=None) -> str:
         lines.append(f"ABANDONADAS ({len(abandoned)})")
         for s in abandoned:
             age = _age(s.updated_at)
-            lines.append(f"  {s.short_id}  {s.label:<22} {age:>5}  {s.needs or s.detail or '—'}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {s.needs or s.detail or '—'}")
         lines.append("")
 
     if waiting:
