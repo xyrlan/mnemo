@@ -7,6 +7,47 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The queue now says what each session is *doing*, not just whether it is
+  alive.** `mnemo sessions` answered two questions — is the process alive
+  (`live`), does a human need to answer (`tempo`) — and a child sitting at
+  `active` for twenty minutes read identically whether it was making progress,
+  stuck on one thing, or going in circles. Those three call for three different
+  responses, so the working bucket now shows the last tool, its target, a
+  `(+N)` count of tool uses since, and `↻` when the same tool and target come
+  back:
+
+  ```
+  TRABALHANDO (3)
+    s00  #158 recall harness      Bash Commit measurement… (+26)        2k
+    s07  #197 dispatch a piece    Bash Commit (+20)                    18k
+    s08  #200 windows ci          Grep linkScanOffset (+7) ↻            9k
+  ```
+
+  A rising count with a changing target is progress; a frozen count is stalled;
+  a rising count on an unchanged target is a loop, which reads exactly like
+  progress without the mark.
+
+- **`mnemo session <short_id>`** — the same data one level down, for when a
+  queue line looks wrong and the question becomes *wrong how*. Lists that
+  session's recent actions oldest-first with timestamps (default 15,
+  `--limit` to change), marking any tool and target that comes back inside the
+  window. A unique prefix of the short id is enough; an ambiguous one refuses
+  rather than showing the wrong session. No `--follow`: you look, you decide,
+  and `claude attach` is still how you get inside.
+
+  Read from `linkScanPath`, which `state.json` has always provided and which
+  mnemo parsed and then never opened — `detector` forwarded it into an unblock
+  marker and the consumer ignored it in favour of re-resolving. The pointer
+  into a live session was write-only; this reads it.
+
+  Transcripts are append-only, so a byte offset is a complete bookmark and each
+  `--watch` tick reads only new bytes. Measured on nine real dispatch children
+  (9.3 MB): a cold tick costs 7.8 ms and a warm one 0.011 ms. Offsets live in
+  memory and die with the process — an offset only has value inside a live
+  watch, and between invocations what you want is current state, not yesterday's
+  delta. `--json` is unchanged; activity is a render concern, not a `Session`
+  field.
+
 - **`mnemo dispatch --contract <path>` — one background child per *piece of a
   feature*, instead of one per GitHub issue.** Nobody files four issues to
   build one feature, so the unit of parallel work is now a **contract**: a
