@@ -6,14 +6,32 @@ one file.
 ``state`` and ``tempo`` are different axes and the distinction carries the
 feature:
 
-- ``state`` is the process phase: ``working``, ``done``
+- ``state`` is the process phase: ``working``, ``blocked``, ``done``,
+  ``stopped``
 - ``tempo`` is whether a human is needed: ``blocked``, ``active``, ``idle``
 
-A session waiting on a question sits at ``state=working, tempo=blocked``.
-Branching on ``state`` files it under "working" and the queue stops surfacing
-the only sessions it exists to surface. Measured on a real dispatch,
-2026-09-12; ``timeline.jsonl`` records ``state`` transitions and never
-mentions ``tempo``.
+Branch on ``tempo``, never on ``state`` — and note *why* that is sharper than
+it sounds: the two vocabularies **overlap**. ``state`` carries its own
+``blocked``, so the axes are not orthogonal and a filter written against
+``state`` looks plausible on review while being wrong. A blocked session
+reads ``state=blocked, tempo=blocked``; branching on ``state`` files it under
+a phase and the queue stops surfacing the only sessions it exists to surface.
+
+The enumerations above are measured, not assumed — nine real sessions,
+2026-09-13::
+
+    state: {'done': 4, 'blocked': 2, 'stopped': 2, 'working': 1}
+    tempo: {'idle': 6, 'blocked': 2, 'active': 1}
+
+An earlier version of this docstring listed ``state`` as ``working, done``
+alone. Under-stating a field's range is what made a wrong filter look correct
+on review: it cost the incident recorded below on 2026-09-12 and a silent
+watcher on 2026-09-13 (#222). Both values it omitted are terminal-ish phases
+Claude Code writes routinely, so re-measure before trusting this list again.
+
+Consumers outside Python read the same rule from ``mnemo sessions --json``,
+which emits the derived booleans below alongside the raw fields. Nothing
+should re-implement them.
 """
 from __future__ import annotations
 
@@ -70,9 +88,32 @@ class Session:
         """Blocked and not known to be dead: a real claim on the maintainer."""
         return self.is_blocked and not self.is_abandoned
 
+    #: Process phases that mean "this session will not do anything more".
+    #: ``stopped`` is as terminal as ``done`` — it is what Claude Code writes
+    #: when a process ends without finishing its turn — and omitting it left
+    #: two real sessions rendering under "working" with the literal word
+    #: ``stopped`` as their activity (#222).
+    FINISHED = frozenset({"done", "stopped"})
+
     @property
     def is_done(self) -> bool:
-        return self.state == "done"
+        """Finished, by process phase. Says nothing about whether it succeeded."""
+        return self.state in self.FINISHED
+
+    def derived(self) -> dict[str, bool]:
+        """The four answers consumers actually ask, as plain data.
+
+        ``asdict()`` cannot see a ``@property``, so ``--json`` shipped only the
+        raw fields and every consumer re-implemented the rule — the failure
+        #222 reported. This keeps one definition for the renderer, the
+        statusline and JSON alike.
+        """
+        return {
+            "is_blocked": self.is_blocked,
+            "is_waiting": self.is_waiting,
+            "is_abandoned": self.is_abandoned,
+            "is_done": self.is_done,
+        }
 
     @property
     def label(self) -> str:

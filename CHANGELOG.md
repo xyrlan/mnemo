@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`mnemo sessions --json` now answers the question instead of handing you the
+  raw fields to re-derive it from.** Each row carries `is_waiting`,
+  `is_blocked`, `is_done` and `is_abandoned` alongside `state`/`tempo`/`live`.
+  `Session` already computed all four correctly, but as `@property`, and
+  `asdict()` cannot see a property — so every script re-implemented the rule
+  and a watcher polling the queue during the #215–#218 dispatch stayed silent
+  through three children going from working to blocked to done. `is_waiting` is
+  the one that cannot be rebuilt by eye: it is an interaction between `tempo`
+  and liveness that exists because of #196. Additive — existing consumers of
+  the raw fields are unaffected. (#222)
+
 - **The queue now says what each session is *doing*, not just whether it is
   alive.** `mnemo sessions` answered two questions — is the process alive
   (`live`), does a human need to answer (`tempo`) — and a child sitting at
@@ -76,6 +87,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   maintainer reviews the file and runs the dispatch; no model spawns work.
 
 ### Fixed
+
+- **A `stopped` session was filed under "working" forever.** `is_done` tested
+  `state == "done"` alone, but Claude Code also writes `stopped` for a process
+  that ended without finishing its turn — two of nine real sessions on
+  2026-09-13. They rendered under TRABALHANDO with the literal word `stopped`
+  as their activity, and a consumer polling for completion never saw them end.
+  `is_done` now covers both terminal phases. Surfaced while documenting the
+  `state` enumeration for #222: the docstring claimed `state` carried only
+  `working, done`, which is what made the omission invisible on review. (#222)
 
 - **Dispatch rollback left the branch behind.** Removing a failed child's
   worktree deleted its directory but not its branch, so retrying the same
