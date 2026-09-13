@@ -284,9 +284,20 @@ positional issue numbers. `--dry-run` continues to apply.
 
 ## Error handling
 
-- **Invalid contract** — orphan `consumes` (naming a signature no piece
-  `exposes`), missing field, duplicate slug, unparseable frontmatter. Rejected
-  **before any worktree is created**; the whole file validates first.
+- **Invalid contract** — `consumes` naming a piece that does not exist or the
+  consuming piece itself, missing field, duplicate slug, unaddressable slug,
+  unparseable frontmatter. Rejected **before any worktree is created**; the
+  whole file validates first.
+
+  **What validation deliberately does not check:** that the owner piece
+  actually `exposes` the consumed signature. The two lines are written by hand
+  and differ cosmetically — a space, a backtick, a renamed argument — so string
+  equality would refuse well-formed contracts over formatting. This repo has
+  already paid for that shape once (#184: an instruction the model could not
+  satisfy, where ignoring it was the correct answer), and a rule that fires on
+  formatting gets ignored, which is worse than no rule. Whether the boundary
+  was real is answered by the measurement below — did the children collide? —
+  not by comparing two strings beforehand.
 - **`verdict: sequential`** — rejected with a message pointing at the file.
 - **Worktree already exists** — already refused today (`dispatch.py:203`);
   unchanged. Paths are never reused.
