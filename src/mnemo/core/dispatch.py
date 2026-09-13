@@ -415,14 +415,69 @@ def remove_worktree(
 
 # --- spawn -----------------------------------------------------------------
 
+# A Claude Code session short id: exactly eight lowercase hex digits, as every
+# id under `~/.claude/jobs/` is. The trailing `$` is load-bearing — without it
+# a 40-char commit sha echoed above the block matches on its first eight
+# characters and is returned as an id addressing no session.
+_SHORT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+
+# SGR escapes, which `claude --bg` really does emit around the id even when
+# stdout is a pipe — verified against a live spawn, not assumed. Stripped
+# before matching, because the colored id arrives as the single token
+# ESC[36m5aa54cf8 ESC[39m (no spaces) and so matches no id shape at all.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _short_id_from(stdout: str) -> str:
+    """The first token in *stdout* shaped like a session short id, else ``""``.
+
+    Scans tokens rather than lines. See :func:`spawn_child` for why the shape,
+    and not the position, is what this keys on.
+    """
+    for token in _ANSI_RE.sub("", stdout).split():
+        if _SHORT_ID_RE.match(token):
+            return token
+    return ""
+
 
 def spawn_child(prompt: str, *, cwd: Path | str) -> str:
-    """Start a detached child in *cwd*. Returns its short id.
+    r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
     ``--bg`` with the prompt **positional**. Never ``-p``/``--print``: the CLI
     rejects the combination, and ``--print`` would never start the interactive
     session ``claude attach`` needs, leaving the job unattachable. Never
     wrapped in ``timeout``, which is not on the macOS PATH.
+
+    **Reading the id back (#211).** ``--bg`` does not print an id; it prints a
+    five-line help block, the id on the first line and three attach/logs/stop
+    hints under it, the first occurrence wrapped in SGR color even on a pipe::
+
+        backgrounded · \x1b[36m5aa54cf8\x1b[39m
+          claude agents             list sessions
+          claude attach 5aa54cf8    open in this terminal
+          claude logs 5aa54cf8      show recent output
+          claude stop 5aa54cf8      stop this session
+
+    The original parse took the last whitespace-separated token of the whole
+    blob, which is the last word of the last line — ``session``. Both children
+    of the first real contract dispatch were reported under that name, and the
+    one actionable line dispatch prints read ``claude attach session``.
+
+    The id is matched by **shape**, not by position, because position is what
+    failed: a line index is only correct while nothing is ever printed above
+    the block, and a single warning on stdout would make "the last token of
+    the first line" return the last word of the warning — a non-id handed
+    straight to the attach hint, which is this same bug with a new cause.
+
+    Escapes are stripped before matching. The colored first occurrence is the
+    single token ``\x1b[36m5aa54cf8\x1b[39m``, which matches no id shape, so
+    without stripping this would depend on the *hint* lines happening to be
+    unstyled — luck, and the kind that breaks silently when the styling
+    changes.
+
+    When no token matches, this returns ``""`` rather than a guess. A blank
+    column reads as missing; ``background.`` reads as an id and sends the
+    maintainer to a command that cannot work.
     """
     args = ["claude", "--bg", prompt]
     try:
@@ -434,7 +489,7 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
         raise DispatchError(
             f"claude --bg failed: {result.stderr.strip() or result.stdout.strip()}"
         )
-    return result.stdout.strip().split()[-1] if result.stdout.strip() else ""
+    return _short_id_from(result.stdout)
 
 
 # --- orchestration ---------------------------------------------------------

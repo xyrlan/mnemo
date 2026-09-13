@@ -132,6 +132,13 @@ def _report(results: list) -> int:
     if started:
         print()
         print("  queue:  mnemo sessions")
-        print(f"  attach: claude attach {started[0].short_id}")
+        # Only a child whose id was actually read back can be attached. When
+        # none was, the hint is omitted rather than printed with an empty
+        # argument: `claude attach ` reads as actionable and is not, which is
+        # the #211 failure in a quieter form. The queue above still finds
+        # every child, because it reads `state.json` and not this value.
+        attachable = next((r for r in started if r.short_id), None)
+        if attachable is not None:
+            print(f"  attach: claude attach {attachable.short_id}")
 
     return 1 if failed else 0

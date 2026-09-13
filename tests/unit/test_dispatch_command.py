@@ -70,6 +70,56 @@ def test_points_at_the_queue_rather_than_claude_agents(monkeypatch, capsys, tmp_
     assert "claude agents" not in out
 
 
+def test_the_attach_hint_names_the_first_child_that_has_an_id(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """The hint must address a child that can actually be attached.
+
+    ``short_id`` is ``""`` when the id could not be read back out of the spawn
+    output. Taking ``started[0]`` blindly then prints ``claude attach `` with
+    nothing after it — a command that cannot work, which is the #211 failure
+    in a quieter form.
+    """
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root: [
+            core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id=""),
+            core.Dispatched(issue=198, worktree=tmp_path / "p-wt-198", short_id="a1b2c3d4"),
+        ],
+    )
+
+    assert dispatch_cmd.cmd_dispatch(_args(issues=[197, 198])) == 0
+
+    out = capsys.readouterr().out
+    assert "claude attach a1b2c3d4" in out
+    assert "claude attach \n" not in out
+
+
+def test_no_attach_hint_when_no_child_reported_an_id(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """With no id anywhere, the queue is the only honest next step.
+
+    The children are running regardless — ``mnemo sessions`` reads their
+    ``state.json`` and finds them — so the report says so instead of printing
+    a truncated command.
+    """
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root: [
+            core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="")
+        ],
+    )
+
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "mnemo sessions" in out       # the queue still finds them
+    assert "claude attach" not in out    # but never a command that cannot work
+
+
 def test_dry_run_spawns_nothing(monkeypatch, capsys, tmp_path: Path) -> None:
     """The plan is printable without creating a worktree or a child."""
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
