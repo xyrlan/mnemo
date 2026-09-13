@@ -1,0 +1,171 @@
+"""``mnemo deliver`` — the last metre of a dispatch, from the parent's side.
+
+Two commands, not a prompt:
+
+- ``mnemo deliver --review`` is read-only. Every dispatch worktree, whether it
+  is clean, how far ahead of ``master``, a diffstat, and any PR that already
+  exists. Prints and exits, touching nothing.
+- ``mnemo deliver <id> [<id>...]`` pushes and opens a PR for **exactly** the
+  ids named, and nothing else.
+
+**Naming an id is the approval.** There is deliberately no ``--all`` and no
+"deliver everything that is ready": one flag approving N children is precisely
+the failure mode this exists to prevent (#215). The maintainer reviews each
+diff — the expensive part, and the part that must stay per-child — and then
+spends one command instead of three on the mechanics, which are not worth
+repeating N times.
+
+Both halves work on a pipe. ``mnemo sessions`` and ``mnemo session`` are
+pipe-safe by design and this joins them; an interactive y/n confirmation would
+break that, and was rejected for it. The approval is in the argv, where it is
+visible in shell history, not in a keystroke nobody can audit.
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from mnemo.cli.parser import command
+
+
+def _repo_root() -> Path | None:
+    """The git toplevel of the cwd, or ``None``. As ``dispatch`` reads it."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    return Path(top) if top else None
+
+
+def _review(*, repo_root: Path) -> int:
+    """Print every dispatch worktree and what it would take to deliver it.
+
+    Read-only, and says so by doing nothing else. Returns 0 even when nothing
+    is ready: "nothing to deliver" is a successful report, not a failure —
+    this is the command a maintainer runs to find out.
+    """
+    from mnemo.core.sessions import delivery
+
+    trees = delivery.dispatch_worktrees(repo_root=repo_root)
+    if not trees:
+        print("no dispatch worktrees — nothing to deliver")
+        return 0
+
+    states = [delivery.ready(tree, repo_root=repo_root) for tree in trees]
+    ready = [r for r in states if r.ready]
+    blocked = [r for r in states if not r.ready]
+
+    if ready:
+        print(f"PRONTAS ({len(ready)})")
+        for r in ready:
+            ahead = f"{r.ahead} commit" + ("s" if r.ahead != 1 else "")
+            print(f"  {r.label}  {r.branch}")
+            print(f"      {ahead} ahead of {delivery.BASE}"
+                  + (f", {r.diffstat}" if r.diffstat else ""))
+            if r.pr:
+                # Named, not filtered out. An existing PR usually means this
+                # was already delivered — but a branch pushed again after
+                # review comments is the same row, and only the maintainer
+                # knows which one this is.
+                print(f"      PR já existe: {r.pr}")
+        print()
+
+    if blocked:
+        print(f"NÃO PRONTAS ({len(blocked)})")
+        for r in blocked:
+            print(f"  {r.label}  {r.branch or '—'}")
+            print(f"      {r.reason}")
+        print()
+
+    if ready:
+        names = " ".join(r.label.lstrip("#") for r in ready)
+        # The exact command, with the ids spelled out. Naming them is the
+        # approval, so the hint that saves the typing must not collapse them
+        # into a flag — copying this line is still a per-child decision the
+        # maintainer can edit before running.
+        print(f"  entregar: mnemo deliver {names}")
+    return 0
+
+
+def _deliver_one(named: str, *, repo_root: Path) -> bool:
+    """Push and open a PR for one named id. True when it was delivered.
+
+    Every refusal is printed against the name the maintainer typed, so a list
+    of four reads as four outcomes rather than one aggregate.
+    """
+    from mnemo.core.sessions import delivery
+
+    tree = delivery.find_worktree(named, repo_root=repo_root)
+    if tree is None:
+        print(f"{named}: no dispatch worktree — "
+              f"run `mnemo deliver --review` to see what there is")
+        return False
+
+    state = delivery.ready(tree, repo_root=repo_root)
+    if not state.ready:
+        # Refused with the reason, never pushed anyway.
+        print(f"{state.label}: {state.reason}")
+        return False
+
+    if state.pr:
+        # Not an error and not a push. Delivering twice would open a duplicate
+        # PR for the same branch, and the maintainer who wants the existing
+        # one updated can push it themselves — that is a different decision
+        # from the one this command takes, and it is already reviewed.
+        print(f"{state.label}: PR já existe — {state.pr}")
+        return False
+
+    try:
+        delivery.push(state.branch, worktree=tree)
+    except delivery.DeliveryError as exc:
+        print(f"{state.label}: push failed: {exc}")
+        return False
+
+    title = f"{state.label}: {state.branch}"
+    try:
+        url = delivery.open_pr(state.branch, worktree=tree, title=title)
+    except delivery.DeliveryError as exc:
+        # The push landed. Saying so matters: the branch is on the remote and
+        # a retry must not read as though nothing happened.
+        print(f"{state.label}: pushed {state.branch}, but gh pr create failed: {exc}")
+        return False
+
+    print(f"{state.label}: {url or state.branch + ' pushed, PR created'}")
+    return True
+
+
+@command("deliver")
+def cmd_deliver(args: argparse.Namespace) -> int:
+    """Review what is deliverable, or deliver exactly the ids named."""
+    root = _repo_root()
+    if root is None:
+        print("not inside a git repository — deliver reads the dispatch worktrees")
+        return 1
+
+    ids = list(getattr(args, "ids", []) or [])
+    review = bool(getattr(args, "review", False))
+
+    if review and ids:
+        # --review is read-only and delivering is not. Running both would make
+        # the report a preamble to a push the maintainer may have meant to
+        # read first.
+        print("pass --review or ids to deliver, not both")
+        return 1
+    if not review and not ids:
+        print("nothing named: `mnemo deliver --review` to see what is ready, "
+              "then `mnemo deliver <id> [<id>...]`")
+        return 1
+
+    if review:
+        return _review(repo_root=root)
+
+    delivered = [_deliver_one(named, repo_root=root) for named in ids]
+    return 0 if all(delivered) else 1

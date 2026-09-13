@@ -102,6 +102,16 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="dispatch each piece of a decomposition contract")
     dispatch_p.add_argument("--dry-run", dest="dry_run", action="store_true",
                             help="print the worktree and branch per child without spawning")
+    deliver_p = sub.add_parser(
+        "deliver",
+        help="review what a dispatch produced, or push + open a PR for named children")
+    # Ids are positional and there is deliberately no --all: naming a child is
+    # the approval, and one flag approving N children is the failure #215 is
+    # about. --review is read-only and refuses to run alongside them.
+    deliver_p.add_argument("ids", nargs="*", metavar="ID",
+                           help="session short id, issue number or piece slug to deliver")
+    deliver_p.add_argument("--review", action="store_true",
+                           help="read-only: every dispatch worktree, its branch, and whether it is deliverable")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")
