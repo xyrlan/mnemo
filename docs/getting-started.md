@@ -456,14 +456,14 @@ mnemo sessions
 
 ```
 TE ESPERANDO (1)
-  a41c8e2f  #196 queue liveness       4m  Which of the two should own the hint?
+  a41c8e2f  #196 queue liveness                   4m  Which of the two should own the hint?
 
 TRABALHANDO (2)
-  13b6f4f3  #207 sessions docs     Read docs/getting-started.md (+31)    9k
-  3a14bdd9  #206 label column      Bash pytest -q (+12) ↻                7k
+  13b6f4f3  #207 sessions docs                 Read docs/getting-started.md (+31)    9k
+  3a14bdd9  #206 label column                  Bash pytest -q (+12) ↻                7k
 
 PRONTAS (1)
-  7c1e9a04  #205 unblock consumer  #199                                 22k
+  7c1e9a04  #205 unblock consumer              #199                                 22k
 
   attach: claude attach a41c8e2f
 ```
@@ -502,6 +502,11 @@ same target:
 
 The column is budgeted, and when it runs out of room it cuts the *target*
 rather than the `(+N)` and `↻` that carry the signal.
+
+The label beside it is budgeted the same way, and for the same reason. Where it
+has to cut, it keeps the head — the issue number, or the contract piece — and
+trims the inferred title after it, because the identifier is what you are
+tracking across a dispatch and the title is the expendable half.
 
 Only the working bucket gets it. A blocked session's claim on you is the
 question it is asking, and burying that under a tool name would invert the
