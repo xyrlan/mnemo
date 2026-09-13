@@ -210,6 +210,87 @@ Supported. `rsync` is absent, so a pure-Python fallback takes over — slower pe
 file, but functional. The plugin needs `bash` on `PATH` (Git for Windows
 provides it); without it, hooks skip silently rather than erroring.
 
+## `mnemo sessions` says there are none, but I have some running
+
+```
+  nenhuma sessão em background
+```
+
+The queue is scoped to the repo you are standing in. A session started
+somewhere else is real but out of scope:
+
+```bash
+mnemo sessions --all
+```
+
+If `--all` is also empty, the sessions are not where mnemo looks. It reads
+Claude Code's own jobs directory, read-only — it does not track sessions
+itself, so a session that never registered there cannot appear. `/mnemo:doctor`
+reports what it found:
+
+```
+  ✓ 4 background sessions (1 waiting)
+```
+
+**A worktree is its own scope.** This is the common surprise: dispatching
+children into worktrees puts each one in a different directory, so standing in
+the main checkout you see none of them. `mnemo sessions --all` is the view you
+want while a dispatch is running. (What normalization does handle is the same
+directory reached through two different strings — a symlink, or `/tmp` on
+macOS; it resolves those so the queue does not come up empty.)
+
+## A session is running but missing from the queue
+
+`/mnemo:doctor` counts the entries it could not parse, which is the case a
+plain "no sessions" line would hide:
+
+```
+  ⚠ 4 background sessions (1 waiting, 1 unreadable)
+```
+
+An unreadable entry is one whose state file mnemo could not read or make sense
+of. The queue skips it rather than guessing; it is still a real session, and
+`claude attach <short_id>` still reaches it. If the count is
+`could not read <path>`, the whole jobs directory is unreadable — a permissions
+problem on that directory rather than anything in the vault.
+
+Death does not remove a session from the queue. A session whose process died
+while working stays in `TRABALHANDO` with whatever it was last doing — the
+bucket is chosen by what the session recorded, not by whether the process is
+still alive. What liveness does decide is the blocked pair: a session blocked
+on a human moves to `ABANDONADAS` once the process behind it is *provably*
+gone, so a question nobody will ever answer stops competing for the top of the
+queue. Provably is the operative word — only a roster that positively reports
+the pid as gone counts, and an unknown one is left in `TE ESPERANDO` rather
+than being written off.
+
+## The activity column is empty, or stuck
+
+An empty column means the session has no transcript to read yet
+(`linkScanPath` absent) or nothing has happened in it since mnemo started
+looking. `mnemo session <short_id>` says which:
+
+```
+  esta sessão não registrou um transcript (linkScanPath ausente)
+  nenhuma ação registrada na janela lida
+```
+
+A column that never moves is the signal working, not failing: the count rises
+only when tool uses happen, so a frozen `(+N)` is a stalled session. Tell it
+apart from a loop by the `↻` mark — a count rising against an unchanged target
+is going in circles, which without the mark reads exactly like progress.
+
+`(+N)` is not a lifetime total. A one-shot `mnemo sessions` reads the tail end
+of each transcript, so the count covers the recent window rather than the whole
+session; under `--watch`, each later redraw reads only what was appended since
+the last one. Bookmarks live in memory and die with the process — which is why
+a number that looks small for a long-running session is not a bug, and why
+`--watch` shows movement more usefully than re-running the one-shot.
+
+When a tick finds nothing new, the column holds its previous value rather than
+blanking — a session that wrote nothing since is still doing whatever it was
+doing, and an em-dash there would read as "stopped".
+
 ## Removing everything
 
 Plugin: `/plugin uninstall mnemo`
