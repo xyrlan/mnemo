@@ -453,3 +453,71 @@ def test_the_label_is_cut_on_a_word_boundary():
     cut = _label(_labelled("s", "#193 recall harness hit_slugs migration"))
 
     assert cut == "#193 recall harness hit_slugs…"
+
+
+# --- the PR join: git first, the child's report as the fallback (#217) -----
+#
+# `_prs` read `children[].kind == "pr"` — a list Claude Code writes when it
+# happens to notice a PR and mnemo never writes at all. On the 2026-09-13
+# dispatch one child's row showed `#212` and its sibling showed a prose
+# sentence, though both had opened a PR. The lookup is injected rather than
+# called from here because this module is pure by contract: a `gh` call costs
+# ~400ms and this runs once per row of a 2s redraw.
+
+
+def _done(short_id: str = "d1", **kw) -> Session:
+    return Session(short_id=short_id, state="done", tempo="idle",
+                   name="pronta", **kw)
+
+
+def test_the_lookup_supplies_a_pr_the_child_never_reported():
+    """The case the fallback cannot serve, and the reason for the change."""
+    out = render_queue([_done()], None, lambda s: "#212")
+
+    assert "#212" in out
+
+
+def test_the_lookup_wins_over_what_the_child_volunteered():
+    """Git is the authority; `children` is what Claude Code happened to see."""
+    session = _done(children=({"id": "999", "kind": "pr"},))
+
+    out = render_queue([session], None, lambda s: "#212")
+
+    assert "#212" in out
+    assert "#999" not in out
+
+
+def test_the_childs_report_is_kept_when_the_lookup_finds_nothing():
+    """No gh, no network, a pruned tree — the old behaviour is still right."""
+    session = _done(children=({"id": "307", "kind": "pr"},))
+
+    out = render_queue([session], None, lambda s: None)
+
+    assert "#307" in out
+
+
+def test_detail_is_still_the_last_resort():
+    out = render_queue([_done(detail="merged by hand")], None, lambda s: None)
+
+    assert "merged by hand" in out
+
+
+def test_omitting_the_lookup_changes_nothing():
+    """Every caller that predates the parameter keeps its bytes."""
+    sessions = [_done(children=({"id": "307", "kind": "pr"},))]
+
+    assert render_queue(sessions) == render_queue(sessions, None, None)
+
+
+def test_the_lookup_is_only_asked_about_finished_sessions():
+    """A `gh` call per row is the cost; the PR column is only in PRONTAS."""
+    asked = []
+    sessions = [
+        _done("d1"),
+        Session(short_id="k1", state="working", tempo="active", name="working"),
+        Session(short_id="b1", state="working", tempo="blocked", needs="q?"),
+    ]
+
+    render_queue(sessions, None, lambda s: asked.append(s.short_id) or None)
+
+    assert asked == ["d1"]

@@ -92,7 +92,35 @@ def _tokens(s: Session) -> str:
     return f"{s.tokens // 1000}k" if s.tokens >= 1000 else str(s.tokens)
 
 
-def _prs(s: Session) -> str:
+def _prs(s: Session, lookup=None) -> str:
+    """The PR this session produced, from git when possible (#217).
+
+    Two sources, in that order of trust:
+
+    1. *lookup*, a callable from ``Session`` to a PR string or ``None``. This
+       is the **authoritative** join — ``gh pr list --head <branch>`` against
+       the branch ``dispatch.branch_name`` derived — and it does not depend on
+       the child reporting anything.
+    2. ``Session.children`` filtered to ``kind == "pr"``, which is what this
+       read before. Claude Code writes that list when it happens to notice a
+       PR and mnemo never writes it at all, which is why one child of the
+       2026-09-13 dispatch showed ``#212`` and its sibling showed a prose
+       sentence though both had opened one.
+
+    The fallback is kept rather than replaced: when the child *did* volunteer
+    a PR it is correct, and it costs no subprocess. The order is what changed
+    — git is asked first, and the volunteered value is now the degraded case
+    instead of the only one.
+
+    *lookup* is injected because this module is pure by contract: the
+    docstring at the top promises no I/O so the ordering rules stay testable
+    without touching disk. A ``gh`` call inlined here would put a 400ms
+    subprocess inside a function called once per row of a 2s redraw.
+    """
+    if lookup is not None:
+        found = lookup(s)
+        if found:
+            return found
     ids = [f"#{c.get('id')}" for c in s.children if c.get("kind") == "pr" and c.get("id")]
     return ", ".join(ids)
 
@@ -167,8 +195,13 @@ def _label(s: Session, budget: int = LABEL_WIDTH) -> str:
     return f"{head} {cut.rstrip()}…"
 
 
-def render_queue(sessions: list[Session], activities=None) -> str:
+def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> str:
     """Render the whole queue, blocked first.
+
+    *pr_lookup* maps a :class:`Session` to the PR it produced, or ``None``.
+    Injected rather than called from here so this module stays pure (#217);
+    omitted, the PRONTAS bucket falls back to whatever the child volunteered
+    in ``children``, exactly as before. See :func:`_prs`.
 
     *activities* maps ``short_id`` to :class:`~mnemo.core.activity.Activity`.
     Omitted, the activity column costs nothing: the call is byte-identical to
@@ -214,7 +247,7 @@ def render_queue(sessions: list[Session], activities=None) -> str:
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
-            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s, pr_lookup) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
         lines.append("")
 
     if abandoned:
