@@ -13,6 +13,7 @@ from pathlib import Path
 
 from mnemo.cli.commands.doctor_checks import (
     activation,
+    duplicate_install,
     fidelity,
     hosts,
     install_backfill,
@@ -51,6 +52,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("stripped_enforce",      rules._doctor_check_stripped_enforce),
     ("install_backfill",      install_backfill._doctor_check_install_backfill),
     ("hosts",                 hosts._doctor_check_hosts),
+    ("duplicate_install",     duplicate_install._doctor_check_duplicate_install),
 ]
 
 

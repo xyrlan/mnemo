@@ -11,6 +11,9 @@ from mnemo.cli.commands.doctor_checks.activation import (  # noqa: F401
     _doctor_check_activation,
     _doctor_check_activation_fidelity,
 )
+from mnemo.cli.commands.doctor_checks.duplicate_install import (  # noqa: F401
+    _doctor_check_duplicate_install,
+)
 from mnemo.cli.commands.doctor_checks.fidelity import (  # noqa: F401
     _doctor_check_zero_hit,
 )
