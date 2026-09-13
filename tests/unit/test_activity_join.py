@@ -22,7 +22,10 @@ def _transcript(tmp_path, name, tools):
                 {"type": "tool_use", "id": "t", "name": tool, "input": {target_key: target}},
             ]},
         }))
-    p.write_text("\n".join(lines) + "\n")
+    # Bytes, not write_text: on Windows the latter turns each "\n" into
+    # "\r\n", which shifts every byte offset this file asserts on. Claude
+    # Code writes transcripts with bare LF.
+    p.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
     return str(p)
 
 
@@ -59,13 +62,13 @@ def test_offset_advances_and_second_read_sees_only_new_work(tmp_path):
     first, offset = activity_for(session, 0)
     assert first.tool == "Read"
 
-    with open(path, "a") as fh:
+    with open(path, "ab") as fh:
         fh.write(json.dumps({
             "type": "assistant", "timestamp": "2026-09-13T14:03:00.000Z",
             "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "id": "t2", "name": "Bash",
                  "input": {"description": "Run tests"}}]},
-        }) + "\n")
+        }).encode("utf-8") + b"\n")
     second, new_offset = activity_for(session, offset)
 
     assert second.tool == "Bash"

@@ -15,9 +15,21 @@ def _line(**fields) -> str:
     return json.dumps(fields) + "\n"
 
 
+def _write(path, text: str) -> None:
+    """Write *text* with LF endings, whatever the platform.
+
+    `Path.write_text` translates "\n" to "\r\n" on Windows, which adds a
+    byte per line and makes every offset assertion here off by the line count
+    (CI: `assert 31 == 30`). Claude Code writes transcripts with bare LF, so
+    the fixture has to as well — the reader was right both times; the fixture's
+    size arithmetic was what broke.
+    """
+    path.write_bytes(text.encode("utf-8"))
+
+
 def test_cold_start_reads_whole_file_when_small(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1) + _line(type="assistant", n=2))
+    _write(p, _line(type="assistant", n=1) + _line(type="assistant", n=2))
 
     events, offset = read_tail(str(p), 0)
 
@@ -27,11 +39,11 @@ def test_cold_start_reads_whole_file_when_small(tmp_path):
 
 def test_second_read_returns_only_the_delta(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1))
+    _write(p, _line(type="assistant", n=1))
     _, offset = read_tail(str(p), 0)
 
-    with p.open("a") as fh:
-        fh.write(_line(type="assistant", n=2))
+    with p.open("ab") as fh:
+        fh.write((_line(type="assistant", n=2)).encode())
     events, new_offset = read_tail(str(p), offset)
 
     assert [e["n"] for e in events] == [2]
@@ -40,7 +52,7 @@ def test_second_read_returns_only_the_delta(tmp_path):
 
 def test_nothing_new_returns_empty_and_same_offset(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1))
+    _write(p, _line(type="assistant", n=1))
     _, offset = read_tail(str(p), 0)
 
     events, new_offset = read_tail(str(p), offset)
@@ -52,7 +64,7 @@ def test_nothing_new_returns_empty_and_same_offset(tmp_path):
 def test_partial_trailing_line_is_not_consumed(tmp_path):
     """A child mid-write must not cost us the line it is writing."""
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1) + '{"type": "assistant", "n": 2')
+    _write(p, _line(type="assistant", n=1) + '{"type": "assistant", "n": 2')
 
     events, offset = read_tail(str(p), 0)
 
@@ -63,11 +75,11 @@ def test_partial_trailing_line_is_not_consumed(tmp_path):
 def test_completed_line_arrives_on_the_next_read(tmp_path):
     p = tmp_path / "t.jsonl"
     first = _line(type="assistant", n=1)
-    p.write_text(first + '{"type": "assistant", "n": 2')
+    _write(p, first + '{"type": "assistant", "n": 2')
     _, offset = read_tail(str(p), 0)
 
-    with p.open("a") as fh:
-        fh.write("}\n")
+    with p.open("ab") as fh:
+        fh.write(("}\n").encode())
     events, _ = read_tail(str(p), offset)
 
     assert [e["n"] for e in events] == [2]
@@ -76,7 +88,7 @@ def test_completed_line_arrives_on_the_next_read(tmp_path):
 def test_cold_start_windows_a_large_file_and_drops_the_partial_head(tmp_path):
     """A large file is read through a narrow tail window, not in full."""
     p = tmp_path / "t.jsonl"
-    p.write_text("".join(_line(type="assistant", n=i, pad="x" * 200) for i in range(400)))
+    _write(p, "".join(_line(type="assistant", n=i, pad="x" * 200) for i in range(400)))
     size = p.stat().st_size
     assert size > 4096, "fixture must exceed the window for this to mean anything"
 
@@ -110,7 +122,7 @@ def test_cold_start_drops_a_mid_line_cut_even_when_the_remainder_still_parses(tm
     widths = {len(l.encode()) for l in lines}
     assert len(widths) == 1, "fixture must be fixed-width to place the cut precisely"
     line_width = widths.pop()
-    p.write_text("".join(lines))
+    _write(p, "".join(lines))
     size = p.stat().st_size
 
     # Land 1 byte into line 15's 3-space indent (true start of line 15 is at
@@ -134,7 +146,7 @@ def test_cold_start_on_an_exact_line_boundary_keeps_every_line(tmp_path):
     widths = {len(l.encode()) for l in lines}
     assert len(widths) == 1, "fixture must be fixed-width for an exact boundary to be constructible"
     line_width = widths.pop()
-    p.write_text("".join(lines))
+    _write(p, "".join(lines))
 
     window = 5 * line_width  # boundary falls exactly between lines 14 and 15
     events, offset = read_tail(str(p), 0, window=window)
@@ -146,7 +158,7 @@ def test_cold_start_on_an_exact_line_boundary_keeps_every_line(tmp_path):
 def test_window_zero_or_negative_still_completes_the_cold_start(tmp_path):
     """A non-positive window must not stall the reader at offset 0 forever."""
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(n=1) + _line(n=2))
+    _write(p, _line(n=1) + _line(n=2))
 
     for window in (0, -1, -100000):
         events, offset = read_tail(str(p), 0, window=window)
@@ -156,10 +168,10 @@ def test_window_zero_or_negative_still_completes_the_cold_start(tmp_path):
 
 def test_truncated_file_resets_and_rereads(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text("".join(_line(type="assistant", n=i) for i in range(10)))
+    _write(p, "".join(_line(type="assistant", n=i) for i in range(10)))
     _, offset = read_tail(str(p), 0)
 
-    p.write_text(_line(type="assistant", n=99))
+    _write(p, _line(type="assistant", n=99))
     events, new_offset = read_tail(str(p), offset)
 
     assert [e["n"] for e in events] == [99]
@@ -168,7 +180,7 @@ def test_truncated_file_resets_and_rereads(tmp_path):
 
 def test_invalid_json_line_is_skipped(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1) + "not json\n" + _line(type="assistant", n=2))
+    _write(p, _line(type="assistant", n=1) + "not json\n" + _line(type="assistant", n=2))
 
     events, _ = read_tail(str(p), 0)
 
@@ -178,7 +190,7 @@ def test_invalid_json_line_is_skipped(tmp_path):
 def test_non_object_json_line_is_skipped(tmp_path):
     """Valid JSON that is not a dict would break every consumer downstream."""
     p = tmp_path / "t.jsonl"
-    p.write_text(_line(type="assistant", n=1) + "[1, 2, 3]\n" + '"a string"\n')
+    _write(p, _line(type="assistant", n=1) + "[1, 2, 3]\n" + '"a string"\n')
 
     events, _ = read_tail(str(p), 0)
 
@@ -194,7 +206,7 @@ def test_missing_file_returns_empty(tmp_path):
 
 def test_empty_file_returns_empty(tmp_path):
     p = tmp_path / "t.jsonl"
-    p.write_text("")
+    _write(p, "")
 
     events, offset = read_tail(str(p), 0)
 
@@ -219,7 +231,7 @@ def test_transient_stat_failure_holds_the_bookmark_and_does_not_replay(tmp_path)
     """
     p = tmp_path / "t.jsonl"
     moved = tmp_path / "t.jsonl.moved"
-    p.write_text(_line(i=1))
+    _write(p, _line(i=1))
     events, offset = read_tail(str(p), 0)
     assert [e["i"] for e in events] == [1]
     assert offset > 0
@@ -233,3 +245,30 @@ def test_transient_stat_failure_holds_the_bookmark_and_does_not_replay(tmp_path)
     after_events, after_offset = read_tail(str(p), during_offset)
     assert after_events == [], "the event already consumed before the outage must not be replayed"
     assert after_offset == offset
+
+
+def test_crlf_line_endings_are_read_without_losing_events(tmp_path):
+    """A transcript with CRLF endings still parses, offsets and all.
+
+    Claude Code writes bare LF, so this is not the shape the reader meets in
+    production — but CI proved the distinction matters: the fixtures here
+    originally used `Path.write_text`, which silently becomes CRLF on Windows,
+    and three tests failed with `assert 31 == 30` (one byte per line). The
+    reader was correct both times; only the fixtures' size arithmetic was
+    wrong. This pins that, so a future CRLF failure is read as a fixture bug
+    and not chased into the reader.
+    """
+    p = tmp_path / "crlf.jsonl"
+    body = "".join(_line(type="assistant", n=i) for i in range(3))
+    p.write_bytes(body.replace("\n", "\r\n").encode())
+
+    events, offset = read_tail(str(p), 0)
+
+    assert [e["n"] for e in events] == [0, 1, 2]
+    assert offset == p.stat().st_size, "the offset is the file's, not Python's idea of it"
+
+    with p.open("ab") as fh:
+        fh.write(_line(type="assistant", n=3).replace("\n", "\r\n").encode())
+    more, _ = read_tail(str(p), offset)
+
+    assert [e["n"] for e in more] == [3]

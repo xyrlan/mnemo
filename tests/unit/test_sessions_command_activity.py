@@ -24,13 +24,15 @@ def _args(**kw):
 @pytest.fixture
 def transcript(tmp_path):
     p = tmp_path / "child.jsonl"
-    p.write_text(json.dumps({
+    # write_bytes, not write_text: Windows would turn the "\n" into "\r\n"
+    # and shift the byte offsets the watch path bookmarks.
+    p.write_bytes(json.dumps({
         "type": "assistant",
         "timestamp": "2026-09-13T14:02:11.000Z",
         "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "t", "name": "Edit",
              "input": {"file_path": "/r/dispatch.py"}}]},
-    }) + "\n")
+    }).encode("utf-8") + b"\n")
     return p
 
 
