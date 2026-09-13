@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mnemo.core import dispatch
+from mnemo.core import contracts, dispatch
 
 
 # --- the mapping: a naming convention, not a new state file ----------------
@@ -122,3 +122,55 @@ def test_prompt_tolerates_an_empty_body() -> None:
     prompt = dispatch.build_prompt(187, title="cross-type dupes", body="")
 
     assert "gh issue view 187" in prompt
+
+
+# --- the contract piece prompt: a boundary, never an approach --------------
+
+
+PIECE = contracts.Piece(
+    slug="parser",
+    files=["src/mnemo/core/contracts.py"],
+    exposes=["`parse_contract(path) -> Contract`"],
+    consumes=[("`spawn_child`", "seam")],
+)
+
+
+def test_prompt_names_the_file_boundary() -> None:
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch")
+    assert "src/mnemo/core/contracts.py" in text
+
+
+def test_prompt_states_what_the_piece_must_deliver() -> None:
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch")
+    assert "`parse_contract(path) -> Contract`" in text
+
+
+def test_prompt_says_a_consumed_signature_may_be_assumed() -> None:
+    """The forward reference resolves by signature — the child does not wait."""
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch")
+    assert "`spawn_child`" in text
+    assert "seam" in text
+
+
+def test_prompt_carries_the_branch() -> None:
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch")
+    assert "feat/contract-dispatch/parser" in text
+
+
+def test_prompt_omits_the_consumes_section_when_there_is_nothing_to_consume() -> None:
+    """A piece with no forward references must not be told to assume nothing exists."""
+    alone = contracts.Piece(slug="solo", files=["a.py"], exposes=["`f()`"])
+    text = dispatch.build_piece_prompt(alone, feature="demo")
+    assert "assume" not in text.lower()
+
+
+def test_build_piece_prompt_takes_no_approach() -> None:
+    """The #187 refusal, preserved: a prompt cannot prescribe a solution.
+
+    A boundary ("do not touch X") is scope. An approach ("use a regex") is a
+    solution, and passing one can override a correct refusal.
+    """
+    import inspect
+
+    params = inspect.signature(dispatch.build_piece_prompt).parameters
+    assert "approach" not in params

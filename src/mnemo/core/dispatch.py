@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from mnemo.core import contracts
+
 WORKTREE_SUFFIX = "-wt-"
 
 # `<anything>-wt-<digits>` or `<anything>-wt-c-<slug>`, optional trailing
@@ -197,6 +199,66 @@ def build_prompt(issue: int, *, title: str, body: str) -> str:
         title=title or f"issue #{issue}",
         body=(body or "").strip() or "(empty — read it with gh)",
         branch=branch_name(issue),
+    )
+
+
+_PIECE_PROMPT = """You are building one piece of the feature "{feature}": {slug}
+
+The decomposition was reviewed and agreed before you started. Your piece:
+
+**Files you may change** — this is a hard boundary. Work outside it belongs to
+another child working in parallel right now, and editing it causes a conflict
+that costs more than the parallelism saved:
+{files}
+
+**What your piece must deliver** — other pieces are being written against these
+signatures at this moment, so they are not negotiable without saying so:
+{exposes}
+
+{consumes}You are on branch `{branch}` in your own worktree.
+
+Nothing about *how* to build this is specified, deliberately. If the contract's
+boundary turns out to be wrong — the work does not divide where it says, or a
+signature cannot be delivered as written — stop and say so rather than widening
+your boundary to make it fit.
+
+Run the full test suite before you finish. Do not merge or push without asking.
+"""
+
+_CONSUMES_PROMPT = """**What you may assume exists** — another piece is
+delivering these. They may not exist in your worktree yet: write against the
+signature, stub locally if you must, and the merge resolves it. Do not wait,
+and do not implement them yourself:
+{items}
+
+"""
+
+
+def build_piece_prompt(piece: contracts.Piece, *, feature: str) -> str:
+    """A contract piece's opening prompt: its boundary and its interfaces.
+
+    Like :func:`build_prompt`, this takes no "approach" parameter, and for the
+    same reason (see that function's rationale). The distinction the contract
+    relies on is thin but real: *"do not touch X, consume ``Y.parse()``"* is a
+    **boundary** and belongs here, while *"use a regex to parse it"* is an
+    **approach** and must not be expressible. Blurring the two reintroduces the
+    #187 failure at N children instead of one.
+    """
+    consumes = ""
+    if piece.consumes:
+        items = "\n".join(
+            f"- {signature} — from the piece `{owner}`"
+            for signature, owner in piece.consumes
+        )
+        consumes = _CONSUMES_PROMPT.format(items=items)
+
+    return _PIECE_PROMPT.format(
+        feature=feature,
+        slug=piece.slug,
+        files="\n".join(f"- {path}" for path in piece.files),
+        exposes="\n".join(f"- {item}" for item in piece.exposes) or "- (nothing)",
+        consumes=consumes,
+        branch=branch_name(piece.slug, feature=feature),
     )
 
 
