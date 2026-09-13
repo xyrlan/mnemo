@@ -84,6 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="learn from every session that was answered while blocked, then print what it taught",
     )
+    session_p = sub.add_parser(
+        "session", help="recent actions of one background session")
+    session_p.add_argument("short_id", metavar="SHORT_ID",
+                           help="session short id (a unique prefix is enough)")
+    session_p.add_argument("--limit", type=int, default=15,
+                           help="how many recent actions to show (default: 15)")
     dispatch_p = sub.add_parser(
         "dispatch",
         help="spawn a background child per issue, or per piece of a contract")

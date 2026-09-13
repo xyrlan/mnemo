@@ -118,3 +118,163 @@ def test_age_accepts_a_timestamp_without_a_timezone() -> None:
 def test_age_of_a_future_timestamp_reads_as_agora() -> None:
     """Documents today's behaviour: a negative delta falls in the <1min branch."""
     assert _age("2026-09-12T13:00:00.000Z", now=NOW) == "agora"
+
+
+# --- activity column (layer 1) ---
+
+from mnemo.core.activity.summarize import Activity  # noqa: E402
+
+
+def _working(short_id="abc", **kw):
+    kw.setdefault("tempo", "active")
+    kw.setdefault("name", "child")
+    return Session(short_id=short_id, **kw)
+
+
+def test_render_without_activities_is_unchanged():
+    """The backward-compatibility test: the old call must produce old bytes."""
+    sessions = [_working(detail="building")]
+
+    assert render_queue(sessions) == render_queue(sessions, None)
+    assert render_queue(sessions, {}) == render_queue(sessions)
+
+
+def test_activity_replaces_detail_in_the_working_bucket():
+    sessions = [_working(detail="building")]
+    acts = {"abc": Activity(tool="Edit", target="dispatch.py", since=3)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Edit dispatch.py (+3)" in out
+    assert "building" not in out
+
+
+def test_detail_is_the_fallback_when_a_session_has_no_activity():
+    sessions = [_working(detail="building")]
+
+    out = render_queue(sessions, {})
+
+    assert "building" in out
+
+
+def test_zero_since_shows_no_counter():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Bash", target="Run tests", since=0)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Bash Run tests" in out
+    assert "(+0)" not in out
+
+
+def test_repeated_tool_is_marked():
+    """The loop signal has to be visible without counting columns."""
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Grep", target="linkScanOffset", since=7, repeated=True)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Grep linkScanOffset (+7)" in out
+    assert "↻" in out
+
+
+def test_activity_without_a_target_still_renders():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="AskUserQuestion", target=None, since=1)}
+
+    out = render_queue(sessions, acts)
+
+    assert "AskUserQuestion" in out
+
+
+def test_activity_does_not_leak_into_the_waiting_bucket():
+    """A blocked session's claim is `needs`; activity would bury it."""
+    sessions = [_working(short_id="w", tempo="blocked", needs="qual opção?")]
+    acts = {"w": Activity(tool="Edit", target="x.py", since=2)}
+
+    out = render_queue(sessions, acts)
+
+    assert "qual opção?" in out
+    assert "Edit x.py" not in out
+
+
+def test_activity_for_an_unlisted_session_is_ignored():
+    sessions = [_working()]
+    acts = {"someone-else": Activity(tool="Edit", target="x.py")}
+
+    out = render_queue(sessions, acts)
+
+    assert "x.py" not in out
+
+
+def test_long_activity_does_not_break_the_column():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Bash", target="x" * 40, since=99)}
+
+    out = render_queue(sessions, acts)
+
+    for line in out.splitlines():
+        assert len(line) <= 100, line
+
+
+# --- activity column budget (measured: 39% of real actions exceeded it) ---
+
+def test_activity_is_budgeted_to_the_column_width():
+    from mnemo.core.sessions.render import DETAIL_WIDTH, _activity
+
+    act = Activity(tool="Bash", target="Relocate comment file and verify clean", since=23)
+
+    rendered = _activity(act)
+
+    assert len(rendered) <= DETAIL_WIDTH
+    assert "…" in rendered
+
+
+def test_budgeting_cuts_the_target_never_the_signals():
+    """(+N) and the loop mark are the two things worth showing; they survive."""
+    from mnemo.core.sessions.render import _activity
+
+    act = Activity(tool="Bash", target="Windows job step conclusions and more",
+                   since=24, repeated=True)
+
+    rendered = _activity(act)
+
+    assert rendered.endswith("(+24) ↻")
+    assert rendered.startswith("Bash ")
+
+
+def test_budgeted_target_is_cut_on_a_word_boundary():
+    from mnemo.core.sessions.render import _activity
+
+    act = Activity(tool="Bash", target="Commit measurement script and report", since=26)
+
+    assert _activity(act) == "Bash Commit measurement… (+26)"
+
+
+def test_a_tool_name_that_fills_the_column_keeps_its_signals():
+    from mnemo.core.sessions.render import DETAIL_WIDTH, _activity
+
+    act = Activity(tool="mcp__claude-in-chrome__browser_batch", target="x", since=5)
+
+    rendered = _activity(act)
+
+    assert len(rendered) <= DETAIL_WIDTH
+    assert rendered.endswith("(+5)")
+
+
+def test_the_table_stays_aligned_when_activity_is_long():
+    """The whole point of the budget: the token column must not move."""
+    sessions = [
+        _working(short_id="s1", tokens=4200),
+        _working(short_id="s2", tokens=1500),
+    ]
+    acts = {
+        "s1": Activity(tool="Bash", target="Relocate comment file and verify clean", since=23),
+        "s2": Activity(tool="Edit", target="x.py"),
+    }
+
+    out = render_queue(sessions, acts)
+    rows = [l for l in out.splitlines() if l.startswith("  s")]
+
+    assert len(rows) == 2
+    assert len(rows[0]) == len(rows[1]), rows

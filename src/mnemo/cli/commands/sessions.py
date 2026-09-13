@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 
 from mnemo.cli.parser import command
+from mnemo.core.activity import activities_for
 
 
 def _consume_unblocks() -> int:
@@ -79,17 +80,37 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         print(_json.dumps([asdict(s) for s in _read()], indent=2, ensure_ascii=False))
         return 0
 
+    # In memory, for the life of this process. An offset only has value inside
+    # a live watch; a single invocation wants current state, not a delta.
+    #
+    # `previous` is a one-element list, not a bare dict, because `_activities`
+    # both reads and replaces it on every tick. A plain name would need
+    # `nonlocal`; the list keeps the closure honest with one fewer keyword.
+    offsets = {}
+    previous = [{}]
+
+    def _activities(found):
+        """Never let a transcript read cost us the queue itself."""
+        try:
+            previous[0] = activities_for(found, offsets, previous=previous[0])
+        except Exception:
+            previous[0] = {}
+        return previous[0]
+
     if bool(getattr(args, "watch", False)):
         # Only a terminal understands the escape; redirected to a log it would
         # be raw bytes on every redraw.
         clear = "\033[2J\033[H" if sys.stdout.isatty() else ""  # clear + home
         try:
             while True:
+                found = _read()
+                acts = _activities(found)
                 print(clear, end="")
-                print(render_queue(_read()))
+                print(render_queue(found, acts))
                 time.sleep(2)
         except KeyboardInterrupt:
             return 0
 
-    print(render_queue(_read()))
+    found = _read()
+    print(render_queue(found, _activities(found)))
     return 0

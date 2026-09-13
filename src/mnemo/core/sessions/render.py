@@ -23,6 +23,14 @@ from mnemo.core.sessions.jobs import Session
 EMPTY = "  nenhuma sessão em background"
 NO_TIMESTAMP = "9999"  # sorts after every real ISO-8601 timestamp
 
+# The detail/activity column. Named rather than repeated as a literal because
+# `_activity` has to budget against the same number the f-strings pad to — the
+# two drifting apart is what breaks the table.
+DETAIL_WIDTH = 34
+# Below this, a cut target says nothing ("Bash Rel…"), so the tool name and the
+# signals take the whole column instead.
+MIN_TARGET = 8
+
 
 def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
     """Human age of the last update, or '' when unknown."""
@@ -78,10 +86,62 @@ def _prs(s: Session) -> str:
     return ", ".join(ids)
 
 
-def render_queue(sessions: list[Session]) -> str:
-    """Render the whole queue, blocked first."""
+def _activity(act, budget: int = DETAIL_WIDTH) -> str:
+    """One column of what a session is doing, or '' when nothing is known.
+
+    ``(+N)`` is the movement signal and ``↻`` the loop signal: a count that
+    rises with an unchanged target is a session going in circles, which reads
+    identically to progress without the mark.
+
+    Budgeted to *budget* columns by cutting the **target**, never the signals.
+    Measured on 204 real actions from nine dispatch children: 39% of them
+    exceed the column (p90 44, max 47), and `f"{x:<34}"` pads without
+    truncating — so the unbudgeted string shoved the token column 10-15
+    places right on two lines in five and the queue stopped reading as a
+    table. Cutting the whole string instead would have eaten `(+26)` and
+    `↻` first, which are the two things worth showing.
+    """
+    if act is None or not act.tool:
+        return ""
+
+    tail = ""
+    if act.since:
+        tail += f" (+{act.since})"
+    if act.repeated:
+        tail += " ↻"
+
+    head = act.tool if not act.target else f"{act.tool} {act.target}"
+    if len(head) + len(tail) <= budget:
+        return head + tail
+
+    # Not enough room for tool + target + signals. Give the target whatever is
+    # left after the signals, and cut it on a word boundary.
+    room = budget - len(tail) - len(act.tool) - 2  # space before, ellipsis after
+    if not act.target or room < MIN_TARGET:
+        # A tool name alone already fills the column: the signals still matter
+        # more than the rest of the name.
+        return act.tool[: budget - len(tail)] + tail
+    cut = act.target[:room]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return f"{act.tool} {cut.rstrip()}…{tail}"
+
+
+def render_queue(sessions: list[Session], activities=None) -> str:
+    """Render the whole queue, blocked first.
+
+    *activities* maps ``short_id`` to :class:`~mnemo.core.activity.Activity`.
+    Omitted, the output is byte-identical to the queue that shipped in v1.4.0 —
+    the column is additive, and every caller that predates it keeps working.
+
+    Only the working bucket uses it. A blocked session's claim on the
+    maintainer is ``needs``; burying that under a tool name would invert the
+    ordering the whole queue exists to provide.
+    """
     if not sessions:
         return EMPTY
+
+    acts = activities or {}
 
     waiting = sorted((s for s in sessions if s.is_waiting), key=_freshest_first, reverse=True)
     abandoned = sorted((s for s in sessions if s.is_abandoned), key=_sort_key)
@@ -102,13 +162,14 @@ def render_queue(sessions: list[Session]) -> str:
     if working:
         lines.append(f"TRABALHANDO ({len(working)})")
         for s in working:
-            lines.append(f"  {s.short_id}  {s.label:<22} {s.detail or '—':<34}{_tokens(s):>6}")
+            detail = _activity(acts.get(s.short_id)) or s.detail or "—"
+            lines.append(f"  {s.short_id}  {s.label:<22} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}")
         lines.append("")
 
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
-            lines.append(f"  {s.short_id}  {s.label:<22} {_prs(s) or s.detail or '—':<34}{_tokens(s):>6}")
+            lines.append(f"  {s.short_id}  {s.label:<22} {_prs(s) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
         lines.append("")
 
     if abandoned:

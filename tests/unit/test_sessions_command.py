@@ -58,7 +58,7 @@ def test_reading_the_queue_sweeps_for_unblocks(monkeypatch, tmp_path: Path) -> N
         "mnemo.core.sessions.jobs.read_sessions",
         lambda root=None, *, cwd=None: found,
     )
-    monkeypatch.setattr("mnemo.core.sessions.render.render_queue", lambda s: "queue")
+    monkeypatch.setattr("mnemo.core.sessions.render.render_queue", lambda s, a=None: "queue")
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
     monkeypatch.setattr(
         "mnemo.core.sessions.detector.sweep",
@@ -103,7 +103,7 @@ def test_an_unavailable_vault_still_prints_the_queue(monkeypatch, capsys) -> Non
         "mnemo.core.sessions.jobs.read_sessions",
         lambda root=None, *, cwd=None: [],
     )
-    monkeypatch.setattr("mnemo.core.sessions.render.render_queue", lambda s: "the queue")
+    monkeypatch.setattr("mnemo.core.sessions.render.render_queue", lambda s, a=None: "the queue")
     monkeypatch.setattr("mnemo.cli._resolve_vault", boom)
 
     args = argparse.Namespace(json=False, watch=False, **{"all": True})
