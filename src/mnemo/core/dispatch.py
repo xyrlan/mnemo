@@ -211,8 +211,12 @@ another child working in parallel right now, and editing it causes a conflict
 that costs more than the parallelism saved:
 {files}
 
+New files are yours to create when this piece needs them — a test module, a
+helper — as long as nothing outside the boundary has to change to reach them.
+
 **What your piece must deliver** — other pieces are being written against these
-signatures at this moment, so they are not negotiable without saying so:
+signatures right now, so do not change them silently. If one cannot be
+delivered as written, stop and say so:
 {exposes}
 
 {consumes}You are on branch `{branch}` in your own worktree.
@@ -225,10 +229,10 @@ your boundary to make it fit.
 Run the full test suite before you finish. Do not merge or push without asking.
 """
 
-_CONSUMES_PROMPT = """**What you may assume exists** — another piece is
-delivering these. They may not exist in your worktree yet: write against the
-signature, stub locally if you must, and the merge resolves it. Do not wait,
-and do not implement them yourself:
+_CONSUMES_PROMPT = """**What you may assume exists** — another piece is delivering
+these. They may not exist in your worktree yet: write against the signature,
+stub locally if you must, and the merge resolves it. Do not wait for them, and
+do not implement them yourself:
 {items}
 
 """
