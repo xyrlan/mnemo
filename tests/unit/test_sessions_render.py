@@ -118,3 +118,100 @@ def test_age_accepts_a_timestamp_without_a_timezone() -> None:
 def test_age_of_a_future_timestamp_reads_as_agora() -> None:
     """Documents today's behaviour: a negative delta falls in the <1min branch."""
     assert _age("2026-09-12T13:00:00.000Z", now=NOW) == "agora"
+
+
+# --- activity column (layer 1) ---
+
+from mnemo.core.activity.summarize import Activity  # noqa: E402
+
+
+def _working(short_id="abc", **kw):
+    kw.setdefault("tempo", "active")
+    kw.setdefault("name", "child")
+    return Session(short_id=short_id, **kw)
+
+
+def test_render_without_activities_is_unchanged():
+    """The backward-compatibility test: the old call must produce old bytes."""
+    sessions = [_working(detail="building")]
+
+    assert render_queue(sessions) == render_queue(sessions, None)
+    assert render_queue(sessions, {}) == render_queue(sessions)
+
+
+def test_activity_replaces_detail_in_the_working_bucket():
+    sessions = [_working(detail="building")]
+    acts = {"abc": Activity(tool="Edit", target="dispatch.py", since=3)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Edit dispatch.py (+3)" in out
+    assert "building" not in out
+
+
+def test_detail_is_the_fallback_when_a_session_has_no_activity():
+    sessions = [_working(detail="building")]
+
+    out = render_queue(sessions, {})
+
+    assert "building" in out
+
+
+def test_zero_since_shows_no_counter():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Bash", target="Run tests", since=0)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Bash Run tests" in out
+    assert "(+0)" not in out
+
+
+def test_repeated_tool_is_marked():
+    """The loop signal has to be visible without counting columns."""
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Grep", target="linkScanOffset", since=7, repeated=True)}
+
+    out = render_queue(sessions, acts)
+
+    assert "Grep linkScanOffset (+7)" in out
+    assert "↻" in out
+
+
+def test_activity_without_a_target_still_renders():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="AskUserQuestion", target=None, since=1)}
+
+    out = render_queue(sessions, acts)
+
+    assert "AskUserQuestion" in out
+
+
+def test_activity_does_not_leak_into_the_waiting_bucket():
+    """A blocked session's claim is `needs`; activity would bury it."""
+    sessions = [_working(short_id="w", tempo="blocked", needs="qual opção?")]
+    acts = {"w": Activity(tool="Edit", target="x.py", since=2)}
+
+    out = render_queue(sessions, acts)
+
+    assert "qual opção?" in out
+    assert "Edit x.py" not in out
+
+
+def test_activity_for_an_unlisted_session_is_ignored():
+    sessions = [_working()]
+    acts = {"someone-else": Activity(tool="Edit", target="x.py")}
+
+    out = render_queue(sessions, acts)
+
+    assert "x.py" not in out
+
+
+def test_long_activity_does_not_break_the_column():
+    sessions = [_working()]
+    acts = {"abc": Activity(tool="Bash", target="x" * 40, since=99)}
+
+    out = render_queue(sessions, acts)
+
+    for line in out.splitlines():
+        assert len(line) <= 100, line

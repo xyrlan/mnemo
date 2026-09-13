@@ -78,10 +78,38 @@ def _prs(s: Session) -> str:
     return ", ".join(ids)
 
 
-def render_queue(sessions: list[Session]) -> str:
-    """Render the whole queue, blocked first."""
+def _activity(act) -> str:
+    """One column of what a session is doing, or '' when nothing is known.
+
+    ``(+N)`` is the movement signal and ``↻`` the loop signal: a count that
+    rises with an unchanged target is a session going in circles, which reads
+    identically to progress without the mark.
+    """
+    if act is None or not act.tool:
+        return ""
+    text = act.tool if not act.target else f"{act.tool} {act.target}"
+    if act.since:
+        text += f" (+{act.since})"
+    if act.repeated:
+        text += " ↻"
+    return text
+
+
+def render_queue(sessions: list[Session], activities=None) -> str:
+    """Render the whole queue, blocked first.
+
+    *activities* maps ``short_id`` to :class:`~mnemo.core.activity.Activity`.
+    Omitted, the output is byte-identical to the queue that shipped in v1.4.0 —
+    the column is additive, and every caller that predates it keeps working.
+
+    Only the working bucket uses it. A blocked session's claim on the
+    maintainer is ``needs``; burying that under a tool name would invert the
+    ordering the whole queue exists to provide.
+    """
     if not sessions:
         return EMPTY
+
+    acts = activities or {}
 
     waiting = sorted((s for s in sessions if s.is_waiting), key=_freshest_first, reverse=True)
     abandoned = sorted((s for s in sessions if s.is_abandoned), key=_sort_key)
@@ -102,7 +130,8 @@ def render_queue(sessions: list[Session]) -> str:
     if working:
         lines.append(f"TRABALHANDO ({len(working)})")
         for s in working:
-            lines.append(f"  {s.short_id}  {s.label:<22} {s.detail or '—':<34}{_tokens(s):>6}")
+            detail = _activity(acts.get(s.short_id)) or s.detail or "—"
+            lines.append(f"  {s.short_id}  {s.label:<22} {detail:<34}{_tokens(s):>6}")
         lines.append("")
 
     if done:
