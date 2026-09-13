@@ -45,13 +45,25 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     """Spawn a child per issue. Returns 1 if any of them failed to start."""
     from mnemo.core import dispatch as core
 
+    issues = list(getattr(args, "issues", []) or [])
+    contract_path = getattr(args, "contract", None)
+
+    # Before the git check, not after: printing the format spawns nothing, and
+    # it is the one thing someone runs *before* they have a repo to dispatch
+    # from. Refusing it for want of a git root would be refusing documentation.
+    if getattr(args, "example", False):
+        return _print_example(contract_path)
+
     root = _repo_root()
     if root is None:
         print("not inside a git repository — dispatch needs one to branch from")
         return 1
 
-    issues = list(getattr(args, "issues", []) or [])
-    contract_path = getattr(args, "contract", None)
+    if contract_path == "":
+        # `--contract` with nargs="?" and no value. argparse cannot tell the
+        # maintainer what is missing; this can.
+        print("--contract needs a PATH, or --example to print the format")
+        return 1
 
     if issues and contract_path:
         # Both name the children, and they name different ones. Guessing which
@@ -74,6 +86,37 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         return 0
 
     return _report(core.dispatch_all(issues, repo_root=root))
+
+
+def _print_example(contract_path: str | None) -> int:
+    """Emit the canonical example contract on stdout, and nothing else.
+
+    Printed verbatim and alone so the output is a usable file:
+
+        mnemo dispatch --contract --example > docs/contract.md
+
+    A banner or a trailing hint would have to be deleted by hand before the
+    file parsed, which is the same friction this closes. The hints go to
+    stderr, where a redirect leaves them on the terminal.
+    """
+    import sys
+
+    from mnemo.core import contracts
+
+    if contract_path:
+        # `--contract some/path --example` names both a file to read and a
+        # format to print. Refusing beats silently ignoring one of them.
+        print("--example prints the format; it does not take a PATH")
+        return 1
+
+    print(contracts.EXAMPLE, end="")
+    print(
+        f"\nWritten by the decomposing-for-dispatch skill ({contracts.SKILL}).\n"
+        "Redirect this to a file, edit it, then:\n"
+        "    mnemo dispatch --contract <file> --dry-run",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> int:

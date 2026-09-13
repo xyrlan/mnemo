@@ -155,8 +155,16 @@ def test_piece_without_files_is_refused(tmp_path: Path) -> None:
 
 def test_missing_verdict_is_refused(tmp_path: Path) -> None:
     text = VALID.replace("verdict: parallel\n", "")
-    with pytest.raises(contracts.ContractError, match="verdict"):
+    with pytest.raises(contracts.ContractError) as caught:
         contracts.parse_contract(write(tmp_path, text))
+    message = str(caught.value)
+    assert "verdict" in message
+    # An *absent* verdict is still a contract with one missing field, so it
+    # keeps the narrow message. This is the case the teaching refusal is most
+    # likely to swallow if its guard is ever widened to `not contract.verdict`
+    # — the file has a feature and pieces, so the reader knows the format and
+    # needs the one-line diagnosis, not the whole shape.
+    assert "not a contract" not in message
 
 
 def test_no_pieces_is_refused(tmp_path: Path) -> None:
@@ -280,3 +288,154 @@ def test_consumes_nothing_still_yields_an_empty_list(tmp_path: Path) -> None:
         text = VALID.replace("- **consumes:** nothing", f"- **consumes:** {sentinel}")
         parsed = contracts.parse_contract(write(tmp_path, text))
         assert parsed.pieces[0].consumes == [], sentinel
+
+
+# --- the format has to be learnable without reading this module ------------
+#
+# #216: the first real contract was hand-written by reading the parser. That
+# worked because the author had it open. These tests pin the three exits that
+# make the format reachable without it — one canonical example, a refusal that
+# shows it, and a pointer to the skill — and, more importantly, pin that the
+# example is *parsed by the parser it documents*. An example that drifts from
+# what `parse_contract` accepts is worse than none: it teaches a shape the
+# command then refuses.
+
+
+def test_example_contract_parses(tmp_path: Path) -> None:
+    """The example must be a contract, not a picture of one.
+
+    This is the whole reason the example lives next to the parser instead of
+    in prose: prose cannot be executed, so it drifts silently. If a future
+    rule refuses this text, either the rule is wrong or the example is stale,
+    and this test fails rather than letting `--example` emit something the
+    command would reject.
+    """
+    contract = contracts.parse_contract(write(tmp_path, contracts.EXAMPLE))
+    assert contract.feature
+    assert contract.verdict == "parallel"
+    assert contract.is_dispatchable
+    assert len(contract.pieces) >= 2, "an example of a decomposition needs a cut"
+
+
+def test_example_demonstrates_every_field(tmp_path: Path) -> None:
+    """A field absent from the example is a field nobody learns exists."""
+    contract = contracts.parse_contract(write(tmp_path, contracts.EXAMPLE))
+    assert any(p.files for p in contract.pieces)
+    assert any(p.exposes for p in contract.pieces)
+    assert any(p.consumes for p in contract.pieces)
+    # The `nothing` sentinel is load-bearing (a leaf piece consumes nothing)
+    # and is not obvious from the grammar, so the example has to show it.
+    assert any(not p.consumes for p in contract.pieces)
+
+
+def test_example_comments_survive_the_parser(tmp_path: Path) -> None:
+    """The example explains itself inline; those comments must not break it.
+
+    A `##` heading is read as a piece slug, so explanatory text cannot use
+    one — it would be refused as an unaddressable slug. The example uses HTML
+    comments and piece-body prose instead. This pins that choice: if the
+    comments ever become headings, the example stops parsing and this fails.
+    """
+    assert "<!--" in contracts.EXAMPLE, "the example has to explain itself"
+    contract = contracts.parse_contract(write(tmp_path, contracts.EXAMPLE))
+    # Every heading in the example became an addressable piece — nothing in it
+    # is a prose `##` that the parser would read as a slug and refuse.
+    headings = [
+        line[3:].strip()
+        for line in contracts.EXAMPLE.splitlines()
+        if line.startswith("## ")
+    ]
+    assert headings, "no piece headings in the example"
+    assert headings == [p.slug for p in contract.pieces]
+    for slug in headings:
+        assert contracts.SLUG_RE.match(slug), slug
+
+
+def test_refusal_of_a_non_contract_teaches_the_shape(tmp_path: Path) -> None:
+    """The likeliest mistake produces the least useful message — fix that.
+
+    Pointing `--contract` at a plan, a spec, or any other markdown file was
+    refused with `verdict must be 'parallel' or 'sequential', got ''`. That
+    is accurate and teaches nothing: the reader does not have a verdict
+    because they do not have a contract. A file with no frontmatter and no
+    pieces is not a contract with a bad field, so it is named as such.
+    """
+    text = "# My Plan\n\nSome notes about what to build.\n"
+    with pytest.raises(contracts.ContractError) as caught:
+        contracts.parse_contract(write(tmp_path, text))
+    message = str(caught.value)
+    assert "not a contract" in message
+    # It shows the shape rather than only naming the failure.
+    assert "feature:" in message and "verdict:" in message
+    assert "- **files:**" in message
+
+
+def test_teaching_refusal_names_the_skill(tmp_path: Path) -> None:
+    """The skill exists and nothing surfaced it — surface it where it is needed."""
+    text = "# My Plan\n\nNotes.\n"
+    with pytest.raises(contracts.ContractError, match="decomposing-for-dispatch"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_a_real_contract_with_one_bad_field_keeps_its_precise_message(
+    tmp_path: Path,
+) -> None:
+    """The teaching refusal must not swallow the precise ones.
+
+    `_validate`'s messages are good when the reader already has a contract —
+    replacing them with a generic "here is the shape" would be a regression.
+    The broad message is for a file that is not a contract at all; a contract
+    with one wrong field still gets the narrow diagnosis.
+    """
+    text = VALID.replace("verdict: parallel", "verdict: maybe")
+    with pytest.raises(contracts.ContractError) as caught:
+        contracts.parse_contract(write(tmp_path, text))
+    message = str(caught.value)
+    assert "'parallel' or 'sequential'" in message
+    assert "not a contract" not in message
+
+
+def test_frontmatter_without_pieces_is_still_diagnosed_precisely(
+    tmp_path: Path,
+) -> None:
+    """Frontmatter present means the author knows what a contract is.
+
+    They got the header right and the sections wrong, so `no pieces` is the
+    useful message; the full shape would bury it.
+    """
+    text = VALID.split("## parser")[0]
+    with pytest.raises(contracts.ContractError, match="no pieces"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_a_prose_heading_is_refused_as_a_slug(tmp_path: Path) -> None:
+    """Documented in SKILL.md, so pin it: `## Notes` is not a free section.
+
+    Every `##` is read as a piece slug, which is why the example explains
+    itself in HTML comments. Someone who writes a contract like an ordinary
+    document hits this, and the slug message is what tells them why.
+    """
+    text = VALID.replace(
+        "## parser", "## Why this decomposition\n\nSome prose.\n\n## parser"
+    )
+    with pytest.raises(contracts.ContractError, match="slug"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
+def test_a_field_before_the_first_piece_is_ignored(tmp_path: Path) -> None:
+    """The silent one, and the reason SKILL.md warns about it.
+
+    A `- **files:**` bullet in the preamble belongs to no piece, so it is
+    dropped rather than misattributed to the first one. Correct — attributing
+    it would invent a boundary nobody wrote — but invisible, so it is pinned
+    here and documented in the skill.
+    """
+    text = VALID.replace(
+        "## parser", "- **files:** stray/preamble.py\n\n## parser"
+    )
+    contract = contracts.parse_contract(write(tmp_path, text))
+    assert "stray/preamble.py" not in contract.pieces[0].files
+    assert contract.pieces[0].files == [
+        "src/mnemo/core/contracts.py",
+        "tests/unit/test_contracts.py",
+    ]
