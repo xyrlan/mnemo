@@ -85,11 +85,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="learn from every session that was answered while blocked, then print what it taught",
     )
     dispatch_p = sub.add_parser(
-        "dispatch", help="spawn a background child per issue, each in its own worktree")
-    dispatch_p.add_argument("issues", nargs="+", type=int, metavar="ISSUE",
+        "dispatch",
+        help="spawn a background child per issue, or per piece of a contract")
+    # nargs="*", not "+": --contract has to be able to stand alone. The two
+    # inputs cannot share a mutually exclusive group (argparse refuses a
+    # variadic positional in one), so the command itself refuses the overlap.
+    dispatch_p.add_argument("issues", nargs="*", type=int, metavar="ISSUE",
                             help="GitHub issue number(s) to dispatch")
+    dispatch_p.add_argument("--contract", metavar="PATH",
+                            help="dispatch each piece of a decomposition contract")
     dispatch_p.add_argument("--dry-run", dest="dry_run", action="store_true",
-                            help="print the worktree and branch per issue without spawning")
+                            help="print the worktree and branch per child without spawning")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")

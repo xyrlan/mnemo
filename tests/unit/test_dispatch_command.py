@@ -91,3 +91,87 @@ def test_refuses_outside_a_git_repo(monkeypatch, capsys) -> None:
 
     assert dispatch_cmd.cmd_dispatch(_args()) == 1
     assert "git" in capsys.readouterr().out.lower()
+
+
+# --- --contract: the same command, named by a decomposition instead ---------
+
+VALID_CONTRACT = """\
+---
+feature: contract-dispatch
+created: 2026-09-12
+verdict: parallel
+---
+
+## parser
+- **files:** src/mnemo/core/contracts.py
+- **exposes:** `parse_contract(path) -> Contract`
+- **consumes:** nothing
+"""
+
+
+def test_contract_flag_parses() -> None:
+    from mnemo.cli.parser import _build_parser
+
+    args = _build_parser().parse_args(["dispatch", "--contract", "c.md"])
+    assert args.contract == "c.md"
+    assert not args.issues
+
+
+def test_contract_and_issues_are_refused_together(monkeypatch, tmp_path, capsys) -> None:
+    """Enforced in the command, not argparse: a variadic positional cannot
+    share a mutually exclusive group with a flag."""
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    args = argparse.Namespace(issues=[193], contract="c.md", dry_run=False)
+    assert dispatch_cmd.cmd_dispatch(args) == 1
+    assert "both" in capsys.readouterr().out.lower()
+
+
+def test_neither_issues_nor_contract_is_refused(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    args = argparse.Namespace(issues=[], contract=None, dry_run=False)
+    assert dispatch_cmd.cmd_dispatch(args) == 1
+    assert "issue" in capsys.readouterr().out.lower()
+
+
+def test_dry_run_prints_pieces_without_spawning(monkeypatch, tmp_path, capsys) -> None:
+    """The paths are pure functions of the contract, so the plan is checkable."""
+    contract = tmp_path / "c.md"
+    contract.write_text(VALID_CONTRACT, encoding="utf-8")
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path / "proj")
+    monkeypatch.setattr(
+        core, "spawn_child",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")),
+    )
+    args = argparse.Namespace(issues=[], contract=str(contract), dry_run=True)
+    assert dispatch_cmd.cmd_dispatch(args) == 0
+    out = capsys.readouterr().out
+    assert "proj-wt-c-parser" in out
+    assert "feat/contract-dispatch/parser" in out
+
+
+def test_unreadable_contract_is_reported_not_raised(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    args = argparse.Namespace(
+        issues=[], contract=str(tmp_path / "missing.md"), dry_run=False
+    )
+    assert dispatch_cmd.cmd_dispatch(args) == 1
+    assert "contract" in capsys.readouterr().out.lower()
+
+
+def test_a_sequential_contract_is_refused_without_spawning(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """``sequential`` is the decomposition saying the work does not divide."""
+    contract = tmp_path / "c.md"
+    contract.write_text(
+        VALID_CONTRACT.replace("verdict: parallel", "verdict: sequential"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path / "proj")
+    monkeypatch.setattr(
+        core, "spawn_child",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")),
+    )
+    args = argparse.Namespace(issues=[], contract=str(contract), dry_run=False)
+    assert dispatch_cmd.cmd_dispatch(args) == 1
+    assert "sequential" in capsys.readouterr().out.lower()
