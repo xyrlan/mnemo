@@ -19,8 +19,10 @@ import pytest
 from mnemo.core import dispatch
 
 # Verbatim ``claude --bg`` stdout, captured from a live spawn on 2026-09-13
-# with stdout on a **pipe** — the escapes below are really emitted there, not
-# an artefact of a terminal.
+# under ``FORCE_COLOR`` — which a background child inherits, so this is what
+# the dispatcher itself sees. Without that variable the same command prints
+# the block with a bare id, which is why an interactive probe of it and the
+# real dispatch disagree about the bytes. Both shapes are exercised below.
 #
 # Two things a hand-written fixture gets wrong, and both are #211's actual
 # lesson. Five lines, not one: the blob's last token is the word ``session``,
@@ -38,6 +40,17 @@ REAL_BG_STDOUT = (
     "\x1b[2m  claude attach a1b2c3d4    open in this terminal\x1b[22m\n"
     "\x1b[2m  claude logs a1b2c3d4      show recent output\x1b[22m\n"
     "\x1b[2m  claude stop a1b2c3d4      stop this session\x1b[22m\n"
+)
+
+# The same block with no color at all — what the command prints when the
+# environment does not ask for it. A real production shape, not a synthetic
+# one: an interactive run sees exactly this.
+PLAIN_BG_STDOUT = (
+    "backgrounded · a1b2c3d4\n"
+    "  claude agents             list sessions\n"
+    "  claude attach a1b2c3d4    open in this terminal\n"
+    "  claude logs a1b2c3d4      show recent output\n"
+    "  claude stop a1b2c3d4      stop this session\n"
 )
 
 # The same block with **every** occurrence colored, including the hints.
@@ -262,7 +275,8 @@ def test_spawn_returns_the_short_id(repo: Path, monkeypatch) -> None:
 @pytest.mark.parametrize(
     "stdout",
     [
-        pytest.param(REAL_BG_STDOUT, id="real-help-block"),
+        pytest.param(REAL_BG_STDOUT, id="real-help-block-colored"),
+        pytest.param(PLAIN_BG_STDOUT, id="real-help-block-uncolored"),
         pytest.param(FULLY_STYLED_BG_STDOUT, id="every-occurrence-colored"),
         pytest.param("  a1b2c3d4  \n", id="bare-id"),
         pytest.param(
@@ -279,8 +293,14 @@ def test_spawn_finds_the_id_whatever_surrounds_it(
     Anchoring on a line number is what broke here once already. A warning on
     stdout would move the block down, and reading "the last token of the
     first line" would then return ``stale`` — a non-id printed as an attach
-    hint, which is #211 again under a different cause. The id is the only
-    8-hex token in the block, so that is what is matched.
+    hint, which is #211 again under a different cause.
+
+    Nor are the bytes fixed: the colored and uncolored blocks here are both
+    real, emitted by the same command depending on whether the environment
+    asks for color (``FORCE_COLOR``, which a background child inherits). A
+    parse tuned to whichever one the author happened to probe is correct on
+    half the runs. The id is the only 8-hex token either way, so that is what
+    is matched.
     """
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")

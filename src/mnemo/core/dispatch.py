@@ -421,10 +421,10 @@ def remove_worktree(
 # characters and is returned as an id addressing no session.
 _SHORT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
-# SGR escapes, which `claude --bg` really does emit around the id even when
-# stdout is a pipe — verified against a live spawn, not assumed. Stripped
+# SGR escapes, which `claude --bg` emits around the id under `FORCE_COLOR`
+# — verified against live spawns with and without it, not assumed. Stripped
 # before matching, because the colored id arrives as the single token
-# ESC[36m5aa54cf8 ESC[39m (no spaces) and so matches no id shape at all.
+# ESC[36m<id>ESC[39m (no spaces) and so matches no id shape at all.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -450,7 +450,8 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
 
     **Reading the id back (#211).** ``--bg`` does not print an id; it prints a
     five-line help block, the id on the first line and three attach/logs/stop
-    hints under it, the first occurrence wrapped in SGR color even on a pipe::
+    hints under it, the first occurrence wrapped in SGR color when the
+    environment asks for color::
 
         backgrounded · \x1b[36m5aa54cf8\x1b[39m
           claude agents             list sessions
@@ -469,11 +470,14 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
     the first line" return the last word of the warning — a non-id handed
     straight to the attach hint, which is this same bug with a new cause.
 
-    Escapes are stripped before matching. The colored first occurrence is the
-    single token ``\x1b[36m5aa54cf8\x1b[39m``, which matches no id shape, so
-    without stripping this would depend on the *hint* lines happening to be
-    unstyled — luck, and the kind that breaks silently when the styling
-    changes.
+    Escapes are stripped before matching, because whether they are there at
+    all depends on the environment: under ``FORCE_COLOR`` the first
+    occurrence is the single token ``\x1b[36m5aa54cf8\x1b[39m``, matching no
+    id shape, and without it the same command prints a bare id. A background
+    child inherits that variable, so the dispatcher and an interactive probe
+    of the same command legitimately see different bytes — the parse must not
+    depend on either. Even with the escapes present, not stripping them would
+    leave this relying on the *hint* lines happening to be unstyled.
 
     When no token matches, this returns ``""`` rather than a guess. A blank
     column reads as missing; ``background.`` reads as an id and sends the
