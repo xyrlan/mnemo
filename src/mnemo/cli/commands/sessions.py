@@ -134,7 +134,12 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         return found
 
     if bool(getattr(args, "json", False)):
-        print(_json.dumps([asdict(s) for s in _read()], indent=2, ensure_ascii=False))
+        # The derived booleans ride along with the raw fields: `asdict` cannot
+        # see a @property, so without this every consumer re-implements the
+        # blocked/waiting rule and gets it wrong the way #222 did. Additive,
+        # so a consumer reading state/tempo/live is untouched.
+        rows = [{**asdict(s), **s.derived()} for s in _read()]
+        print(_json.dumps(rows, indent=2, ensure_ascii=False))
         return 0
 
     # In memory, for the life of this process. An offset only has value inside

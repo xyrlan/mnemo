@@ -548,6 +548,32 @@ mnemo sessions --consume-unblocks  # learn from sessions answered while blocked
 `--watch` clears the screen only on a terminal; redirected to a file it appends
 each redraw instead of writing escape codes into your log.
 
+#### Writing a script against `--json`
+
+Branch on the derived booleans, never on the raw `state` string:
+
+```bash
+mnemo sessions --all --json | jq -r '.[] | select(.is_waiting) | .short_id'
+```
+
+| Field | Means |
+|---|---|
+| `is_waiting` | **Blocked and its process is still alive** — a real claim on you. This is the one you want. |
+| `is_blocked` | Blocked on disk, alive or not. |
+| `is_abandoned` | Blocked, but the process is provably gone. Nothing to answer. |
+| `is_done` | Finished, by process phase (`done` *or* `stopped`). |
+
+The raw fields are still there, and the two enumerations are worth stating
+because guessing at them is what breaks scripts:
+
+- `state` — the process phase: `working`, `blocked`, `done`, `stopped`
+- `tempo` — whether a human is needed: `active`, `idle`, `blocked`
+
+They **overlap**: `state` has its own `blocked`, so the axes are not
+orthogonal and a filter written against `state` can look right and be wrong.
+`is_waiting` in particular is not a one-liner — it is an interaction between
+`tempo` and liveness — so read it rather than rebuilding it.
+
 `--consume-unblocks` is the one that is not about looking. When you answer a
 blocked session, that moment is a correction worth learning from, and mnemo
 records a marker for it; this redeems the markers and prints what it learned.
