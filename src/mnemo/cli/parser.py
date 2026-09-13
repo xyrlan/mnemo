@@ -76,8 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sessions = sub.add_parser("sessions", help="live queue of Claude Code background sessions")
     sessions.add_argument("--json", action="store_true", help="machine-readable listing")
-    sessions.add_argument("--watch", action="store_true", help="redraw every 2s until Ctrl-C (ignored with --json)")
+    sessions.add_argument("--watch", action="store_true", help="redraw until Ctrl-C (ignored with --json; see --interval, --append)")
     sessions.add_argument("--all", action="store_true", help="every repo, not just this one")
+    sessions.add_argument(
+        "--append", action="store_true",
+        help="watch by appending only the rows that changed, instead of clearing the screen",
+    )
+    sessions.add_argument(
+        "--interval", type=float, default=2.0, metavar="SECONDS",
+        help="seconds between watch ticks (default: 2)",
+    )
     sessions.add_argument(
         "--consume-unblocks",
         dest="consume_unblocks",
@@ -90,6 +98,10 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="session short id (a unique prefix is enough)")
     session_p.add_argument("--limit", type=int, default=15,
                            help="how many recent actions to show (default: 15)")
+    session_p.add_argument("--follow", "-f", action="store_true",
+                           help="keep printing new actions as they arrive, until Ctrl-C")
+    session_p.add_argument("--interval", type=float, default=2.0, metavar="SECONDS",
+                           help="seconds between polls when following (default: 2)")
     dispatch_p = sub.add_parser(
         "dispatch",
         help="spawn a background child per issue, or per piece of a contract")
