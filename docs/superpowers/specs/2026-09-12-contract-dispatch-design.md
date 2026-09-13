@@ -233,12 +233,31 @@ In order of risk.
 
 | | issue | contract piece |
 |---|---|---|
-| worktree | `repo-wt-193` | `repo-wt-parser` |
+| worktree | `repo-wt-193` | `repo-wt-c-parser` |
 | branch | `fix/issue-193` | `feat/<feature>/parser` |
 
-The shared regex `_WT_RE = re.compile(r"-wt-(\d+)/?$")` (`dispatch.py:52`)
-widens to accept a slug, returning an `int` when the capture is all digits and a
-`str` otherwise.
+**The `c-` prefix is load-bearing, not decoration.** The existing regex
+`_WT_RE = re.compile(r"-wt-(\d+)/?$")` (`dispatch.py:52`) carries a comment
+stating that it is anchored on both ends *"so `mnemo-wt-feature` — a hand-made
+worktree that is not a dispatch — is not mistaken for one"*, and `issue_for_cwd`
+repeats the guarantee: it returns `None` for any path this module did not name,
+"so a false positive cannot mislabel an unrelated session."
+
+So `\d+` is not an implementation detail. It is the mechanism that separates a
+dispatched worktree from one a human made by hand, and a naive widening to
+`(.+?)` would delete that guard silently — every directory ending in `-wt-<word>`
+would start being reported as a dispatch child in the session queue.
+
+The regex therefore widens to a closed alternation rather than a wildcard:
+
+```python
+_WT_RE = re.compile(r"-wt-(\d+|c-[a-z0-9-]+)/?$")
+```
+
+It stays anchored, still refuses `mnemo-wt-feature`, and returns an `int` when
+the capture is all digits and the slug `str` when it begins with `c-`. Piece
+slugs are constrained to `[a-z0-9-]+` at parse time so that the contract file can
+never name a piece the addressing scheme cannot express.
 
 **It has two call sites, and the second is easy to miss.** Besides the inverse
 lookup in `issue_for_cwd` (`dispatch.py:112`), `worktree_path` uses
@@ -284,6 +303,9 @@ positional issue numbers. `--dry-run` continues to apply.
 - The nesting guard — `worktree_path` called from inside a slug-named worktree
   must strip the existing suffix rather than nest, the same way it already does
   for `-wt-<int>`.
+- The false-positive guard — a hand-made `repo-wt-feature` (no `c-` prefix, not
+  all digits) still yields `None` from `issue_for_cwd` after the widening. This
+  test encodes the reason the regex is an alternation and not a wildcard.
 - Prompt — a contract injects the boundary and does **not** inject an approach.
 - `tests/conftest.py:69` already monkeypatches `spawn_child` globally, so no test
   spawns a real child.
