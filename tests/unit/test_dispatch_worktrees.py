@@ -328,3 +328,128 @@ def test_a_piece_slug_without_its_feature_is_refused() -> None:
     """`fix/issue-c-parser` names an issue that does not exist — fail loudly."""
     with pytest.raises(ValueError, match="feature"):
         dispatch.branch_name("c-parser")
+
+
+# --- dispatching a whole contract ------------------------------------------
+
+
+def _contract(tmp_path: Path, verdict: str = "parallel"):
+    from mnemo.core import contracts
+
+    return contracts.Contract(
+        feature="demo",
+        verdict=verdict,
+        pieces=[
+            contracts.Piece(slug="one", files=["a.py"], exposes=["`f()`"]),
+            contracts.Piece(slug="two", files=["b.py"], exposes=["`g()`"]),
+        ],
+        path=tmp_path / "contract.md",
+    )
+
+
+def _boom(prompt, *, cwd):
+    raise dispatch.DispatchError("boom")
+
+
+def test_dispatch_contract_spawns_one_child_per_piece(repo: Path, monkeypatch) -> None:
+    spawned: list[Path] = []
+
+    def fake_spawn(prompt, *, cwd):
+        spawned.append(cwd)
+        return "id1"
+
+    monkeypatch.setattr(dispatch, "spawn_child", fake_spawn)
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.issue for r in results] == ["c-one", "c-two"]
+    assert [p.name for p in spawned] == ["proj-wt-c-one", "proj-wt-c-two"]
+
+
+def test_dispatch_contract_refuses_a_sequential_verdict(repo: Path, monkeypatch) -> None:
+    """``sequential`` means the work does not divide — spawning would be wrong."""
+    monkeypatch.setattr(dispatch, "spawn_child", lambda *a, **k: pytest.fail("spawned"))
+    with pytest.raises(dispatch.DispatchError, match="sequential"):
+        dispatch.dispatch_contract(_contract(repo, verdict="sequential"), repo_root=repo)
+
+
+def test_one_failing_piece_does_not_strand_the_others(repo: Path, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def flaky(prompt, *, cwd):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise dispatch.DispatchError("boom")
+        return "id2"
+
+    monkeypatch.setattr(dispatch, "spawn_child", flaky)
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert results[0].error == "boom"
+    assert results[1].short_id == "id2"
+    assert not (repo.parent / "proj-wt-c-one").exists()  # rolled back
+
+
+def _branches(repo: Path) -> set[str]:
+    out = subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"], cwd=repo,
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def test_rollback_deletes_the_branch_so_the_retry_can_run(repo: Path, monkeypatch) -> None:
+    """Removing the tree alone is not a rollback.
+
+    The branch outlives it, and the retry then dies on ``a branch named ...
+    already exists`` — a *different* failure from the one rolled back, and one
+    no amount of retrying clears.
+    """
+    monkeypatch.setattr(dispatch, "spawn_child", _boom)
+
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.error for r in results] == ["boom", "boom"]
+    assert "feat/demo/one" not in _branches(repo)
+    assert "feat/demo/two" not in _branches(repo)
+
+    # The real proof: the same contract dispatches cleanly afterwards.
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd: "ok1")
+    retry = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert [r.error for r in retry] == [None, None]
+    assert {"feat/demo/one", "feat/demo/two"} <= _branches(repo)
+
+
+def test_an_issue_rollback_also_deletes_its_branch(repo: Path, monkeypatch) -> None:
+    """The same guarantee on the issue path, which had the same leak."""
+    monkeypatch.setattr(dispatch, "spawn_child", _boom)
+
+    with pytest.raises(dispatch.DispatchError):
+        dispatch.dispatch_issue(197, repo_root=repo, fetch=_fake_fetch)
+
+    assert "fix/issue-197" not in _branches(repo)
+
+
+def test_rollback_never_deletes_a_branch_it_did_not_create(repo: Path) -> None:
+    """``worktree add`` most often refuses *because* the branch already exists.
+
+    That branch is someone else's. The rollback for it must remove the
+    half-made directory and nothing more.
+    """
+    subprocess.run(["git", "branch", "fix/issue-197"], cwd=repo, check=True,
+                   capture_output=True, text=True)
+
+    with pytest.raises(dispatch.DispatchError):
+        dispatch.ensure_worktree(197, repo_root=repo)
+
+    assert "fix/issue-197" in _branches(repo)
+
+
+def test_a_piece_prompt_reaches_its_child(repo: Path, monkeypatch) -> None:
+    """The child must receive its own boundary, not another piece's."""
+    seen: dict[str, str] = {}
+
+    def fake_spawn(prompt, *, cwd):
+        seen[cwd.name] = prompt
+        return "id"
+
+    monkeypatch.setattr(dispatch, "spawn_child", fake_spawn)
+    dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert "a.py" in seen["proj-wt-c-one"]
+    assert "a.py" not in seen["proj-wt-c-two"]
