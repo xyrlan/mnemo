@@ -88,6 +88,33 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Two mnemo installs at two versions ran every hook twice, and nothing on the
+  machine said so.** A plugin install at 1.3.3 sat alongside the direct install
+  at 1.4.1; Claude Code fired both sets of hooks, so the stale copy kept writing
+  the orphan `bots/<repo>-wt-*/` namespaces that #225 had just fixed — three of
+  them created in the ten minutes after the fix merged. The duplication was
+  already detectable (`install.migration`), but only from inside the *plugin's*
+  own SessionStart, gated on `CLAUDE_PLUGIN_ROOT`, and fired at most once ever:
+  on this machine that single notice was spent on 2026-09-10, three days before
+  the damage. Nothing compared the two versions.
+
+  `mnemo doctor` now reports a second install on every run, naming both
+  versions, the hooks the other copy registers, and how to remove it. Detection
+  keys on the plugin *registry* (`installed_plugins.json` + `enabledPlugins`),
+  not on the cache directory: `claude plugin uninstall` leaves the whole
+  versioned tree — `hooks/hooks.json` included — on disk, so a cache-dir scan
+  reports plugins that no longer run. Enablement is read from the project's
+  `.claude/settings.json` and `settings.local.json` as well as the global file,
+  since the registry's `project` and `local` scopes are switched on there.
+  (#229)
+
+- **`mnemo status` reported a phantom plugin and hid the install actually doing
+  the work.** Same root cause, found while fixing the above: `_installed_plugin_root`
+  globbed the cache, so a leftover 1.3.3 tree made status print
+  `Hooks (plugin): 4/4` on a machine with no plugin installed — and because that
+  branch *replaces* the settings.json scope lines, the four real hooks went
+  unreported. It now intersects the glob with the registry. (#229)
+
 - **`mnemo migrate-worktree-briefings` repaired one kind of vault breakage by
   creating another.** Moving a briefing out of `bots/<proj>-wt-*/` left every
   reference to its old path behind, and the command knew only about `bots/` —

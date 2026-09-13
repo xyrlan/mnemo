@@ -33,17 +33,38 @@ def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) ->
 
 
 def _installed_plugin_root() -> str | None:
-    """Newest installed copy of the mnemo plugin, or None.
+    """Newest *installed* copy of the mnemo plugin, or None.
 
     CLAUDE_PLUGIN_ROOT is only set when Claude Code invokes mnemo, so a
     plugin user running ``mnemo status`` in a terminal fell through to the
     settings.json scopes and was told "0/4 hooks" while the install was
     fine. The plugin cache is the same layout on every platform.
+
+    The cache directory alone is *not* proof of an install: ``claude plugin
+    uninstall`` leaves the whole versioned tree — ``hooks/hooks.json``
+    included — on disk. Globbing the cache therefore reported a phantom
+    "Hooks (plugin): 4/4" long after removal, and because that branch
+    replaces the settings.json scope lines, it also hid the direct install
+    that was really running the hooks. Intersect with the plugin registry,
+    which ``uninstall`` does clean.
     """
+    from mnemo.install.duplicate_install import find_duplicate_installs
+
+    try:
+        registered = {
+            str(i.install_path) for i in find_duplicate_installs() if i.install_path
+        }
+    except Exception:
+        # `status` must keep printing even if the registry is unreadable or
+        # changes shape; fall back to reporting no plugin, which routes to the
+        # settings.json scope lines rather than suppressing them.
+        return None
+    if not registered:
+        return None
     base = Path(os.path.expanduser("~/.claude/plugins/cache"))
     roots = [
         d for d in base.glob("*/mnemo/*")
-        if (d / "hooks" / "hooks.json").is_file()
+        if str(d) in registered and (d / "hooks" / "hooks.json").is_file()
     ]
     if not roots:
         return None
