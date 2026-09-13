@@ -46,10 +46,19 @@ from typing import Callable, Sequence
 
 WORKTREE_SUFFIX = "-wt-"
 
-# `<anything>-wt-<digits>`, optional trailing slash. Anchored on both ends so
-# `mnemo-wt-feature` — a hand-made worktree that is not a dispatch — is not
-# mistaken for one.
-_WT_RE = re.compile(r"-wt-(\d+)/?$")
+# `<anything>-wt-<digits>` or `<anything>-wt-c-<slug>`, optional trailing
+# slash. Anchored on both ends so `mnemo-wt-feature` — a hand-made worktree
+# that is not a dispatch — is not mistaken for one.
+#
+# The alternation is the whole point: a wildcard `(.+)` would name every
+# directory ending in `-wt-<anything>` a dispatch child, and `mnemo sessions`
+# would then label an unrelated session as one of ours. Only two shapes this
+# module itself writes are admitted — a bare issue number, and a contract
+# piece under the reserved `c-` prefix, which no hand-made branch name uses.
+_WT_RE = re.compile(r"-wt-(\d+|c-[a-z0-9-]+)/?$")
+
+# What names a child: a GitHub issue number, or a contract piece slug.
+Target = int | str
 
 
 class DispatchError(RuntimeError):
@@ -80,8 +89,8 @@ class Dispatched:
 # --- naming: the mapping, as a convention ----------------------------------
 
 
-def worktree_path(issue: int, *, repo_root: Path | str) -> Path:
-    """Where issue *issue*'s child works: a **sibling** of the repo.
+def worktree_path(target: Target, *, repo_root: Path | str) -> Path:
+    """Where *target*'s child works: a **sibling** of the repo.
 
     A sibling, never a subdirectory: a worktree inside the repo is swept by
     ``git add -A``, walked by the extractor, and shows up in every ``grep``
@@ -90,18 +99,32 @@ def worktree_path(issue: int, *, repo_root: Path | str) -> Path:
     The repo's own ``-wt-<n>`` suffix is stripped first, so dispatching from
     inside a child's tree yields ``mnemo-wt-198`` rather than stacking into
     ``mnemo-wt-197-wt-198`` and nesting again on the generation after that.
+    The same holds for a slug-named tree: a dispatch out of
+    ``mnemo-wt-c-parser`` yields ``mnemo-wt-c-seam``, because the suffix that
+    is stripped is whatever ``_WT_RE`` admits, not just a number.
     """
     root = Path(repo_root)
     base = _WT_RE.sub("", root.name)
-    return root.parent / f"{base}{WORKTREE_SUFFIX}{issue}"
+    return root.parent / f"{base}{WORKTREE_SUFFIX}{target}"
 
 
-def branch_name(issue: int) -> str:
-    return f"fix/issue-{issue}"
+def branch_name(target: Target, *, feature: str | None = None) -> str:
+    """The branch a child works on.
+
+    An issue keeps ``fix/issue-<n>``, unchanged. A contract piece is namespaced
+    under its feature — ``feat/<feature>/<slug>`` — so that the branches of one
+    decomposition sort together and a piece slug as ordinary as ``parser`` does
+    not collide across features.
+    """
+    if feature:
+        slug = str(target)
+        slug = slug[2:] if slug.startswith("c-") else slug
+        return f"feat/{feature}/{slug}"
+    return f"fix/issue-{target}"
 
 
-def issue_for_cwd(cwd: str | Path | None) -> int | None:
-    """The issue number a dispatched worktree encodes, or ``None``.
+def issue_for_cwd(cwd: str | Path | None) -> Target | None:
+    """The issue number or piece slug a dispatched worktree encodes, or ``None``.
 
     The inverse of :func:`worktree_path`. Returns ``None`` for any path this
     module did not name — an ordinary checkout, or a worktree someone created
@@ -110,7 +133,10 @@ def issue_for_cwd(cwd: str | Path | None) -> int | None:
     if not cwd:
         return None
     match = _WT_RE.search(str(cwd))
-    return int(match.group(1)) if match else None
+    if not match:
+        return None
+    captured = match.group(1)
+    return int(captured) if captured.isdigit() else captured
 
 
 # --- the prompt: context and scope, never a solution -----------------------

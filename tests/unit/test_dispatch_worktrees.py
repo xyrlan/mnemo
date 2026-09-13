@@ -268,3 +268,57 @@ def test_one_bad_issue_does_not_strand_the_others(repo: Path, monkeypatch) -> No
     assert [r.issue for r in bad] == [4242]
     assert dispatch.worktree_path(197, repo_root=repo).is_dir()
     assert not dispatch.worktree_path(4242, repo_root=repo).exists()
+
+
+# --- addressing a child by a contract piece --------------------------------
+
+
+def test_piece_slug_names_a_worktree(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo"
+    tree = dispatch.worktree_path("c-parser", repo_root=root)
+    assert tree.name == "mnemo-wt-c-parser"
+    assert tree.parent == root.parent
+
+
+def test_issue_number_still_names_a_worktree(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo"
+    assert dispatch.worktree_path(193, repo_root=root).name == "mnemo-wt-193"
+
+
+def test_slug_worktree_does_not_nest(tmp_path: Path) -> None:
+    """Dispatching from inside a slug-named child must not stack suffixes."""
+    root = tmp_path / "mnemo-wt-c-parser"
+    tree = dispatch.worktree_path("c-seam", repo_root=root)
+    assert tree.name == "mnemo-wt-c-seam"
+
+
+def test_issue_worktree_still_does_not_nest(tmp_path: Path) -> None:
+    root = tmp_path / "mnemo-wt-197"
+    assert dispatch.worktree_path(198, repo_root=root).name == "mnemo-wt-198"
+
+
+def test_issue_for_cwd_reads_a_slug_back(tmp_path: Path) -> None:
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-c-parser") == "c-parser"
+
+
+def test_issue_for_cwd_still_reads_an_int_back(tmp_path: Path) -> None:
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-193") == 193
+
+
+def test_hand_made_worktree_is_still_not_a_dispatch(tmp_path: Path) -> None:
+    """The guard the ``\\d+`` anchor existed to provide, preserved.
+
+    A directory someone named by hand must not be reported as a dispatch
+    child — a false positive mislabels an unrelated session in the queue.
+    """
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-feature") is None
+    assert dispatch.issue_for_cwd("/x/mnemo-wt-My-Branch") is None
+
+
+def test_piece_branch_is_namespaced_by_feature() -> None:
+    name = dispatch.branch_name("c-parser", feature="contract-dispatch")
+    assert name == "feat/contract-dispatch/parser"
+
+
+def test_issue_branch_is_unchanged() -> None:
+    assert dispatch.branch_name(193) == "fix/issue-193"
