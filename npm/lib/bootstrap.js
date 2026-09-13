@@ -5,7 +5,7 @@ const { probeOnPath } = require("./detect");
 const { resolveMnemoBinary } = require("./runMnemo");
 
 
-const PIN_SPEC = "mnemo-claude>=1.4,<1.5";
+const PIN_SPEC = "mnemo-claude>=1.5,<1.6";
 
 
 function buildInstallCmd(installer, spec = PIN_SPEC) {
