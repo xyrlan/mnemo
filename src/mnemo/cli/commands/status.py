@@ -381,9 +381,11 @@ def _print_activation_status(vault: Path) -> None:
 
         # Determine current project
         try:
-            from mnemo.core.agent import resolve_agent
+            # Canonical (#225): matches what PreToolUse actually enforces, and
+            # the project name reported further up this same command.
+            from mnemo.core.agent import resolve_canonical_agent
             import os as _os
-            agent = resolve_agent(_os.getcwd())
+            agent = resolve_canonical_agent(_os.getcwd())
             project = agent.name
         except Exception:
             project = ""

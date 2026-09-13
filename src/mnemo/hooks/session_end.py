@@ -442,7 +442,10 @@ def main() -> int:
             agent_name = cached["agent"]
         else:
             cwd = payload.get("cwd") or os.getcwd()
-            agent_name = agent.resolve_agent(cwd).name
+            # Canonical (#225): must agree with the name session_start caches,
+            # since this is only the cache-miss path for the same session. The
+            # day's log is written under this name.
+            agent_name = agent.resolve_canonical_agent(cwd).name
         try:
             mirror.mirror_all(cfg)
         except Exception as e:

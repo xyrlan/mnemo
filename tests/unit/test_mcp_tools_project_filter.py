@@ -50,7 +50,12 @@ def test_resolve_current_project_returns_project_name(tmp_vault):
 
 
 def test_resolve_current_project_returns_none_on_failure(tmp_vault):
-    with patch("mnemo.core.mcp.tools.resolve_agent", side_effect=RuntimeError("boom")):
+    # Patched on the source module: tools.py imports the resolver at call time
+    # so a worktree-canonical override stays observable (#225).
+    from mnemo.core import agent as agent_mod
+    with patch.object(
+        agent_mod, "resolve_canonical_agent", side_effect=RuntimeError("boom")
+    ):
         result = _resolve_current_project(tmp_vault)
     assert result is None
 

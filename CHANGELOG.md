@@ -104,6 +104,30 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   already landed. Asking the child to write the trailer was rejected — it makes
   the dispatcher trust a child to report what the dispatcher already knows,
   the fragility #217 named, and #223 is the demonstration. (#224)
+- **Dispatched children read rules from an empty vault.** `mnemo.core.agent`
+  has two resolvers — `resolve_agent` returns the directory's own basename,
+  `resolve_canonical_agent` follows a worktree's `.git` file back to the main
+  repo — and the MCP server used the naive one. It backs `list_rules_by_topic`
+  and `read_mnemo_rule`, the two tools the injected prompt tells every session
+  to call *before writing code*, so inside a worktree they scoped to a project
+  that has never had a rule written to it: measured from `mnemo-wt-225`,
+  **21 topics visible instead of 78**. Injection was already canonical, which
+  is why this stayed invisible — children *did* get a briefing, and only the
+  rule lookup came back thin.
+
+  The same naive resolution ran on four more paths that write or report under
+  a project name, and all four are now canonical: `session_start` cached the
+  naive name and `session_end` wrote the day's log under it (this is what
+  created one orphan `bots/<repo>-wt-*/` namespace per dispatched worktree —
+  15 of them, holding logs and five real briefings, no rules); `mirror` chose
+  the vault memory dir to sync into; and `statusline` / `mnemo status`
+  reported per-project rule counts that contradicted what `pre_tool_use`
+  actually enforces. The cached `repo_root` still points at the tree being
+  worked in — only the *name* was ever wrong.
+
+  Existing orphan briefings are not moved by this change:
+  `mnemo migrate-worktree-briefings --repos <path> --dry-run` already exists
+  for that and is unaffected. (#225)
 
 - **A `stopped` session was filed under "working" forever.** `is_done` tested
   `state == "done"` alone, but Claude Code also writes `stopped` for a process

@@ -49,7 +49,10 @@ def _agent_from_project_dir(name: str) -> str:
     parts = cleaned.split("-")
     decoded = _decode_path(parts)
     if decoded is not None:
-        return agent.resolve_agent(str(decoded)).name
+        # Canonical (#225): this name selects the vault memory dir to mirror
+        # into. Naive resolution mirrored a worktree session's memory into an
+        # orphan `bots/<repo>-wt-*/` namespace nothing reads.
+        return agent.resolve_canonical_agent(str(decoded)).name
     # Fallback for paths that no longer exist on disk: use the historical heuristic.
     tail = "-".join(parts[3:])
     if tail:

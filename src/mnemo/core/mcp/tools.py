@@ -16,7 +16,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypedDict
 
-from mnemo.core.agent import resolve_agent
 from mnemo.core.filters import (
     derive_rule_slug,
     is_consumer_visible,
@@ -81,9 +80,18 @@ def _rule_in_scope(rule: dict, project: str | None, scope: str) -> bool:
 
 
 def _resolve_current_project(vault_root: Path) -> str | None:
-    """Derive current project from cwd. Returns ``None`` on any failure."""
+    """Derive current project from cwd. Returns ``None`` on any failure.
+
+    Canonical, not naive (#225): inside a git worktree ``resolve_agent`` returns
+    the tree's own basename (``mnemo-wt-225``), and this function backs
+    ``list_rules_by_topic`` / ``read_mnemo_rule`` — the two tools the injected
+    prompt tells every session to call before writing code. Scoping them to the
+    tree name points them at a namespace that has never had a rule written to
+    it. Every other read path (hooks, learn, backfill, why) is already canonical.
+    """
     try:
-        return resolve_agent(str(Path.cwd())).name
+        from mnemo.core import agent as agent_mod
+        return agent_mod.resolve_canonical_agent(str(Path.cwd())).name
     except Exception:
         return None
 

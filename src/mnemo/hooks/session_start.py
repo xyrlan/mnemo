@@ -481,7 +481,13 @@ def main() -> int:
 
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()
-        ainfo = agent.resolve_agent(cwd)
+        # Canonical (#225): this name is cached for session_end (which writes
+        # the day's log under it) and used for the session-start log line
+        # below. Resolving naively filed both under the worktree's own
+        # basename, creating one orphan `bots/<repo>-wt-*/` namespace per
+        # dispatched worktree while injection (further down) used the
+        # canonical name. `repo_root` stays the tree actually being worked in.
+        ainfo = agent.resolve_canonical_agent(cwd)
         info = {
             **asdict(ainfo),
             "started_at": datetime.now().isoformat(timespec="seconds"),
