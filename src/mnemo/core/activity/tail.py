@@ -64,7 +64,7 @@ def read_tail(
             fh.seek(start)
             blob = fh.read()
     except OSError:
-        return [], 0 if offset == 0 else offset
+        return [], offset
 
     consumed = blob.rfind(b"\n")
     if consumed == -1:
