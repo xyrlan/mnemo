@@ -13,8 +13,15 @@ maintainer describing the work out loud. Do not go looking for a plan file;
 plain plan mode writes none, and the contract is the durable artifact, not a
 copy of something else.
 
-Write the contract to `docs/mnemo/contracts/YYYY-MM-DD-<feature>.md`. Then stop.
-Dispatching is the maintainer's decision, not yours.
+Write the contract to `docs/superpowers/contracts/YYYY-MM-DD-<feature>.md`.
+Then stop. Dispatching is the maintainer's decision, not yours.
+
+Nothing reads that directory — `--contract` takes an explicit path, so the
+location is a filing convention and not a lookup. It is named here because it
+is where every contract in this repo actually lives, next to the specs and
+plans the decomposition came out of. An earlier version of this file
+prescribed `docs/mnemo/contracts/`, which no contract ever used and which has
+never existed in the repository.
 
 ## The test
 
@@ -78,10 +85,20 @@ worktree is created:
 Signatures go in backticks; commas inside them are safe. `files` is a plain
 comma-separated list.
 
+Prose is free-form anywhere except a `##` heading, which the parser reads as a
+piece slug — a section like `## Notes` is refused as an unaddressable slug.
+Explain the decomposition in the preamble, in a piece's body, or in an HTML
+comment. Note that a `- **files:**` bullet written *before* the first `##` is
+silently ignored, because it belongs to no piece.
+
+For a commented example that is itself parsed by the parser it documents:
+
+    mnemo dispatch --contract --example
+
 ## After writing
 
 Tell the maintainer the file is ready for review, and show the command:
 
-    mnemo dispatch --contract docs/mnemo/contracts/<file>.md --dry-run
+    mnemo dispatch --contract docs/superpowers/contracts/<file>.md --dry-run
 
 Do not run it.

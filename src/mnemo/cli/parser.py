@@ -98,8 +98,16 @@ def _build_parser() -> argparse.ArgumentParser:
     # variadic positional in one), so the command itself refuses the overlap.
     dispatch_p.add_argument("issues", nargs="*", type=int, metavar="ISSUE",
                             help="GitHub issue number(s) to dispatch")
-    dispatch_p.add_argument("--contract", metavar="PATH",
-                            help="dispatch each piece of a decomposition contract")
+    # nargs="?": --contract's argument is optional so `--contract --example`
+    # reads as "the example of a contract" rather than needing a second flag
+    # spelling. Bare `--contract` with neither a path nor --example is refused
+    # by the command, which can say what is missing; argparse cannot.
+    dispatch_p.add_argument("--contract", metavar="PATH", nargs="?", const="",
+                            help="dispatch each piece of a decomposition contract "
+                                 "(format: skills/decomposing-for-dispatch/SKILL.md)")
+    dispatch_p.add_argument("--example", action="store_true",
+                            help="print a commented example contract and exit; "
+                                 "redirect it to a file to start one")
     dispatch_p.add_argument("--dry-run", dest="dry_run", action="store_true",
                             help="print the worktree and branch per child without spawning")
     deliver_p = sub.add_parser(
