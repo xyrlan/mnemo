@@ -82,6 +82,15 @@ class Piece:
 
 @dataclass(frozen=True)
 class Contract:
+    """A decomposition: the pieces, and the boundary between them.
+
+    ``path`` has no reader yet, deliberately. The refusal message in the CLI
+    cannot be one — an unparseable contract never becomes a ``Contract``, so
+    that site names the path it was given instead. The reader it exists for is
+    a child prompt that cites the contract the child came from, so the child
+    can re-read the boundary it was given rather than infer it.
+    """
+
     feature: str
     verdict: str
     pieces: list[Piece] = field(default_factory=list)

@@ -86,7 +86,9 @@ def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> in
     except contracts.ContractError as exc:
         # A contract that cannot be trusted is a decomposition to redo, not a
         # dispatch to retry, so the message names the file rather than a step.
-        print(f"contract unusable: {exc}")
+        # The path comes from the argument, not from the parsed contract: the
+        # exception is precisely what stopped one from existing.
+        print(f"contract unusable: {path}: {exc}")
         return 1
 
     if getattr(args, "dry_run", False):
