@@ -44,14 +44,22 @@ def check_duplicate_install(claude_dir: Path | None = None) -> list[str] | None:
         return None
 
 
-def _doctor_check_duplicate_install(vault: Path) -> bool:
+def _doctor_check_duplicate_install(
+    vault: Path, claude_dir: Path | None = None,
+) -> bool:
     """Doctor-registry adapter — True when silent, False on warning.
 
     ``vault`` is part of every check's signature but unused here: installs are
     machine-scoped (``~/.claude``), not vault-scoped — the same reasoning as
     ``hosts._doctor_check_hosts``.
+
+    ``claude_dir`` is the machine scope, injectable so tests can point at a
+    fixture tree. Without it a test can only steer this check by patching
+    ``HOME``, which ``os.path.expanduser`` ignores on Windows — it reads
+    ``USERPROFILE`` — so such a test silently exercises the developer's real
+    home and passes for the wrong reason everywhere except CI.
     """
-    findings = check_duplicate_install()
+    findings = check_duplicate_install(claude_dir)
     if not findings:
         return True
     for msg in findings:

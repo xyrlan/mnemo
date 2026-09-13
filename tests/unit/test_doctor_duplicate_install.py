@@ -165,25 +165,38 @@ def test_registry_entry_without_hooks_json_is_not_hook_running(tmp_path: Path) -
     assert installs[0].runs_hooks is False
 
 
-def test_doctor_adapter_returns_false_and_prints(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_doctor_adapter_returns_false_and_prints(tmp_path: Path, capsys) -> None:
     claude = tmp_path / ".claude"
     _seed_plugin(claude, version="1.3.3")
-    monkeypatch.setenv("HOME", str(tmp_path))
 
-    ok = check_mod._doctor_check_duplicate_install(tmp_path / "vault")
+    ok = check_mod._doctor_check_duplicate_install(tmp_path / "vault", claude)
     assert ok is False
     out = capsys.readouterr().out
     assert "duplicate mnemo install" in out
     assert "1.3.3" in out
 
 
-def test_doctor_adapter_silent_without_plugin(tmp_path: Path, capsys, monkeypatch) -> None:
-    (tmp_path / ".claude").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_doctor_adapter_silent_without_plugin(tmp_path: Path, capsys) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir(parents=True)
 
-    ok = check_mod._doctor_check_duplicate_install(tmp_path / "vault")
+    ok = check_mod._doctor_check_duplicate_install(tmp_path / "vault", claude)
     assert ok is True
     assert capsys.readouterr().out == ""
+
+
+def test_adapter_defaults_to_the_real_machine_scope(tmp_path: Path, monkeypatch) -> None:
+    """The registry calls the adapter with one argument, so the default must hold.
+
+    Asserting on the forwarded value rather than on a patched ``HOME``: the
+    production default goes through ``os.path.expanduser``, which reads
+    ``USERPROFILE`` on Windows and ignores ``HOME`` entirely.
+    """
+    seen: list[object] = []
+    monkeypatch.setattr(check_mod, "check_duplicate_install", lambda cd=None: seen.append(cd))
+
+    check_mod._doctor_check_duplicate_install(tmp_path / "vault")
+    assert seen == [None]  # None → find_duplicate_installs resolves ~/.claude
 
 
 def test_project_scoped_enablement_counts(tmp_path: Path) -> None:
