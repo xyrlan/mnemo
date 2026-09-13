@@ -305,6 +305,23 @@ positional issue numbers. `--dry-run` continues to apply.
   (`remove_worktree`, `dispatch.py:239`), including on `KeyboardInterrupt`.
   Children already spawned stay up; the report says which succeeded.
 
+  **Correction found while building this:** that rollback was incomplete, on
+  the issue path as much as the new contract one. It removed the directory but
+  left the branch, so retrying the same target died on `fatal: a branch named
+  '...' already exists` — a *different* failure from the one rolled back, and
+  one no amount of retrying clears. The existing test asserted only that the
+  directory was gone, which is why the leak survived: the assertion with teeth
+  is that the **retry succeeds**. `remove_worktree` now takes an opt-in
+  `branch=` and deletes it with `git branch -d`.
+
+  Opt-in rather than derived from the target, because only the caller knows
+  whether the branch was ours: `ensure_worktree`'s own failure path must not
+  pass it, since the usual reason `git worktree add` refuses is that the branch
+  already existed — someone else's work, which a rollback must never delete.
+  And `-d`, never `-D`: `-d` refuses a branch holding unmerged commits, which
+  moments after `worktree add` it cannot have; if it somehow does, keeping it
+  is the right outcome.
+
 ## Testing
 
 - `core/contracts.py` — parse, validation, orphan `consumes`, duplicate slug,
