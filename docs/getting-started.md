@@ -443,6 +443,127 @@ mnemo extract --dry-run   # show what would run without calling the LLM
 mnemo extract --force     # reprocess entries previously dismissed or promoted
 ```
 
+## Watching background sessions
+
+Claude Code can run sessions in the background, and once there are six of them
+the bottleneck stops being the machine and becomes you: every one of them may
+or may not be waiting for an answer, and the only way to find out used to be
+attaching to each in turn.
+
+```bash
+mnemo sessions
+```
+
+```
+TE ESPERANDO (1)
+  a41c8e2f  #196 queue liveness                   4m  Which of the two should own the hint?
+
+TRABALHANDO (2)
+  13b6f4f3  #207 sessions docs                 Read docs/getting-started.md (+31)    9k
+  3a14bdd9  #206 label column                  Bash pytest -q (+12) ↻                7k
+
+PRONTAS (1)
+  7c1e9a04  #205 unblock consumer              #199                                 22k
+
+  attach: claude attach a41c8e2f
+```
+
+Four buckets, and the order is the point. **TE ESPERANDO** is a session blocked
+on a human, and it comes first because it is the only bucket where nothing
+happens until you act. **TRABALHANDO** is running, **PRONTAS** has finished
+(the column shows the PRs it opened), and **ABANDONADAS** asked for a human and
+then died before getting one — listed rather than hidden, because whether a
+dead session still matters is your call, not mnemo's. A session only lands
+there when its process is *provably* gone; when mnemo cannot tell, the session
+stays in the waiting bucket, on the grounds that a question wrongly written off
+is worse than one listed twice.
+
+Within the waiting bucket, newest first. That looks backwards until you know
+what the timestamp means: a blocked session's clock stops when its process
+stops writing, so the *stalest* entry is the likeliest corpse rather than the
+most urgent question. The freshest one is the one actually waiting on you, so
+it gets the top line and the `attach:` hint. The abandoned bucket sorts the
+other way — oldest first — because there the stalest really is the one to
+clear, and it gets its own `limpar:` hint.
+
+### What the activity column tells you
+
+A session sitting at "working" for twenty minutes reads identically whether it
+is making progress, stuck on one thing, or going in circles — and those call
+for three different responses. So the working bucket shows the last tool it
+used, what it used it on, `(+N)` for how many tool uses came before it in the
+window just read, and `↻` when the previous tool use had the same tool and the
+same target:
+
+- **rising count, changing target** — progress, leave it alone
+- **frozen count** — stalled
+- **rising count, unchanged target, `↻`** — a loop, which without the mark
+  reads exactly like progress
+
+The column is budgeted, and when it runs out of room it cuts the *target*
+rather than the `(+N)` and `↻` that carry the signal.
+
+The label beside it is budgeted the same way, and for the same reason. Where it
+has to cut, it keeps the head — the issue number, or the contract piece — and
+trims the inferred title after it, because the identifier is what you are
+tracking across a dispatch and the title is the expendable half.
+
+Only the working bucket gets it. A blocked session's claim on you is the
+question it is asking, and burying that under a tool name would invert the
+ordering the queue exists to provide.
+
+### Looking closer at one session
+
+When a queue line looks wrong, the next question is *wrong how*:
+
+```bash
+mnemo session 3a14
+mnemo session 3a14 --limit 40    # default is 15
+```
+
+That prints the session's recent actions oldest-first with timestamps, so a
+loop becomes visible as a shape rather than a single mark. A unique prefix of
+the short id is enough; an ambiguous prefix refuses rather than guessing, on
+the grounds that showing you the wrong session's actions is worse than asking
+for another character.
+
+The `↻` here is deliberately broader than the queue's: the queue marks a
+back-to-back repeat, while this view marks any tool and target that comes back
+anywhere in the window you are looking at. A grep run four times with other
+work in between is a loop too, and it is invisible to a consecutive-repeat
+test.
+
+There is no `--follow`. You look, you decide, and `claude attach <short_id>`
+is how you get inside — that is Claude Code's job, not mnemo's.
+
+### Flags
+
+```bash
+mnemo sessions --all               # every repo, not just the one you're in
+mnemo sessions --watch             # redraw every 2s until Ctrl-C
+mnemo sessions --json              # machine-readable; --watch is ignored
+mnemo sessions --consume-unblocks  # learn from sessions answered while blocked
+```
+
+`--watch` clears the screen only on a terminal; redirected to a file it appends
+each redraw instead of writing escape codes into your log.
+
+`--consume-unblocks` is the one that is not about looking. When you answer a
+blocked session, that moment is a correction worth learning from, and mnemo
+records a marker for it; this redeems the markers and prints what it learned.
+The `SessionEnd` hook runs it for you in the background — running it by hand is
+for when you want to see the result. It ignores `--all` and the current
+directory, because an unblocked session is worth learning from wherever it ran.
+
+### It never reaches Claude
+
+Both commands are human-only by design: no hook and no MCP tool exposes either
+one, and nothing about the queue is written into any session's context. The
+parent session's context is the scarce resource this whole feature exists to
+protect — a queue that spent it to describe itself would be defeating its own
+purpose. What Claude Code does surface is the count, in the status line
+(`N esperando`), if you installed it.
+
 ## Working on mnemo itself
 
 The repo is also the plugin, so it ships a `.mcp.json`. Under a plugin

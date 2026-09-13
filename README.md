@@ -171,6 +171,15 @@ registers mnemo's MCP server there and writes the rules file that tool reads
 (`.cursor/rules/mnemo.mdc`, `AGENTS.md`). Learning still happens in Claude
 Code; those tools get what it learned.
 
+Running several Claude Code sessions in the background? `mnemo sessions` prints
+them as one queue with the ones blocked on a human at the top, and shows what
+each of the others is doing — the last tool, its target, and a mark when the
+same one keeps coming back, so a session that is looping stops reading like a
+session that is working. `mnemo session <short_id>` opens one of them up.
+Neither ever reaches Claude: no hook and no MCP tool exposes them, because the
+context they would spend is the thing they exist to save. See
+[docs/getting-started.md](docs/getting-started.md#watching-background-sessions).
+
 Everything else is a CLI subcommand (`mnemo help --all`): `mnemo open`,
 `mnemo fix`, `mnemo statusline`, `mnemo backfill`, `mnemo reclassify`,
 `mnemo export`, `mnemo autopilot`, `mnemo disable-rule`, and the rest.
