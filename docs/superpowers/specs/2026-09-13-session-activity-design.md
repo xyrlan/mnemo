@@ -80,13 +80,28 @@ child — a session running a whole task alone, uninterrupted):
 | clubinho / 129-legado-client | 1 | 3.6 MB | 3.6 MB |
 | mnemo / feat-pr-f-hosts | 1 | 1.6 MB | 1.6 MB |
 
-**Proxy caveat, stated plainly:** these are `--claude-worktrees-<branch>`
-directories — native Claude Code worktrees. No `mnemo dispatch` child has left
-a transcript on this machine yet; the dispatch convention is
-`<repo>-wt-<issue>` (`dispatch.py:106-122`) and zero such directories exist
-under `~/.claude/projects`. PRs #194/#191/#192 came out of native worktrees.
-So the table above is the best available proxy, **not** a measurement of
-dispatch children. It is used only to establish an order of magnitude.
+**Corrected 2026-09-13, same day:** the claim that no `mnemo dispatch` child
+had left a transcript was wrong — it came from grepping `~/.claude/projects`
+for `-wt-` before accounting for the dash-encoding of the path. Nine real
+dispatch-child transcripts exist, in `-Users-xyrlan-github-mnemo-wt-<issue>`
+directories for issues 158, 176 (×2), 187, 193, 195, 196, 197 and 200.
+
+| Population | n | p50 | max |
+|---|---|---|---|
+| Real `mnemo dispatch` children | 9 | 1.0 MB | 1.4 MB |
+| Native `--claude-worktrees-` sessions | 17 | ~2.5 MB | 7.4 MB |
+
+Dispatch children run **smaller** than the native-worktree proxy (p50 1.0 MB
+vs ~2.5 MB) but still 3x the 327 KB global median, so the conclusion the
+measurement was taken for is unchanged: re-reading every file per tick is the
+wrong shape. The proxy overestimated by ~2.5x; it did not mislead.
+
+Verified end to end against all nine: **9/9 produce a readable activity**
+through `read_tail` → `summarize`, and `recent_actions` on #197's transcript
+renders its real closing sequence (`Edit dispatch.py` → `Edit
+test_dispatch_command.py` → `Bash Check changelog…` → `Edit CHANGELOG.md` →
+`Bash Final full suite` → `Bash Commit`). The "first real dispatch run is the
+true test" caveat in **Known risk** below is therefore already discharged.
 
 **What it settles:** worktree children run 5–10x the global median. Re-reading
 every file on every tick would mean ~10 MB of JSON parsed every 2 s for four

@@ -2143,13 +2143,25 @@ From the spec, restated so execution does not drift:
 - Anything about liveness or #196
 - A TUI framework — `--watch` stays `print("\033[2J\033[H")` + `sleep(2)`
 
-## Known risk
+## Known risk — discharged 2026-09-13
 
-No `mnemo dispatch` child has ever left a transcript on this machine — the
-worktrees measured are `--claude-worktrees-<branch>` (native Claude Code),
-while dispatch writes `<repo>-wt-<issue>` (`dispatch.py:106-122`). So Task 7
-Step 2 verifies against *native* worktree sessions, and the first real dispatch
-run after this ships is the true test. If dispatch children turn out not to
-carry `linkScanPath` in their `state.json`, layer 1 degrades to today's
-behaviour and layer 2 reports the absence — no crash, but no value either. That
-would be the thing to check first.
+The original text here said no `mnemo dispatch` child had ever left a
+transcript, so the first real dispatch run would be the true test. **That was
+wrong**, from grepping `~/.claude/projects` for `-wt-` before accounting for
+the dash-encoding of the path. Nine real dispatch-child transcripts exist
+(`-Users-xyrlan-github-mnemo-wt-{158,176×2,187,193,195,196,197,200}`), p50
+1.0 MB, max 1.4 MB — smaller than the native-worktree proxy (~2.5 MB) but
+still 3x the global median, so the design conclusion is unchanged.
+
+Verified through Tasks 1+2: **9/9 produce a readable activity**, and
+`recent_actions` on #197 renders its real closing sequence. Every one of them
+mentions `linkScanPath`, so the field the whole design rests on is present in
+practice.
+
+**What remains unverified** is the live path: `~/.claude/jobs/` holds only
+`pins.json` right now, so no session is running and `read_sessions()` returns
+nothing. Task 3's join and Task 5's watch loop are therefore fixture-verified
+plus verified against transcripts on disk, but not yet against a live
+`state.json`. Task 7 Step 2 is the place to close that, and it needs a
+background session alive at the time — dispatch something, or run the check
+during the next real dispatch.
