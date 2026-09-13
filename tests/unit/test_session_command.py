@@ -141,3 +141,44 @@ def test_an_ambiguous_prefix_refuses_rather_than_guessing(monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "one" not in out and "two" not in out
+
+
+def test_the_loop_mark_catches_a_non_adjacent_repeat(session_with_actions, capsys):
+    """Wider than `Activity.repeated`, on purpose.
+
+    `summarize.Activity.repeated` flags only back-to-back tool uses. A real
+    loop rarely is: it is grep, read, think, grep again. The fixture here
+    interleaves Read/Edit/Bash between two identical Greps, so every
+    `repeated` is False — and both Greps must still be marked.
+    """
+    from mnemo.core.activity.summarize import recent_actions
+
+    assert cmd_session(_args()) == 0
+    out = capsys.readouterr().out
+
+    grep_lines = [l for l in out.splitlines() if "Grep" in l]
+    assert len(grep_lines) == 2
+    assert grep_lines[1].rstrip().endswith("↻"), grep_lines
+    assert not grep_lines[0].rstrip().endswith("↻"), "the first sighting is not a loop"
+
+
+def test_the_mark_stays_rare_on_ordinary_work(capsys, monkeypatch, tmp_path):
+    """Measured on 9 real dispatch children: 10 of 135 shown actions (7%).
+
+    A mark on every other line would be noise rather than signal, so this
+    pins that distinct work goes unmarked.
+    """
+    from mnemo.core.sessions.jobs import Session
+
+    p = tmp_path / "c.jsonl"
+    p.write_text("\n".join(
+        _event("Edit", "file_path", "/r/f%d.py" % i, "2026-09-13T14:0%d:00.000Z" % i)
+        for i in range(6)
+    ) + "\n")
+    monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions",
+                        lambda **kw: [Session(short_id="abc", name="child",
+                                              link_scan_path=str(p))])
+
+    assert cmd_session(_args()) == 0
+
+    assert "↻" not in capsys.readouterr().out
