@@ -42,7 +42,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Union
 
 from mnemo.core import contracts
 
@@ -60,7 +60,13 @@ WORKTREE_SUFFIX = "-wt-"
 _WT_RE = re.compile(r"-wt-(\d+|c-[a-z0-9-]+)/?$")
 
 # What names a child: a GitHub issue number, or a contract piece slug.
-Target = int | str
+#
+# ``Union`` rather than ``int | str``: this is an assignment, evaluated when
+# the module is imported, and the ``|`` operator on types only exists from
+# 3.10. ``from __future__ import annotations`` does not help — it defers
+# *annotations*, not expressions. The package supports 3.8, so the shorthand
+# fails at import on two of the versions CI builds.
+Target = Union[int, str]
 
 
 class DispatchError(RuntimeError):
