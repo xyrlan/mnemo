@@ -266,3 +266,20 @@ def test_extra_observed_tools_find_a_target():
     ]
     for tool, input_, expected in cases:
         assert summarize([_assistant(tool, input_)]).target == expected, tool
+
+
+def test_long_target_is_cut_on_a_word_boundary():
+    """Measured: 862 of 990 capped targets were cut mid-word, which loses the
+    difference between `status` and `state` to whoever reads the queue."""
+    act = summarize([_assistant("Bash", {"description": "Rewrite DetalheEnvioScreen removing status filters"})])
+
+    assert len(act.target) <= 40
+    assert act.target == "Rewrite DetalheEnvioScreen removing"
+    assert not act.target.endswith("stat")
+
+
+def test_a_single_unspaced_word_still_gets_the_hard_cut():
+    """A path or URL has no boundary to cut on; a hard cut beats returning nothing."""
+    act = summarize([_assistant("Bash", {"command": "x" * 200})])
+
+    assert len(act.target) == 40

@@ -41,6 +41,7 @@ _TARGET_KEYS = {
     "WebFetch": ("url",),
     "WebSearch": ("query",),
     "mcp__claude-in-chrome__computer": ("action",),
+    "mcp__claude-in-chrome__find": ("query",),
     "mcp__claude-in-chrome__navigate": ("url",),
     "mcp__mnemo__list_rules_by_topic": ("topic",),
     "Monitor": ("description",),
@@ -82,7 +83,16 @@ def _clean(value: Any) -> Optional[str]:
     flat = " ".join(value.split())
     if not flat:
         return None
-    return flat[:TARGET_MAX]
+    if len(flat) <= TARGET_MAX:
+        return flat
+    # Cut on a word boundary. Measured on real transcripts: 990 targets hit
+    # the cap and 862 of them (87%) were cut mid-word, which is how
+    # "Rewrite DetalheEnvioScreen removing stat" leaves the reader unable to
+    # tell `status` from `state`. Falls back to the hard cut when the first
+    # word is itself longer than the budget (a path, a URL, a shell line).
+    head = flat[:TARGET_MAX]
+    spaced = head.rsplit(" ", 1)[0]
+    return spaced if " " in head else head
 
 
 def _target(name: str, input_: Any) -> Optional[str]:
