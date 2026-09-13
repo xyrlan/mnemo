@@ -215,3 +215,66 @@ def test_long_activity_does_not_break_the_column():
 
     for line in out.splitlines():
         assert len(line) <= 100, line
+
+
+# --- activity column budget (measured: 39% of real actions exceeded it) ---
+
+def test_activity_is_budgeted_to_the_column_width():
+    from mnemo.core.sessions.render import DETAIL_WIDTH, _activity
+
+    act = Activity(tool="Bash", target="Relocate comment file and verify clean", since=23)
+
+    rendered = _activity(act)
+
+    assert len(rendered) <= DETAIL_WIDTH
+    assert "…" in rendered
+
+
+def test_budgeting_cuts_the_target_never_the_signals():
+    """(+N) and the loop mark are the two things worth showing; they survive."""
+    from mnemo.core.sessions.render import _activity
+
+    act = Activity(tool="Bash", target="Windows job step conclusions and more",
+                   since=24, repeated=True)
+
+    rendered = _activity(act)
+
+    assert rendered.endswith("(+24) ↻")
+    assert rendered.startswith("Bash ")
+
+
+def test_budgeted_target_is_cut_on_a_word_boundary():
+    from mnemo.core.sessions.render import _activity
+
+    act = Activity(tool="Bash", target="Commit measurement script and report", since=26)
+
+    assert _activity(act) == "Bash Commit measurement… (+26)"
+
+
+def test_a_tool_name_that_fills_the_column_keeps_its_signals():
+    from mnemo.core.sessions.render import DETAIL_WIDTH, _activity
+
+    act = Activity(tool="mcp__claude-in-chrome__browser_batch", target="x", since=5)
+
+    rendered = _activity(act)
+
+    assert len(rendered) <= DETAIL_WIDTH
+    assert rendered.endswith("(+5)")
+
+
+def test_the_table_stays_aligned_when_activity_is_long():
+    """The whole point of the budget: the token column must not move."""
+    sessions = [
+        _working(short_id="s1", tokens=4200),
+        _working(short_id="s2", tokens=1500),
+    ]
+    acts = {
+        "s1": Activity(tool="Bash", target="Relocate comment file and verify clean", since=23),
+        "s2": Activity(tool="Edit", target="x.py"),
+    }
+
+    out = render_queue(sessions, acts)
+    rows = [l for l in out.splitlines() if l.startswith("  s")]
+
+    assert len(rows) == 2
+    assert len(rows[0]) == len(rows[1]), rows
