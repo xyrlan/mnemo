@@ -2158,10 +2158,34 @@ Verified through Tasks 1+2: **9/9 produce a readable activity**, and
 mentions `linkScanPath`, so the field the whole design rests on is present in
 practice.
 
-**What remains unverified** is the live path: `~/.claude/jobs/` holds only
-`pins.json` right now, so no session is running and `read_sessions()` returns
-nothing. Task 3's join and Task 5's watch loop are therefore fixture-verified
-plus verified against transcripts on disk, but not yet against a live
-`state.json`. Task 7 Step 2 is the place to close that, and it needs a
-background session alive at the time — dispatch something, or run the check
-during the next real dispatch.
+**The live path is now covered too.** `~/.claude/jobs/` holds only `pins.json`
+(no session running), so instead of waiting for one, the path was driven
+through `read_sessions(root=<tmp>)` with a `state.json` written in the real
+camelCase shape (`state`, `tempo`, `name`, `cwd`, `tokens`, `sessionId`,
+`linkScanPath`, `updatedAt`) pointing at the real #197 dispatch transcript.
+Result: the session parsed, `link_scan_path` came through, `label` recovered
+`#197` from `cwd` via `issue_for_cwd`, and `render_queue` printed
+`Bash Commit (+20)`. What is still untested is only the timing of a genuinely
+concurrent writer, which no fixture can stand in for.
+
+## Finding: the label column is unbudgeted (pre-existing, out of scope)
+
+Driving real data through the renderer exposed a layout bug that every fixture
+in this plan hides, because the fixtures use short names like `child`.
+
+Real labels run 30–34 characters (`"#197 dispatch a feature's pieces"` = 32,
+`"#203 measure unblock edge coverage"` = 34) against a `{s.label:<22}` field.
+`jobs.py` caps `label` at 40 chars, so the column can overflow by up to 18 —
+and the overflow shoves whatever follows, which is why the verification output
+read `pieces Bash Commit (+20)` with no column break.
+
+**This predates this branch**: `git show 3e2851b:src/mnemo/core/sessions/render.py`
+has the same unbudgeted `{s.label:<22}` in all four buckets, already shoving
+`detail`. The activity column did not cause it; it made it visible, because an
+activity string is longer and more structured than the `—` that used to sit
+there.
+
+Deliberately **not fixed here**. Budgeting `label` touches all four buckets and
+the waiting bucket's whole job is to be readable, so it deserves its own change
+with its own before/after on real data — not a drive-by inside an activity
+feature. Worth filing.
