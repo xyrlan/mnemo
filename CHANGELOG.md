@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-13
+
 ### Added
 
 - **`mnemo sessions --json` now answers the question instead of handing you the

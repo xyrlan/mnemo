@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import mnemo
 from mnemo.cli.commands.doctor_checks import duplicate_install as check_mod
 from mnemo.install import duplicate_install as dup
 
@@ -121,8 +122,12 @@ def test_version_skew_only_counts_hook_running_installs(tmp_path: Path) -> None:
 
 
 def test_matching_version_reports_duplication_without_skew_line(tmp_path: Path) -> None:
+    # Seeded at the *running* version, read rather than written literally: a
+    # hardcoded one means "same version" only until the next release bumps
+    # pyproject, and then this test fails on the release commit for a reason
+    # that has nothing to do with the check. It did exactly that on 1.5.0.
     claude = tmp_path / ".claude"
-    _seed_plugin(claude, version="1.4.1")
+    _seed_plugin(claude, version=mnemo.__version__)
     findings = check_mod.check_duplicate_install(claude)
 
     assert findings is not None
