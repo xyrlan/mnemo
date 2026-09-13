@@ -73,10 +73,14 @@ def pushed(monkeypatch: pytest.MonkeyPatch) -> list:
         delivery, "push",
         lambda branch, *, worktree: calls.append(("push", branch)),
     )
-    monkeypatch.setattr(
-        delivery, "open_pr",
-        lambda branch, *, worktree, title: calls.append(("pr", branch)) or "https://x/pull/1",
-    )
+    def _open_pr(branch, *, worktree, title, target=None):
+        # `target` is recorded, not ignored: #224 is a bug about the one fact
+        # this command owns never reaching the PR, so the wiring is the thing
+        # worth asserting on.
+        calls.append(("pr", branch, target))
+        return "https://x/pull/1"
+
+    monkeypatch.setattr(delivery, "open_pr", _open_pr)
     return calls
 
 
@@ -152,7 +156,23 @@ def test_only_the_named_child_is_delivered(in_repo: Path, pushed: list) -> None:
 
     assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 0
 
-    assert pushed == [("push", "feat/f/delivery"), ("pr", "feat/f/delivery")]
+    assert pushed == [
+        ("push", "feat/f/delivery"), ("pr", "feat/f/delivery", "c-delivery"),
+    ]
+
+
+def test_the_issue_number_reaches_open_pr(in_repo: Path, pushed: list) -> None:
+    """#224: the trailer can only be written if the target is threaded through.
+
+    `open_pr` decides whether to append `Closes #<n>` from this argument. The
+    command recovers it from the worktree path and is the only thing that
+    knows it, so a `None` here is the whole bug with the fix still in place.
+    """
+    _ready_tree(in_repo, "222", "fix/issue-222")
+
+    assert deliver.cmd_deliver(_args(ids=["222"])) == 0
+
+    assert pushed == [("push", "fix/issue-222"), ("pr", "fix/issue-222", 222)]
 
 
 def test_each_named_child_is_delivered(in_repo: Path, pushed: list) -> None:
@@ -215,7 +235,7 @@ def test_a_push_that_landed_is_reported_even_when_the_pr_fails(
     _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
     monkeypatch.setattr(delivery, "push", lambda branch, *, worktree: None)
 
-    def boom(branch, *, worktree, title):
+    def boom(branch, *, worktree, title, target=None):
         raise delivery.DeliveryError("no default branch")
 
     monkeypatch.setattr(delivery, "open_pr", boom)
