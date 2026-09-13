@@ -185,3 +185,160 @@ def test_consume_unblocks_says_so_when_there_is_nothing(
     )
     assert sessions_cmd.cmd_sessions(args) == 0
     assert "no unblocked session" in capsys.readouterr().out
+
+
+# --- append mode (#218) ------------------------------------------------
+#
+# The default redraw clears the screen every tick, so scrollback holds
+# nothing and every row reads as equally new. Measured against six real
+# dispatch children over 60s: 114 row-renders carried 7 actual changes
+# (6.1%). Append mode emits the 6% and stays silent for the rest.
+
+
+def _watch_args(**kw):
+    kw.setdefault("json", False)
+    kw.setdefault("watch", True)
+    kw.setdefault("append", False)
+    kw.setdefault("interval", 2.0)
+    kw.setdefault("consume_unblocks", False)
+    kw.setdefault("all", True)
+    return argparse.Namespace(**kw)
+
+
+@pytest.fixture
+def _ticker(monkeypatch):
+    """Drive the watch loop a bounded number of ticks, then Ctrl-C out."""
+
+    def drive(ticks: int):
+        seen = [0]
+
+        def fake_sleep(_):
+            seen[0] += 1
+            if seen[0] >= ticks:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr("time.sleep", fake_sleep)
+        return seen
+
+    return drive
+
+
+def _moving_session(monkeypatch, tmp_path, writes):
+    """A session whose transcript grows by one tool use per tick."""
+    import json as _json
+
+    from mnemo.core.sessions.jobs import Session
+
+    p = tmp_path / "child.jsonl"
+    p.write_bytes(b"")
+    session = Session(short_id="abc", tempo="active", name="child",
+                      link_scan_path=str(p))
+
+    pending = list(writes)
+
+    def fake_read(**kw):
+        # Each read is a tick; append the next action before it is summarized.
+        if pending:
+            tool, target = pending.pop(0)
+            with open(p, "ab") as fh:
+                fh.write(_json.dumps({
+                    "type": "assistant",
+                    "timestamp": "2026-09-13T14:02:11.000Z",
+                    "message": {"role": "assistant", "content": [
+                        {"type": "tool_use", "id": "t", "name": tool,
+                         "input": {"file_path": target}}]},
+                }).encode("utf-8") + b"\n")
+        return [session]
+
+    monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", fake_read)
+    monkeypatch.setattr("mnemo.core.sessions.detector.sweep", lambda *a, **kw: None)
+    return session
+
+
+def test_append_mode_never_clears_the_screen(
+    monkeypatch, capsys, tmp_path: Path, _ticker
+) -> None:
+    """The whole point: scrollback must survive the watch."""
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py"), ("Read", "/r/b.py")])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+    _ticker(3)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(append=True)) == 0
+
+    assert "\033[2J" not in capsys.readouterr().out
+
+
+def test_append_mode_stays_silent_when_nothing_moves(
+    monkeypatch, capsys, tmp_path: Path, _ticker
+) -> None:
+    """94% of real row-renders are unchanged; they must not be reprinted."""
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py")])
+    _ticker(4)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(append=True)) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("a.py") == 1, out
+
+
+def test_append_mode_emits_a_row_that_moved(
+    monkeypatch, capsys, tmp_path: Path, _ticker
+) -> None:
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py"), ("Read", "/r/b.py")])
+    _ticker(3)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(append=True)) == 0
+
+    out = capsys.readouterr().out
+    assert "a.py" in out and "b.py" in out, out
+
+
+def test_append_mode_identifies_which_session_moved(
+    monkeypatch, capsys, tmp_path: Path, _ticker
+) -> None:
+    """A bare tool name is unreadable with four children in the log."""
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py")])
+    _ticker(2)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(append=True)) == 0
+
+    assert "abc" in capsys.readouterr().out
+
+
+def test_the_default_watch_still_clears(
+    monkeypatch, capsys, tmp_path: Path, _ticker
+) -> None:
+    """Two modes, not a replacement — the redraw stays the default."""
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py")])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+    _ticker(2)
+
+    assert sessions_cmd.cmd_sessions(_watch_args()) == 0
+
+    assert "\033[2J" in capsys.readouterr().out
+
+
+def test_interval_is_honoured(monkeypatch, tmp_path: Path) -> None:
+    """A twenty-minute dispatch does not need 600 redraws."""
+    _moving_session(monkeypatch, tmp_path, [])
+    slept: list[float] = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("time.sleep", fake_sleep)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(interval=30.0)) == 0
+
+    assert slept == [30.0]
+
+
+def test_append_implies_watch(monkeypatch, capsys, tmp_path: Path, _ticker) -> None:
+    """`--append` alone is a watch mode, not a silent no-op."""
+    _moving_session(monkeypatch, tmp_path, [("Edit", "/r/a.py")])
+    _ticker(2)
+
+    assert sessions_cmd.cmd_sessions(_watch_args(watch=False, append=True)) == 0
+
+    assert "a.py" in capsys.readouterr().out

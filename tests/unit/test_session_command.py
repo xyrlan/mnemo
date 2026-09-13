@@ -182,3 +182,111 @@ def test_the_mark_stays_rare_on_ordinary_work(capsys, monkeypatch, tmp_path):
     assert cmd_session(_args()) == 0
 
     assert "↻" not in capsys.readouterr().out
+
+
+# --- --follow (#218) ---------------------------------------------------
+#
+# #210 ruled --follow out as a scope call. #218 revisits it: watching one
+# child's actions accumulate is a thing the maintainer wanted. The
+# plumbing already exists — read_tail returns a new offset and the CLI
+# threw it away, passing 0 on every run and re-reading a 256KB cold
+# window each time.
+
+
+def _follow_args(short_id="abc", limit=15, follow=True, interval=2.0):
+    return argparse.Namespace(short_id=short_id, limit=limit,
+                              follow=follow, interval=interval)
+
+
+@pytest.fixture
+def _ticker(monkeypatch):
+    def drive(ticks: int):
+        seen = [0]
+
+        def fake_sleep(_):
+            seen[0] += 1
+            if seen[0] >= ticks:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr("time.sleep", fake_sleep)
+        return seen
+
+    return drive
+
+
+def test_follow_carries_the_bookmark(session_with_actions, monkeypatch, _ticker):
+    """The measured fix: the second tick must not re-read from zero."""
+    from mnemo.core.activity import tail as tail_mod
+
+    reads = []
+    real = tail_mod.read_tail
+
+    def spy(path, offset, *a, **kw):
+        reads.append(offset)
+        return real(path, offset, *a, **kw)
+
+    monkeypatch.setattr("mnemo.core.activity.read_tail", spy)
+    _ticker(2)
+
+    assert cmd_session(_follow_args()) == 0
+
+    assert len(reads) >= 2, reads
+    assert reads[0] == 0, "first tick is a cold start"
+    assert reads[1] > 0, "second tick must resume from the bookmark"
+
+
+def test_follow_does_not_reprint_actions_already_shown(
+    session_with_actions, capsys, _ticker
+):
+    """Appending, not redrawing: an action is printed once."""
+    _ticker(3)
+
+    assert cmd_session(_follow_args()) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("detector.py") == 2, out  # one Read, one Edit — not 3x
+
+
+def test_follow_prints_new_actions_as_they_arrive(
+    monkeypatch, tmp_path, capsys, _ticker
+):
+    from mnemo.core.sessions.jobs import Session
+
+    p = tmp_path / "child.jsonl"
+    p.write_bytes(_event("Grep", "pattern", "first").encode("utf-8") + b"\n")
+    session = Session(short_id="abc", name="child", link_scan_path=str(p))
+    monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", lambda **kw: [session])
+
+    ticks = [0]
+
+    def fake_sleep(_):
+        ticks[0] += 1
+        if ticks[0] >= 2:
+            raise KeyboardInterrupt
+        with open(p, "ab") as fh:
+            fh.write(_event("Edit", "file_path", "/r/second.py").encode("utf-8") + b"\n")
+
+    monkeypatch.setattr("time.sleep", fake_sleep)
+
+    assert cmd_session(_follow_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "first" in out and "second.py" in out, out
+
+
+def test_follow_omits_the_attach_footer(session_with_actions, capsys, _ticker):
+    """A footer repeated every tick is noise in an appending stream."""
+    _ticker(2)
+
+    assert cmd_session(_follow_args()) == 0
+
+    assert "attach:" not in capsys.readouterr().out
+
+
+def test_without_follow_the_one_shot_view_is_unchanged(session_with_actions, capsys):
+    """--follow is opt-in; the default prints once and exits."""
+    assert cmd_session(_follow_args(follow=False)) == 0
+
+    out = capsys.readouterr().out
+    assert "attach: claude attach abc" in out
+    assert out.count("detector.py") == 2
