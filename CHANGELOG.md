@@ -3,6 +3,51 @@
 All notable changes to mnemo will be documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`mnemo dispatch --contract <path>` — one background child per *piece of a
+  feature*, instead of one per GitHub issue.** Nobody files four issues to
+  build one feature, so the unit of parallel work is now a **contract**: a
+  reviewed markdown file naming each piece, the files it may change, the
+  signatures it `exposes`, and the signatures it `consumes` from other pieces.
+  Pieces are addressed as `<repo>-wt-c-<slug>` on `feat/<feature>/<slug>`; the
+  issue form is unchanged.
+
+  A piece's `consumes` names something that does not exist yet — the piece
+  delivering it is being written at the same moment. The child writes against
+  the signature and the merge resolves it, which is why `exposes` must be a
+  literal signature rather than a description, and why dispatch is a flat
+  fan-out rather than a scheduler.
+
+  `verdict: sequential` is a first-class outcome: it is the decomposition
+  reporting that the work does not divide, and it is refused rather than
+  dispatched. A contract naming an unknown piece, a duplicate slug, an
+  unaddressable slug, a piece with no file boundary, or a piece consuming from
+  itself is refused **before any worktree is created**.
+
+- **Skill `decomposing-for-dispatch`** — writes that contract file from the
+  current conversation, whatever its origin (built-in plan mode persists
+  nothing, so the skill reads the session rather than a plan file). It applies
+  one test per pair of pieces — *can A be written and tested without reading
+  the interior of B?* — and records boundaries, never approaches. The
+  maintainer reviews the file and runs the dispatch; no model spawns work.
+
+### Fixed
+
+- **Dispatch rollback left the branch behind.** Removing a failed child's
+  worktree deleted its directory but not its branch, so retrying the same
+  target died on `fatal: a branch named '...' already exists` — a *different*
+  failure from the one rolled back, and one no amount of retrying clears. This
+  affected the issue path as much as the new contract one. The existing test
+  asserted only that the directory was gone, which is why it survived; the
+  assertion with teeth is that the retry succeeds.
+
+- **`mnemo sessions` labelled a contract piece as a nonexistent issue.** A
+  slug-named child rendered as `#c-parser`, where `#` is the GitHub-issue
+  sigil. Pieces now show bare.
+
 ## [1.4.1] — 2026-09-12
 
 ### Added

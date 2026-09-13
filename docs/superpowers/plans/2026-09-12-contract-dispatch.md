@@ -1277,14 +1277,23 @@ git commit -m "docs: contract dispatch"
 Run each and confirm the output before saying the work is done:
 
 ```bash
-python -m pytest tests/unit -q                    # whole suite green
-grep -rn "read_sessions\|render_queue" src/mnemo/hooks/ src/mnemo/core/mcp/
-grep -rn "dispatch" src/mnemo/hooks/ src/mnemo/core/mcp/
+PYTHONPATH=src python3 -m pytest tests/unit -q     # whole suite green
+grep -rnE "from mnemo\.core import dispatch|from mnemo\.core\.dispatch|dispatch_contract|dispatch_all|dispatch_issue|spawn_child" src/mnemo/hooks/ src/mnemo/core/mcp/
+grep -rn "render_queue" src/mnemo/hooks/ src/mnemo/core/mcp/
 ```
 
 The two greps must return **nothing**. They assert the invariants this design
-preserves: no hook and no MCP tool may enumerate sessions or spawn work. A hit
-means the implementation revoked an invariant the spec promised to keep.
+preserves: no hook and no MCP tool may spawn work or render the session queue.
+A hit means the implementation revoked an invariant the spec promised to keep.
+
+They are deliberately narrower than a bare `grep dispatch`, which was the first
+formulation and was useless: it matched the word in an unrelated JSON-RPC
+docstring (`core/mcp/server.py:7`, "dispatch into …tools"), so it failed against
+a clean master and proved nothing. `read_sessions` is likewise excluded — it
+appears legitimately at `hooks/session_end.py:297`, feeding the unblock
+detector, which reads session state without exposing the queue to a model's
+context. The invariant is about **a model spending tokens or spawning work**,
+not about the string.
 
 Then a real end-to-end check, which the unit suite cannot cover because
 `conftest.py:69` monkeypatches `spawn_child` globally:
