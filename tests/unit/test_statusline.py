@@ -37,11 +37,18 @@ def _write_page(
 
 @pytest.fixture(autouse=True)
 def _no_project_resolution(monkeypatch):
-    """Statusline tests expect vault-wide topic counts unless overridden."""
-    monkeypatch.setattr(
-        "mnemo.core.agent.resolve_agent",
-        lambda cwd: type("A", (), {"name": None, "repo_root": cwd, "has_git": False})(),
-    )
+    """Statusline tests expect vault-wide topic counts unless overridden.
+
+    Both resolvers are stubbed (#225): the statusline now resolves the project
+    canonically, and stubbing only ``resolve_agent`` left these tests reading
+    the developer's real repo name — so they passed or failed depending on the
+    directory the suite happened to run from.
+    """
+    def stub(cwd):
+        return type("A", (), {"name": None, "repo_root": cwd, "has_git": False})()
+
+    monkeypatch.setattr("mnemo.core.agent.resolve_agent", stub)
+    monkeypatch.setattr("mnemo.core.agent.resolve_canonical_agent", stub)
 
 
 def _write_claude_json_with_mnemo(path: Path) -> None:

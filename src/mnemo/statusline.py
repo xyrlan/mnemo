@@ -142,10 +142,13 @@ def _activation_segments(vault_root: Path, cwd: str | None) -> list[str]:
         if index is None:
             return []
 
-        # Determine current project from cwd
-        from mnemo.core.agent import resolve_agent
+        # Determine current project from cwd. Canonical (#225): PreToolUse
+        # enforces against the canonical project, so resolving naively here
+        # would report a rule count that contradicts what actually fires
+        # inside a worktree.
+        from mnemo.core.agent import resolve_canonical_agent
         effective_cwd = cwd or str(Path.cwd())
-        agent = resolve_agent(effective_cwd)
+        agent = resolve_canonical_agent(effective_cwd)
         project = agent.name
 
         from mnemo.core.rule_activation import (
@@ -191,13 +194,15 @@ def render(
     if not (_mcp_registered(project_mcp) or _mcp_registered(claude_json_path)):
         return ""
     try:
-        from mnemo.core.agent import resolve_agent
+        from mnemo.core.agent import resolve_canonical_agent
         from mnemo.core.mcp.session_state import read_today
         from mnemo.core.mcp.tools import get_mnemo_topics
 
         effective_cwd = cwd or str(Path.cwd())
         try:
-            project = resolve_agent(effective_cwd).name
+            # Canonical (#225): must agree with the topic list the MCP tools
+            # serve, which is what this count claims to summarise.
+            project = resolve_canonical_agent(effective_cwd).name
         except Exception:
             project = None
 
