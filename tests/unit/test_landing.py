@@ -437,6 +437,34 @@ def test_rehearse_checks_the_consumer_against_the_owner_in_the_merged_tree(
     assert "purge" in result.failed.detail
 
 
+def test_rehearse_stops_at_the_consumer_when_the_owner_lacks_the_consumed_name(
+    repo: Path, gh_prs, tmp_path,
+) -> None:
+    """The owner's own row passes; the consumer names something it never wrote.
+
+    Mutation-found: with the consumer step's check removed, every other test
+    here still passed, because the owner's own ``exposes`` check fired first
+    in each of them. This one reaches the consumer's step — ``storage``
+    exposes and defines ``load`` — and asserts that ``api`` is the piece
+    stopped on, with the name it consumed and cannot have.
+    """
+    gh_prs["feat/f/storage"] = (1, "OPEN")
+    gh_prs["feat/f/api"] = (2, "OPEN")
+    api = Piece("api", files=["src/api.py"],
+                consumes=[("`load(key)`", "storage"), ("`purge()`", "storage")])
+    _branch(repo, "feat/f/storage", {"src/storage.py": "def load(key):\n    pass\n"})
+    _branch(repo, "feat/f/api", {"src/api.py": "x = 1\n"})
+    states = landing.inspect(_contract(api, STORAGE), repo_root=repo)
+    # `inspect` refuses api statically (storage exposes no `purge`); `force`
+    # reaches the rehearsal's own check, which reads the merged tree.
+    result = landing.rehearse(states, repo_root=repo, suite=_suite(tmp_path / "l"),
+                              force=True)
+
+    assert not result.ok
+    assert result.failed.slug == "api"
+    assert "purge" in result.failed.detail and "storage" in result.failed.detail
+
+
 def test_rehearse_stops_at_a_red_suite_with_its_output(repo: Path, gh_prs, tmp_path) -> None:
     gh_prs["feat/f/storage"] = (1, "OPEN")
     gh_prs["feat/f/api"] = (2, "OPEN")
