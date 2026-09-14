@@ -199,17 +199,24 @@ def _maybe_schedule_briefing(
 ) -> None:
     """Spawn a detached per-session briefing when briefings.enabled=True.
 
-    The briefing's storage agent is the **canonical** agent for the cwd
-    (resolves through worktree .git pointers). This unifies briefings from
-    main + worktree sessions of the same repo into one pool. The
-    ``agent_name`` parameter is kept for signature compatibility and is no
-    longer used for briefing path resolution.
+    The briefing's storage agent is ``agent_name`` — the name ``main()``
+    resolved for this session: the session cache first (written by
+    session_start, canonically since #225, while the tree still existed),
+    canonical resolution of the cwd only on a cache miss. That is the same
+    name the day's log line is written under, so the two never disagree.
+
+    Not re-resolved from ``cwd`` here (#247): a dispatched worktree is
+    routinely removed before its child is stopped, so by the time SessionEnd
+    fires the cwd can be a path with nothing on disk. A fresh resolution then
+    finds no ``.git`` above it and falls back to the directory basename —
+    ``bots/<repo>-wt-N/briefings/``, one orphan namespace per stopped child,
+    while the log line beside it went under ``bots/<repo>/``. ``cwd`` is
+    still needed to locate the transcript, which outlives the tree.
 
     Unlike extraction, briefings skip the count+time debounce — they are
     cheap and run on every session end so no handoff state is dropped.
     """
     try:
-        from mnemo.core import agent as agent_mod
         from mnemo.core import errors as err_mod
 
         briefings_cfg = cfg.get("briefings") or {}
@@ -220,10 +227,8 @@ def _maybe_schedule_briefing(
         if jsonl_path is None:
             return
 
-        canonical = agent_mod.resolve_canonical_agent(cwd).name
-
         try:
-            _spawn_detached_briefing(jsonl_path, canonical)
+            _spawn_detached_briefing(jsonl_path, agent_name)
         except OSError as exc:
             err_mod.log_error(vault_root, "session_end.briefing.popen", exc)
     except Exception as exc:
@@ -376,6 +381,12 @@ def _maybe_schedule_propose(
 ) -> None:
     """Run the end-of-session rule proposer when autopilot is active.
 
+    The project is ``agent_name``, the name ``main()`` resolved for this
+    session (session cache first) — not a fresh resolution of ``cwd``, which
+    can already be a removed worktree by the time SessionEnd fires (#247; see
+    :func:`_maybe_schedule_briefing`). ``cwd`` still goes to the analyzer for
+    its git calls.
+
     Always stamps ``analyzed_at`` on the session cache after this returns —
     reaching SessionEnd is the user's intent to close the session, and the
     Tier 3 catchup (autopilot.core.scheduler) must respect that even when
@@ -389,18 +400,12 @@ def _maybe_schedule_propose(
 
         if is_active(vault_root=vault_root):
             from mnemo.autopilot.proposer.eos_extractor import analyze_session
-            from mnemo.core import agent as agent_mod
 
             cwd_path = __import__("pathlib").Path(cwd)
             try:
-                project = agent_mod.resolve_canonical_agent(cwd).name
-            except Exception:
-                project = agent_name
-
-            try:
                 analyze_session(
                     session_id=session_id,
-                    project=project,
+                    project=agent_name,
                     vault_root=vault_root,
                     cwd=cwd_path,
                 )
