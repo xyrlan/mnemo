@@ -28,7 +28,17 @@ reflex: injected on 88 of 1131 prompts (7.8%)
 `reflex` is the per-prompt recall. When Claude asks for rules by topic
 instead, query-aware ranking lifted the share of cases with the needed rule
 in the top five from 16% to 31% on topics with more than 20 rules (530
-evaluations). Your own numbers: `mnemo status`.
+evaluations). Your own numbers, from your own transcripts:
+
+```bash
+mnemo replay
+```
+
+It replays every prompt you typed through the same decision the hook makes
+and reports how often a rule from an *earlier* session would have come back
+to you — with the hindsight cases (the rule came from that same session) and
+the rules the vault had not learned yet counted separately, not in. Counts
+first; a rate only once there are enough prompts to carry one.
 
 ## How it compares
 
@@ -153,6 +163,7 @@ waiting. Details in
 ```
 /mnemo:status   vault state + hook health
 /mnemo:why      why per-prompt recall fired, or didn't, on your last prompts
+mnemo replay    your transcripts against your vault: what would have come back, and from when
 /mnemo:doctor   full diagnostic with actionable fixes
 /mnemo:learn    learn from this session now
 /mnemo:help     list commands
