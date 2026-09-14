@@ -166,7 +166,13 @@ def _report(results: list) -> int:
     failed = [r for r in results if r.error is not None]
 
     for r in started:
-        print(f"{_label(r.issue)}  {r.short_id}  {r.worktree}")
+        print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}")
+        if r.warning:
+            # The child is running — the tree was kept for it — but something
+            # about the `claude` CLI did not look as expected (#235). Printed
+            # under the row, not swallowed into a blank column: which
+            # assumption broke and against which version is the whole point.
+            print(f"    WARNING: {r.warning}")
     for r in failed:
         # Never silent: a skipped child the maintainer does not see is one
         # they will assume is running.
@@ -183,5 +189,8 @@ def _report(results: list) -> int:
         attachable = next((r for r in started if r.short_id), None)
         if attachable is not None:
             print(f"  attach: claude attach {attachable.short_id}")
+        if any(r.warning for r in started):
+            print("  check:  pytest -m live_claude   # the claude CLI contract, "
+                  "against the installed binary")
 
     return 1 if failed else 0
