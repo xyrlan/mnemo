@@ -1,0 +1,194 @@
+"""The ``claude`` CLI contract, checked against the **installed** binary (#235).
+
+Opt-in — ``pytest -m live_claude`` — because it spawns one real background
+session (a one-word prompt, ~30 tokens, ~6s), then stops and removes it. The
+default run deselects it via ``addopts``.
+
+Every assertion here corresponds to an entry in
+:data:`mnemo.core.claude_cli.ASSUMPTIONS`; the failure message names it. When
+one fails, the procedure is: read what the binary actually did, update the
+assumption (and the code that implements it), bump ``VERIFIED_AGAINST``.
+Fixtures elsewhere in the suite mirror the last observed output; this is the
+only test that can tell when "last observed" has gone stale.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import time
+import warnings
+from pathlib import Path
+
+import pytest
+
+from mnemo.core import claude_cli, dispatch
+from mnemo.core.sessions import jobs, liveness
+
+pytestmark = [pytest.mark.live_claude, pytest.mark.real_spawn]
+
+PROMPT = "Reply with exactly the word OK and nothing else. Do not use any tools."
+
+
+def _git_repo(root: Path) -> Path:
+    root.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for args in (["init", "-q", "-b", "master"], ["add", "."], ["commit", "-qm", "init"]):
+        if args[0] == "add":
+            (root / "README.md").write_text("live\n", encoding="utf-8")
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, env=env)
+    return root
+
+
+def _until(predicate, *, seconds: float, every: float = 0.5):
+    """Poll *predicate* until it returns something truthy, or time runs out."""
+    deadline = time.monotonic() + seconds
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() > deadline:
+            return value
+        time.sleep(every)
+
+
+def _state(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+@pytest.fixture()
+def real_claude(real_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Undo the suite's HOME isolation for the child, and for the jobs reader.
+
+    The autouse fixtures point HOME and ``jobs_dir`` at a throwaway tree so no
+    unit test can touch the developer's machine. This test's whole purpose is
+    to touch it: the child inherits the environment, and under a fresh HOME
+    ``claude`` would hit onboarding and never spawn. Returns the real
+    ``~/.claude``.
+    """
+    if shutil.which("claude") is None:
+        pytest.skip("no `claude` on PATH")
+    monkeypatch.setenv("HOME", str(real_home))
+    monkeypatch.setenv("USERPROFILE", str(real_home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: real_home))
+    monkeypatch.delenv("MNEMO_CONFIG_PATH", raising=False)
+    claude_home = real_home / ".claude"
+    monkeypatch.setattr(jobs, "jobs_dir", lambda: claude_home / "jobs")
+    return claude_home
+
+
+def test_installed_version_is_readable(real_claude: Path) -> None:
+    version = claude_cli.claude_version()
+    assert version, "`claude --version` printed no x.y.z; parse_version needs updating"
+    if version != claude_cli.VERIFIED_AGAINST:
+        warnings.warn(
+            f"claude {version} installed; assumptions last verified against "
+            f"{claude_cli.VERIFIED_AGAINST}. If this run passes, bump "
+            "VERIFIED_AGAINST / VERIFIED_ON in mnemo.core.claude_cli.",
+            stacklevel=1,
+        )
+
+
+def test_agents_refuses_a_pipe(real_claude: Path) -> None:
+    """``agents-needs-tty``: routed around, but the note must stay true."""
+    result = subprocess.run(["claude", "agents"], capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0, (
+        "`claude agents` now works on a pipe; update the `agents-needs-tty` "
+        "assumption and the dispatch hints that route around it"
+    )
+
+
+def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> None:
+    """One real spawn, every assumption dispatch meets on the way, in order."""
+    repo = _git_repo(tmp_path / "live")
+    tree = dispatch.ensure_worktree(1, repo_root=repo)
+    short_id = ""
+    try:
+        # bg-positional-prompt + bg-prints-short-id: the real spawn_child, no
+        # fixture in the path. ContractBroken here names what changed.
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree)
+        assert claude_cli.SHORT_ID_RE.match(short_id), short_id
+
+        # jobs-state-json: present synchronously, cwd is the tree.
+        entry = real_claude / "jobs" / short_id
+        state_path = entry / "state.json"
+        problem = claude_cli.verify_registered(short_id, cwd=tree)
+        assert problem is None, problem
+        data = _state(state_path)
+        assert data is not None
+        for key in ("state", "tempo", "sessionId", "intent"):
+            assert isinstance(data.get(key), str) and data[key], (
+                f"jobs-state-json: `{key}` missing or not a string at spawn: {data.get(key)!r}"
+            )
+        assert data["sessionId"].startswith(short_id), (
+            "jobs-state-json: sessionId no longer prefixed by the short id"
+        )
+        assert data["intent"] == PROMPT, "jobs-state-json: `intent` is no longer the prompt"
+
+        # The reader every consumer goes through resolves the tree to exactly
+        # this session — what `mnemo sessions` and `mnemo deliver` rely on.
+        found = jobs.read_sessions(real_claude / "jobs", cwd=str(tree), claude_home=real_claude)
+        assert [s.short_id for s in found] == [short_id], found
+
+        # state-tempo-vocabulary, at spawn.
+        session = found[0]
+        assert session.state in {"working", "blocked", "done", "stopped"}, session.state
+        assert session.tempo in {"active", "blocked", "idle"}, session.tempo
+
+        # daemon-roster-pid: present synchronously, and the pid is alive.
+        roster = liveness.read_roster(real_claude)
+        assert roster is not None, "daemon-roster-pid: roster.json unreadable"
+        assert short_id in roster, f"daemon-roster-pid: {short_id} not in workers"
+        assert session.live is True, "daemon-roster-pid: read_sessions did not stamp live=True"
+
+        # Let the one-word child finish, then check the terminal vocabulary
+        # and the transcript it leaves behind.
+        finished = _until(
+            lambda: (lambda d: d if d and d.get("state") in ("done", "stopped") else None)(
+                _state(state_path)
+            ),
+            seconds=180,
+        )
+        assert finished, f"child never reached done/stopped: {_state(state_path)}"
+        assert finished.get("tempo") == "idle", (
+            f"state-tempo-vocabulary: finished child has tempo={finished.get('tempo')!r}"
+        )
+
+        # transcript-jsonl: linkScanPath is filled in after spawn.
+        transcript = _until(
+            lambda: (_state(state_path) or {}).get("linkScanPath"), seconds=60
+        )
+        assert isinstance(transcript, str) and os.path.isfile(transcript), (
+            f"transcript-jsonl: linkScanPath={transcript!r}"
+        )
+        with open(transcript, encoding="utf-8") as fh:
+            lines = [line for line in fh if line.strip()]
+        assert lines, "transcript-jsonl: file is empty"
+        events = [json.loads(line) for line in lines]
+        assert all(isinstance(e, dict) and "type" in e for e in events), (
+            "transcript-jsonl: a line is not an object with `type`"
+        )
+        assert any(e.get("type") == "assistant" and isinstance(e.get("message"), dict)
+                   for e in events), "transcript-jsonl: no assistant line with `message`"
+
+        # stop-rm-noninteractive: stop on a done session exits 0 and leaves
+        # state/tempo alone.
+        stop = subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+        assert stop.returncode == 0, f"stop-rm-noninteractive: stop rc={stop.returncode} {stop.stderr!r}"
+        after = _state(state_path)
+        assert after and after.get("state") in ("done", "stopped") and after.get("tempo") == "idle", after
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            rm = subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+            assert rm.returncode == 0, f"stop-rm-noninteractive: rm rc={rm.returncode} {rm.stderr!r}"
+            assert not (real_claude / "jobs" / short_id).exists(), (
+                "stop-rm-noninteractive: `claude rm` left the jobs entry behind"
+            )
+        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(1))

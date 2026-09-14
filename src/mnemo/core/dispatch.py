@@ -20,6 +20,13 @@ attempt, so each is encoded here rather than left to be rediscovered:
   reader must use ``mnemo sessions --json``.
 - **``timeout`` is not on the macOS PATH.** Dispatches are never wrapped in it.
 
+Every observable behaviour of the ``claude`` CLI this relies on — the shape
+of what ``--bg`` prints, the jobs-directory files read back, the roster, the
+resume semantics above — is stated as data in :mod:`mnemo.core.claude_cli`
+with the version it was last verified against, and exercised against the
+installed binary by ``pytest -m live_claude`` (#235). A spawn whose output or
+jobs entry does not match raises or warns naming the assumption that broke.
+
 One worktree per child is mandatory, not advisory. Sharing a tree between
 parallel sessions has already cost three git accidents in one turn: a branch
 taken from another session's branch, ``add -A`` sweeping another session's
@@ -44,7 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
-from mnemo.core import contracts
+from mnemo.core import claude_cli, contracts
 
 WORKTREE_SUFFIX = "-wt-"
 
@@ -98,6 +105,11 @@ class Dispatched:
     worktree: Path | None = None
     short_id: str | None = None
     error: str | None = None
+    #: Set when the child started but a ``claude`` CLI assumption did not hold
+    #: (#235): the id could not be read back, or the jobs dir does not show
+    #: the session. Not an error — the tree is kept, because the child is most
+    #: likely running in it — but never silent either; the report prints it.
+    warning: str | None = None
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -415,29 +427,13 @@ def remove_worktree(
 
 # --- spawn -----------------------------------------------------------------
 
-# A Claude Code session short id: exactly eight lowercase hex digits, as every
-# id under `~/.claude/jobs/` is. The trailing `$` is load-bearing — without it
-# a 40-char commit sha echoed above the block matches on its first eight
-# characters and is returned as an id addressing no session.
-_SHORT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
-
-# SGR escapes, which `claude --bg` emits around the id under `FORCE_COLOR`
-# — verified against live spawns with and without it, not assumed. Stripped
-# before matching, because the colored id arrives as the single token
-# ESC[36m<id>ESC[39m (no spaces) and so matches no id shape at all.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _short_id_from(stdout: str) -> str:
-    """The first token in *stdout* shaped like a session short id, else ``""``.
-
-    Scans tokens rather than lines. See :func:`spawn_child` for why the shape,
-    and not the position, is what this keys on.
-    """
-    for token in _ANSI_RE.sub("", stdout).split():
-        if _SHORT_ID_RE.match(token):
-            return token
-    return ""
+# The parser and the regexes it is made of live in :mod:`mnemo.core.claude_cli`
+# next to the *statement* of the `--bg` output shape they implement, so the
+# code and its contract cannot drift apart (#235). Re-exported under the old
+# names for readers who arrive here from #211.
+_SHORT_ID_RE = claude_cli.SHORT_ID_RE
+_ANSI_RE = claude_cli.ANSI_RE
+_short_id_from = claude_cli.short_id_from
 
 
 def spawn_child(prompt: str, *, cwd: Path | str) -> str:
@@ -479,9 +475,14 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
     depend on either. Even with the escapes present, not stripping them would
     leave this relying on the *hint* lines happening to be unstyled.
 
-    When no token matches, this returns ``""`` rather than a guess. A blank
-    column reads as missing; ``background.`` reads as an id and sends the
-    maintainer to a command that cannot work.
+    When no token matches, this raises :class:`claude_cli.ContractBroken`
+    naming the assumption (``bg-prints-short-id``), the installed
+    ``claude --version`` and the bytes that were printed — never a guess, and
+    no longer a silent ``""`` either (#235). ``background.`` reads as an id and
+    sends the maintainer to a command that cannot work; a blank column reads
+    as missing and says nothing about *why*. The orchestration below catches
+    it and keeps the worktree, because a zero exit means the child most likely
+    started regardless.
     """
     args = ["claude", "--bg", prompt]
     try:
@@ -493,12 +494,45 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
         raise DispatchError(
             f"claude --bg failed: {result.stderr.strip() or result.stdout.strip()}"
         )
-    return _short_id_from(result.stdout)
+    return claude_cli.require_short_id(result.stdout)
 
 
 # --- orchestration ---------------------------------------------------------
 
 Fetcher = Callable[..., Issue]
+
+
+def _spawn_into(
+    target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str
+) -> Dispatched:
+    """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
+
+    Two failure shapes, treated differently on purpose:
+
+    - ``claude`` could not run, or exited nonzero: no child exists, so the
+      tree and the branch are removed and the error propagates. Including
+      ``KeyboardInterrupt``: a Ctrl-C between the two steps must not leave a
+      tree — or a branch — that blocks the retry.
+    - ``claude`` exited zero but printed nothing shaped like an id
+      (:class:`claude_cli.ContractBroken`): a child is almost certainly
+      running in *tree*, and removing the directory from under it would be
+      the worse outcome. The tree is kept, ``short_id`` is empty, and the
+      broken assumption travels on ``warning`` so the report can say which
+      observable changed and against which ``claude --version``.
+
+    A spawn that did read an id back is then checked against the jobs dir
+    (``jobs-state-json``); a mismatch there is likewise a warning, since the
+    child is running either way.
+    """
+    try:
+        short_id = spawn_child(prompt, cwd=tree)
+    except claude_cli.ContractBroken as exc:
+        return Dispatched(issue=target, worktree=tree, short_id="", warning=str(exc))
+    except BaseException:
+        remove_worktree(tree, repo_root=repo_root, branch=branch)
+        raise
+    warning = claude_cli.verify_registered(short_id, cwd=tree)
+    return Dispatched(issue=target, worktree=tree, short_id=short_id, warning=warning)
 
 
 def dispatch_issue(
@@ -508,20 +542,16 @@ def dispatch_issue(
 
     Ordered so that the cheapest refusal comes first — a nonexistent issue
     never reaches git — and so that anything created is removed again if a
-    later step fails. Raises :class:`DispatchError` with no state left behind.
+    later step fails before a child exists. Raises :class:`DispatchError` with
+    no state left behind; see :func:`_spawn_into` for the one case that keeps
+    the tree.
     """
     details = fetch(issue, repo_root=repo_root)  # before any git state exists
     tree = ensure_worktree(issue, repo_root=repo_root)
-    try:
-        short_id = spawn_child(
-            build_prompt(issue, title=details.title, body=details.body), cwd=tree
-        )
-    except BaseException:
-        # Including KeyboardInterrupt: a Ctrl-C between the two steps must not
-        # leave a tree — or a branch — that blocks the retry.
-        remove_worktree(tree, repo_root=repo_root, branch=branch_name(issue))
-        raise
-    return Dispatched(issue=issue, worktree=tree, short_id=short_id)
+    return _spawn_into(
+        issue, tree, build_prompt(issue, title=details.title, body=details.body),
+        repo_root=repo_root, branch=branch_name(issue),
+    )
 
 
 def dispatch_all(
@@ -555,19 +585,10 @@ def dispatch_piece(
     """
     target = f"c-{piece.slug}"
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
-    try:
-        short_id = spawn_child(
-            build_piece_prompt(piece, feature=feature), cwd=tree
-        )
-    except BaseException:
-        # Including KeyboardInterrupt: a Ctrl-C between the two steps must not
-        # leave a tree — or a branch — that blocks the retry.
-        remove_worktree(
-            tree, repo_root=repo_root,
-            branch=branch_name(target, feature=feature),
-        )
-        raise
-    return Dispatched(issue=target, worktree=tree, short_id=short_id)
+    return _spawn_into(
+        target, tree, build_piece_prompt(piece, feature=feature),
+        repo_root=repo_root, branch=branch_name(target, feature=feature),
+    )
 
 
 def dispatch_contract(

@@ -37,10 +37,11 @@ mnemo = ["templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not recall'"
+addopts = "-ra -m 'not recall and not live_claude'"
 markers = [
     "recall: live retrieval regression suite (opt-in; runs against a real vault)",
     "real_spawn: the test exercises a detached-spawn function itself (opts out of the autouse no-spawn guard)",
+    "live_claude: exercises the claude CLI contract against the installed binary; spawns a real session (opt-in: -m live_claude)",
 ]
 
 [tool.coverage.run]

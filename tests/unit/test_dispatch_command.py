@@ -120,6 +120,48 @@ def test_no_attach_hint_when_no_child_reported_an_id(
     assert "claude attach" not in out    # but never a command that cannot work
 
 
+def test_a_warning_is_printed_under_its_row(monkeypatch, capsys, tmp_path: Path) -> None:
+    """A child that started while a ``claude`` CLI assumption broke is loud (#235).
+
+    The row is still a started row — exit 0, the tree is kept — but the
+    warning names the assumption under it and the id column shows a visible
+    placeholder rather than the blank that read as "missing" before.
+    """
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root: [
+            core.Dispatched(
+                issue=197, worktree=tmp_path / "p-wt-197", short_id="",
+                warning="claude CLI assumption `bg-prints-short-id` did not hold (installed claude 9.9.9)",
+            )
+        ],
+    )
+
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "WARNING: claude CLI assumption `bg-prints-short-id`" in out
+    assert "installed claude 9.9.9" in out
+    assert "#197  ????????  " in out
+    assert "pytest -m live_claude" in out
+    assert "claude attach" not in out
+
+
+def test_no_warning_line_when_nothing_broke(monkeypatch, capsys, tmp_path: Path) -> None:
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root: [
+            core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4")
+        ],
+    )
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+    out = capsys.readouterr().out
+    assert "WARNING" not in out
+    assert "live_claude" not in out
+
+
 def test_dry_run_spawns_nothing(monkeypatch, capsys, tmp_path: Path) -> None:
     """The plan is printable without creating a worktree or a child."""
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)

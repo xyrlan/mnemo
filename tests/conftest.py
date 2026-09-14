@@ -177,9 +177,13 @@ def _real_vault_guard(request: pytest.FixtureRequest):
     ``~/.cursor``, or ``~/.codex``.
 
     Five ``stat`` calls before and after. Tests marked ``recall`` run against
-    the real vault on purpose and are exempt.
+    the real vault on purpose and are exempt. So are tests marked
+    ``live_claude`` (#235): they spawn a real ``claude --bg`` child, and a
+    real child writes its transcript under ``~/.claude/projects`` — that write
+    is the behaviour under test, not a leak. They are opt-in and deselected
+    by default for the same reason.
     """
-    if request.node.get_closest_marker("recall"):
+    if request.node.get_closest_marker("recall") or request.node.get_closest_marker("live_claude"):
         yield
         return
     before = _vault_fingerprint()

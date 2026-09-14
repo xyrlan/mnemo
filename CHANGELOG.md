@@ -5,6 +5,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The `claude` CLI behaviours dispatch depends on are now stated in one
+  place, tested against the installed binary, and loud when they break.**
+  `mnemo dispatch`, `mnemo sessions` and `mnemo deliver` rely on things Claude
+  Code never documented as a contract — the shape `claude --bg` prints, the
+  files under `~/.claude/jobs/`, the daemon roster, what `--resume` does to a
+  live session — and every one of them had already changed underneath us
+  once (#211) while the suite stayed green on fixtures mirroring the last
+  observed output. `mnemo.core.claude_cli` now lists each assumption with the
+  `claude --version` it was last verified against; `pytest -m live_claude`
+  (opt-in, deselected by default) spawns one real child and checks every
+  claim against the installed binary, then stops and removes it. A spawn
+  whose output has no id, or whose jobs entry is missing or names another
+  cwd, now reports *which* assumption broke and against which version,
+  instead of a blank column. The tree is kept in that case — `claude` exited
+  0, so the child is running in it — and the report prints the warning under
+  the row. (#235)
+
 ### Fixed
 
 - **The first-run backfill's default is one value everywhere, and a finished

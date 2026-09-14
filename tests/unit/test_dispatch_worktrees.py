@@ -11,6 +11,7 @@ files, and ``--amend`` rewriting another session's commit.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -344,23 +345,96 @@ def test_spawn_never_truncates_a_longer_hex_run_into_an_id(
         pytest.param("Started your session in the background.\n", id="prose-only"),
     ],
 )
-def test_spawn_returns_empty_when_no_id_is_printed(
+def test_spawn_refuses_to_guess_when_no_id_is_printed(
     repo: Path, monkeypatch, stdout: str
 ) -> None:
-    """No id beats a wrong id.
+    """No id beats a wrong id, and a named miss beats a blank one (#235).
 
-    ``spawn_child`` returning ``""`` makes the report print a blank column,
-    which reads as missing. Returning ``background.`` reads as an id and
-    sends the maintainer to a command that cannot work — the failure #211
-    was actually made of.
+    Returning ``background.`` reads as an id and sends the maintainer to a
+    command that cannot work — the failure #211 was actually made of. The
+    old answer, ``""``, printed a blank column that said nothing about *why*.
+    Now the miss is a :class:`claude_cli.ContractBroken` naming the
+    assumption and the installed ``claude --version``.
     """
     def fake_run(args, **kwargs):
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     tree = dispatch.ensure_worktree(197, repo_root=repo)
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(dispatch.claude_cli, "claude_version", lambda: "9.9.9")
 
-    assert dispatch.spawn_child("x", cwd=tree) == ""
+    with pytest.raises(dispatch.claude_cli.ContractBroken) as info:
+        dispatch.spawn_child("x", cwd=tree)
+    assert "bg-prints-short-id" in str(info.value)
+    assert "9.9.9" in str(info.value)
+
+
+@pytest.mark.real_spawn
+def test_a_broken_id_contract_keeps_the_tree_and_warns(repo: Path, monkeypatch) -> None:
+    """``claude`` exited 0 and printed no id: a child is running in that tree.
+
+    Rolling the tree back here would delete the directory from under a live
+    session, so the dispatch is reported as started, with the broken
+    assumption on ``warning`` and an empty id — never as a failure, and never
+    silently.
+    """
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        # Only `claude` is faked; `git worktree add` must really run, since
+        # the tree's survival is what this test is about.
+        if args and args[0] == "claude":
+            return subprocess.CompletedProcess(args, 0, stdout="started.\n", stderr="")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(dispatch.claude_cli, "claude_version", lambda: "9.9.9")
+    fetch = lambda issue, *, repo_root: dispatch.Issue(issue, "t", "b")  # noqa: E731
+
+    result = dispatch.dispatch_issue(197, repo_root=repo, fetch=fetch)
+
+    assert result.error is None
+    assert result.short_id == ""
+    assert result.warning and "bg-prints-short-id" in result.warning
+    assert result.worktree is not None and result.worktree.exists()
+    assert result.worktree.resolve() in _worktrees(repo)
+
+
+def test_a_spawn_whose_jobs_entry_is_missing_warns(repo: Path, monkeypatch) -> None:
+    """An id came back, but ``~/.claude/jobs/<id>/state.json`` is not there.
+
+    ``mnemo sessions`` and ``mnemo deliver`` both resolve the child through
+    that file, so its absence is the ``jobs-state-json`` assumption breaking
+    and is reported as such — as a warning, since the child is running.
+    """
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd: "a1b2c3d4")
+    monkeypatch.setattr(dispatch.claude_cli, "claude_version", lambda: "9.9.9")
+    fetch = lambda issue, *, repo_root: dispatch.Issue(issue, "t", "b")  # noqa: E731
+
+    result = dispatch.dispatch_issue(197, repo_root=repo, fetch=fetch)
+
+    assert result.short_id == "a1b2c3d4"
+    assert result.warning and "jobs-state-json" in result.warning
+    assert result.worktree is not None and result.worktree.exists()
+
+
+def test_a_registered_spawn_carries_no_warning(
+    repo: Path, monkeypatch, tmp_jobs_dir: Path
+) -> None:
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd: "a1b2c3d4")
+    fetch = lambda issue, *, repo_root: dispatch.Issue(issue, "t", "b")  # noqa: E731
+    tree = dispatch.worktree_path(197, repo_root=repo)
+    entry = tmp_jobs_dir / "a1b2c3d4"
+    entry.mkdir()
+    (entry / "state.json").write_text(
+        json.dumps({"cwd": str(tree), "state": "working", "tempo": "active"}),
+        encoding="utf-8",
+    )
+
+    result = dispatch.dispatch_issue(197, repo_root=repo, fetch=fetch)
+
+    assert result.short_id == "a1b2c3d4"
+    assert result.warning is None
 
 
 @pytest.mark.real_spawn
