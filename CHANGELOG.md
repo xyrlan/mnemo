@@ -5,6 +5,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first-run backfill's default is one value everywhere, and a finished
+  sweep now says so.** `backfill.autoOnFirstSession` has been `false` in
+  `config.DEFAULTS` since 1.1.0, and the README and `docs/configuration.md`
+  said so — but `docs/getting-started.md` still described the sweep as
+  automatic, and the `session_start` hook's own fallback for a missing key was
+  `True`, the opposite of the default it was meant to stand in for. The
+  fallback now reads `DEFAULTS` (a test pins the two together) and the
+  getting-started page describes the opt-in. Separately, a sweep that ran
+  staged its whole output in `shared/_inbox/`, from which nothing injects, so
+  on a fresh vault it was indistinguishable from a sweep that did nothing;
+  only `mnemo doctor` listed it. Session start now carries one line while
+  backfilled rules are staged **and the vault has no live rule at all** —
+  stateless (no once-shown marker, after #229), repeating while that holds
+  and clearing itself once the user moves or deletes the pages or anything
+  goes live. It counts; it never promotes. (#234)
+
 ## [1.5.0] — 2026-09-13
 
 ### Added

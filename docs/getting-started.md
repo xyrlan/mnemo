@@ -197,15 +197,33 @@ history you already have: Claude Code stores every session it has ever run at
 
 ### What happens on your first session
 
-On the first session after install, mnemo spawns a background sweep of **the
-repo you're sitting in** — newest sessions first, capped at
+Nothing is swept unless you ask. On the first session in a repo that has
+harvestable transcripts, mnemo prints one line: how many past sessions are
+there and, at most, what reading them would cost in Haiku calls. That line is
+the invitation to run `mnemo backfill` yourself (see [Running it
+yourself](#running-it-yourself) below); it is shown once per repo and never
+spends a call.
+
+If you would rather have the sweep run on its own, opt in before the first
+session:
+
+```json
+{ "backfill": { "autoOnFirstSession": true } }
+```
+
+With that set, the first session after install spawns a background sweep of
+**the repo you're sitting in** — newest sessions first, capped at
 `backfill.installCap` (20). Each session costs one call to the `claude` CLI you
 already have, using `extraction.model` (Haiku by default) and retried once if
 it times out. Sessions that touched fewer than `backfill.minFileMutations`
 files are skipped without a call.
 
 What comes back is written into `bots/<repo>/memory/` — the same place live
-capture writes — and the next extraction turns it into rules.
+capture writes — and the next extraction turns it into rules, staged for your
+review as described next. While those staged rules are the only thing in the
+vault, every session start says so — one line naming how many are waiting in
+`shared/_inbox/` and what to do with them — and stops saying so the moment you
+move or delete them, or any rule goes live.
 
 That is the whole automatic budget: it runs **once per vault**, never for your
 other projects, and never again. Everything beyond it is something you type.
@@ -213,12 +231,6 @@ other projects, and never again. Everything beyond it is something you type.
 The calls go through your existing `claude` CLI on whatever authentication it
 already uses. On a Pro/Max subscription that means no per-token charge; on
 API-key auth it is billed like any other Haiku call.
-
-To never let it run, before you upgrade or install:
-
-```json
-{ "backfill": { "autoOnFirstSession": false } }
-```
 
 ### Backfilled pages are always staged for review
 
