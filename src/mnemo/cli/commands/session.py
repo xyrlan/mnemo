@@ -109,7 +109,11 @@ def cmd_session(args: argparse.Namespace) -> int:
         print("  listar: mnemo sessions --all")
         return 1
 
-    flags = [f for f in (session.state, session.tempo) if f]
+    # The model goes here rather than in the queue's table (#268): this view
+    # is already the one that answers "that row looks wrong, wrong how", and
+    # the model is one of the answers. The queue says it once in a footer
+    # instead of once per row — see render._models.
+    flags = [f for f in (session.state, session.tempo, session.model) if f]
     if session.live is True:
         flags.append("live")
     elif session.live is False:

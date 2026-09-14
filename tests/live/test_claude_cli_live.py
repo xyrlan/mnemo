@@ -160,6 +160,19 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
             f"state-tempo-vocabulary: finished child has tempo={finished.get('tempo')!r}"
         )
 
+        # bg-model-flag, half one: `respawnFlags` carries `--model` even
+        # though nothing was passed, because Claude Code resolves the
+        # machine's default into it. This is the field `Session.model` reads;
+        # the sibling `model` key is null on every real session.
+        flags = finished.get("respawnFlags")
+        assert isinstance(flags, list) and "--model" in flags, (
+            f"bg-model-flag: no `--model` in respawnFlags={flags!r}; "
+            "mnemo sessions reads the model from there"
+        )
+        assert jobs._parse(short_id, finished).model, (
+            f"bg-model-flag: respawnFlags={flags!r} has `--model` with no value"
+        )
+
         # transcript-jsonl: linkScanPath is filled in after spawn.
         transcript = _until(
             lambda: (_state(state_path) or {}).get("linkScanPath"), seconds=60
@@ -192,3 +205,62 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
                 "stop-rm-noninteractive: `claude rm` left the jobs entry behind"
             )
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(1))
+
+
+def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
+    """``bg-model-flag``: ``--bg --model <id>`` is accepted and honoured (#268).
+
+    A second real spawn, and it earns its ~6s: the whole of ``mnemo dispatch
+    --model`` rests on these two flags composing, and no fixture can tell when
+    they stop. Deliberately on the cheapest model available, both because the
+    prompt is one word and because a test that spends the expensive default to
+    prove a cheaper one works would be self-defeating.
+
+    The transcript is the proof rather than ``respawnFlags``: the flags only
+    say what was *asked for*, and the question this assumption answers is what
+    the child actually ran on.
+    """
+    repo = _git_repo(tmp_path / "live-model")
+    tree = dispatch.ensure_worktree(2, repo_root=repo)
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku")
+        assert claude_cli.SHORT_ID_RE.match(short_id), (
+            f"bg-model-flag: `--bg --model haiku` printed no id: {short_id!r}"
+        )
+
+        state_path = real_claude / "jobs" / short_id / "state.json"
+        finished = _until(
+            lambda: (lambda d: d if d and d.get("state") in ("done", "stopped") else None)(
+                _state(state_path)
+            ),
+            seconds=180,
+        )
+        assert finished, f"child never finished: {_state(state_path)}"
+
+        session = jobs._parse(short_id, finished)
+        assert session.model == "haiku", (
+            f"bg-model-flag: spawned with --model haiku, respawnFlags say "
+            f"{finished.get('respawnFlags')!r}"
+        )
+
+        transcript = _until(lambda: finished.get("linkScanPath") or
+                            (_state(state_path) or {}).get("linkScanPath"), seconds=60)
+        assert isinstance(transcript, str) and os.path.isfile(transcript), transcript
+        with open(transcript, encoding="utf-8") as fh:
+            models = {
+                json.loads(line).get("message", {}).get("model")
+                for line in fh
+                if line.strip() and json.loads(line).get("type") == "assistant"
+            }
+        models.discard(None)
+        assert models, "bg-model-flag: no assistant record named a model"
+        assert all("haiku" in m for m in models), (
+            f"bg-model-flag: asked for haiku, the child ran on {sorted(models)} — "
+            "`--model` is no longer honoured under `--bg`"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(2))

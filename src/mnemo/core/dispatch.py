@@ -110,6 +110,12 @@ class Dispatched:
     #: the session. Not an error — the tree is kept, because the child is most
     #: likely running in it — but never silent either; the report prints it.
     warning: str | None = None
+    #: The ``--model`` this child was spawned with, or ``None`` for "whatever
+    #: the machine's settings resolve to" (#268). Recorded so the dispatch
+    #: report can say what was chosen at the moment the choice was made;
+    #: afterwards the truth is the child's own ``state.json``, which Claude
+    #: Code fills in with the *resolved* id even when nothing was passed.
+    model: str | None = None
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -465,7 +471,7 @@ _ANSI_RE = claude_cli.ANSI_RE
 _short_id_from = claude_cli.short_id_from
 
 
-def spawn_child(prompt: str, *, cwd: Path | str) -> str:
+def spawn_child(prompt: str, *, cwd: Path | str, model: str | None = None) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
     ``--bg`` with the prompt **positional**. Never ``-p``/``--print``: the CLI
@@ -512,8 +518,25 @@ def spawn_child(prompt: str, *, cwd: Path | str) -> str:
     as missing and says nothing about *why*. The orchestration below catches
     it and keeps the worktree, because a zero exit means the child most likely
     started regardless.
+
+    **The model (#268).** *model* is passed through as ``--model <id>``, and
+    omitted entirely when it is ``None`` — so a dispatch that names no model
+    runs the byte-identical command it ran before, and the child resolves
+    whatever ``~/.claude/settings.json`` says. ``--bg`` and ``--model``
+    compose (``bg-model-flag``, measured 2026-09-14 on 2.1.270: a child
+    spawned with ``--model haiku`` produced a transcript whose every
+    assistant record reads ``claude-haiku-4-5-20251001``).
+
+    The value is **not** validated against a list of known model ids here.
+    Claude Code accepts aliases (``opus``, ``haiku``), full ids, and
+    provider-prefixed names, and the set changes without mnemo; a local
+    allowlist would refuse a model that works. An unknown id fails in the
+    child's own startup, where the error names the real vocabulary.
     """
-    args = ["claude", "--bg", prompt]
+    args = ["claude", "--bg"]
+    if model:
+        args += ["--model", model]
+    args.append(prompt)
     try:
         result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
     except (FileNotFoundError, OSError) as exc:
@@ -532,7 +555,8 @@ Fetcher = Callable[..., Issue]
 
 
 def _spawn_into(
-    target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str
+    target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str,
+    model: str | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -554,18 +578,23 @@ def _spawn_into(
     child is running either way.
     """
     try:
-        short_id = spawn_child(prompt, cwd=tree)
+        short_id = spawn_child(prompt, cwd=tree, model=model)
     except claude_cli.ContractBroken as exc:
-        return Dispatched(issue=target, worktree=tree, short_id="", warning=str(exc))
+        return Dispatched(
+            issue=target, worktree=tree, short_id="", warning=str(exc), model=model
+        )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
         raise
     warning = claude_cli.verify_registered(short_id, cwd=tree)
-    return Dispatched(issue=target, worktree=tree, short_id=short_id, warning=warning)
+    return Dispatched(
+        issue=target, worktree=tree, short_id=short_id, warning=warning, model=model
+    )
 
 
 def dispatch_issue(
-    issue: int, *, repo_root: Path | str, fetch: Fetcher = fetch_issue
+    issue: int, *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
+    model: str | None = None,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -580,30 +609,40 @@ def dispatch_issue(
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body, repo_root=repo_root),
-        repo_root=repo_root, branch=branch_name(issue),
+        repo_root=repo_root, branch=branch_name(issue), model=model,
     )
 
 
 def dispatch_all(
-    issues: Sequence[int], *, repo_root: Path | str, fetch: Fetcher = fetch_issue
+    issues: Sequence[int], *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
+    model: str | None = None,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
     Children are independent by construction — separate trees, separate
     branches — so a bad issue number in the middle of a list is reported and
     skipped rather than aborting the ones that would have worked.
+
+    *model* applies to every child of this invocation. There is no per-issue
+    model here on purpose: an issue is a unit of work, not a unit of budget,
+    and nothing on an issue says how hard it is (#268). A contract piece is
+    the one place a per-child model exists, because a contract is written and
+    reviewed before dispatch and can say so per piece.
     """
     out: list[Dispatched] = []
     for issue in issues:
         try:
-            out.append(dispatch_issue(issue, repo_root=repo_root, fetch=fetch))
+            out.append(
+                dispatch_issue(issue, repo_root=repo_root, fetch=fetch, model=model)
+            )
         except DispatchError as exc:
             out.append(Dispatched(issue=issue, error=str(exc)))
     return out
 
 
 def dispatch_piece(
-    piece: contracts.Piece, *, feature: str, repo_root: Path | str
+    piece: contracts.Piece, *, feature: str, repo_root: Path | str,
+    model: str | None = None,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -612,17 +651,24 @@ def dispatch_piece(
 
     *feature* reaches :func:`ensure_worktree` because it is what names the
     branch (``feat/<feature>/<slug>``); the target alone cannot.
+
+    *model* is the dispatch-wide default; the piece's own ``model:`` wins over
+    it. That direction is the point: the contract was written and reviewed
+    knowing what each piece is, and the flag is a blanket applied at the
+    command line. A blanket that overrode a considered per-piece choice would
+    make the field unusable.
     """
     target = f"c-{piece.slug}"
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
     return _spawn_into(
         target, tree, build_piece_prompt(piece, feature=feature, repo_root=repo_root),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
+        model=piece.model or model,
     )
 
 
 def dispatch_contract(
-    contract: contracts.Contract, *, repo_root: Path | str
+    contract: contracts.Contract, *, repo_root: Path | str, model: str | None = None
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -635,6 +681,9 @@ def dispatch_contract(
     aborting the ones that would have worked — the pieces are independent by
     construction (separate trees, separate branches), exactly as in
     :func:`dispatch_all`.
+
+    *model* is the default for every piece that does not name its own; see
+    :func:`dispatch_piece` for why the piece wins.
     """
     if not contract.is_dispatchable:
         raise DispatchError(
@@ -647,7 +696,8 @@ def dispatch_contract(
         try:
             out.append(
                 dispatch_piece(
-                    piece, feature=contract.feature, repo_root=repo_root
+                    piece, feature=contract.feature, repo_root=repo_root,
+                    model=model,
                 )
             )
         except DispatchError as exc:

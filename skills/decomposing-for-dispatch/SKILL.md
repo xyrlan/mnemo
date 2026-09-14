@@ -70,6 +70,7 @@ verdict: parallel
 - **files:** path/one.py, path/two.py
 - **exposes:** `literal_signature(arg) -> Type`
 - **consumes:** `other_signature(x) -> T` from other-piece
+- **model:** haiku
 ```
 
 Rules the parser enforces — a contract breaking one is refused before any
@@ -81,9 +82,20 @@ worktree is created:
   itself.
 - `exposes` is a **literal signature**. Other pieces are written against it while
   they wait, so a prose description cannot be delivered against.
+- `model` is optional and takes one `--model` value — an alias (`haiku`,
+  `sonnet`, `opus`) or a full id. A sentence there is refused.
 
 Signatures go in backticks; commas inside them are safe. `files` is a plain
 comma-separated list.
+
+`model` is the one field about *cost* rather than boundary, and it is
+admissible for the same reason `files` is: it says what to spend on a piece,
+never how to build it. Name it where a piece's boundary is small and its work
+is mechanical — two files, one signature, nothing to decide; leave it off
+where the piece has to fit itself around an interface it does not own, and it
+will take whatever `mnemo dispatch --model` was given, or the machine's
+default. A piece that names one wins over the flag, so a contract's per-piece
+judgement survives a blanket typed at the command line.
 
 Prose is free-form anywhere except a `##` heading, which the parser reads as a
 piece slug — a section like `## Notes` is refused as an unaddressable slug.

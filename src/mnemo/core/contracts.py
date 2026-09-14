@@ -42,8 +42,18 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # backtick, which is the whole of how prose differs from a path here.
 PATH_RE = re.compile(r"^[A-Za-z0-9._*?\[\]!-]+(?:/[A-Za-z0-9._*?\[\]!-]+)*/?$")
 
+# A `model` entry is a single Claude Code `--model` value: an alias
+# (`haiku`), a full id (`claude-haiku-4-5-20251001`), or either with a
+# context-window suffix (`opus[1m]`, which is what `state.json` records for a
+# child of this machine's default). Deliberately not an allowlist of known
+# ids: the set changes without mnemo, and a local list would refuse a model
+# that works. This only refuses what is *not a single token* — a space, a
+# quote, shell punctuation — because that is how prose differs from a model
+# id, exactly as `PATH_RE` separates a boundary from an instruction.
+MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]+(?:\[[A-Za-z0-9]+\])?$")
+
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
-_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes)\:\*\*\s*(.*)$")
+_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model)\:\*\*\s*(.*)$")
 # "`sig` from owner" — the signature keeps its backticks (it is quoted
 # verbatim so a later diff of the contract is meaningful, and Task 5 quotes it
 # into a child's prompt as literal text). The owner is a lookup key rather
@@ -103,6 +113,11 @@ verdict: parallel
               write against while they wait. `nothing` is valid.
     consumes: `signature` from <piece-slug> — a signature another piece
               owns. The owner must exist and must not be this piece.
+    model:    optional. The `--model` this piece's child runs on, as an
+              alias (`haiku`, `sonnet`, `opus`) or a full id. Omit it and
+              the piece takes `mnemo dispatch --model`, or the machine's
+              default when that is absent too. A budget, not an approach:
+              say what to spend here, never how to build it.
 
   Prose is free-form anywhere except a `##` heading, which is read as a
   piece slug. Write the boundary, never the approach: "only these files",
@@ -117,11 +132,17 @@ verdict: parallel
 - **files:** src/app/storage.py, tests/unit/test_storage.py
 - **exposes:** `load(key) -> Record | None`, `save(key, record) -> None`
 - **consumes:** nothing
+- **model:** haiku
 
 Prose under a piece is free: say what the piece must deliver and why the cut
 falls here. This piece is a leaf — it consumes nothing, so it can be written
 and tested without reading the interior of any other piece. That question is
 the test for whether two pieces are really two.
+
+It also names a `model`, which the piece below does not: the boundary here is
+two files and two signatures, so the judgement was spent writing the contract
+rather than reading the repo. The piece below has to fit itself around an
+interface it does not own, and takes whatever the dispatch was given.
 
 ## api
 
@@ -147,7 +168,8 @@ verdict: parallel
 ## <piece-slug>
 - **files:** path/one.py, path/two.py
 - **exposes:** `literal_signature(arg) -> Type`
-- **consumes:** `other_signature(x) -> T` from other-piece"""
+- **consumes:** `other_signature(x) -> T` from other-piece
+- **model:** haiku            # optional; omit to take `mnemo dispatch --model`"""
 
 
 class ContractError(ValueError):
@@ -167,6 +189,17 @@ class Piece:
     exposes: list[str] = field(default_factory=list)
     # (signature, owning piece slug) — the owner is validated, not decorative.
     consumes: list[tuple[str, str]] = field(default_factory=list)
+    # Which model this piece's child runs on (#268). Optional, and `None`
+    # means "whatever the dispatch was given, else the machine's default" —
+    # so every contract written before the field keeps working unchanged.
+    #
+    # A *budget*, not an approach: it says what to spend on this piece, never
+    # how to build it, which is why it is admissible here while "use a regex"
+    # is not. Per piece rather than per contract because that is the whole
+    # point — a decomposition routinely has one piece that needs judgement
+    # and three that are mechanical, and the contract is the artifact where
+    # that difference was already written down and reviewed.
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +347,12 @@ def _validate(contract: Contract) -> None:
                     f"piece {piece.slug!r} lists {path!r} under files, which is "
                     "not a path: a files entry is a boundary, not an instruction"
                 )
+        if piece.model is not None and not MODEL_RE.match(piece.model):
+            raise ContractError(
+                f"piece {piece.slug!r} names model {piece.model!r}, which is not "
+                "a model id: model takes one `--model` value (an alias like "
+                "`haiku`, or a full id), not a sentence"
+            )
         for item in piece.exposes:
             if "`" not in item:
                 raise ContractError(
@@ -363,6 +402,7 @@ def parse_contract(path: Path | str) -> Contract:
     files: list[str] = []
     exposes: list[str] = []
     consumes: list[tuple[str, str]] = []
+    model: str | None = None
 
     def flush() -> None:
         # Bind the current accumulator values now, not the names — a
@@ -375,7 +415,10 @@ def parse_contract(path: Path | str) -> Contract:
         # default/closure trap by accident.
         if slug is not None:
             pieces.append(
-                Piece(slug=slug, files=files, exposes=exposes, consumes=consumes)
+                Piece(
+                    slug=slug, files=files, exposes=exposes, consumes=consumes,
+                    model=model,
+                )
             )
 
     for line in text.splitlines():
@@ -383,7 +426,7 @@ def parse_contract(path: Path | str) -> Contract:
         if heading:
             flush()
             slug = heading.group(1).strip()
-            files, exposes, consumes = [], [], []
+            files, exposes, consumes, model = [], [], [], None
             continue
         matched = _FIELD_RE.match(line)
         if not matched or slug is None:
@@ -391,6 +434,12 @@ def parse_contract(path: Path | str) -> Contract:
         key, value = matched.group(1), matched.group(2)
         if key == "files":
             files = _split_list(value)
+        elif key == "model":
+            # A single value, never a list: `--model` takes one. An empty or
+            # `nothing` value reads as "no opinion", the same as omitting the
+            # line, so it falls back to the dispatch-wide default.
+            cleaned = value.strip()
+            model = None if _is_empty_list(cleaned) else cleaned
         elif key == "exposes":
             exposes = _split_signatures(value)
         else:

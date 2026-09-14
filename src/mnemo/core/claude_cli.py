@@ -92,6 +92,22 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         verified=_V,
     ),
     Assumption(
+        key="bg-model-flag",
+        claim=(
+            "`claude --bg --model <id> '<prompt>'` is accepted: the flags "
+            "compose, the child runs on <id>, and `state.json` records the "
+            "flags it was spawned with under `respawnFlags` — a list where "
+            "`--model` is followed by its value. The value is present even "
+            "when nothing was passed, because Claude Code resolves the "
+            "machine default into it (measured: 23 of 23 real children, and "
+            "a `--model haiku` child whose transcript reads "
+            "claude-haiku-4-5-20251001 on every assistant record). The "
+            "sibling key `model` is null on every one of them and is not read."
+        ),
+        used_by="dispatch.spawn_child (--model), sessions.jobs.Session.model",
+        verified=f"{VERIFIED_AGAINST} on 2026-09-14",
+    ),
+    Assumption(
         key="jobs-state-json",
         claim=(
             "`~/.claude/jobs/<id>/state.json` exists by the time `--bg` returns "
