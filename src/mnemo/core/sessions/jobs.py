@@ -169,10 +169,17 @@ def model_from(data: dict[str, Any]) -> str | None:
     session with — and **not** from the sibling ``model`` key, which is
     ``null`` on every real session measured (23 of 23 on 2.1.270), including
     one deliberately spawned with ``--model haiku``. The flags are where the
-    answer actually lives, and they carry it even when the dispatcher passed
-    nothing, because Claude Code resolves the machine's default into them:
-    the default children of 2026-09-14 read ``["--model",
-    "claude-fable-5-1[1m]"]``.
+    answer actually lives.
+
+    They carry a value even when the dispatcher passed nothing **only on a
+    full profile**, where Claude Code resolves the machine's default into
+    them (``["--model", "opus[1m]"]``; the default children of 2026-09-14
+    read ``["--model", "claude-fable-5-1[1m]"]``). A lean child (#270, the
+    default since ``spawn_child`` grew a profile) passes its own
+    ``--settings``, leaving no user-level default to resolve, and its flags
+    carry no ``--model`` at all. ``None`` for such a child is the true
+    answer — the model is whatever the child's own settings resolve — and
+    callers must render it as unknown rather than as a failure to read.
 
     Preferring the raw ``model`` key "when it is set" would be a trap rather
     than a fallback: it is the field an upstream change is most likely to

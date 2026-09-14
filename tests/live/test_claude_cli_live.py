@@ -160,17 +160,35 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
             f"state-tempo-vocabulary: finished child has tempo={finished.get('tempo')!r}"
         )
 
-        # bg-model-flag, half one: `respawnFlags` carries `--model` even
-        # though nothing was passed, because Claude Code resolves the
-        # machine's default into it. This is the field `Session.model` reads;
-        # the sibling `model` key is null on every real session.
+        # bg-model-flag, half one: `respawnFlags` is the argv `Session.model`
+        # reads; the sibling `model` key is null on every real session.
+        #
+        # This child was spawned on the lean profile (#270, the default since
+        # `spawn_child` grew one), which passes its own `--settings`. Claude
+        # Code therefore has no user-level default to resolve, and writes no
+        # `--model` at all — measured, both arms, on 2.1.270:
+        #
+        #   lean          -> ['--setting-sources', ..., '--settings', ...]
+        #   --full-profile-> ['--model', 'opus[1m]']
+        #
+        # So the resolution half of the assumption is asserted below on a
+        # full-profile child, which is the only arm that can exhibit it. Here
+        # we pin what the lean arm must do: carry the profile it was given,
+        # and never a half-written `--model` with no value after it.
         flags = finished.get("respawnFlags")
-        assert isinstance(flags, list) and "--model" in flags, (
-            f"bg-model-flag: no `--model` in respawnFlags={flags!r}; "
-            "mnemo sessions reads the model from there"
+        assert isinstance(flags, list), (
+            f"bg-model-flag: respawnFlags is not a list: {flags!r}"
         )
-        assert jobs._parse(short_id, finished).model, (
-            f"bg-model-flag: respawnFlags={flags!r} has `--model` with no value"
+        assert "--settings" in flags, (
+            f"lean-child-profile: no `--settings` in respawnFlags={flags!r}; "
+            "the lean profile is what this child was spawned with"
+        )
+        assert "--model" not in flags, (
+            f"bg-model-flag: a lean child resolved a default model into "
+            f"respawnFlags={flags!r}; the lean profile passes its own "
+            "`--settings`, so there is no user default left to resolve — if "
+            "this now fires, `mnemo sessions` can read a model for lean "
+            "children and the assumption's measured arms are stale"
         )
 
         # transcript-jsonl: linkScanPath is filled in after spawn.
@@ -336,6 +354,59 @@ def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
             f"{key}: `{name}` reached a lean child; --strict-mcp-config no "
             f"longer excludes ~/.claude.json servers. Output: {lean.stdout[:400]!r}"
         )
+
+
+def test_full_profile_child_resolves_the_machine_default(
+    real_claude: Path, tmp_path: Path
+) -> None:
+    """``bg-model-flag``, resolution half: only a full-profile child shows it.
+
+    The assumption's claim that ``respawnFlags`` carries ``--model`` *even
+    when nothing was passed* was measured before the lean profile existed
+    (#270), on children that inherited the user's settings. A lean child
+    passes its own ``--settings``, so there is no user-level default left for
+    Claude Code to resolve and it writes no ``--model`` at all. Measured on
+    2.1.270, same prompt, same tree, one flag apart:
+
+        lean (default)  -> ['--setting-sources', ..., '--settings', ...]
+        --full-profile  -> ['--model', 'opus[1m]']
+
+    Which makes this the only arm that can still exercise the claim, and the
+    reason it is asserted here rather than in the default-path spawn test.
+    Spending the machine default for one word is the price of the only
+    measurement that can catch the resolution going away.
+    """
+    repo = _git_repo(tmp_path / "live-full")
+    tree = dispatch.ensure_worktree(3, repo_root=repo)
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree, lean=False)
+        assert claude_cli.SHORT_ID_RE.match(short_id), short_id
+
+        state_path = real_claude / "jobs" / short_id / "state.json"
+        finished = _until(
+            lambda: (lambda d: d if d and d.get("state") in ("done", "stopped") else None)(
+                _state(state_path)
+            ),
+            seconds=180,
+        )
+        assert finished, f"child never finished: {_state(state_path)}"
+
+        flags = finished.get("respawnFlags")
+        assert isinstance(flags, list) and "--model" in flags, (
+            f"bg-model-flag: a full-profile child passed no model and got "
+            f"respawnFlags={flags!r}; Claude Code no longer resolves the "
+            "machine default, so `mnemo sessions` shows no model for any "
+            "child that did not name one"
+        )
+        assert jobs._parse(short_id, finished).model, (
+            f"bg-model-flag: respawnFlags={flags!r} has `--model` with no value"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
 def _load_user_servers() -> dict:
