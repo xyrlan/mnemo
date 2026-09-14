@@ -266,8 +266,8 @@ def test_a_human_turn_that_landed_between_sweeps_is_recorded(tmp_path: Path) -> 
     path = _transcript(tmp_path, _OPENING, _QUESTION)
     assert detector.sweep([_session(path, "blocked")], vault_root=tmp_path) == 0
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER + _FOLLOW_UP)
+    with path.open("ab") as fh:
+        fh.write((_ANSWER + _FOLLOW_UP).encode("utf-8"))
 
     assert detector.sweep([_session(path, "blocked")], vault_root=tmp_path) == 1
 
@@ -305,8 +305,8 @@ def test_the_opening_prompt_is_not_an_edge(tmp_path: Path) -> None:
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["unblocks"] == []
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER)
+    with path.open("ab") as fh:
+        fh.write((_ANSWER).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
 
 
@@ -318,8 +318,8 @@ def test_a_first_sighting_before_any_assistant_turn_still_skips_the_opening(tmp_
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["primed"] is False
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_QUESTION + _ANSWER)
+    with path.open("ab") as fh:
+        fh.write((_QUESTION + _ANSWER).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
     assert _entry(tmp_path)["primed"] is True
 
@@ -332,8 +332,8 @@ def test_a_first_sighting_after_an_assistant_turn_counts_the_next_human_turn(tmp
     detector.sweep([_session(path)], vault_root=tmp_path)
     assert _entry(tmp_path)["primed"] is True
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER)
+    with path.open("ab") as fh:
+        fh.write((_ANSWER).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
 
 
@@ -341,14 +341,14 @@ def test_synthetic_prompts_and_tool_results_are_not_edges(tmp_path: Path) -> Non
     path = _transcript(tmp_path, _OPENING, _QUESTION)
     detector.sweep([_session(path)], vault_root=tmp_path)
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_rec("tool_result", "file contents", "2026-09-12T14:45:00.000Z"))
-        fh.write(_rec("user", "<task-notification>\n<task-id>x</task-id>", "2026-09-12T14:45:01.000Z"))
-        fh.write(_rec("user", "<local-command-stdout>ok</local-command-stdout>", "2026-09-12T14:45:02.000Z"))
-        fh.write(_rec("user", "<system-reminder>hooks fired</system-reminder>", "2026-09-12T14:45:03.000Z"))
-        fh.write(_rec("user", "[Request interrupted by user]", "2026-09-12T14:45:04.000Z"))
-        fh.write(_rec("user", "   ", "2026-09-12T14:45:05.000Z"))
-        fh.write(_rec("assistant", "still working", "2026-09-12T14:45:06.000Z"))
+    with path.open("ab") as fh:
+        fh.write((_rec("tool_result", "file contents", "2026-09-12T14:45:00.000Z")).encode("utf-8"))
+        fh.write((_rec("user", "<task-notification>\n<task-id>x</task-id>", "2026-09-12T14:45:01.000Z")).encode("utf-8"))
+        fh.write((_rec("user", "<local-command-stdout>ok</local-command-stdout>", "2026-09-12T14:45:02.000Z")).encode("utf-8"))
+        fh.write((_rec("user", "<system-reminder>hooks fired</system-reminder>", "2026-09-12T14:45:03.000Z")).encode("utf-8"))
+        fh.write((_rec("user", "[Request interrupted by user]", "2026-09-12T14:45:04.000Z")).encode("utf-8"))
+        fh.write((_rec("user", "   ", "2026-09-12T14:45:05.000Z")).encode("utf-8"))
+        fh.write((_rec("assistant", "still working", "2026-09-12T14:45:06.000Z")).encode("utf-8"))
 
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["unblocks"] == []
@@ -367,8 +367,8 @@ def test_a_cross_session_message_records_its_body(tmp_path: Path) -> None:
         "</cross-session-message>\n\n"
         "This came from another Claude session — not typed by your user."
     )
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_rec("user", wrapped, "2026-09-12T14:46:25.309Z", isMeta=True))
+    with path.open("ab") as fh:
+        fh.write((_rec("user", wrapped, "2026-09-12T14:46:25.309Z", isMeta=True)).encode("utf-8"))
 
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
     (unblock,) = _entry(tmp_path)["unblocks"]
@@ -378,8 +378,8 @@ def test_a_cross_session_message_records_its_body(tmp_path: Path) -> None:
 def test_a_recorded_turn_is_recorded_once(tmp_path: Path) -> None:
     path = _transcript(tmp_path, _OPENING, _QUESTION)
     detector.sweep([_session(path)], vault_root=tmp_path)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER)
+    with path.open("ab") as fh:
+        fh.write((_ANSWER).encode("utf-8"))
 
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
@@ -390,9 +390,9 @@ def test_a_recorded_turn_is_recorded_once(tmp_path: Path) -> None:
 def test_two_turns_in_one_region_are_two_markers(tmp_path: Path) -> None:
     path = _transcript(tmp_path, _OPENING, _QUESTION)
     detector.sweep([_session(path)], vault_root=tmp_path)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER + _FOLLOW_UP)
-        fh.write(_rec("user", "yes, badges too", "2026-09-12T14:47:00.000Z"))
+    with path.open("ab") as fh:
+        fh.write((_ANSWER + _FOLLOW_UP).encode("utf-8"))
+        fh.write((_rec("user", "yes, badges too", "2026-09-12T14:47:00.000Z")).encode("utf-8"))
 
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 2
 
@@ -410,13 +410,13 @@ def test_a_partial_trailing_line_waits_for_the_next_sweep(tmp_path: Path) -> Non
     before = _entry(tmp_path)["offset"]
 
     head, tail = _ANSWER[:40], _ANSWER[40:]
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(head)
+    with path.open("ab") as fh:
+        fh.write((head).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["offset"] == before
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(tail)
+    with path.open("ab") as fh:
+        fh.write((tail).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
 
 
@@ -479,8 +479,8 @@ def test_needs_falls_back_to_the_last_blocked_sighting(tmp_path: Path) -> None:
     }, separators=(",", ":")) + "\n"
     path = _transcript(tmp_path, _OPENING, tool_only)
     detector.sweep([_session(path, "blocked", needs="which language?")], vault_root=tmp_path)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER)
+    with path.open("ab") as fh:
+        fh.write((_ANSWER).encode("utf-8"))
 
     detector.sweep([_session(path, "blocked", needs="which language?")], vault_root=tmp_path)
     (unblock,) = _entry(tmp_path)["unblocks"]
@@ -490,8 +490,8 @@ def test_needs_falls_back_to_the_last_blocked_sighting(tmp_path: Path) -> None:
 def test_a_long_answer_is_excerpted(tmp_path: Path) -> None:
     path = _transcript(tmp_path, _OPENING, _QUESTION)
     detector.sweep([_session(path)], vault_root=tmp_path)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_rec("user", "word " * 200, "2026-09-12T14:46:25.309Z"))
+    with path.open("ab") as fh:
+        fh.write((_rec("user", "word " * 200, "2026-09-12T14:46:25.309Z")).encode("utf-8"))
 
     detector.sweep([_session(path)], vault_root=tmp_path)
     (unblock,) = _entry(tmp_path)["unblocks"]
@@ -520,8 +520,8 @@ def test_transcript_growth_moves_the_bookmark_and_writes(tmp_path: Path, monkeyp
     before = _entry(tmp_path)["offset"]
 
     written = _writes(monkeypatch)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_rec("assistant", "reading", "2026-09-12T14:45:00.000Z"))
+    with path.open("ab") as fh:
+        fh.write((_rec("assistant", "reading", "2026-09-12T14:45:00.000Z")).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
 
     assert len(written) == 1
