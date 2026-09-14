@@ -66,7 +66,7 @@ def test_plugin_ships_every_packaged_skill_verbatim():
     for name in SKILLS:
         plugin_copy = REPO / "skills" / name / "SKILL.md"
         assert plugin_copy.is_file(), f"skills/{name}/SKILL.md missing from the plugin"
-        assert plugin_copy.read_text() == read_skill(name), (
+        assert plugin_copy.read_text(encoding="utf-8") == read_skill(name), (
             f"skills/{name}/SKILL.md drifted from src/mnemo/skills — "
             "run tools/sync_plugin_manifest.py"
         )

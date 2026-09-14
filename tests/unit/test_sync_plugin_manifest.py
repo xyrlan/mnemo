@@ -107,8 +107,8 @@ def test_sync_generates_the_plugin_skill_files(tmp_path: Path):
 
     for name in SKILLS:
         copy = tmp_path / "skills" / name / "SKILL.md"
-        assert copy.read_text() == read_skill(name)
-        assert copy.read_text().startswith("---\nname: " + name)
+        assert copy.read_text(encoding="utf-8") == read_skill(name)
+        assert copy.read_text(encoding="utf-8").startswith("---\nname: " + name)
 
 
 def test_sync_removes_a_skill_that_left_the_package(tmp_path: Path):

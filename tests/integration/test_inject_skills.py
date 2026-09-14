@@ -28,7 +28,7 @@ def test_inject_skills_writes_every_packaged_skill(skills_dir: Path):
 def test_injected_skill_keeps_the_frontmatter_first_and_the_tag_under_it(skills_dir: Path):
     """A tag above the `---` makes Claude Code read the whole file as body."""
     inj.inject_skills(skills_dir)
-    body = (skills_dir / "decomposing-for-dispatch" / "SKILL.md").read_text()
+    body = (skills_dir / "decomposing-for-dispatch" / "SKILL.md").read_text(encoding="utf-8")
 
     assert body.startswith("---\nname: decomposing-for-dispatch\n")
     assert "\n---\n" + inj.SKILL_TAG + "\n" in body
@@ -43,7 +43,7 @@ def test_inject_skills_is_idempotent_and_refreshes_its_own_file(skills_dir: Path
 
     inj.inject_skills(skills_dir)
 
-    assert target.read_text() == inj.render_skill("decomposing-for-dispatch")
+    assert target.read_text(encoding="utf-8") == inj.render_skill("decomposing-for-dispatch")
     assert {p.name for p in skills_dir.iterdir()} == set(inj.SKILLS)
 
 

@@ -60,7 +60,7 @@ def _sync_plugin_skills(skills_dir: Path) -> None:
     for name in SKILLS:
         target = skills_dir / name / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(read_skill(name))
+        target.write_text(read_skill(name), encoding="utf-8")
     # A skill that left the package must leave the plugin too, or the plugin
     # keeps offering something `mnemo init` no longer installs.
     for stale in skills_dir.iterdir():
