@@ -4,6 +4,8 @@ Split from the 77-line ``_apply_auto_promoted`` in the pre-v0.9
 ``inbox.py`` monolith into per-status helpers (PR I):
 
 - :func:`_handle_no_entry`              — first-time fresh write
+- :func:`_handle_user_owned`            — no entry but the file exists: a
+  person put it there; stage a sibling (#248)
 - :func:`_handle_dismissed`             — user previously dismissed; skip
 - :func:`_handle_inbox_to_auto_migrate` — v0.2→v0.3 status migration
 - :func:`_handle_target_missing`        — sacred file deleted by user
@@ -18,7 +20,7 @@ from pathlib import Path
 
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.inbox.paths import _sibling_path
-from mnemo.core.extract.inbox.rendering import _render_page
+from mnemo.core.extract.inbox.rendering import _render_page, _same_but_for_run_stamps
 from mnemo.core.extract.inbox.sources import union_with_prior_sources
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
@@ -51,6 +53,39 @@ def _handle_no_entry(
         last_sync=run_id,
     )
     result.auto_promoted.append(key)
+
+
+def _handle_user_owned(
+    page: ExtractedPage,
+    target: Path,
+    vault_root: Path,
+    content: str,
+    result: ApplyResult,
+) -> None:
+    """No state entry, yet the sacred file exists: a person owns it (#248).
+
+    A live ``shared/<type>/`` page the ledger has never written is exactly one
+    a human put there — written by hand, ``mv``-promoted out of ``_inbox/``
+    (the documented review path), or imported. It is the limiting case of
+    "the user edited the sacred file": they wrote all of it. So it takes the
+    same door :func:`_handle_target_exists` opens for an edited page — a
+    ``.proposed.md`` sibling in ``_inbox/`` — and the live page is never read
+    for merging, never rewritten, and never adopted into the state ledger
+    (adopting it would change what ``written_hash`` means for every consumer).
+
+    With no entry the unchanged fast path in ``apply_pages`` can never fire,
+    so every later run re-emits the slug and lands here again. Compare what
+    the proposal says, not its run stamps, before rewriting it — the same
+    guard the cross-type proposal path uses (#187).
+    """
+    key = f"{page.type}/{page.slug}"
+    sibling = _sibling_path(target, vault_root)
+    if sibling.exists() and _same_but_for_run_stamps(
+        sibling.read_text(encoding="utf-8"), content,
+    ):
+        return
+    atomic_write(sibling, content)
+    result.sibling_bounced.append((key, str(sibling)))
 
 
 def _handle_inbox_to_auto_migrate(
@@ -152,7 +187,10 @@ def _apply_auto_promoted(
     new_written_hash = content_hash(content)
 
     if entry is None:
-        _handle_no_entry(page, target, state, run_id, content, new_written_hash, result)
+        if target.exists():
+            _handle_user_owned(page, target, vault_root, content, result)
+        else:
+            _handle_no_entry(page, target, state, run_id, content, new_written_hash, result)
         return
 
     if entry.status == "dismissed" and not force:

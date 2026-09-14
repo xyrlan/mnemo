@@ -51,7 +51,7 @@ from mnemo.core.extract.inbox.paths import (
     _sibling_path,
     _target_path_for_page,
 )
-from mnemo.core.extract.inbox.rendering import _render_page
+from mnemo.core.extract.inbox.rendering import _render_page, _same_but_for_run_stamps
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import SACRED_STATUSES, ExtractionState, StateEntry
 from mnemo.core.rule_activation.index import is_universal
@@ -317,22 +317,6 @@ def _stamp_entry_origin(
     if entry is None or entry.status in SACRED_STATUSES:
         return
     entry.origin_backfill = True
-
-
-#: Frontmatter keys ``rendering._render_page`` stamps from the run id. They move
-#: on every run by construction, so they are not evidence that a page changed.
-_RUN_STAMPED_KEYS = ("extracted_at:", "extraction_run:", "last_sync:")
-
-
-def _same_but_for_run_stamps(old: str, new: str) -> bool:
-    """True when two renders differ only in their run-id stamps."""
-    def strip(text: str) -> list[str]:
-        return [
-            line for line in text.splitlines()
-            if not line.startswith(_RUN_STAMPED_KEYS)
-        ]
-
-    return strip(old) == strip(new)
 
 
 def _stage_cross_type_proposal(
