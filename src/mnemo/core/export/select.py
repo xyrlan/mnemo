@@ -29,6 +29,18 @@ class ExportRule:
     universal: bool
     source_count: int
     page_type: str
+    #: ``origin: imported`` — the quote is another contributor's, not the
+    #: reader's, and :func:`render.render_entry` attributes it that way.
+    #: Defaults False so every native page hashes exactly as before.
+    imported: bool = False
+
+
+def _is_imported(fm: dict) -> bool:
+    """``share.format.is_imported_frontmatter``, resolved at call time so this
+    module imports before the share package has landed in a tree."""
+    from mnemo.core.share.format import is_imported_frontmatter
+
+    return is_imported_frontmatter(fm)
 
 
 def select_rules(
@@ -71,6 +83,7 @@ def select_rules(
             universal=universal,
             source_count=len(sources),
             page_type=rel[0],
+            imported=_is_imported(fm),
         ))
     out.sort(key=lambda r: (not r.universal, -r.source_count, r.slug))
     if limit is not None:

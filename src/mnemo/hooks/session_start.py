@@ -468,6 +468,54 @@ def _staged_backfill_notice(vault_root: Path) -> str:
         return ""
 
 
+def _share_import_notice(vault_root: Path, cfg: dict, project: str, cwd: str) -> str:
+    """One line when the repo carries published rules this vault has not seen.
+
+    ``mnemo publish`` (share-rules, #245) checks a rules tree into the repo
+    at ``<repo>/.mnemo-shared/``; a newcomer's clone already has it, and
+    nothing else tells them so. This is the invitation to ``mnemo import``.
+
+    Same per-project discipline as the backfill invitation, with one
+    refinement: the marker is a digest of *what is pending*, not a bare
+    flag. A tree that gains rules after the first invitation invites again;
+    one the user read and chose not to import stays quiet. Never once-ever —
+    #229's once-ever warning went silent for three days.
+
+    Writes only the marker and, on first use, the vault id that "is this
+    mine" needs. ``cfg`` is taken for parity with the other notices; nothing
+    in it is read yet. Fail-silent, like the rest of the session-start path;
+    a tree that cannot be read is "nothing pending".
+    """
+    try:
+        from mnemo.core import agent as _agent
+        from mnemo.core.share import imports as _imports
+        from mnemo.core.share.format import SHARE_DIR
+
+        tree = Path(_agent.resolve_agent(cwd).repo_root) / SHARE_DIR
+        if not tree.is_dir():
+            return ""
+        pending = _imports.pending_hashes(vault_root, tree)
+        if not pending:
+            return ""
+        digest = _imports.pending_digest(pending)
+        if _imports.notice_shown(_imports.load_ledger(vault_root), project, digest):
+            return ""
+        _imports.mark_notice_shown(vault_root, project, digest)
+        n = len(pending)
+        return (
+            f"[mnemo] this repo publishes {n} rule(s) your vault has not imported "
+            f"({SHARE_DIR}/) — `mnemo import --dry-run` shows what would be staged, "
+            "`mnemo import` stages them in shared/_inbox/ for review."
+        )
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.share_import_notice", exc)
+        except Exception:
+            pass
+        return ""
+
+
 #: Bullets per session. This block rides on the session-start prompt, so the
 #: cap is a budget, not a preference; the tail line points at `mnemo status`
 #: for the overflow rather than spending more of the prompt on it.
@@ -697,6 +745,15 @@ def main() -> int:
                     payload_text = (
                         payload_text + "\n\n" + staged_notice
                         if payload_text else staged_notice
+                    )
+                # Rules another contributor published into this repo, still
+                # unimported. Same standing again: on a fresh clone with a
+                # fresh vault it is the only news there is.
+                share_notice = _share_import_notice(vault, cfg, canonical_name, cwd)
+                if share_notice:
+                    payload_text = (
+                        payload_text + "\n\n" + share_notice
+                        if payload_text else share_notice
                     )
                 # Same rule as the notice: a vault whose only news is a rule it
                 # just learned still has news worth sending.

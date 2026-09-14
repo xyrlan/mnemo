@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.unit._export_fixtures import write_rule
+from tests.unit._share_import_stub import ensure_format
+
+fmt = ensure_format()
 
 
 def test_selects_project_rules_and_universal_only(tmp_vault: Path):
@@ -150,3 +153,50 @@ def test_limit_zero_returns_empty_and_none_returns_everything(tmp_vault: Path):
 
     assert select_rules(tmp_vault, project="app", limit=0) == []
     assert [r.slug for r in select_rules(tmp_vault, project="app", limit=None)] == ["a", "b"]
+
+
+# --- imported rules (share-rules) ------------------------------------------
+
+def _stage_imported(vault: Path, *, slug: str, quote: str, project: str = "app") -> Path:
+    """A promoted import: the page ``to_vault_page`` writes, moved into shared/."""
+    rule = fmt.PortableRule(
+        slug=slug, type="feedback", name=slug, description="d", body="Their rule.\n",
+        tags=(), confidence="verified", stability="stable", quote=quote,
+        evidence_source="briefing: theirs", vault="other-vault", project="their-clone",
+        published_at="2026-09-10", source_count=2, hash="h",
+    )
+    text = fmt.to_vault_page(rule, project=project, today="2026-09-13")
+    live = vault / "shared" / "feedback" / f"{slug}.md"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(text, encoding="utf-8")
+    return live
+
+
+def test_promoted_import_is_selected_for_the_local_project_and_flagged(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    _stage_imported(tmp_vault, slug="theirs", quote="never do that")
+    write_rule(tmp_vault, slug="mine", quote="always this")
+
+    rules = {r.slug: r for r in select_rules(tmp_vault, project="app")}
+
+    assert set(rules) == {"theirs", "mine"}
+    assert rules["theirs"].imported is True and rules["theirs"].quote == "never do that"
+    assert rules["mine"].imported is False
+
+
+def test_promoted_import_is_not_selected_for_another_project(tmp_vault: Path):
+    from mnemo.core.export.select import select_rules
+
+    _stage_imported(tmp_vault, slug="theirs", quote="q", project="app")
+
+    assert select_rules(tmp_vault, project="elsewhere") == []
+
+
+def test_native_pages_default_to_not_imported(tmp_vault: Path):
+    from mnemo.core.export.select import ExportRule, select_rules
+
+    write_rule(tmp_vault, slug="mine")
+    (rule,) = select_rules(tmp_vault, project="app")
+    assert rule.imported is False
+    assert ExportRule.__dataclass_fields__["imported"].default is False
