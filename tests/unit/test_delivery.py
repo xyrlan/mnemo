@@ -737,3 +737,41 @@ def test_open_pr_returns_empty_rather_than_a_wrong_url(monkeypatch) -> None:
     _gh(monkeypatch, "created\n")
 
     assert delivery.open_pr("b", worktree="/tree", title="t") == ""
+
+
+# --- the PR join with its state, for landing (#236) ------------------------
+
+# Verbatim `gh pr list --head feat/dispatch-last-metre/delivery --state all
+# --json number,url,state --limit 1`, captured 2026-09-13: the PR of the first
+# contract piece ever delivered, after it was merged.
+REAL_GH_MERGED = (
+    '[{"number":219,"state":"MERGED",'
+    '"url":"https://github.com/xyrlan/mnemo/pull/219"}]\n'
+)
+
+
+def test_pr_info_reads_the_state_alongside_the_url(monkeypatch) -> None:
+    """Landing needs to know a merged piece from an open one; ``pr_for`` does not."""
+    calls = _gh(monkeypatch, REAL_GH_MERGED)
+
+    info = delivery.pr_info("feat/dispatch-last-metre/delivery", repo_root="/repo")
+
+    assert info is not None
+    assert info.url == "https://github.com/xyrlan/mnemo/pull/219"
+    assert info.state == "MERGED"
+    assert "state" in calls[0][calls[0].index("--json") + 1]
+
+
+def test_pr_info_is_none_when_no_pr_exists(monkeypatch) -> None:
+    _gh(monkeypatch, REAL_GH_NONE)
+
+    assert delivery.pr_info("feat/f/x", repo_root="/repo") is None
+
+
+def test_pr_for_is_the_url_of_pr_info(monkeypatch) -> None:
+    """One ``gh`` shape, two readers: ``pr_for`` must not drift from ``pr_info``."""
+    _gh(monkeypatch, REAL_GH_MERGED)
+
+    assert delivery.pr_for("feat/f/x", repo_root="/repo") == (
+        delivery.pr_info("feat/f/x", repo_root="/repo").url
+    )

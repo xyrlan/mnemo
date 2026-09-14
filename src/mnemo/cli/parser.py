@@ -132,6 +132,23 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="session short id, issue number or piece slug to deliver")
     deliver_p.add_argument("--review", action="store_true",
                            help="read-only: every dispatch worktree, its branch, and whether it is deliverable")
+    land_p = sub.add_parser(
+        "land",
+        help="a delivered contract's pieces in landing order with their PRs and "
+             "signatures; --merge rehearses the merge and then lands them")
+    land_p.add_argument("contract", metavar="PATH",
+                        help="the contract that was dispatched")
+    # Read-only by default: the view is the check that makes the merge safe,
+    # and it is useful on its own. --merge is the one irreversible step, and
+    # it runs only after a rehearsal in a throwaway worktree passed in full.
+    land_p.add_argument("--merge", action="store_true",
+                        help="rehearse the merge in order (suite at each step), then "
+                             "gh pr merge each piece; stops at the first failure")
+    land_p.add_argument("--suite", metavar="CMD", default=None,
+                        help="the test command the rehearsal runs after each merge "
+                             "(default: python -m pytest -q)")
+    land_p.add_argument("--method", choices=["squash", "merge", "rebase"],
+                        default="squash", help="gh pr merge method (default: squash)")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")
