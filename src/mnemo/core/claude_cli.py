@@ -41,7 +41,7 @@ from typing import Optional, Tuple
 #: Bump both when it passes on a newer version; the live test warns when the
 #: installed version differs so this does not silently go stale.
 VERIFIED_AGAINST = "2.1.270"
-VERIFIED_ON = "2026-09-13"
+VERIFIED_ON = "2026-09-14"
 
 
 @dataclass(frozen=True)
@@ -175,6 +175,29 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "--json`, which reads state.json directly."
         ),
         used_by="dispatch report hints (routed around, not depended on)",
+        verified=_V,
+    ),
+    Assumption(
+        key="lean-child-profile",
+        claim=(
+            "`--setting-sources project,local` loads the repo's settings and "
+            "not `~/.claude/settings.json`, so the user's `enabledPlugins`, "
+            "statusline and unrelated hooks do not load; `--strict-mcp-config` "
+            "ignores every MCP configuration except one passed with "
+            "`--mcp-config`. Both are accepted alongside `--bg`. Handing "
+            "mnemo's own hooks back with `--settings <file>` fires its "
+            "SessionStart briefing, and its server with `--mcp-config <file>` "
+            "restores the three `mcp__mnemo__*` tools. Measured over three "
+            "`--bg` children per arm (one-word prompt, empty repo, first-turn "
+            "total input read from each transcript): 55,180/58,285/58,287 on "
+            "the full profile against 42,293/42,295/42,296 lean — ~16k tokens "
+            "and ~27%. Without `--mcp-config`, a lean child lists no "
+            "`mcp__*` tools at all. `--safe-mode` and `--bare` are rejected as blunter: the "
+            "first disables mnemo too, the second additionally forces "
+            "ANTHROPIC_API_KEY/apiKeyHelper auth, which an OAuth maintainer's "
+            "child does not have."
+        ),
+        used_by="dispatch.spawn_child via child_profile.lean_args",
         verified=_V,
     ),
     Assumption(

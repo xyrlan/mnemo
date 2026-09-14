@@ -75,8 +75,10 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         print("nothing to dispatch: give an issue number or --contract PATH")
         return 1
 
+    lean = not getattr(args, "full_profile", False)
+
     if contract_path:
-        return _dispatch_contract(contract_path, root=root, args=args)
+        return _dispatch_contract(contract_path, root=root, args=args, lean=lean)
 
     if getattr(args, "dry_run", False):
         # Printable without side effects: the paths and branches are pure
@@ -86,7 +88,10 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             print(f"#{issue}  {core.branch_name(issue)}  {tree}{_model_suffix(model)}")
         return 0
 
-    return _report(core.dispatch_all(issues, repo_root=root, model=model))
+    return _report(
+        core.dispatch_all(issues, repo_root=root, model=model, lean=lean),
+        lean=lean,
+    )
 
 
 def _print_example(contract_path: str | None) -> int:
@@ -128,11 +133,17 @@ def _model_suffix(model: str | None) -> str:
     choice nobody made. The resolved id is not invented here either — it lives
     on the machine's settings, and ``mnemo sessions`` reads it back off the
     child's own ``state.json`` once the child exists.
+
+    Only the model: the profile is a property of the whole dispatch, not of
+    one child, so it is reported once in the footer (#270) rather than
+    repeated per row.
     """
     return f"  [{model}]" if model else ""
 
 
-def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> int:
+def _dispatch_contract(
+    path: str, *, root: Path, args: argparse.Namespace, lean: bool = True
+) -> int:
     """Read, validate, then dispatch — refusing before any tree is created."""
     from mnemo.core import contracts
     from mnemo.core import dispatch as core
@@ -162,11 +173,13 @@ def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> in
         return 0
 
     try:
-        results = core.dispatch_contract(contract, repo_root=root, model=model)
+        results = core.dispatch_contract(
+            contract, repo_root=root, model=model, lean=lean
+        )
     except core.DispatchError as exc:
         print(str(exc))
         return 1
-    return _report(results)
+    return _report(results, lean=lean)
 
 
 def _label(target: object) -> str:
@@ -179,8 +192,13 @@ def _label(target: object) -> str:
     return f"#{target}" if isinstance(target, int) else str(target)
 
 
-def _report(results: list) -> int:
-    """Print every outcome, then the two commands the maintainer needs next."""
+def _report(results: list, *, lean: bool = True) -> int:
+    """Print every outcome, then the two commands the maintainer needs next.
+
+    *lean* is printed rather than assumed, because it changes what the child
+    can see — a child missing a plugin it needed is a confusing failure to
+    debug from the outside, and one line here names the cause (#270).
+    """
     started = [r for r in results if r.error is None]
     failed = [r for r in results if r.error is not None]
 
@@ -200,6 +218,23 @@ def _report(results: list) -> int:
 
     if started:
         print()
+        if lean:
+            from mnemo.core import child_profile
+
+            # What the child does *not* have is the surprising half, so it is
+            # stated once per dispatch rather than left to be discovered when
+            # a child cannot find a tool the maintainer takes for granted.
+            print("  profile: lean — repo settings + mnemo only, no user "
+                  "plugins/MCP/skills (--full-profile opts out)")
+            # Deliberately not the word WARNING, which in this report means
+            # "a `claude` CLI assumption broke" (#235). This is a different
+            # thing — mnemo is not installed — and giving both the same label
+            # would make a report about the machine read as a report about the
+            # spawn.
+            for gap in child_profile.missing_pieces():
+                print(f"    incomplete: {gap}")
+        else:
+            print("  profile: full user profile (--full-profile)")
         print("  queue:  mnemo sessions")
         # Only a child whose id was actually read back can be attached. When
         # none was, the hint is omitted rather than printed with an empty

@@ -407,7 +407,7 @@ def test_a_spawn_whose_jobs_entry_is_missing_warns(repo: Path, monkeypatch) -> N
     that file, so its absence is the ``jobs-state-json`` assumption breaking
     and is reported as such — as a warning, since the child is running.
     """
-    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None: "a1b2c3d4")
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True: "a1b2c3d4")
     monkeypatch.setattr(dispatch.claude_cli, "claude_version", lambda: "9.9.9")
     fetch = lambda issue, *, repo_root: dispatch.Issue(issue, "t", "b")  # noqa: E731
 
@@ -421,7 +421,7 @@ def test_a_spawn_whose_jobs_entry_is_missing_warns(repo: Path, monkeypatch) -> N
 def test_a_registered_spawn_carries_no_warning(
     repo: Path, monkeypatch, tmp_jobs_dir: Path
 ) -> None:
-    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None: "a1b2c3d4")
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True: "a1b2c3d4")
     fetch = lambda issue, *, repo_root: dispatch.Issue(issue, "t", "b")  # noqa: E731
     tree = dispatch.worktree_path(197, repo_root=repo)
     entry = tmp_jobs_dir / "a1b2c3d4"
@@ -468,7 +468,7 @@ def test_spawn_raises_when_claude_exits_nonzero(repo: Path, monkeypatch) -> None
 
 def test_one_bad_issue_does_not_strand_the_others(repo: Path, monkeypatch) -> None:
     """#4242 does not exist; #197 must still run, and #4242 must leave no tree."""
-    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None: "aaaa1111")
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True: "aaaa1111")
 
     def fetch(issue: int, *, repo_root):
         if issue == 4242:
@@ -563,14 +563,14 @@ def _contract(tmp_path: Path, verdict: str = "parallel"):
     )
 
 
-def _boom(prompt, *, cwd, model=None):
+def _boom(prompt, *, cwd, model=None, lean=True):
     raise dispatch.DispatchError("boom")
 
 
 def test_dispatch_contract_spawns_one_child_per_piece(repo: Path, monkeypatch) -> None:
     spawned: list[Path] = []
 
-    def fake_spawn(prompt, *, cwd, model=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True):
         spawned.append(cwd)
         return "id1"
 
@@ -590,7 +590,7 @@ def test_dispatch_contract_refuses_a_sequential_verdict(repo: Path, monkeypatch)
 def test_one_failing_piece_does_not_strand_the_others(repo: Path, monkeypatch) -> None:
     calls = {"n": 0}
 
-    def flaky(prompt, *, cwd, model=None):
+    def flaky(prompt, *, cwd, model=None, lean=True):
         calls["n"] += 1
         if calls["n"] == 1:
             raise dispatch.DispatchError("boom")
@@ -626,7 +626,7 @@ def test_rollback_deletes_the_branch_so_the_retry_can_run(repo: Path, monkeypatc
     assert "feat/demo/two" not in _branches(repo)
 
     # The real proof: the same contract dispatches cleanly afterwards.
-    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None: "ok1")
+    monkeypatch.setattr(dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True: "ok1")
     retry = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
     assert [r.error for r in retry] == [None, None]
     assert {"feat/demo/one", "feat/demo/two"} <= _branches(repo)
@@ -661,7 +661,7 @@ def test_a_piece_prompt_reaches_its_child(repo: Path, monkeypatch) -> None:
     """The child must receive its own boundary, not another piece's."""
     seen: dict[str, str] = {}
 
-    def fake_spawn(prompt, *, cwd, model=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True):
         seen[cwd.name] = prompt
         return "id"
 

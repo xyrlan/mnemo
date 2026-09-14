@@ -131,6 +131,13 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="model every child of this dispatch runs on "
                                  "(alias like haiku/sonnet/opus, or a full id); "
                                  "a contract piece's own `model:` wins over it")
+    # Opt back *in* to the maintainer's profile. The default is lean (#270)
+    # because a child needs the vault and the repo, not nine plugins; this is
+    # for the child that genuinely needs one of them. Orthogonal to --model:
+    # one picks who the child is, the other picks what it loads.
+    dispatch_p.add_argument("--full-profile", dest="full_profile", action="store_true",
+                            help="give children the full user profile (plugins, all MCP "
+                                 "servers, all skills) instead of the lean default")
     deliver_p = sub.add_parser(
         "deliver",
         help="review what a dispatch produced, or push + open a PR for named children")

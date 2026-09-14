@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from mnemo.core import claude_cli, dispatch
+from mnemo.core import child_profile, claude_cli, dispatch
 from mnemo.core.sessions import jobs, liveness
 
 pytestmark = [pytest.mark.live_claude, pytest.mark.real_spawn]
@@ -264,3 +264,85 @@ def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(2))
+
+
+def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
+    """``lean-child-profile``: the flags drop the user profile, and mnemo survives.
+
+    Two ``-p`` sessions rather than two ``--bg`` children, because this checks
+    what the child can *see*, and ``--print`` answers that in one call without
+    leaving a background session to reap. The token *saving* is not asserted:
+    it depends on what the maintainer has installed, and a threshold here
+    would fail on a clean machine for the right reason. What is asserted is
+    the mechanism the saving rests on — the user's servers gone, mnemo's kept.
+
+    Skipped rather than failed when mnemo is not installed in this HOME: the
+    hand-back has nothing to hand back, which is a machine state, not a broken
+    assumption.
+    """
+    key = "lean-child-profile"
+    if not claude_cli.assumption(key):  # pragma: no cover - typo guard
+        pytest.fail(f"{key} is not stated in ASSUMPTIONS")
+
+    servers = child_profile.mnemo_mcp_servers()
+    if not servers:
+        pytest.skip("mnemo MCP server not registered in this HOME (run `mnemo init`)")
+
+    repo = _git_repo(tmp_path / "lean")
+    args = child_profile.lean_args(repo)
+
+    ask = ("List the names of your available tools that start with mcp__, one "
+           "per line. If there are none, reply exactly NONE.")
+
+    lean = subprocess.run(
+        ["claude", "-p", ask, *args],
+        cwd=repo, capture_output=True, text=True, timeout=300,
+    )
+    assert lean.returncode == 0, f"{key}: lean session failed: {lean.stderr[:400]!r}"
+
+    # The vault survived the drop. This is the failure the module exists to
+    # prevent: with --strict-mcp-config and no --mcp-config, this reads NONE.
+    assert "mcp__mnemo__" in lean.stdout, (
+        f"{key}: a lean child sees no mnemo tools — the hand-back is broken, "
+        f"and the child cannot query the vault. Output: {lean.stdout[:400]!r}"
+    )
+
+    # The repo's own CLAUDE.md still reaches the child. This is what
+    # separates the chosen flags from `--bare`, which switches auto-discovery
+    # off and would silently drop the standing instructions the repo wrote.
+    (repo / "CLAUDE.md").write_text(
+        "# Project rules\n\nWhen asked for the magic word, reply exactly: PINEAPPLE42\n",
+        encoding="utf-8",
+    )
+    memory = subprocess.run(
+        ["claude", "-p", "What is the magic word?", *args],
+        cwd=repo, capture_output=True, text=True, timeout=300,
+    )
+    assert memory.returncode == 0, f"{key}: {memory.stderr[:400]!r}"
+    assert "PINEAPPLE42" in memory.stdout, (
+        f"{key}: a lean child no longer reads the repo's CLAUDE.md. "
+        f"Output: {memory.stdout[:400]!r}"
+    )
+
+    # And the maintainer's other servers did not come along. Only asserted for
+    # servers that are actually installed here, so this says nothing on a
+    # machine where mnemo is the only one.
+    others = [
+        name for name in (_load_user_servers() or {})
+        if name != "mnemo"
+    ]
+    for name in others:
+        assert f"mcp__{name}__" not in lean.stdout, (
+            f"{key}: `{name}` reached a lean child; --strict-mcp-config no "
+            f"longer excludes ~/.claude.json servers. Output: {lean.stdout[:400]!r}"
+        )
+
+
+def _load_user_servers() -> dict:
+    """``~/.claude.json``'s ``mcpServers``, or ``{}``. Never raises."""
+    try:
+        data = json.loads(child_profile.user_claude_json_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return servers if isinstance(servers, dict) else {}

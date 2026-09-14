@@ -22,7 +22,7 @@ def test_reports_each_started_child(monkeypatch, capsys, tmp_path: Path) -> None
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4")
         ],
     )
@@ -39,7 +39,7 @@ def test_reports_a_failure_and_exits_nonzero(monkeypatch, capsys, tmp_path: Path
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4"),
             core.Dispatched(issue=4242, error="issue #4242 not found"),
         ],
@@ -58,7 +58,7 @@ def test_points_at_the_queue_rather_than_claude_agents(monkeypatch, capsys, tmp_
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4")
         ],
     )
@@ -83,7 +83,7 @@ def test_the_attach_hint_names_the_first_child_that_has_an_id(
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id=""),
             core.Dispatched(issue=198, worktree=tmp_path / "p-wt-198", short_id="a1b2c3d4"),
         ],
@@ -108,7 +108,7 @@ def test_no_attach_hint_when_no_child_reported_an_id(
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="")
         ],
     )
@@ -130,7 +130,7 @@ def test_a_warning_is_printed_under_its_row(monkeypatch, capsys, tmp_path: Path)
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(
                 issue=197, worktree=tmp_path / "p-wt-197", short_id="",
                 warning="claude CLI assumption `bg-prints-short-id` did not hold (installed claude 9.9.9)",
@@ -152,7 +152,7 @@ def test_no_warning_line_when_nothing_broke(monkeypatch, capsys, tmp_path: Path)
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         core, "dispatch_all",
-        lambda issues, *, repo_root, model=None: [
+        lambda issues, *, repo_root, model=None, lean=True: [
             core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4")
         ],
     )
