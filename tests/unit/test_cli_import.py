@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit._export_fixtures import write_rule
-from tests.unit._share_stub import ensure_format, publish_rule
+from tests.unit._share_import_stub import ensure_format, publish_rule
 
 fmt = ensure_format()
 

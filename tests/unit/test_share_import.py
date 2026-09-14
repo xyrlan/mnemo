@@ -1,7 +1,7 @@
 """``run_import``: stage what changed, never promote, never overwrite a stranger.
 
 Every portable page here is built through the format piece's ``to_portable``
-(see ``_share_stub``), so the tree's shape is whatever ``format`` says it is.
+(see ``_share_import_stub``), so the tree's shape is whatever ``format`` says it is.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit._export_fixtures import write_rule
-from tests.unit._share_stub import ensure_format, publish_rule
+from tests.unit._share_import_stub import ensure_format, publish_rule
 
 fmt = ensure_format()
 

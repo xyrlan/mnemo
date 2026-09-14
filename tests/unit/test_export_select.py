@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.unit._export_fixtures import write_rule
-from tests.unit._share_stub import ensure_format
+from tests.unit._share_import_stub import ensure_format
 
 fmt = ensure_format()
 
