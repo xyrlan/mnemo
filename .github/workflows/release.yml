@@ -44,6 +44,14 @@ jobs:
             exit 1
           fi
 
+      # changelog.d/ fragments are folded into CHANGELOG.md by hand at release
+      # (tools/assemble_changelog.py, #246). A tag pushed with fragments still
+      # pending would publish a version whose notes sit in files nobody reads.
+      # This runs before anything irreversible: the number is not burned, and
+      # the fix is assemble, commit, re-tag.
+      - name: Refuse to publish with changelog fragments pending
+        run: python3 tools/assemble_changelog.py --fail-if-pending
+
       - name: Install build tooling
         run: python -m pip install --upgrade build
 

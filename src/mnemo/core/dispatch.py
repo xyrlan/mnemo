@@ -193,7 +193,7 @@ Scope limits:
 - Do not merge or push without asking.
 - Do not touch files outside what this issue needs.
 - Run the full test suite before claiming the work is done.
-
+{changelog}
 No approach is prescribed. Decide what the issue actually calls for from the
 evidence in the repo. If the issue proposes a fix that the code shows to be
 wrong, say so and refuse it — a measured refusal is a better outcome than a
@@ -202,7 +202,31 @@ job, not failing it.
 """
 
 
-def build_prompt(issue: int, *, title: str, body: str) -> str:
+_CHANGELOG_PROMPT = """
+Document the change for users in `changelog.d/{name}.<section>.md` — one new
+file holding the `- ` bullet(s) a `CHANGELOG.md` entry would carry, with
+`<section>` one of added, changed, fixed, removed, deprecated or security.
+Do not edit `CHANGELOG.md` itself: it is assembled from those files at
+release, and every parallel PR that edits it conflicts with every other one
+(#246). `changelog.d/README.md` has the shape.
+"""
+
+
+def _changelog_prompt(name: str, repo_root: Path | str | None) -> str:
+    """The fragment instruction, or nothing where the repo keeps no fragments.
+
+    Where to write is a **boundary** — like the files a piece may touch — and
+    belongs in the prompt. A repo without ``changelog.d/`` is told nothing, so
+    a dispatch there does not sprout a directory nobody assembles.
+    """
+    if repo_root is None or not (Path(repo_root) / "changelog.d").is_dir():
+        return ""
+    return _CHANGELOG_PROMPT.format(name=name)
+
+
+def build_prompt(
+    issue: int, *, title: str, body: str, repo_root: Path | str | None = None
+) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
     Deliberately takes no "approach" parameter. The #187 child was dispatched
@@ -216,13 +240,15 @@ def build_prompt(issue: int, *, title: str, body: str) -> str:
 
     A well-written issue body carried more than the dispatching prompt did.
     Since a prompt that prescribes an approach can override a correct refusal,
-    there is no way to pass one here.
+    there is no way to pass one here. *repo_root* is context, not approach: it
+    only decides whether the repo's changelog convention is stated.
     """
     return _PROMPT.format(
         issue=issue,
         title=title or f"issue #{issue}",
         body=(body or "").strip() or "(empty — read it with gh)",
         branch=branch_name(issue),
+        changelog=_changelog_prompt(str(issue), repo_root),
     )
 
 
@@ -249,7 +275,7 @@ Nothing about *how* to build this is specified, deliberately. If the contract's
 boundary turns out to be wrong — the work does not divide where it says, or a
 signature cannot be delivered as written — stop and say so rather than widening
 your boundary to make it fit.
-
+{changelog}
 Run the full test suite before you finish. Do not merge or push without asking.
 """
 
@@ -262,7 +288,9 @@ do not implement them yourself:
 """
 
 
-def build_piece_prompt(piece: contracts.Piece, *, feature: str) -> str:
+def build_piece_prompt(
+    piece: contracts.Piece, *, feature: str, repo_root: Path | str | None = None
+) -> str:
     """A contract piece's opening prompt: its boundary and its interfaces.
 
     Like :func:`build_prompt`, this takes no "approach" parameter, and for the
@@ -287,6 +315,7 @@ def build_piece_prompt(piece: contracts.Piece, *, feature: str) -> str:
         exposes="\n".join(f"- {item}" for item in piece.exposes) or "- (nothing)",
         consumes=consumes,
         branch=branch_name(piece.slug, feature=feature),
+        changelog=_changelog_prompt(f"{feature}-{piece.slug}", repo_root),
     )
 
 
@@ -549,7 +578,8 @@ def dispatch_issue(
     details = fetch(issue, repo_root=repo_root)  # before any git state exists
     tree = ensure_worktree(issue, repo_root=repo_root)
     return _spawn_into(
-        issue, tree, build_prompt(issue, title=details.title, body=details.body),
+        issue, tree,
+        build_prompt(issue, title=details.title, body=details.body, repo_root=repo_root),
         repo_root=repo_root, branch=branch_name(issue),
     )
 
@@ -586,7 +616,7 @@ def dispatch_piece(
     target = f"c-{piece.slug}"
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
     return _spawn_into(
-        target, tree, build_piece_prompt(piece, feature=feature),
+        target, tree, build_piece_prompt(piece, feature=feature, repo_root=repo_root),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
     )
 
