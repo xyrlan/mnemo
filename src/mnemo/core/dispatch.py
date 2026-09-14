@@ -19,6 +19,12 @@ attempt, so each is encoded here rather than left to be rediscovered:
 - **``claude agents`` requires a TTY** and refuses on a pipe. Any scripted
   reader must use ``mnemo sessions --json``.
 - **``timeout`` is not on the macOS PATH.** Dispatches are never wrapped in it.
+- **A child does not inherit the maintainer's profile** (#270). Plugins, extra
+  MCP servers and unrelated skills are none of them what the child was
+  dispatched for, and all of them are paid for on its first turn: ~58,000
+  input tokens against ~42,000 lean, measured over three children per arm.
+  :mod:`mnemo.core.child_profile` builds the flags that drop them and hands
+  mnemo's own hooks and MCP server back, because the same flags drop those.
 
 Every observable behaviour of the ``claude`` CLI this relies on — the shape
 of what ``--bg`` prints, the jobs-directory files read back, the roster, the
@@ -51,7 +57,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
-from mnemo.core import claude_cli, contracts
+from mnemo.core import child_profile, claude_cli, contracts
 
 WORKTREE_SUFFIX = "-wt-"
 
@@ -471,13 +477,25 @@ _ANSI_RE = claude_cli.ANSI_RE
 _short_id_from = claude_cli.short_id_from
 
 
-def spawn_child(prompt: str, *, cwd: Path | str, model: str | None = None) -> str:
+def spawn_child(
+    prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True
+) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
     ``--bg`` with the prompt **positional**. Never ``-p``/``--print``: the CLI
     rejects the combination, and ``--print`` would never start the interactive
     session ``claude attach`` needs, leaving the job unattachable. Never
     wrapped in ``timeout``, which is not on the macOS PATH.
+
+    **The child's configuration (#270).** By default the child does *not*
+    inherit the maintainer's profile: no plugins, no unrelated MCP servers, no
+    unrelated skills or hooks. Only the repo's own ``.claude/`` and mnemo's
+    own hooks and MCP server, handed back explicitly. Measured at ~58,000 →
+    ~42,000 first-turn input tokens, three children per arm. See
+    :mod:`mnemo.core.child_profile` for what is dropped, what is rebuilt and
+    why the blunter switches were rejected; ``lean=False`` (or
+    ``MNEMO_DISPATCH_FULL_PROFILE=1``) restores the old behaviour for a child
+    that genuinely needs a plugin.
 
     **Reading the id back (#211).** ``--bg`` does not print an id; it prints a
     five-line help block, the id on the first line and three attach/logs/stop
@@ -536,6 +554,12 @@ def spawn_child(prompt: str, *, cwd: Path | str, model: str | None = None) -> st
     args = ["claude", "--bg"]
     if model:
         args += ["--model", model]
+    if child_profile.is_lean(lean):
+        # Before the prompt, which is positional: a flag after it would be
+        # read as a second positional by any CLI that stops parsing there.
+        # Alongside --model, never instead of it: the two choose different
+        # things (who the child is, and what it loads) and both survive.
+        args += child_profile.lean_args(cwd)
     args.append(prompt)
     try:
         result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
@@ -557,6 +581,7 @@ Fetcher = Callable[..., Issue]
 def _spawn_into(
     target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str,
     model: str | None = None,
+    lean: bool = True,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -578,7 +603,7 @@ def _spawn_into(
     child is running either way.
     """
     try:
-        short_id = spawn_child(prompt, cwd=tree, model=model)
+        short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean)
     except claude_cli.ContractBroken as exc:
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc), model=model
@@ -595,6 +620,7 @@ def _spawn_into(
 def dispatch_issue(
     issue: int, *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
     model: str | None = None,
+    lean: bool = True,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -609,13 +635,14 @@ def dispatch_issue(
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body, repo_root=repo_root),
-        repo_root=repo_root, branch=branch_name(issue), model=model,
+        repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
     )
 
 
 def dispatch_all(
     issues: Sequence[int], *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
     model: str | None = None,
+    lean: bool = True,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -633,7 +660,10 @@ def dispatch_all(
     for issue in issues:
         try:
             out.append(
-                dispatch_issue(issue, repo_root=repo_root, fetch=fetch, model=model)
+                dispatch_issue(
+                    issue, repo_root=repo_root, fetch=fetch,
+                    model=model, lean=lean,
+                )
             )
         except DispatchError as exc:
             out.append(Dispatched(issue=issue, error=str(exc)))
@@ -643,6 +673,7 @@ def dispatch_all(
 def dispatch_piece(
     piece: contracts.Piece, *, feature: str, repo_root: Path | str,
     model: str | None = None,
+    lean: bool = True,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -663,12 +694,13 @@ def dispatch_piece(
     return _spawn_into(
         target, tree, build_piece_prompt(piece, feature=feature, repo_root=repo_root),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
-        model=piece.model or model,
+        model=piece.model or model, lean=lean,
     )
 
 
 def dispatch_contract(
-    contract: contracts.Contract, *, repo_root: Path | str, model: str | None = None
+    contract: contracts.Contract, *, repo_root: Path | str,
+    model: str | None = None, lean: bool = True,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -697,7 +729,7 @@ def dispatch_contract(
             out.append(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
-                    model=model,
+                    model=model, lean=lean,
                 )
             )
         except DispatchError as exc:
