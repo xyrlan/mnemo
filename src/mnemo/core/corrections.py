@@ -107,27 +107,45 @@ def parse_section(markdown: str) -> list[Correction]:
     return out
 
 
+
+#: How mnemo's own dispatch prompts open (``core/dispatch.py``: ``_PROMPT`` and
+#: ``_PIECE_PROMPT``). A user turn that starts this way was written by mnemo,
+#: not typed by a person, so nothing in it can be the user's correction.
+DISPATCH_BRIEF_OPENINGS: tuple[str, ...] = (
+    "Work on issue #",
+    "You are building one piece of the feature",
+)
+
+
+def is_dispatch_brief(turn: str) -> bool:
+    """True when *turn* is the opening prompt ``mnemo dispatch`` hands a child."""
+    return (turn or "").lstrip().startswith(DISPATCH_BRIEF_OPENINGS)
+
+
 def verify(
     items: list[Correction], user_turns: list[str],
 ) -> tuple[list[Correction], list[Correction]]:
     """Split items into (kept, rejected) by whether the quote was really typed
-    — *after* the opening turn.
+    by the user — and not merely handed to the session as its brief.
 
     A correction is a reaction: the user telling the assistant to stop, change
-    or prefer something it did or proposed. The first user turn is the task,
-    so a quote found only there is a brief, not a correction. Measured on the
-    real vault (#244): 23 of 64 Corrections items quoted only the opening
-    turn, and 21 of those were dispatched children whose sole user turn is
-    mnemo's own dispatch template ("Do NOT merge or push without asking.",
-    "Write commits and any PR in English."). Three of the vault's nineteen
-    gate-verified feedback rules cited that template as the user's words.
+    or prefer something. Measured on the real vault (#244): 23 of 64
+    Corrections items quoted only the opening turn, and 21 of those were
+    dispatched children whose sole user turn is mnemo's own dispatch template
+    ("Do NOT merge or push without asking.", "Write commits and any PR in
+    English."). Three of the vault's nineteen gate-verified feedback rules
+    cited that template as the user's words.
 
-    A quote the user repeats later in the session is kept: the repetition is
-    the reaction.
+    So the opening turn is skipped **when it is a dispatch brief**
+    (:func:`is_dispatch_brief`) — text mnemo wrote, which no user typed. A
+    human's first message stays in scope: the five-minute loop in the README
+    is exactly "never use npm in this repo, always yarn" as the first and
+    only thing typed, and that is a correction. A quote the user repeats
+    later in the session is kept either way: the repetition is the reaction.
     """
     kept: list[Correction] = []
     rejected: list[Correction] = []
-    reactions = user_turns[1:]
+    reactions = user_turns[1:] if user_turns and is_dispatch_brief(user_turns[0]) else user_turns
     for item in items:
         if any(quote_matches_turn(item.quote, t) for t in reactions):
             kept.append(item)

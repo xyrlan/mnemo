@@ -154,7 +154,8 @@ def test_system_prompt_excludes_the_opening_brief_and_requests_from_corrections(
     questions or the dispatch prompt itself, and the rule half narrated what
     was done. The prompt must say what a correction is not."""
     low = BRIEFING_SYSTEM_PROMPT.lower()
-    assert "opening message" in low or "first user turn" in low
+    assert "task brief" in low and "work on issue #" in low
+    assert "in their own words" in low  # a human's first message still counts
     for word in ("approval", "question", "feature request", "bug report"):
         assert word in low, word
     assert "imperative" in low
