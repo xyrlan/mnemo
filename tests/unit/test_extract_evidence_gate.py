@@ -234,3 +234,53 @@ def test_a_never_demoted_reference_page_still_auto_promotes(tmp_path):
     apply_pages([p], state, root, run_id="r1")
     assert (root / "shared" / "reference" / "plain-reference.md").exists()
     assert state.entries["reference/plain-reference"].status == "auto_promoted"
+
+
+# --- the gate is symmetric (#244) --------------------------------------------------
+#
+# On the real vault the four truest corrections of September were emitted as
+# ``type: reference`` with a quote that verifies at the same bar as a feedback
+# page; the gate only looked at feedback pages, so they counted as unbacked.
+
+def test_reference_page_with_a_verifying_quote_becomes_verified_feedback(tmp_path):
+    root = _vault(tmp_path)
+    p = evidence.verify_page(_page(
+        type="reference", confidence="inferred",
+        evidence={"quote": "never retry on 4xx, only on 5xx",
+                  "source": "bots/proj/briefings/sessions/s1.md"},
+    ), root)
+    assert p.type == "feedback" and p.confidence == "verified" and not p.unverified_feedback
+    assert p.evidence == {"quote": "never retry on 4xx, only on 5xx",
+                          "source": "bots/proj/briefings/sessions/s1.md"}
+
+
+def test_reference_page_whose_quote_does_not_verify_is_left_alone(tmp_path):
+    root = _vault(tmp_path)
+    for ev in (None,
+               {"quote": "always deploy the staging branch before merging release tags",
+                "source": "bots/proj/briefings/sessions/s1.md"},
+               {"quote": "never retry on 4xx, only on 5xx", "source": "bots/proj/briefings/sessions/nope.md"}):
+        p = evidence.verify_page(_page(type="reference", confidence="inferred", evidence=ev), root)
+        assert p.type == "reference" and p.confidence == "inferred" and not p.unverified_feedback
+
+
+def test_reference_page_cannot_borrow_verification_from_a_briefing_it_was_not_built_from(tmp_path):
+    root = _vault(tmp_path)
+    p = evidence.verify_page(_page(
+        type="reference", confidence="inferred",
+        source_files=["bots/other/briefings/sessions/s2.md"],
+        evidence={"quote": "never retry on 4xx, only on 5xx",
+                  "source": "bots/proj/briefings/sessions/s1.md"},
+    ), root)
+    assert p.type == "reference" and p.confidence == "inferred"
+
+
+def test_user_and_project_pages_are_not_retyped(tmp_path):
+    root = _vault(tmp_path)
+    for t in ("user", "project"):
+        p = evidence.verify_page(_page(
+            type=t, confidence="inferred",
+            evidence={"quote": "never retry on 4xx, only on 5xx",
+                      "source": "bots/proj/briefings/sessions/s1.md"},
+        ), root)
+        assert p.type == t

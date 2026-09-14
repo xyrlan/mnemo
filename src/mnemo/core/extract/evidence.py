@@ -55,14 +55,29 @@ def verify_page(page: ExtractedPage, vault_root: Path) -> ExtractedPage:
     Verification needs a quote that passes :func:`quote_verified` — at least
     ``corrections.MIN_CONTENT_TOKENS`` content words, found in the Corrections
     of one of the page's own source briefings.
+
+    The gate is symmetric (#244): the evidence decides the type in both
+    directions. A ``feedback`` page whose quote fails is demoted to a staged
+    ``reference`` page; a ``reference`` page whose quote passes the very same
+    bar becomes verified ``feedback``. The LLM's ``type`` is an opinion and the
+    quote is a checkable fact — on the real vault the four truest corrections
+    of a month were emitted as ``reference`` *with* a verifying quote and
+    counted as unbacked because only the demoting direction existed. ``user``
+    and ``project`` pages are not retyped: a quote can establish a rule, not
+    an identity or an architectural fact.
     """
-    if page.type != "feedback":
-        return page
     # The quote must come from a briefing this page was actually built from.
     # Without this a page can cite any briefing in the vault and inherit its
     # verification, laundering one project's correction into another's rule.
     cited = page.evidence.get("source") if isinstance(page.evidence, dict) else None
-    if cited in page.source_files and quote_verified(page.evidence, vault_root):
+    verifies = cited in page.source_files and quote_verified(page.evidence, vault_root)
+    if page.type == "reference":
+        if verifies:
+            return replace(page, type="feedback", confidence="verified", unverified_feedback=False)
+        return page
+    if page.type != "feedback":
+        return page
+    if verifies:
         return replace(page, confidence="verified", unverified_feedback=False)
     return replace(
         page,

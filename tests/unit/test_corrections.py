@@ -95,3 +95,31 @@ def test_quote_is_specific_treats_unaccented_vao_as_a_stopword():
     from mnemo.core.corrections import quote_is_specific
     assert not quote_is_specific("vão subir o deploy do backend hoje")
     assert not quote_is_specific("vao subir o deploy do backend hoje")
+
+
+# --- the opening brief is not a correction (#244) ---------------------------------
+#
+# A correction reacts to something the assistant did; the first user turn is
+# the task. On the real vault 23 of 64 Corrections items quoted only the first
+# turn, 21 of them in dispatched children whose sole user turn is mnemo's own
+# dispatch template ("Do NOT merge or push without asking.").
+
+def test_verify_rejects_a_quote_found_only_in_the_opening_turn():
+    items = [C.Correction(quote="do not merge or push without asking", rule="Never merge unasked")]
+    kept, rejected = C.verify(items, ["Work on issue #1. Do not merge or push without asking.", "looks good"])
+    assert kept == [] and rejected == items
+
+
+def test_verify_keeps_a_quote_the_user_repeated_after_the_opening_turn():
+    items = [C.Correction(quote="never retry on 4xx, only on 5xx", rule="Retry only 5xx")]
+    kept, _ = C.verify(items, [
+        "add retries; never retry on 4xx, only on 5xx",
+        "I said never retry on 4xx, only on 5xx — fix it",
+    ])
+    assert kept == items
+
+
+def test_verify_single_turn_session_has_no_corrections():
+    items = [C.Correction(quote="write commits and any PR in English", rule="English commits")]
+    kept, rejected = C.verify(items, ["Fix the bug. Write commits and any PR in English."])
+    assert kept == [] and rejected == items

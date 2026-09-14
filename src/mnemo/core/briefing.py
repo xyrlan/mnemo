@@ -221,7 +221,8 @@ def generate_session_briefing(
                 vault_root,
                 "briefing.corrections_rejected",
                 ValueError(
-                    f"{len(rejected)} correction quote(s) not found in user turns; dropped"
+                    f"{len(rejected)} correction quote(s) not found in user turns after "
+                    f"the opening brief; dropped"
                 ),
             )
     except Exception as exc:

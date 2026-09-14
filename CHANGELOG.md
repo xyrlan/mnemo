@@ -80,6 +80,36 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A correction is a reaction, and the evidence gate now says so in both
+  directions.** Measured on the maintainer's vault before touching anything
+  (`docs/specs/2026-09-13-extraction-corrections-measurement.md`): 100 of
+  the 100 feedback pages demoted since the `## Corrections` section existed
+  had no supporting correction in any source briefing — the gate was right
+  every time, the extractor types *Decisions made* as feedback. Of the 64
+  Corrections items the briefings hold, 23 quote only the session's first
+  user turn, 21 of them dispatched children whose sole user turn is mnemo's
+  own dispatch template; three of the vault's nineteen gate-verified rules
+  cite "Do NOT merge or push without asking." or "Choosing is part of your
+  job…" as the user's words. And the four truest corrections of September
+  were emitted as `type: reference` with a quote that verifies at the
+  feedback bar, invisible to a gate that only demoted. Three changes, none
+  a threshold: `corrections.verify` ignores the opening turn (a quote the
+  user repeats later is kept); `evidence.verify_page` retypes a `reference`
+  page whose quote verifies to verified `feedback`, the mirror of the
+  demotion it already did; the briefing prompt states what a correction is
+  not (the opening message, approvals, questions, feature requests, bug
+  reports) and that the `→` half is an imperative rule, not what was done.
+  `mnemo replay` on the same 2100 prompts, both gates applied to today's
+  pages: carried 117 → 117, hindsight 24 → 23, not-yet-learned 85 → 85,
+  correction-backed rules 78 → 75 and carried-correction-backed 3 → 2 — the
+  one lost was an approval prompt matching an approval quote, which fell
+  under the relative gap when nine evidence-bearing pages moved. The
+  measurement also grades `mnemo reclassify`'s 61 keep verdicts by hand:
+  3–4 are corrections, the rest feature requests, bug reports and approvals,
+  so 53 of the 78 "correction-backed" rules carry a label no current gate
+  would issue. Not changed: thresholds, the 1320 demoted pages, the 60
+  reclassify-era labels, the replay's definition. (#244)
+
 - **The first-run backfill's default is one value everywhere, and a finished
   sweep now says so.** `backfill.autoOnFirstSession` has been `false` in
   `config.DEFAULTS` since 1.1.0, and the README and `docs/configuration.md`

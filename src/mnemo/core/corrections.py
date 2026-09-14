@@ -110,11 +110,26 @@ def parse_section(markdown: str) -> list[Correction]:
 def verify(
     items: list[Correction], user_turns: list[str],
 ) -> tuple[list[Correction], list[Correction]]:
-    """Split items into (kept, rejected) by whether the quote was really typed."""
+    """Split items into (kept, rejected) by whether the quote was really typed
+    — *after* the opening turn.
+
+    A correction is a reaction: the user telling the assistant to stop, change
+    or prefer something it did or proposed. The first user turn is the task,
+    so a quote found only there is a brief, not a correction. Measured on the
+    real vault (#244): 23 of 64 Corrections items quoted only the opening
+    turn, and 21 of those were dispatched children whose sole user turn is
+    mnemo's own dispatch template ("Do NOT merge or push without asking.",
+    "Write commits and any PR in English."). Three of the vault's nineteen
+    gate-verified feedback rules cited that template as the user's words.
+
+    A quote the user repeats later in the session is kept: the repetition is
+    the reaction.
+    """
     kept: list[Correction] = []
     rejected: list[Correction] = []
+    reactions = user_turns[1:]
     for item in items:
-        if any(quote_matches_turn(item.quote, t) for t in user_turns):
+        if any(quote_matches_turn(item.quote, t) for t in reactions):
             kept.append(item)
         else:
             rejected.append(item)
