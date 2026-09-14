@@ -1,5 +1,5 @@
 ---
-description: list commands
+description: "list commands"
 allowed-tools: Bash
 disable-model-invocation: true
 ---

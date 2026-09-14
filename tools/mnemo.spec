@@ -14,11 +14,13 @@
 #
 # The templates have to be collected explicitly: they are package *data*, and
 # scaffold.py reads them through importlib.resources at `mnemo init` time, so
-# a build without them produces a binary that installs a broken vault.
+# a build without them produces a binary that installs a broken vault. The
+# skills are data the same way (install/settings.py reads them at `mnemo
+# init` to write ~/.claude/skills/), so a build without them installs none.
 
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = collect_data_files("mnemo.templates")
+datas = collect_data_files("mnemo.templates") + collect_data_files("mnemo.skills")
 
 a = Analysis(
     ["entry.py"],

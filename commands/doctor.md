@@ -1,5 +1,5 @@
 ---
-description: full diagnostic
+description: "full diagnostic"
 allowed-tools: Bash
 disable-model-invocation: true
 ---

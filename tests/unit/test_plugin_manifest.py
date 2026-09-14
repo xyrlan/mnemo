@@ -44,6 +44,36 @@ def test_plugin_commands_never_hardcode_an_interpreter():
         assert "python3" not in body, path.name
 
 
+def test_plugin_commands_open_with_their_frontmatter():
+    """Anything above the first `---` turns the frontmatter into body text."""
+    for path in (REPO / "commands").glob("*.md"):
+        assert path.read_text().startswith('---\ndescription: "'), path.name
+
+
+def test_plugin_ships_every_packaged_skill_verbatim():
+    """The skill lived only in the repo and reached no install (#233).
+
+    Claude Code loads `skills/<name>/SKILL.md` from the plugin root by
+    convention; `mnemo init` writes the packaged copy. Both have to be the
+    same file, and the packaged one is the source `tools/sync_plugin_manifest.py`
+    copies from — so a hand edit to either side fails here until synced.
+    """
+    import sys
+    sys.path.insert(0, str(REPO / "src"))
+    from mnemo.install.settings import SKILLS, read_skill
+
+    assert SKILLS, "the plugin ships at least one skill"
+    for name in SKILLS:
+        plugin_copy = REPO / "skills" / name / "SKILL.md"
+        assert plugin_copy.is_file(), f"skills/{name}/SKILL.md missing from the plugin"
+        assert plugin_copy.read_text(encoding="utf-8") == read_skill(name), (
+            f"skills/{name}/SKILL.md drifted from src/mnemo/skills — "
+            "run tools/sync_plugin_manifest.py"
+        )
+    on_disk = {p.name for p in (REPO / "skills").iterdir() if p.is_dir()}
+    assert on_disk == set(SKILLS), "plugin skills/ and SKILLS disagree"
+
+
 def test_marketplace_json_well_formed():
     data = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text())
     assert data["name"]
