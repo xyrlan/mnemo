@@ -63,7 +63,11 @@ def _ensure_gitignore(cwd: Path, entries: tuple[str, ...] = GITIGNORE_ENTRIES) -
     block = ["", "# mnemo (project-scoped install)"] + list(missing)
     new_text = "\n".join(existing_lines + block).rstrip("\n") + "\n"
     try:
-        gi.write_text(new_text, encoding="utf-8", errors="surrogateescape")
+        # newline="\n": on Windows, text mode would rewrite the user's LF file
+        # as CRLF on every init; the file is theirs and comes back byte for
+        # byte apart from the entries added.
+        with gi.open("w", encoding="utf-8", errors="surrogateescape", newline="\n") as fh:
+            fh.write(new_text)
     except OSError:
         pass
 

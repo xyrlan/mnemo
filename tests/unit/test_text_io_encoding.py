@@ -25,6 +25,7 @@ import ast
 import builtins
 import io
 import json
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,13 @@ def cp1252_default(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(io, "open", cp1252_open)
     monkeypatch.setattr(builtins, "open", cp1252_open)
+    # Python 3.10 alone routes ``Path.open`` through ``_NormalAccessor.open``,
+    # a class attribute bound to ``io.open`` at import time, so patching
+    # ``io.open`` afterwards never reaches ``Path.read_text`` there. 3.8/3.9
+    # and 3.11+ call ``io.open`` by name at call time.
+    accessor = getattr(pathlib, "_NormalAccessor", None)
+    if accessor is not None and hasattr(accessor, "open"):
+        monkeypatch.setattr(accessor, "open", staticmethod(cp1252_open))
 
 
 def test_fixture_reproduces_the_windows_failure(cp1252_default, tmp_path: Path) -> None:
