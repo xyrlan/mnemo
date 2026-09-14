@@ -40,7 +40,7 @@ def _schedule(tmp_path: Path, *, agent_name: str, cwd: Path) -> str:
     vault.mkdir()
     cfg = {"vaultRoot": str(vault), "briefings": {"enabled": True}}
     transcript = tmp_path / "fake.jsonl"
-    transcript.write_text("{}\n")
+    transcript.write_text("{}\n", encoding="utf-8")
     captured: dict[str, str] = {}
     with patch.object(
         session_end, "_spawn_detached_briefing",
