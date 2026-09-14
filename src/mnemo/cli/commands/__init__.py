@@ -38,6 +38,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     rewrites,
     session,
     sessions,
+    stale,
     statusline,
     status,
     telemetry,
