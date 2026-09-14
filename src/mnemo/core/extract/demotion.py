@@ -6,10 +6,10 @@ That flag is what keeps it out of ``shared/`` — and, like the backfill origin
 stamp before it (:mod:`mnemo.core.backfill.origin`), it is **derived per run**
 and therefore evaporates.
 
-``verify_page`` returns a non-feedback page untouched::
-
-    if page.type != "feedback":
-        return page
+``verify_page`` returns a non-feedback page untouched unless it is a
+``reference`` page carrying a quote that verifies (#244 — the gate is
+symmetric, and that path can only *raise* a page); a demoted page has no
+quote left, so it always comes back exactly as it went in.
 
 From the second run onwards the staged page is advertised to the LLM as an
 existing *reference* rule, so it is re-emitted under ``type: reference``, the

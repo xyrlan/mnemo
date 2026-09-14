@@ -147,3 +147,15 @@ def test_briefing_survives_a_corrections_failure(vault, tmp_path, monkeypatch):
     assert "corrections: 0\n" in text.split("---")[1]
     assert "## TL;DR" in text  # the briefing itself survived
     assert "briefing.corrections" in [w for w, _ in logged]
+
+
+def test_system_prompt_excludes_the_opening_brief_and_requests_from_corrections():
+    """#244: on the real vault most Corrections items were approvals, requests,
+    questions or the dispatch prompt itself, and the rule half narrated what
+    was done. The prompt must say what a correction is not."""
+    low = BRIEFING_SYSTEM_PROMPT.lower()
+    assert "task brief" in low and "work on issue #" in low
+    assert "in their own words" in low  # a human's first message still counts
+    for word in ("approval", "question", "feature request", "bug report"):
+        assert word in low, word
+    assert "imperative" in low

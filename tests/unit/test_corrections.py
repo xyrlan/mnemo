@@ -95,3 +95,52 @@ def test_quote_is_specific_treats_unaccented_vao_as_a_stopword():
     from mnemo.core.corrections import quote_is_specific
     assert not quote_is_specific("vão subir o deploy do backend hoje")
     assert not quote_is_specific("vao subir o deploy do backend hoje")
+
+
+# --- the dispatch brief is not a correction (#244) ------------------------------
+#
+# A correction reacts to something the assistant did. On the real vault 23 of
+# 64 Corrections items quoted only the first turn, 21 of them in dispatched
+# children whose sole user turn is mnemo's own dispatch template ("Do NOT merge
+# or push without asking."). That template is skipped; a human's first message
+# is not — the README's five-minute loop is a one-turn correction.
+
+def test_verify_rejects_a_quote_found_only_in_the_dispatch_brief():
+    items = [C.Correction(quote="do not merge or push without asking", rule="Never merge unasked")]
+    kept, rejected = C.verify(items, ["Work on issue #1 in this repo: x\n\nDo not merge or push without asking.", "looks good"])
+    assert kept == [] and rejected == items
+
+
+def test_verify_rejects_the_dispatch_brief_even_as_the_only_turn():
+    items = [C.Correction(quote="write commits and any PR in English", rule="English commits")]
+    kept, rejected = C.verify(items, ["Work on issue #7 in this repo: y\n\nWrite commits and any PR in English."])
+    assert kept == [] and rejected == items
+
+
+def test_verify_rejects_a_contract_piece_brief_too():
+    items = [C.Correction(quote="do not merge or push without asking", rule="Never merge unasked")]
+    kept, rejected = C.verify(items, ['You are building one piece of the feature "f": p\n\nDo not merge or push without asking.'])
+    assert kept == [] and rejected == items
+
+
+def test_verify_keeps_a_rule_a_human_typed_as_the_first_and_only_turn():
+    """The README's five-minute loop: one session, one line, `mnemo learn`."""
+    items = [C.Correction(quote="never use npm in this repo, always yarn", rule="Use yarn, never npm")]
+    kept, rejected = C.verify(items, ["never use npm in this repo, always yarn"])
+    assert kept == items and rejected == []
+
+
+def test_verify_keeps_a_quote_the_user_repeated_after_the_dispatch_brief():
+    items = [C.Correction(quote="never retry on 4xx, only on 5xx", rule="Retry only 5xx")]
+    kept, _ = C.verify(items, [
+        "Work on issue #2 in this repo: retries\n\nnever retry on 4xx, only on 5xx",
+        "I said never retry on 4xx, only on 5xx — fix it",
+    ])
+    assert kept == items
+
+
+def test_is_dispatch_brief_matches_only_mnemo_openings():
+    assert C.is_dispatch_brief("Work on issue #12 in this repo: t")
+    assert C.is_dispatch_brief('  You are building one piece of the feature "f": s')
+    assert not C.is_dispatch_brief("never use npm in this repo, always yarn")
+    assert not C.is_dispatch_brief("")
