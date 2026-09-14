@@ -174,10 +174,10 @@ inbox.
 |---|---|---|
 | `enforcement.enabled` | `true` | Block `Bash` commands matching a guardrail rule |
 | `enforcement.log.maxBytes` | `1048576` | Denial log rotation threshold |
-| `enrichment.enabled` | `true` | Surface matching rules as context on `Edit`/`Write` |
+| `enrichment.enabled` | `true` | Surface rules whose `activates_on.path_globs` name the file as context on `Read`/`Edit`/`Write` |
 | `enrichment.maxRulesPerCall` | `3` | Rules surfaced per tool call |
 | `enrichment.bodyPreviewChars` | `300` | Characters of rule body included |
-| `enrichment.maxEmissionsPerSession` | `15` | Cap per session |
+| `enrichment.maxEmissionsPerSession` | `15` | Cap per session; each rule is surfaced at most once per session |
 | `enrichment.log.maxBytes` | `1048576` | Log rotation threshold |
 
 ### `scoping` and `doctor`

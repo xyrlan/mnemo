@@ -147,7 +147,7 @@ type: briefing
 [END]
 
 Output:
-{"pages":[{"slug":"heroui-v3-drawer-modal-pattern","name":"HeroUI v3 Drawer modal pattern","description":"Use Drawer slot with placement=center for modals in HeroUI v3","type":"feedback","body":"In HeroUI v3 use the Drawer slot pattern for modals instead of the old Modal component.\\n\\n**Why:** the Modal component was removed in v3; Drawer with `placement=\\"center\\"` replaces it.\\n\\n**How to apply:** when building a modal, import Drawer from @heroui/react and set `placement=\\"center\\"`; never reach for a Modal component.","source_files":["bots/agent-d/memory/briefings/sessions/2026-04-10_heroui.md"],"stability":"stable","tags":["heroui","ui"],"enforce":null,"activates_on":{"tools":["Edit","Write","MultiEdit"],"path_globs":["**/components/modals/**","**/*modal*.tsx"]}}]}
+{"pages":[{"slug":"heroui-v3-drawer-modal-pattern","name":"HeroUI v3 Drawer modal pattern","description":"Use Drawer slot with placement=center for modals in HeroUI v3","type":"feedback","body":"In HeroUI v3 use the Drawer slot pattern for modals instead of the old Modal component.\\n\\n**Why:** the Modal component was removed in v3; Drawer with `placement=\\"center\\"` replaces it.\\n\\n**How to apply:** when building a modal, import Drawer from @heroui/react and set `placement=\\"center\\"`; never reach for a Modal component.","source_files":["bots/agent-d/memory/briefings/sessions/2026-04-10_heroui.md"],"stability":"stable","tags":["heroui","ui"],"enforce":null,"activates_on":null}]}
 
 Example 7 — NEGATIVE: stylistic rule with no file boundary → BOTH fields null.
 ("Prefer descriptive variable names" is exactly the "when in doubt, omit"

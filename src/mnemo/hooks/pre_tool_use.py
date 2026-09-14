@@ -5,8 +5,9 @@ Two responsibilities:
 
 1. Enforcement: if a Bash command matches a deny rule, emit a deny envelope so
    Claude Code rejects the tool call before it runs.
-2. Enrichment: if an Edit/Write/MultiEdit path matches an activates_on rule,
-   emit an additionalContext envelope so Claude Code prepends the rule body.
+2. Enrichment: if a Read/Edit/Write/MultiEdit path matches an activates_on
+   rule whose glob names that file, emit an additionalContext envelope so
+   Claude Code prepends the rule body — once per rule per session (#271).
 
 Fail-open absolute: any exception at any stage returns exit code 0 with empty
 stdout. This hook MUST NEVER block Claude Code from running.
@@ -17,7 +18,7 @@ import json
 import sys
 
 _ENFORCE_TOOL = "Bash"
-_ENRICH_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
+_ENRICH_TOOLS = frozenset({"Read", "Edit", "Write", "MultiEdit"})
 
 
 def main() -> int:
@@ -75,36 +76,35 @@ def main() -> int:
         if enr_enabled and tool_name in _ENRICH_TOOLS:
             file_path = tool_input.get("file_path") or ""
             if file_path:
-                hits = ra.match_path_enrich(index, project, file_path, tool_name)
+                hits = ra.match_path_enrich(
+                    index, project, _repo_relative(file_path), tool_name,
+                )
                 if hits:
-                    # Reflex integration (v0.8):
-                    #   1. Enforce enrichment.maxEmissionsPerSession cap.
-                    #   2. Filter hits against session-wide injected_cache.
+                    from mnemo.core.mcp import session_state
+                    sid = str(payload.get("session_id") or "unknown")
+                    # Once per slug per session, within
+                    # enrichment.maxEmissionsPerSession. Fail-open: broken
+                    # session state never blocks enrichment.
                     try:
-                        from mnemo.core.mcp import session_state
-                        sid = str(payload.get("session_id") or "unknown")
                         max_enrich = int(enr_cfg.get("maxEmissionsPerSession", 15))
                         counts = session_state.read_emission_counts(vault, sid)
-                        if counts["enrich_count"] >= max_enrich:
+                        room = max_enrich - counts["enrich_count"]
+                        if room <= 0:
                             return 0  # silent: cap reached
-                        cache = session_state.read_injected_cache(vault)
-                        hits = [h for h in hits if h.slug not in cache]
-                        if not hits:
-                            return 0
+                        seen = session_state.read_enriched_slugs(vault, sid)
+                        hits = [h for h in hits if h.slug not in seen][:room]
                     except Exception:
-                        # fail-open — never block enrichment because session-state is broken
                         pass
 
                     if hits:
                         _emit_enrich(hits)
                         ra.log_enrichment(vault, hits, tool_name, tool_input)
-                        # Record emission + cache updates.
                         try:
                             import time as _time
-                            now_ts = int(_time.time())
-                            for h in hits:
-                                session_state.add_injection(vault, slug=h.slug, sid=sid, now_ts=now_ts)
-                                session_state.bump_emission(vault, sid=sid, kind="enrich", now_ts=now_ts)
+                            session_state.record_enrichment(
+                                vault, sid=sid, slugs=[h.slug for h in hits],
+                                now_ts=int(_time.time()),
+                            )
                         except Exception:
                             pass
 
@@ -115,6 +115,31 @@ def main() -> int:
         except Exception:
             pass
     return 0
+
+
+def _repo_relative(file_path: str) -> str:
+    """*file_path* relative to the git root enclosing it, POSIX-separated.
+
+    Claude Code hands PreToolUse an absolute ``file_path`` while path globs are
+    written relative to the repo; matched raw, a leading ``/`` defeats even
+    ``**/`` — 0 of 3660 real Edit/Write calls ever matched (#271). The root is
+    the file's own (a worktree's root, in a worktree). Both sides are resolved
+    so a symlinked prefix cannot break the comparison. A path outside any repo
+    comes back unchanged.
+    """
+    try:
+        from pathlib import Path
+        from mnemo.core.agent import _find_git_root
+
+        path = Path(file_path)
+        if not path.is_absolute():
+            return file_path.replace("\\", "/")
+        root = _find_git_root(path.parent)
+        if root is None:
+            return file_path
+        return path.resolve().relative_to(root).as_posix()
+    except Exception:
+        return file_path
 
 
 def _emit_deny(hit) -> None:

@@ -199,7 +199,7 @@ def test_enrich_full_loop(tmp_vault: Path, monkeypatch):
         tmp_vault,
         "modal-a11y.md",
         project=project,
-        path_glob="**/*modal*.tsx",
+        path_glob="src/components/user-modal.tsx",
         tools="Edit",
         body=body,
     )
@@ -207,9 +207,10 @@ def test_enrich_full_loop(tmp_vault: Path, monkeypatch):
 
     write_index(tmp_vault, build_index(tmp_vault))
 
+    # Claude Code sends an absolute file_path; the glob is repo-relative.
     payload = {
         "tool_name": "Edit",
-        "tool_input": {"file_path": "src/components/user-modal.tsx"},
+        "tool_input": {"file_path": str(project_dir / "src" / "components" / "user-modal.tsx")},
         "cwd": str(project_dir),
     }
     rc, out = _run_real_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
