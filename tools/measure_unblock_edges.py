@@ -55,6 +55,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Which ``type: user`` records are a person talking to the session is the
+# detector's own predicate, imported so the measurement and the markers it
+# measures cannot drift apart. Needs ``PYTHONPATH=src`` (see Usage).
+from mnemo.core.sessions.detector import is_human_turn
+
 #: When PR #191 gave ``session_end`` a sweep. Before this, ``detector.sweep``
 #: had exactly one caller (``mnemo sessions``, typed by hand), so edges from
 #: the earlier era were never catchable by the hook and a 0% rate over them is
@@ -70,45 +75,9 @@ PR_191_MERGED = datetime(2026, 9, 12, 21, 30, 41, tzinfo=timezone.utc)
 #: asks about.
 EDGE_WINDOW_SECONDS = 10.0
 
-#: Prompt prefixes that are not the maintainer answering a blocked session.
-#: Task notifications, slash-command expansions, skill preambles and interrupt
-#: markers all arrive as ``type: user`` records but none of them is a human
-#: unblocking anything, and counting them would inflate the edge population
-#: with events the detector was never meant to see.
-SYNTHETIC_PREFIXES = (
-    "<task-notification",
-    "<local-command",
-    "<command-name",
-    "<command-message",
-    "<system-reminder",
-    "[Request interrupted",
-    "Base directory for this skill",
-    "# Claude in Chrome browser automation",
-)
-
-
 def _parse_ts(value: str) -> datetime:
     """Transcript timestamps are ISO-8601 with a ``Z`` suffix."""
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
-def _prompt_text(record: dict) -> str:
-    """The human-visible text of a ``type: user`` record, or ``""``.
-
-    Tool results also arrive as user records; they carry a ``tool_result``
-    block and are the assistant's own loop, not a human turn.
-    """
-    message = record.get("message") or {}
-    content = message.get("content")
-    if isinstance(content, list):
-        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-            return ""
-        return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
-    return content if isinstance(content, str) else ""
-
-
-def _is_human_answer(text: str) -> bool:
-    return bool(text.strip()) and not text.lstrip().startswith(SYNTHETIC_PREFIXES)
 
 
 def read_edges(path: Path) -> list[dict]:
@@ -145,7 +114,7 @@ def read_edges(path: Path) -> list[dict]:
             continue
         if kind != "user":
             continue
-        if not _is_human_answer(_prompt_text(record)):
+        if not is_human_turn(record):
             continue
         if last_assistant is None:
             continue  # the opening task: nothing was blocked yet

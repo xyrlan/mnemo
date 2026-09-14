@@ -276,16 +276,20 @@ def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
 
 
 def _maybe_sweep_sessions(vault_root) -> None:
-    """Record any ``blocked -> active`` edge visible right now (#176).
+    """Record every answer that reached a background session since the last
+    sweep (#176).
 
     ``core.sessions.detector`` documented itself as riding this hook from the
-    start; until now only ``mnemo sessions`` ever called it, so on a machine
-    where nobody runs that command by hand the detector never ran at all.
+    start; until PR #191 only ``mnemo sessions`` ever called it, so on a
+    machine where nobody runs that command by hand the detector never ran at
+    all.
 
-    This is a second trigger, not a fix for the cadence: the hook fires when
-    *this* session ends, and an edge that opens and closes inside another
-    session's lifetime is still missed. It converts "never swept unless a
-    human typed a command" into "swept at least once per session end".
+    The hook fires when *this* session ends, which is never inside another
+    session's ten-second ``blocked -> active`` flip (measured, PR #203). That
+    no longer matters: the detector reads each session's transcript forward
+    from its own bookmark, so an answer that landed an hour ago is recorded
+    here just as well as one that landed a second ago. This trigger only has
+    to happen eventually, not in time.
 
     Unscoped on purpose. The hook fires in one repo, but the blocked sessions
     worth recording may be running anywhere; ``mnemo sessions`` filters by cwd

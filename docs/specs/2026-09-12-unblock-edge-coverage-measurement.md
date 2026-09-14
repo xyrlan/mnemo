@@ -263,3 +263,15 @@ PYTHONPATH=src python3 tools/measure_unblock_edges.py --json
 ```
 
 Numbers move as transcripts accumulate; the structural claim does not.
+
+## Resolution (2026-09-14)
+
+The detector no longer samples `tempo` for the edge. `detector.sweep` keeps a
+byte bookmark per session in `session-queue.json`, reads the transcript
+(`linkScanPath`) forward from it on every trigger, and records each human turn
+it finds as one unblock — the transcript is the record that outlives the
+edge, so a sweep that is late by an hour records the same marker a 3s poll
+would have. The `tempo` comparison survives only as the fallback for a
+transcript that cannot be read. The predicate that decides what a human turn
+is (`detector.is_human_turn`) is the one this measurement's script imports,
+so the two cannot drift.
