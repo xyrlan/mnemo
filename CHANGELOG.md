@@ -157,6 +157,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `learn`'s "now: briefing" was a nested mapping to a strict YAML parser
   rather than text. Re-running `mnemo init` rewrites the files. (#233)
 
+### Changed
+
+- **The README tells both halves.** It told the memory story only — the
+  dispatch loop that shipped in 1.4, 1.5 and this week (`dispatch` →
+  `sessions` → `deliver` → `land`, `replay` to measure the vault) was one
+  paragraph under "Commands", and a reader learned that mnemo is a memory
+  plugin, not that a session fans out into children that inherit the vault,
+  that the queue puts the blocked ones first, or that answering a blocked
+  child feeds the vault back. The README now says so in one sentence and shows
+  the whole loop once, with the queue, `mnemo land` and `mnemo replay` output
+  copied from the terminal (the replay figures, with their interval and their
+  "not measured" line, are the new number it quotes). "How it compares" gains
+  the `claude --bg` row. It is not longer: the autopilot section and the vault
+  tree moved to getting-started, which also gains a "The dispatch loop"
+  section — issue form and contract form, delivering, landing, and what a
+  blocked child's answer becomes — at the depth the queue already had. (#243)
+
 ## [1.5.0] — 2026-09-13
 
 ### Added

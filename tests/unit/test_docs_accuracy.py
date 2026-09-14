@@ -17,7 +17,7 @@ DOCS = [REPO / "README.md", *(REPO / "docs").glob("*.md")]
 
 
 def _doc_text() -> dict[Path, str]:
-    return {p: p.read_text() for p in DOCS}
+    return {p: p.read_text(encoding="utf-8") for p in DOCS}
 
 
 def test_every_referenced_cli_command_exists():
@@ -73,7 +73,7 @@ def test_every_documented_config_key_exists():
         return out
 
     known = flatten(DEFAULTS)
-    text = (REPO / "docs" / "configuration.md").read_text()
+    text = (REPO / "docs" / "configuration.md").read_text(encoding="utf-8")
     # Backticked dotted keys, e.g. `extraction.auto.enabled`. Anchored on a
     # real top-level section so backticked filenames (`settings.json`) and
     # paths aren't mistaken for config keys.
@@ -93,7 +93,7 @@ def test_configuration_keys_are_fully_qualified():
     """
     from mnemo.core.config import DEFAULTS
 
-    text = (REPO / "docs" / "configuration.md").read_text()
+    text = (REPO / "docs" / "configuration.md").read_text(encoding="utf-8")
     top = set(DEFAULTS)
     for line in text.splitlines():
         if not line.startswith("| `"):
@@ -116,7 +116,7 @@ def test_docs_name_every_hook_event_that_ships():
     """getting-started.md listed two events for a long time; four ship."""
     from mnemo.install.settings import HOOK_DEFINITIONS
 
-    text = (REPO / "docs" / "getting-started.md").read_text()
+    text = (REPO / "docs" / "getting-started.md").read_text(encoding="utf-8")
     for event in HOOK_DEFINITIONS:
         assert event in text, f"getting-started.md never mentions the {event} hook"
 
@@ -129,5 +129,5 @@ def test_vault_templates_do_not_repeat_the_off_by_default_claim(claim: str):
     first thing a user reads.
     """
     for name in ("HOME.md", "README.md"):
-        text = (REPO / "src" / "mnemo" / "templates" / name).read_text()
+        text = (REPO / "src" / "mnemo" / "templates" / name).read_text(encoding="utf-8")
         assert claim not in text.lower(), f"templates/{name} still says '{claim}'"
