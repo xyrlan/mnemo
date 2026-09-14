@@ -176,8 +176,10 @@ def cp1252_default(monkeypatch: pytest.MonkeyPatch):
     # a class attribute bound to ``io.open`` at import time, so patching
     # ``io.open`` afterwards never reaches ``Path.read_text`` there. 3.8/3.9
     # and 3.11+ call ``io.open`` by name at call time.
+    # On 3.8/3.9 the same attribute is ``os.open`` (the raw opener behind
+    # ``Path._opener``), so only replace it where it is ``io.open``.
     accessor = getattr(pathlib, "_NormalAccessor", None)
-    if accessor is not None and hasattr(accessor, "open"):
+    if accessor is not None and getattr(accessor, "open", None) is real_open:
         monkeypatch.setattr(accessor, "open", staticmethod(cp1252_open))
 
 
