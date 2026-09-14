@@ -191,6 +191,25 @@ Under the plugin, hook health reads `Hooks (plugin): 4/4`. Under an npm or
 pipx install it names the settings file instead, because that's where the
 hooks live.
 
+## Where things live
+
+```
+~/mnemo/                  your vault
+├── HOME.md               dashboard at the top, your notes below
+├── bots/<repo>/          per-project capture (logs, memory, briefings)
+├── shared/               curated rules — the project brain
+│   ├── feedback/         preferences and corrections
+│   ├── user/             user-profile facts
+│   ├── reference/        pointers to external systems
+│   ├── project/          per-repo project context
+│   ├── _inbox/           staged for your review: backfilled pages, proposed rewrites
+│   └── _archive/         originals kept by reclassify; never read
+└── .mnemo/               internal state (indices, telemetry)
+```
+
+Edit `HOME.md`'s notes section freely — mnemo only manages the dashboard block
+at the top.
+
 ## Backfill
 
 A brand-new vault knows nothing, so mnemo has nothing to inject for the first
@@ -376,6 +395,18 @@ At `PreToolUse`, a `Bash` command matching a rule you marked as a guardrail is
 blocked outright. An `Edit`/`Write` whose path matches a rule's `activates_on`
 gets that rule's body surfaced as context.
 
+## Autopilot
+
+Between sessions, mnemo keeps its own brain in shape — rebuilding indices,
+sweeping dead rules, and calibrating how often rules get injected against your
+own hit/miss log. Nothing runs on the prompt path, and all of it is local.
+
+It opens GitHub issues or pull requests only if you set
+`autopilot.network.enabled` to `true` — see
+[configuration.md](configuration.md#autopilot--what-may-leave-the-machine).
+
+Control it with `mnemo autopilot {status,pause,off,on}`.
+
 ## Taking your rules with you
 
 ```bash
@@ -439,6 +470,7 @@ command that still exists.
 
 ```bash
 mnemo status    # vault state, hook health, last auto-run, currently-running state
+mnemo why       # the reflex's last decisions: what fired, what stayed silent, and why
 mnemo replay    # replay your transcripts: how often an earlier session's rule would have fired
 mnemo doctor    # full diagnostic: statusLine drift, stale locks, recent failures
 mnemo extract   # manual extraction (also rebuilds the HOME dashboard)
@@ -447,6 +479,20 @@ mnemo fix       # reset the extraction circuit breaker after repeated failures
 
 `mnemo status` and `mnemo doctor` also have slash forms under the plugin
 (`/mnemo:status`, `/mnemo:doctor`); `open`, `fix` and `extract` are CLI-only.
+
+`mnemo why` (or `/mnemo:why`) prints the reflex's last decisions with their
+arithmetic — what was scored, what won, and what a silent one needed and did
+not reach:
+
+```
+09:41:24  injected  mnemo-1.0-roadmap (6.84)
+          ahead of  recall-degrades-with-topic-size (3.45)
+
+09:30:07  silent    recall-degrades-with-topic-size led at 4.21 but needed 5.78
+                    (1.50 x the runner-up's 3.85) to be clearly ahead
+                    recall-degrades-with-topic-size  4.21
+                    mnemo-1.0-roadmap                3.85
+```
 
 Detailed errors land in `~/mnemo/.errors.log` under `where=extract.bg.*`. If
 `mnemo doctor` warns about `statusLine` drift, you hand-edited
@@ -459,6 +505,201 @@ mnemo extract --dry-run   # show what would run without calling the LLM
 mnemo extract --force     # reprocess entries previously dismissed or promoted
 ```
 
+## The dispatch loop
+
+Once the vault holds something, the other half of mnemo is spending it: a
+session fans out into background children, a queue says which child needs
+you, a delivery pushes each finished one and opens its PR, and a landing
+merges a contract's pieces in the order their signatures require. The
+children run under the same hooks the parent does, and a worktree resolves to
+the repo it was cut from, so a child sees the repo's rules exactly as you do:
+what you taught mnemo in the parent is already injected into the children.
+
+Four commands, in order: `dispatch` → `sessions` → `deliver` → `land`. Only
+`dispatch` has a slash form. The other three are CLI-only, because the queue
+is designed never to reach a session's context
+([why](#it-never-reaches-claude)).
+
+### Issue form
+
+```bash
+mnemo dispatch 197 198          # or /mnemo:dispatch 197 198, inside a session
+mnemo dispatch 197 --dry-run    # the worktree and branch per child; nothing spawned
+```
+
+Each issue gets one background `claude` session in a fresh git worktree at
+`<repo>-wt-<issue>` beside the repo, on branch `fix/issue-<issue>`:
+
+```
+#197  a41c8e2f  /Users/you/github/app-wt-197
+#198  13b6f4f3  /Users/you/github/app-wt-198
+
+  queue:  mnemo sessions
+  attach: claude attach a41c8e2f
+```
+
+The child's opening prompt is the issue body, the worktree, and three scope
+limits: no merge or push without asking, no files outside what the issue
+needs, the full suite before claiming done. It carries no preferred solution,
+deliberately — a prompt that prescribes an approach can override a correct
+refusal, and the one time a child here was handed one it refused and was right
+(#187). Write the issue, not the instructions.
+
+A worktree that already exists is refused rather than reused, because it may
+hold another session's uncommitted work; anything dispatch created is removed
+if a later step fails, so a bad issue number never strands the others. The
+queue labels each child by its issue, recovered from the worktree path.
+
+### Contract form
+
+A feature is not issues yet, and nobody files four issues to build one. Ask
+any session to "decompose this for dispatch": the `decomposing-for-dispatch`
+skill (shipped by the plugin and by `mnemo init` alike) reads the conversation
+and writes a **contract** to `docs/superpowers/contracts/<date>-<feature>.md` —
+the pieces, the files each may change, the literal signatures each `exposes`,
+and the ones it `consumes` from other pieces. Then it stops; dispatching is
+your decision.
+
+```bash
+mnemo dispatch --contract --example                        # the format, commented and parseable
+mnemo dispatch --contract docs/superpowers/contracts/f.md --dry-run
+mnemo dispatch --contract docs/superpowers/contracts/f.md
+```
+
+```
+label-column  feat/queue-followups/label-column  /Users/you/github/app-wt-c-label-column
+sessions-docs  feat/queue-followups/sessions-docs  /Users/you/github/app-wt-c-sessions-docs
+```
+
+One child per piece, at `<repo>-wt-c-<slug>` on `feat/<feature>/<slug>`. A
+piece's prompt is its boundary — the files it may touch, the signatures it
+must deliver, the signatures it may assume exist — and nothing about how. A
+`consumes` may name something that does not exist yet, because the piece
+delivering it is being written at the same moment: the child writes against
+the signature and the merge resolves it. That is why `exposes` must be a
+literal signature, and why dispatch is a flat fan-out and not a scheduler.
+
+`verdict: sequential` is a real answer — the work does not divide — and it is
+refused rather than dispatched. So is a contract naming an unknown piece, a
+duplicate or unaddressable slug, a piece with no files, or a piece consuming
+from itself, all before any worktree exists.
+
+### Watching, and answering
+
+`mnemo sessions` is the queue; the [next section](#watching-background-sessions)
+reads it line by line. The short version: blocked children first, then the
+running ones with what each is doing, then the finished ones with their PRs,
+then the abandoned. `claude attach <short_id>` gets you inside a blocked one.
+
+What you say to a blocked child is a correction, and mnemo learns from it the
+way it learns from any other. When the session-end sweep finds a child that
+was blocked and then answered, it records a marker; the `SessionEnd` hook
+runs the consumer in the background, and you can run it by hand to see the
+result:
+
+```bash
+mnemo sessions --consume-unblocks
+```
+
+```
+consumed: 1 unblocked session(s)
+learned: hint-owner-is-the-queue — The attach hint belongs to the queue, not the session
+```
+
+It ignores `--all` and the current directory, since an unblocked session is
+worth learning from wherever it ran. A marker whose transcript cannot be
+resolved is reported as `skipped:`; a transient failure is `deferred:` and
+retried on the next pass.
+
+### Delivering
+
+```bash
+mnemo deliver --review        # every dispatch worktree, and whether it is deliverable
+mnemo deliver 7c1e            # by short id, issue number or piece slug
+mnemo deliver 205 206         # several — each approved by being named
+```
+
+```
+PRONTAS (1)
+  #205  fix/issue-205
+      3 commits ahead of master, 4 files changed, 118 insertions(+), 9 deletions(-)
+
+NÃO PRONTAS (2)
+  #206  fix/issue-206
+      uncommitted changes — commit them or discard them first
+  #207  fix/issue-207
+      no commits ahead of master — nothing to deliver
+
+  entregar: mnemo deliver 205
+```
+
+`deliver` pushes the child's branch and opens its pull request with
+`gh pr create --fill` — the commits are the description — and appends
+`Closes #N` for an issue child so the merge closes the issue. Its one
+invariant is that naming an id **is** the approval: there is no `--all`, and
+each refusal (not ahead of `master`, a dirty tree, a PR that already exists)
+is printed against the name you typed. A delivered child prints its PR:
+
+```
+#205: https://github.com/you/app/pull/199
+```
+
+### Landing a contract
+
+A contract's pieces were written against each other's signatures, and the
+merge is where those assumptions become real. `mnemo land <contract>` is
+read-only: every piece in **landing order** — a stable topological sort by
+`consumes`, owners before consumers, ties in contract order — with its PR and
+state, the ref that carries it, and whether each `exposes` is actually defined
+in the piece's files on that ref: `✓` present, `✗` missing, `?` for a
+signature that names no identifier, such as a CLI shape.
+
+```bash
+mnemo land docs/superpowers/contracts/2026-09-13-dispatch-last-metre.md
+```
+
+```
+contrato dispatch-last-metre (3 peças, em ordem de pouso)
+  1. delivery            feat/dispatch-last-metre/delivery  [origin/feat/dispatch-last-metre/delivery]
+       PR: https://github.com/xyrlan/mnemo/pull/219 (MERGED)
+       expõe   ✓ `ready(worktree, *, repo_root) -> Readiness`
+       expõe   ✓ `pr_for(branch, *, repo_root) -> str | None`
+  2. contract-discovery  feat/dispatch-last-metre/contract-discovery  [origin/feat/dispatch-last-metre/contract-discovery]
+       PR: https://github.com/xyrlan/mnemo/pull/220 (MERGED)
+  3. watch-modes         feat/dispatch-last-metre/watch-modes  [origin/feat/dispatch-last-metre/watch-modes]
+       PR: https://github.com/xyrlan/mnemo/pull/221 (MERGED)
+
+  tudo pousado — nada a fazer
+```
+
+Presence is a name check, not a string check: `consumes` and `exposes` are
+hand-written and differ cosmetically, and a name survives a renamed argument
+while still catching a function that was never written. A merged piece whose
+branch is gone is checked on `master`. A cycle has no landing order and is
+refused by name.
+
+```bash
+mnemo land <contract> --merge                       # rehearse, then gh pr merge in order
+mnemo land <contract> --merge --suite "npm test"    # default: python -m pytest -q
+mnemo land <contract> --merge --method merge        # squash (default), merge, rebase
+```
+
+`--merge` runs in two phases, and the irreversible one starts only after the
+reversible one passed in full. First a **rehearsal** in a throwaway worktree
+under the system temp dir: each open piece is merged in order, its `exposes`
+are checked in the merged tree, every `consumes` is checked against the
+owner's files there — the first moment the consumed signature either exists
+or does not — and the suite runs. The first conflict, missing name or red
+suite stops it with the piece and the step named, and nothing anywhere has
+changed. Only then are the PRs merged with `gh pr merge`, in the same order,
+stopping at the first refusal; a rerun skips whatever `gh` reports as merged.
+
+A verb of its own rather than a mode of `deliver`, because `deliver`'s
+invariant is per-child approval by name and a landing is inherently every
+piece of the contract — that approval already happened when each piece was
+delivered. Not a scheduler: dispatch stays a flat fan-out, and `land` runs
+after it has landed.
+
 ## Watching background sessions
 
 Claude Code can run sessions in the background, and once there are six of them
@@ -466,18 +707,8 @@ the bottleneck stops being the machine and becomes you: every one of them may
 or may not be waiting for an answer, and the only way to find out used to be
 attaching to each in turn.
 
-Most of them get there through `mnemo dispatch`, which is the front of a
-three-command loop: `mnemo dispatch 197 198` (or `/mnemo:dispatch 197 198`
-inside a session) spawns one child per issue in its own worktree, the queue
-below tells you which one needs you, and `mnemo deliver <short_id>` pushes a
-finished child's branch and opens its pull request. A feature that is not yet
-issues goes through the `decomposing-for-dispatch` skill first — it writes the
-contract `mnemo dispatch --contract <path>` reads, one child per piece — and
-`mnemo dispatch --contract --example` prints the format. The skill ships with
-the plugin and with `mnemo init`, so asking any session to "decompose this for
-dispatch" loads it. Only `dispatch` has a slash command: the queue is kept out
-of every session's context on purpose (see below), and a slash command would
-put it exactly there.
+Most of them get there through `mnemo dispatch`; the [dispatch loop](#the-dispatch-loop)
+above is the whole sequence. This section is the queue itself.
 
 ```bash
 mnemo sessions
