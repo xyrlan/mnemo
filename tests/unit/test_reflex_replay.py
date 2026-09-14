@@ -329,13 +329,15 @@ def test_aggregate_credits_a_prompt_by_its_best_bucket():
     assert report["prompts"] == {
         "total": 3, "fired": 2, "carried": 1, "carried_correction_backed": 1,
         "carried_gate_verified": 1, "carried_label_only": 0,
+        "carried_correction_backed_by_origin": {"user": 1, "ci": 0},
         "hindsight": 0, "not_yet_learned": 1, "undated": 0,
     }
     assert report["injections"]["carried"] == 1 and report["injections"]["hindsight"] == 1
     assert report["rules"] == {"carried_distinct": 1, "carried_correction_backed_distinct": 1,
-                               "carried_gate_verified_distinct": 1, "carried_label_only_distinct": 0}
+                               "carried_gate_verified_distinct": 1, "carried_label_only_distinct": 0,
+                               "carried_correction_backed_distinct_by_origin": {"user": 1, "ci": 0}}
     assert report["top_carried"] == [{"slug": "r1", "prompts": 1, "correction_backed": True,
-                                      "gate_verified": True}]
+                                      "gate_verified": True, "origin": "user"}]
     assert report["rate"] is None, "three prompts is not a rate"
     assert report["transcripts"] == {"sessions": 1, "prompts": 3, "first": "2026-09-03", "last": "2026-09-03"}
 
@@ -483,7 +485,10 @@ def test_aggregate_splits_correction_backed_by_provenance():
     report = R.aggregate(_fake(prompts, injections), vault_rules=10,
                          correction_backed_rules=3, gate_verified_rules=1)
 
-    assert report["vault"] == {"rules": 10, "correction_backed": 3, "gate_verified": 1, "label_only": 2}
+    assert report["vault"] == {
+        "rules": 10, "correction_backed": 3, "gate_verified": 1, "label_only": 2,
+        "correction_backed_by_origin": {"user": 3, "ci": 0},
+    }
     assert report["prompts"]["carried_correction_backed"] == 2
     assert report["prompts"]["carried_gate_verified"] == 1
     assert report["prompts"]["carried_label_only"] == 1
@@ -492,8 +497,10 @@ def test_aggregate_splits_correction_backed_by_provenance():
     assert report["rules"]["carried_gate_verified_distinct"] == 1
     assert report["rules"]["carried_label_only_distinct"] == 1
     assert report["top_carried"] == [
-        {"slug": "gate-rule", "prompts": 1, "correction_backed": True, "gate_verified": True},
-        {"slug": "label-rule", "prompts": 1, "correction_backed": True, "gate_verified": False},
+        {"slug": "gate-rule", "prompts": 1, "correction_backed": True, "gate_verified": True,
+         "origin": "user"},
+        {"slug": "label-rule", "prompts": 1, "correction_backed": True, "gate_verified": False,
+         "origin": "user"},
     ]
 
 

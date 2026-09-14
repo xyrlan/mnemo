@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from mnemo.core import ci_corrections
 from mnemo.core.mcp.recall_sessions import _transcripts_by_session
 from mnemo.core.reflex.decide import decide, doc_token_sets
 from mnemo.core.transcript import SYNTHETIC_TURN as _SYNTHETIC
@@ -83,6 +84,7 @@ class RuleFacts:
     learned_at: Optional[float]  # unix seconds the page entered the vault
     correction_backed: bool  # verified feedback page citing the user's words
     gate_verified: bool = False  # ...and the quote passes today's evidence gate
+    origin: Optional[str] = None  # which channel corrected the model: user | ci (#272)
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,7 @@ class Injection:
     bucket: str
     correction_backed: bool
     gate_verified: bool = False
+    origin: Optional[str] = None
 
 
 # --- reading the transcripts --------------------------------------------------
@@ -223,10 +226,16 @@ def rule_facts(vault_root: Path) -> dict[str, RuleFacts]:
     Same walk and visibility gate as the reflex index builder, so a slug the
     index can rank always has facts here.
 
-    ``correction_backed`` is the label as written (``confidence: verified``
-    with a quote). ``gate_verified`` re-asks the evidence gate of that page
-    today, with the very predicate ``verify_page`` uses — one briefing read
-    per verified page, nothing cached, so the same vault gives the same split.
+    ``correction_backed`` is the label as written (a quote plus a confidence
+    some channel verified). ``gate_verified`` re-asks the evidence gate of that
+    page today, with the very predicate ``verify_page`` uses — one briefing
+    read per verified page, nothing cached, so the same vault gives the same
+    split.
+
+    ``origin`` says which channel corrected the model (#272): ``user`` for a
+    quote the person typed, ``ci`` for one a red run printed. A CI page's quote
+    is checked by the run that printed it, so the briefing gate is not asked of
+    it — see :mod:`mnemo.core.ci_corrections`.
     """
     from mnemo.core.extract.evidence import page_verifies
     from mnemo.core.filters import derive_rule_slug, is_consumer_visible
@@ -261,14 +270,25 @@ def rule_facts(vault_root: Path) -> dict[str, RuleFacts]:
                 learned_at = _parse_ts(fm.get(key))
                 if learned_at is not None:
                     break
-            backed = bool(quote) and str(fm.get("confidence") or "") == "verified"
+            confidence = str(fm.get("confidence") or "")
+            origin = ci_corrections.origin_of(confidence) if quote else None
+            backed = origin is not None
+            # A CI quote is checked by the run that printed it, not by a
+            # briefing's Corrections, so the human gate is not asked of it
+            # (#272). Asking would fail every CI page mechanically and report
+            # it as "label only", which is the opposite of what it is.
+            if origin == ci_corrections.ORIGIN_CI:
+                gate_verified = True
+            else:
+                gate_verified = backed and page_verifies(
+                    evidence, [s for s in sources_raw if isinstance(s, str)], vault_root,
+                )
             out[slug] = RuleFacts(
                 taught_by=frozenset(taught_by),
                 learned_at=learned_at,
                 correction_backed=backed,
-                gate_verified=backed and page_verifies(
-                    evidence, [s for s in sources_raw if isinstance(s, str)], vault_root,
-                ),
+                gate_verified=gate_verified,
+                origin=origin,
             )
     return out
 
@@ -360,6 +380,7 @@ def run(
                 slug=slug, bucket=classify(f, prompt),
                 correction_backed=bool(f and f.correction_backed),
                 gate_verified=bool(f and f.gate_verified),
+                origin=f.origin if f else None,
             ))
 
     return Replay(prompts=prompts, injections=injections, silence=silence,
@@ -385,6 +406,7 @@ def _iso(ts: float) -> str:
 
 def aggregate(
     replay: Replay, *, vault_rules: int, correction_backed_rules: int, gate_verified_rules: int = 0,
+    correction_backed_by_origin: Optional[dict] = None,
 ) -> dict:
     """Counts first, rates only where the sample carries them.
 
@@ -432,13 +454,48 @@ def aggregate(
     carried_backed_slugs = {i.slug for i in carried_backed_injections}
     carried_gate_slugs = {i.slug for i in carried_gate_injections}
 
+    # The number the issue asks for (#272): carried, correction-backed, split
+    # by which channel did the correcting. Prompt-level too, since a prompt is
+    # what a rule actually has to come back to.
+    # A correction-backed rule always has an origin; an injection that predates
+    # the origin axis (or a caller that omits it) is the user's, which is what
+    # every backed rule was before CI became a source. Defaulting here rather
+    # than dropping it keeps the two halves summing to the whole.
+    def _origin_of(inj) -> str:
+        return inj.origin or ci_corrections.ORIGIN_USER
+
+    def _by_origin(items) -> dict[str, int]:
+        out = {ci_corrections.ORIGIN_USER: 0, ci_corrections.ORIGIN_CI: 0}
+        for it in items:
+            out[_origin_of(it)] = out.get(_origin_of(it), 0) + 1
+        return out
+
+    carried_backed_by_origin = _by_origin(carried_backed_injections)
+    carried_backed_slugs_by_origin = {
+        origin: len({i.slug for i in carried_backed_injections if _origin_of(i) == origin})
+        for origin in (ci_corrections.ORIGIN_USER, ci_corrections.ORIGIN_CI)
+    }
+    prompts_backed_by_origin = {ci_corrections.ORIGIN_USER: 0, ci_corrections.ORIGIN_CI: 0}
+    for key, injs in by_prompt.items():
+        origins = {
+            _origin_of(i) for i in injs
+            if i.bucket == CARRIED and i.correction_backed
+        }
+        for origin in origins:
+            if origin in prompts_backed_by_origin:
+                prompts_backed_by_origin[origin] += 1
+
     counts: dict[str, int] = {}
     for inj in carried_injections:
         counts[inj.slug] = counts.get(inj.slug, 0) + 1
     top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    backed_origin_by_slug = {
+        i.slug: _origin_of(i) for i in carried_backed_injections
+    }
     top_carried = [
         {"slug": slug, "prompts": c, "correction_backed": slug in carried_backed_slugs,
-         "gate_verified": slug in carried_gate_slugs}
+         "gate_verified": slug in carried_gate_slugs,
+         "origin": backed_origin_by_slug.get(slug)}
         for slug, c in top
     ]
 
@@ -465,6 +522,11 @@ def aggregate(
             "correction_backed": correction_backed_rules,
             "gate_verified": gate_verified_rules,
             "label_only": correction_backed_rules - gate_verified_rules,
+            "correction_backed_by_origin": dict(
+                correction_backed_by_origin
+                or {ci_corrections.ORIGIN_USER: correction_backed_rules,
+                    ci_corrections.ORIGIN_CI: 0}
+            ),
         },
         "transcripts": {
             "sessions": len(sessions),
@@ -479,6 +541,7 @@ def aggregate(
             "carried_correction_backed": prompt_carried_backed,
             "carried_gate_verified": prompt_carried_gate,
             "carried_label_only": prompt_carried_label,
+            "carried_correction_backed_by_origin": prompts_backed_by_origin,
             "hindsight": prompt_bucket[HINDSIGHT],
             "not_yet_learned": prompt_bucket[NOT_YET_LEARNED],
             "undated": prompt_bucket[UNDATED],
@@ -489,6 +552,7 @@ def aggregate(
             "carried_correction_backed": len(carried_backed_injections),
             "carried_gate_verified": len(carried_gate_injections),
             "carried_label_only": len(carried_backed_injections) - len(carried_gate_injections),
+            "carried_correction_backed_by_origin": carried_backed_by_origin,
             "hindsight": inj_bucket[HINDSIGHT],
             "not_yet_learned": inj_bucket[NOT_YET_LEARNED],
             "undated": inj_bucket[UNDATED],
@@ -498,6 +562,7 @@ def aggregate(
             "carried_correction_backed_distinct": len(carried_backed_slugs),
             "carried_gate_verified_distinct": len(carried_gate_slugs),
             "carried_label_only_distinct": len(carried_backed_slugs - carried_gate_slugs),
+            "carried_correction_backed_distinct_by_origin": carried_backed_slugs_by_origin,
         },
         "rate": rate,
         "min_prompts_for_rate": MIN_PROMPTS_FOR_RATE,
@@ -532,9 +597,24 @@ def format_report(report: dict) -> str:
     lines.append("mnemo replay — your transcripts against your vault")
     lines.append("")
     lines.append(f"prompts replayed        {n:>6}   ({t['sessions']} sessions, {span})")
-    lines.append(f"rules in the vault      {v['rules']:>6}   ({v['correction_backed']} cite a correction you typed: "
+    # "you typed" stays exactly true while the user is the only source; once a
+    # red run has taught something, the line says so instead of overclaiming.
+    vault_origin = v.get("correction_backed_by_origin") or {}
+    ci_rules = vault_origin.get(ci_corrections.ORIGIN_CI, 0)
+    whose = "cite a correction" if ci_rules else "cite a correction you typed"
+    lines.append(f"rules in the vault      {v['rules']:>6}   ({v['correction_backed']} {whose}: "
                  f"{v['gate_verified']} verified by the evidence gate today, {v['label_only']} label only)")
+    if ci_rules:
+        lines.append(f"                                 by origin: "
+                     f"{vault_origin.get(ci_corrections.ORIGIN_USER, 0)} you typed, "
+                     f"{ci_rules} a red CI run printed")
     lines.append("")
+    # This count includes any gate-verified rule, and a CI rule is one — so the
+    # label only says "your own words" while the user is the sole source (#272).
+    ci_prompts = (p.get("carried_correction_backed_by_origin") or {}).get(
+        ci_corrections.ORIGIN_CI, 0)
+    cited_label = ("citing a verified quote   " if ci_prompts
+                   else "citing your own words     ")
     lines.append("would a rule from an earlier session have come back to you?")
     lines.append("")
     lines.append(f"  reflex would have fired            {p['fired']:>6}   prompts   {_pct(p['fired'], n)}")
@@ -543,15 +623,20 @@ def format_report(report: dict) -> str:
         glo, ghi = rate["carried_gate_verified_ci95"]
         lines.append(f"  ├─ rule from an EARLIER session   {p['carried']:>6}   prompts   "
                      f"{_pct(p['carried'], n)}  (95% CI {100*lo:.1f}–{100*hi:.1f}%)   ← the vault's contribution")
-        lines.append(f"  │    citing your own words         {p['carried_gate_verified']:>6}   prompts   "
+        lines.append(f"  │    {cited_label}{p['carried_gate_verified']:>6}   prompts   "
                      f"{_pct(p['carried_gate_verified'], n)}  (95% CI {100*glo:.1f}–{100*ghi:.1f}%)"
                      f"   verified by the evidence gate today")
     else:
         lines.append(f"  ├─ rule from an EARLIER session   {p['carried']:>6}   prompts   ← the vault's contribution")
-        lines.append(f"  │    citing your own words         {p['carried_gate_verified']:>6}   prompts"
+        lines.append(f"  │    {cited_label}{p['carried_gate_verified']:>6}   prompts"
                      f"   verified by the evidence gate today")
     lines.append(f"  │    label only, gate can't check  {p['carried_label_only']:>6}   prompts"
                  f"   a `verified` from mnemo reclassify; its briefing has no Corrections to check against")
+    by_origin = p.get("carried_correction_backed_by_origin") or {}
+    if by_origin.get(ci_corrections.ORIGIN_CI):
+        lines.append(f"  │    of those, corrected by CI     "
+                     f"{by_origin[ci_corrections.ORIGIN_CI]:>6}   prompts"
+                     f"   a red run's assertion, not your words (#272)")
     lines.append(f"  ├─ rule from this SAME session     {p['hindsight']:>6}   prompts   hindsight — the vault could not have helped")
     lines.append(f"  └─ rule not learned yet            {p['not_yet_learned'] + p['undated']:>6}   prompts   "
                  f"today's vault fires, but the rule postdates the prompt")
@@ -569,7 +654,12 @@ def format_report(report: dict) -> str:
         lines.append("")
         lines.append("most carried rules")
         for row in report["top_carried"]:
-            if row.get("gate_verified"):
+            # A CI rule is gate-verified but nobody typed it; calling it "your
+            # words" here is the false attribution `verified-ci` exists to
+            # prevent (#272).
+            if row.get("origin") == ci_corrections.ORIGIN_CI:
+                mark = "  ✓ CI said"
+            elif row.get("gate_verified"):
                 mark = "  ✓ your words"
             elif row["correction_backed"]:
                 mark = "  ~ label only"
