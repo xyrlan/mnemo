@@ -241,7 +241,9 @@ _FOLLOW_UP = _rec("assistant", "Done. One more question: include the badges?", "
 def _transcript(tmp_path: Path, *lines: str, name: str = "sid-1.jsonl") -> Path:
     path = tmp_path / "transcripts" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(lines), encoding="utf-8")
+    # Bytes, not text: Claude Code writes bare LF and the bookmark is a byte
+    # offset; text mode on Windows would add a CR per line and shift it.
+    path.write_bytes("".join(lines).encode("utf-8"))
     return path
 
 
@@ -299,7 +301,7 @@ def test_the_opening_prompt_is_not_an_edge(tmp_path: Path) -> None:
     path = _transcript(tmp_path)  # empty: state.json can exist first
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
 
-    path.write_text(_OPENING + _QUESTION, encoding="utf-8")
+    path.write_bytes((_OPENING + _QUESTION).encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["unblocks"] == []
 
@@ -424,7 +426,7 @@ def test_a_shrunken_transcript_re_baselines(tmp_path: Path) -> None:
     path = _transcript(tmp_path, _OPENING, _QUESTION, _ANSWER, _FOLLOW_UP)
     detector.sweep([_session(path)], vault_root=tmp_path)
 
-    path.write_text(_OPENING, encoding="utf-8")
+    path.write_bytes(_OPENING.encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["offset"] == path.stat().st_size
     assert _entry(tmp_path)["unblocks"] == []
@@ -551,6 +553,6 @@ def test_a_first_sighting_mid_write_bookmarks_the_line_boundary(tmp_path: Path) 
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 0
     assert _entry(tmp_path)["offset"] == len((_OPENING + _QUESTION).encode("utf-8"))
 
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(_ANSWER[40:])
+    with path.open("ab") as fh:
+        fh.write(_ANSWER[40:].encode("utf-8"))
     assert detector.sweep([_session(path)], vault_root=tmp_path) == 1
