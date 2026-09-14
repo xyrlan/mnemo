@@ -161,6 +161,40 @@ def bump_emission(
     _write(vault_root, data)
 
 
+def read_enriched_slugs(vault_root: Path, sid: str) -> set[str]:
+    """Return the slugs PreToolUse enrichment already injected into *sid*. Never raises.
+
+    Session-scoped on purpose, unlike ``injected_cache``: that cache is shared
+    by every session of the day, so the first dispatched child to open a file
+    would use up its notes for all its siblings (#271).
+    """
+    entry = _load(vault_root).get("session_emissions", {}).get(sid) or {}
+    slugs = entry.get("enriched") or []
+    return {s for s in slugs if isinstance(s, str)} if isinstance(slugs, list) else set()
+
+
+def record_enrichment(vault_root: Path, *, sid: str, slugs: list[str], now_ts: int) -> None:
+    """Record one enrichment emission of *slugs* for *sid* in a single write.
+
+    Adds the slugs to the session's ``enriched`` list and to ``injected_cache``
+    (so the prompt-time reflex does not repeat them) and bumps ``enrich_count``
+    once per slug. Never raises.
+    """
+    data = _load(vault_root)
+    entry = data["session_emissions"].get(sid)
+    if entry is None:
+        entry = {"started_at": int(now_ts), "reflex_count": 0, "enrich_count": 0}
+    enriched = entry.get("enriched") if isinstance(entry.get("enriched"), list) else []
+    for slug in slugs:
+        data["injected_cache"][slug] = int(now_ts)
+        if slug not in enriched:
+            enriched.append(slug)
+    entry["enriched"] = enriched
+    entry["enrich_count"] = int(entry.get("enrich_count", 0)) + len(slugs)
+    data["session_emissions"][sid] = entry
+    _write(vault_root, data)
+
+
 def read_emission_counts(vault_root: Path, sid: str) -> dict:
     """Return {reflex_count, enrich_count} for sid; zeros if absent. Never raises."""
     entry = _load(vault_root).get("session_emissions", {}).get(sid) or {}

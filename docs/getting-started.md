@@ -158,7 +158,7 @@ It's idempotent; running it twice is safe. On first run it will:
 2. Scaffold the vault tree at `~/mnemo/` (or `--vault-root <path>`).
 3. Inject **four** hooks into `~/.claude/settings.json` (with a backup):
    `SessionStart`, `UserPromptSubmit`, `PreToolUse` (matching
-   `Bash|Edit|Write|MultiEdit`), and `SessionEnd`.
+   `Bash|Read|Edit|Write|MultiEdit`), and `SessionEnd`.
 4. Register the stdio MCP server in `~/.claude.json`.
 5. Wire the additive status line composer, preserving any `statusLine` you
    already had.
@@ -392,8 +392,12 @@ the prompt passes through untouched.
 ### Enforcement and enrichment
 
 At `PreToolUse`, a `Bash` command matching a rule you marked as a guardrail is
-blocked outright. An `Edit`/`Write` whose path matches a rule's `activates_on`
-gets that rule's body surfaced as context.
+blocked outright. When a `Read`, `Edit` or `Write` touches a file a rule's
+`activates_on.path_globs` names — a repo-relative path such as
+`prisma/schema.prisma` or `**/screens/HomeScreen.tsx` — that rule's body is
+surfaced as context, once per rule per session. Globs that name an area
+(`src/app/**`, `**/*.ts`) do not fire here: an area is what the prompt-time
+reflex is for, and a note on every `.ts` file would be noise.
 
 ## Autopilot
 

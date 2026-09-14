@@ -62,7 +62,7 @@ HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "PreToolUse": {
         "module": "pre_tool_use",
-        "matcher": "Bash|Edit|Write|MultiEdit",
+        "matcher": "Bash|Read|Edit|Write|MultiEdit",
         "async": False,
     },
     "SessionEnd": {

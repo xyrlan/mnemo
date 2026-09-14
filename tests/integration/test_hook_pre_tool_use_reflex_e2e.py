@@ -34,7 +34,7 @@ def _seed_activation_rule(vault):
         "stability: stable\n"
         "activates_on:\n"
         "  tools:\n    - Edit\n    - Write\n"
-        "  path_globs:\n    - \"**/modals/**\"\n"
+        "  path_globs:\n    - \"src/modals/x.tsx\"\n"
         "---\n"
         "Use HeroUI for modals. Detail detail detail.\n",
         encoding="utf-8",
@@ -62,10 +62,11 @@ def test_enrichment_emits_then_dedupes_same_slug(tmp_vault, monkeypatch):
     assert rc == 0
     assert "react-modal" in out1
 
-    # cache should now contain the slug
+    # the session remembers the slug, and the reflex's cache does too
+    assert "react-modal" in session_state.read_enriched_slugs(tmp_vault, "sid-e2e")
     assert "react-modal" in session_state.read_injected_cache(tmp_vault)
 
-    # second invocation — same slug in cache → silent
+    # second invocation — same slug already shown to this session → silent
     rc, out2 = _run(payload)
     assert rc == 0
     assert out2 == ""

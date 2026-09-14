@@ -59,7 +59,7 @@ def _write_enrich_rule(
     filename: str,
     *,
     project: str = "mnemo",
-    path_glob: str = "**/*modal*.tsx",
+    path_glob: str = "src/foo/user-modal.tsx",
     tools: str = "Edit",
     body: str = "Always add a11y attributes to modal components.",
 ) -> Path:
@@ -164,16 +164,17 @@ def test_hook_enriches_matching_edit_emits_context_envelope(
     _write_enrich_rule(
         tmp_vault, "modal-a11y.md",
         project=project,
-        path_glob="**/*modal*.tsx",
+        path_glob="src/foo/user-modal.tsx",
         tools="Edit",
         body="Always add a11y attributes to modal components.",
     )
     project_dir = _make_git_project(tmp_vault, project)
     write_index(tmp_vault, build_index(tmp_vault))
 
+    # Claude Code sends an absolute file_path; the glob is repo-relative.
     payload = {
         "tool_name": "Edit",
-        "tool_input": {"file_path": "src/foo/user-modal.tsx"},
+        "tool_input": {"file_path": str(project_dir / "src" / "foo" / "user-modal.tsx")},
         "cwd": str(project_dir),
     }
     rc, out = _run_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
@@ -201,7 +202,7 @@ def test_hook_ignores_tool_outside_v1_set(tmp_vault: Path, monkeypatch):
     write_index(tmp_vault, build_index(tmp_vault))
 
     payload = {
-        "tool_name": "Read",
+        "tool_name": "Grep",
         "tool_input": {"file_path": "src/foo.py"},
         "cwd": str(project_dir),
     }
@@ -448,7 +449,7 @@ def test_hook_logs_enrichment_to_jsonl(tmp_vault: Path, monkeypatch):
     _write_enrich_rule(
         tmp_vault, "modal-a11y.md",
         project=project,
-        path_glob="**/*modal*.tsx",
+        path_glob="**/components/dialog-modal.tsx",
         tools="Edit",
         body="Add a11y to modals.",
     )
@@ -457,7 +458,7 @@ def test_hook_logs_enrichment_to_jsonl(tmp_vault: Path, monkeypatch):
 
     payload = {
         "tool_name": "Edit",
-        "tool_input": {"file_path": "src/components/dialog-modal.tsx"},
+        "tool_input": {"file_path": str(project_dir / "src" / "components" / "dialog-modal.tsx")},
         "cwd": str(project_dir),
     }
     _run_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
@@ -523,7 +524,7 @@ def test_hook_enriches_write_tool(tmp_vault: Path, monkeypatch):
     _write_enrich_rule(
         tmp_vault, "ts-config.md",
         project=project,
-        path_glob="**/*.ts",
+        path_glob="src/utils/helper.ts",
         tools="Write",
         body="TypeScript config rule.",
     )
@@ -532,7 +533,7 @@ def test_hook_enriches_write_tool(tmp_vault: Path, monkeypatch):
 
     payload = {
         "tool_name": "Write",
-        "tool_input": {"file_path": "src/utils/helper.ts"},
+        "tool_input": {"file_path": str(project_dir / "src" / "utils" / "helper.ts")},
         "cwd": str(project_dir),
     }
     rc, out = _run_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
@@ -548,7 +549,7 @@ def test_hook_enriches_multiedit_tool(tmp_vault: Path, monkeypatch):
     _write_enrich_rule(
         tmp_vault, "ts-config-multi.md",
         project=project,
-        path_glob="**/*.ts",
+        path_glob="src/utils/types.ts",
         tools="MultiEdit",
         body="TypeScript multi-edit rule.",
     )
@@ -557,7 +558,7 @@ def test_hook_enriches_multiedit_tool(tmp_vault: Path, monkeypatch):
 
     payload = {
         "tool_name": "MultiEdit",
-        "tool_input": {"file_path": "src/utils/types.ts"},
+        "tool_input": {"file_path": str(project_dir / "src" / "utils" / "types.ts")},
         "cwd": str(project_dir),
     }
     rc, out = _run_hook(monkeypatch, payload, _cfg(tmp_vault, enr=True))
@@ -589,3 +590,128 @@ def test_hook_no_output_when_no_rules_match(tmp_vault: Path, monkeypatch):
 
     assert rc == 0
     assert out == ""
+
+
+# ---------------------------------------------------------------------------
+# #271: a file's notes surface when a session opens it, once per session
+# ---------------------------------------------------------------------------
+
+
+def _file_note(tmp_vault: Path, *, glob: str = "src/core/agent.py", tools: str = "Edit") -> Path:
+    _write_enrich_rule(
+        tmp_vault, "agent-resolvers.md",
+        project="mnemo",
+        path_glob=glob,
+        tools=tools,
+        body="resolve_agent names a worktree; resolve_canonical_agent names the repo.",
+    )
+    project_dir = _make_git_project(tmp_vault, "mnemo")
+    write_index(tmp_vault, build_index(tmp_vault))
+    return project_dir
+
+
+def _payload(tool: str, file_path: str, cwd: Path, sid: str = "sid-1") -> dict:
+    return {
+        "tool_name": tool,
+        "tool_input": {"file_path": file_path},
+        "cwd": str(cwd),
+        "session_id": sid,
+    }
+
+
+def test_read_of_an_absolute_path_surfaces_the_files_note(tmp_vault: Path, monkeypatch):
+    project_dir = _file_note(tmp_vault, tools="Edit")
+    target = str(project_dir / "src" / "core" / "agent.py")
+
+    rc, out = _run_hook(monkeypatch, _payload("Read", target, project_dir), _cfg(tmp_vault, enr=True))
+
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "agent-resolvers" in ctx
+    assert "resolve_canonical_agent" in ctx
+
+
+def test_note_is_shown_once_per_session_not_once_per_day(tmp_vault: Path, monkeypatch):
+    """A sibling session still sees the note the first session already got."""
+    project_dir = _file_note(tmp_vault)
+    target = str(project_dir / "src" / "core" / "agent.py")
+    cfg = _cfg(tmp_vault, enr=True)
+
+    _, first = _run_hook(monkeypatch, _payload("Read", target, project_dir, "sid-a"), cfg)
+    _, again = _run_hook(monkeypatch, _payload("Edit", target, project_dir, "sid-a"), cfg)
+    _, sibling = _run_hook(monkeypatch, _payload("Read", target, project_dir, "sid-b"), cfg)
+
+    assert "agent-resolvers" in first
+    assert again == ""
+    assert "agent-resolvers" in sibling
+
+
+def test_area_glob_stays_silent_on_a_file_inside_it(tmp_vault: Path, monkeypatch):
+    project_dir = _file_note(tmp_vault, glob="src/core/**")
+    target = str(project_dir / "src" / "core" / "agent.py")
+
+    rc, out = _run_hook(monkeypatch, _payload("Edit", target, project_dir), _cfg(tmp_vault, enr=True))
+
+    assert rc == 0
+    assert out == ""
+
+
+def test_path_is_relative_to_the_worktree_root(tmp_vault: Path, monkeypatch, tmp_path: Path):
+    """In a worktree `.git` is a file; the glob is relative to that tree's root."""
+    project_dir = _file_note(tmp_vault)
+    worktree = tmp_path / "mnemo-wt-271"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /nowhere/.git/worktrees/wt\n", encoding="utf-8")
+    target = str(worktree / "src" / "core" / "agent.py")
+
+    # cwd stays the main checkout so the project resolves to "mnemo".
+    rc, out = _run_hook(monkeypatch, _payload("Read", target, project_dir), _cfg(tmp_vault, enr=True))
+
+    assert rc == 0
+    assert "agent-resolvers" in out
+
+
+def test_symlinked_prefix_still_matches(tmp_vault: Path, monkeypatch, tmp_path: Path):
+    project_dir = _file_note(tmp_vault)
+    link = tmp_path / "linked-checkout"
+    try:
+        link.symlink_to(project_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    target = str(link / "src" / "core" / "agent.py")
+
+    rc, out = _run_hook(monkeypatch, _payload("Read", target, project_dir), _cfg(tmp_vault, enr=True))
+
+    assert rc == 0
+    assert "agent-resolvers" in out
+
+
+def test_file_outside_any_repo_is_silent(tmp_vault: Path, monkeypatch, tmp_path: Path):
+    project_dir = _file_note(tmp_vault, glob="notes.md")
+    outside = tmp_path / "loose"
+    outside.mkdir()
+
+    rc, out = _run_hook(
+        monkeypatch, _payload("Read", str(outside / "notes.md"), project_dir), _cfg(tmp_vault, enr=True),
+    )
+
+    assert rc == 0
+    assert out == ""
+
+
+def test_hits_are_trimmed_to_the_room_left_under_the_session_cap(tmp_vault: Path, monkeypatch):
+    from mnemo.core.mcp import session_state
+
+    for name in ("a-note.md", "b-note.md", "c-note.md"):
+        _write_enrich_rule(tmp_vault, name, project="mnemo", path_glob="prisma/schema.prisma")
+    project_dir = _make_git_project(tmp_vault, "mnemo")
+    write_index(tmp_vault, build_index(tmp_vault))
+    session_state.record_enrichment(tmp_vault, sid="sid-cap", slugs=["x", "y"], now_ts=1)
+    cfg = {**_cfg(tmp_vault, enr=True), "enrichment": {"enabled": True, "maxEmissionsPerSession": 3}}
+    target = str(project_dir / "prisma" / "schema.prisma")
+
+    _, out = _run_hook(monkeypatch, _payload("Read", target, project_dir, "sid-cap"), cfg)
+
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert ctx.count("mnemo rule [[") == 1
+    assert session_state.read_emission_counts(tmp_vault, "sid-cap")["enrich_count"] == 3

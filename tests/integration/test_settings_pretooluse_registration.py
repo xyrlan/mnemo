@@ -40,7 +40,7 @@ def test_inject_hooks_registers_pretooluse_with_matcher(tmp_home: Path):
     entry = mnemo_entries[0]
 
     # Matcher must match the spec
-    assert entry.get("matcher") == "Bash|Edit|Write|MultiEdit", (
+    assert entry.get("matcher") == "Bash|Read|Edit|Write|MultiEdit", (
         f"matcher mismatch: {entry.get('matcher')!r}"
     )
 

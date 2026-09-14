@@ -369,11 +369,11 @@ def test_match_bash_enforce_empty_project():
 
 
 def test_match_path_enrich_hits_nested_glob():
-    """**/components/modals/** matches src/app/components/modals/user-modal.tsx."""
+    """**/modals/user-modal.tsx matches src/app/components/modals/user-modal.tsx."""
     index = _make_enrich_index(
         "proj",
         _rules_entry_with_enrich(
-            path_globs=["**/components/modals/**"],
+            path_globs=["**/modals/user-modal.tsx"],
             tools=["Edit"],
         ),
     )
@@ -385,11 +385,11 @@ def test_match_path_enrich_hits_nested_glob():
 
 
 def test_match_path_enrich_hits_shallow_glob():
-    """**/*modal*.tsx matches components/user-modal.tsx."""
+    """**/components/user-modal.tsx matches components/user-modal.tsx (zero dirs)."""
     index = _make_enrich_index(
         "proj",
         _rules_entry_with_enrich(
-            path_globs=["**/*modal*.tsx"],
+            path_globs=["**/components/user-modal.tsx"],
             tools=["Edit"],
         ),
     )
@@ -398,11 +398,11 @@ def test_match_path_enrich_hits_shallow_glob():
 
 
 def test_match_path_enrich_hits_deeply_nested():
-    """**/*modal*.tsx matches deeply nested path like a/b/c/d/user-modal.tsx."""
+    """**/components/login-modal.tsx matches a deeply nested path."""
     index = _make_enrich_index(
         "proj",
         _rules_entry_with_enrich(
-            path_globs=["**/*modal*.tsx"],
+            path_globs=["**/components/login-modal.tsx"],
             tools=["Write"],
         ),
     )
@@ -417,7 +417,7 @@ def test_match_path_enrich_respects_tool_name_filter():
     index = _make_enrich_index(
         "proj",
         _rules_entry_with_enrich(
-            path_globs=["**/*.tsx"],
+            path_globs=["src/component.tsx"],
             tools=["Edit", "Write"],
         ),
     )
@@ -427,9 +427,9 @@ def test_match_path_enrich_respects_tool_name_filter():
 
 def test_match_path_enrich_orders_by_source_count_desc():
     """Rules with higher source_count appear first."""
-    r_low = _rules_entry_with_enrich("low-count", source_count=1, path_globs=["**/*.py"])
-    r_high = _rules_entry_with_enrich("high-count", source_count=5, path_globs=["**/*.py"])
-    r_mid = _rules_entry_with_enrich("mid-count", source_count=3, path_globs=["**/*.py"])
+    r_low = _rules_entry_with_enrich("low-count", source_count=1, path_globs=["src/main.py"])
+    r_high = _rules_entry_with_enrich("high-count", source_count=5, path_globs=["src/main.py"])
+    r_mid = _rules_entry_with_enrich("mid-count", source_count=3, path_globs=["src/main.py"])
     index = _make_index(
         rules={"low-count": r_low, "high-count": r_high, "mid-count": r_mid},
         by_project={"proj": {"local_slugs": ["low-count", "high-count", "mid-count"], "topics": []}},
@@ -444,7 +444,7 @@ def test_match_path_enrich_orders_by_source_count_desc():
 def test_match_path_enrich_caps_at_3():
     """5 matching rules → only 3 returned."""
     rule_entries = [
-        _rules_entry_with_enrich(f"rule-{i}", source_count=i, path_globs=["**/*.py"])
+        _rules_entry_with_enrich(f"rule-{i}", source_count=i, path_globs=["src/main.py"])
         for i in range(5)
     ]
     rules = {e["name"]: e for e in rule_entries}
@@ -453,7 +453,7 @@ def test_match_path_enrich_caps_at_3():
         rules=rules,
         by_project={"proj": {"local_slugs": local_slugs, "topics": []}},
     )
-    hits = match_path_enrich(index, "proj", "main.py", "Edit")
+    hits = match_path_enrich(index, "proj", "src/main.py", "Edit")
     assert len(hits) == 3
 
 
@@ -461,9 +461,9 @@ def test_match_path_enrich_ignores_other_project_rules():
     """Rules from another project don't match."""
     index = _make_enrich_index(
         "project-a",
-        _rules_entry_with_enrich(path_globs=["**/*.py"], project="project-a"),
+        _rules_entry_with_enrich(path_globs=["src/main.py"], project="project-a"),
     )
-    hits = match_path_enrich(index, "project-b", "main.py", "Edit")
+    hits = match_path_enrich(index, "project-b", "src/main.py", "Edit")
     assert hits == []
 
 
@@ -471,21 +471,21 @@ def test_match_path_enrich_no_match():
     """Non-matching path → empty list."""
     index = _make_enrich_index(
         "proj",
-        _rules_entry_with_enrich(path_globs=["**/*.tsx"]),
+        _rules_entry_with_enrich(path_globs=["src/app.tsx"]),
     )
-    hits = match_path_enrich(index, "proj", "main.py", "Edit")
+    hits = match_path_enrich(index, "proj", "src/main.py", "Edit")
     assert hits == []
 
 
 def test_match_path_enrich_slug_tiebreak():
     """When source_count is equal, rules are sorted by slug ascending."""
-    r_z = _rules_entry_with_enrich("z-rule", source_count=2, path_globs=["**/*.py"])
-    r_a = _rules_entry_with_enrich("a-rule", source_count=2, path_globs=["**/*.py"])
+    r_z = _rules_entry_with_enrich("z-rule", source_count=2, path_globs=["src/main.py"])
+    r_a = _rules_entry_with_enrich("a-rule", source_count=2, path_globs=["src/main.py"])
     index = _make_index(
         rules={"z-rule": r_z, "a-rule": r_a},
         by_project={"proj": {"local_slugs": ["z-rule", "a-rule"], "topics": []}},
     )
-    hits = match_path_enrich(index, "proj", "main.py", "Edit")
+    hits = match_path_enrich(index, "proj", "src/main.py", "Edit")
     assert hits[0].slug == "a-rule"
     assert hits[1].slug == "z-rule"
 
@@ -542,22 +542,79 @@ def test_glob_to_regex_returns_none_for_unterminated():
     assert _glob_to_regex("foo[") is None
 
 
-def test_match_path_enrich_glob_no_double_star_matches_single_segment():
+def test_glob_no_double_star_matches_single_segment():
     """A pattern without ** does not match across directory separators."""
+    assert _glob_matches("*.py", "main.py") is True
+    assert _glob_matches("*.py", "src/main.py") is False
+
+
+# ---------------------------------------------------------------------------
+# #271: only globs that name a file inject, and Read counts as focus
+# ---------------------------------------------------------------------------
+
+
+def test_names_a_file_accepts_literal_paths_optionally_under_double_star():
+    from mnemo.core.rule_activation.matching import names_a_file
+
+    assert names_a_file("prisma/schema.prisma")
+    assert names_a_file("**/screens/HomeScreen.tsx")
+    assert names_a_file(".github/workflows/ci.yml")
+    assert names_a_file("src/app/(admin)/page.tsx")
+    assert names_a_file("app.json")  # no **/ in front: the root file only
+
+
+def test_names_a_file_rejects_areas():
+    from mnemo.core.rule_activation.matching import names_a_file
+
+    # Real globs from the vault that would fire on a whole area.
+    for glob in (
+        "**/*.ts",
+        "src/**/*.tsx",
+        "src/app/dashboard/**",
+        "**/components/*Card*.tsx",
+        "src/app/api/**/route.ts",
+        "**/actions.ts",       # every actions.ts in a Next.js tree
+        "src/*/index.ts",
+        "src/[ab].ts",
+    ):
+        assert not names_a_file(glob), glob
+
+
+def test_match_path_enrich_ignores_area_globs():
+    """A rule whose globs only name an area never injects on a file in it."""
     index = _make_enrich_index(
         "proj",
-        _rules_entry_with_enrich(
-            path_globs=["*.py"],  # no **, only matches root-level .py
-            tools=["Edit"],
-        ),
+        _rules_entry_with_enrich(path_globs=["**/*.tsx", "src/components/**"]),
     )
-    # src/main.py has a directory prefix — plain *.py should not match
-    hits_nested = match_path_enrich(index, "proj", "src/main.py", "Edit")
-    hits_flat = match_path_enrich(index, "proj", "main.py", "Edit")
-    # Flat match should work (fnmatch *.py matches main.py)
-    assert len(hits_flat) == 1
-    # Nested should NOT match with plain *.py
-    assert len(hits_nested) == 0
+    assert match_path_enrich(index, "proj", "src/components/modal.tsx", "Edit") == []
+
+
+def test_match_path_enrich_uses_the_file_glob_of_a_mixed_rule():
+    index = _make_enrich_index(
+        "proj",
+        _rules_entry_with_enrich(path_globs=["src/**", "prisma/schema.prisma"]),
+    )
+    assert match_path_enrich(index, "proj", "src/lib/x.ts", "Edit") == []
+    assert len(match_path_enrich(index, "proj", "prisma/schema.prisma", "Edit")) == 1
+
+
+def test_match_path_enrich_read_matches_whatever_tools_the_rule_lists():
+    """Opening the file is focus: Read matches even a rule declared for Edit only."""
+    index = _make_enrich_index(
+        "proj",
+        _rules_entry_with_enrich(path_globs=["src/core/agent.py"], tools=["Edit"]),
+    )
+    assert len(match_path_enrich(index, "proj", "src/core/agent.py", "Read")) == 1
+    assert match_path_enrich(index, "proj", "src/core/agent.py", "Write") == []
+
+
+def test_match_path_enrich_absolute_path_never_matches_a_relative_glob():
+    """Why the hook must relativise: the shape Claude Code sends matched nothing."""
+    index = _make_enrich_index(
+        "proj",
+        _rules_entry_with_enrich(path_globs=["**/core/agent.py"]),
+    )
+    assert match_path_enrich(index, "proj", "/Users/x/proj/src/core/agent.py", "Edit") == []
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +715,7 @@ def test_match_path_enrich_reads_v2_layout(tmp_vault):
             "  tools:\n"
             "    - Edit\n"
             "  path_globs:\n"
-            "    - \"**/*.py\"\n"
+            "    - \"src/foo/bar.py\"\n"
         ),
     )
     idx = build_index(tmp_vault)

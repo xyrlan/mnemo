@@ -138,10 +138,38 @@ def match_bash_enforce(index: dict, project: str, command: str) -> EnforceHit | 
     return None
 
 
+def names_a_file(glob: str) -> bool:
+    """True when *glob* names one file: a literal path, optionally under ``**/``.
+
+    ``prisma/schema.prisma``, ``app.json`` and ``**/screens/HomeScreen.tsx``
+    name a file; ``src/app/dashboard/**``, ``**/*.ts`` and ``**/actions.ts``
+    name an area. Only the first kind
+    injects on a file in focus (#271): replayed over 150 real sessions'
+    Read/Edit/Write calls, file globs injected a mean of 1.6 notes per session
+    (max 13, none at the 15-per-session cap); letting literal directory globs
+    in as well raised it to 6.2, with 23 sessions at the cap. An area is what
+    the prompt-time reflex is for.
+    """
+    if glob.startswith("**/"):
+        # ``**/actions.ts`` is every actions.ts in the tree; a directory above
+        # the name is what pins it to one file.
+        literal = glob[3:]
+        return "/" in literal and not re.search(r"[*?\[]", literal)
+    return bool(glob) and not re.search(r"[*?\[]", glob)
+
+
 def match_path_enrich(
-    index: dict, project: str, file_path: str, tool_name: str
+    index: dict,
+    project: str,
+    file_path: str,
+    tool_name: str,
 ) -> list[EnrichHit]:
     """Return up to 3 matching EnrichHit for *file_path* filtered by *tool_name*.
+
+    *file_path* is repo-relative (the hook makes it so). Only globs that name
+    a file take part (:func:`names_a_file`). ``Read`` matches every
+    rule — opening the file is when its notes are wanted, before the edit is
+    planned; the rule's ``tools`` list governs the writing tools only.
 
     Ordered by source_count desc, then slug asc. Reads v2 layout.
     """
@@ -161,10 +189,10 @@ def match_path_enrich(
         enrich = rule.get("activates_on")
         if not enrich:
             continue
-        if tool_name not in enrich.get("tools", []):
+        if tool_name != "Read" and tool_name not in enrich.get("tools", []):
             continue
         for glob in enrich.get("path_globs", []):
-            if _glob_matches(glob, file_path):
+            if names_a_file(glob) and _glob_matches(glob, file_path):
                 candidates.append({
                     "slug": slug,
                     "source_count": enrich.get("source_count", 0),
@@ -228,5 +256,6 @@ __all__ = [
     "iter_enrich_rules_for_project",
     "match_bash_enforce",
     "match_path_enrich",
+    "names_a_file",
     "normalize_bash_command",
 ]
