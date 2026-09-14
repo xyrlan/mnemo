@@ -188,12 +188,27 @@ class Cache:
         return self._prs[branch]
 
 
-def pr_for(branch: str, *, repo_root: Path | str) -> str | None:
-    """The URL of the PR opened from *branch*, or ``None``.
+@dataclass(frozen=True)
+class PR:
+    """The PR opened from a branch: where it is, and whether it landed.
+
+    ``state`` is ``gh``'s own vocabulary — ``OPEN``, ``MERGED``, ``CLOSED`` —
+    passed through rather than translated, so a reader can match it against
+    what ``gh pr view`` shows them.
+    """
+
+    url: str
+    state: str
+
+
+def pr_info(branch: str, *, repo_root: Path | str) -> PR | None:
+    """The PR opened from *branch* with its state, or ``None``.
 
     ``--state all``, not the default ``open``. A merged branch whose PR is
-    closed must still report that PR: the caller uses this to decide whether
+    closed must still report that PR: ``deliver`` uses this to decide whether
     delivering again would open a duplicate, and "no open PR" is not "no PR".
+    Landing (#236) needs the state itself: a ``MERGED`` piece is skipped,
+    an ``OPEN`` one is rehearsed, a ``CLOSED`` one is refused.
 
     Returns ``None`` for every failure — no ``gh``, no network, not
     authenticated, no such branch. This is a *join*, not a check: a missing
@@ -205,7 +220,7 @@ def pr_for(branch: str, *, repo_root: Path | str) -> str | None:
     try:
         result = subprocess.run(
             ["gh", "pr", "list", "--head", branch, "--state", "all",
-             "--json", "number,url", "--limit", "1"],
+             "--json", "number,url,state", "--limit", "1"],
             cwd=str(repo_root), capture_output=True, text=True,
         )
     except (FileNotFoundError, OSError):
@@ -225,10 +240,23 @@ def pr_for(branch: str, *, repo_root: Path | str) -> str | None:
     if not isinstance(first, dict):
         return None
     url = first.get("url")
-    if isinstance(url, str) and url:
-        return url
-    number = first.get("number")
-    return f"#{number}" if number else None
+    if not (isinstance(url, str) and url):
+        number = first.get("number")
+        if not number:
+            return None
+        url = f"#{number}"
+    state = first.get("state")
+    return PR(url=url, state=str(state) if state else "")
+
+
+def pr_for(branch: str, *, repo_root: Path | str) -> str | None:
+    """The URL of the PR opened from *branch*, or ``None``.
+
+    The URL half of :func:`pr_info`, kept for the callers that only decorate a
+    row with it. One ``gh`` shape, two readers, so they cannot drift.
+    """
+    info = pr_info(branch, repo_root=repo_root)
+    return info.url if info else None
 
 
 def pr_lookup(*, repo_root: Path | str):

@@ -21,6 +21,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     extract,
     hook,
     init,
+    land,
     learn,
     list_enforced,
     migrate_plugin,

@@ -24,6 +24,49 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   0, so the child is running in it — and the report prints the warning under
   the row. (#235)
 
+- **`mnemo land <contract.md>` — the last metre of a contract.** `deliver`
+  ends with each piece pushed and its PR open, and the part a contract exists
+  for was still done by hand: piece A `consumes` a signature piece B `exposes`,
+  A was written against a signature that did not exist yet, and the merge is
+  where it becomes real. Until now that meant merging the PRs in dependency
+  order, running the suite after each, and finding out at the end whether A's
+  assumption about B held. (#236)
+
+  `mnemo land <contract.md>` is read-only: every piece in **landing order**
+  (a stable topological sort by `consumes`, owners before consumers, ties in
+  contract order), its PR and state, the ref that carries it, and whether each
+  `exposes` is actually defined in the piece's `files` on that ref — `✓`
+  present, `✗` missing, `?` for a signature that names no identifier (a CLI
+  shape). Presence is a **name** check, not a string check: the contract
+  parser refuses to compare a consumed signature with an exposed one by
+  literal equality because the two are hand-written and differ cosmetically,
+  and a name is the granularity that survives a renamed argument and still
+  catches a function that was never written. A merged piece whose branch is
+  gone is checked on `master`, where its work is. A cycle — which the parser
+  admits — is refused by name, since it has no landing order.
+
+  `--merge` finishes it, in two phases, and the irreversible one runs only
+  after the reversible one passed in full. First a **rehearsal** in a
+  throwaway worktree under the system temp dir: each open piece is merged in
+  order, its `exposes` are checked in the merged tree, every `consumes` is
+  checked against the *owner's* files in the merged tree (the owner landed
+  earlier, so this is the first moment the consumed signature either exists
+  or does not), and the suite runs. The first conflict, missing name or red
+  suite stops it with the piece and the step named, and nothing anywhere has
+  changed. Only then are the PRs merged with `gh pr merge`, in the same
+  order, stopping at the first refusal; a rerun skips whatever `gh` reports
+  as merged. `--suite CMD` overrides the suite (default `python -m pytest -q`,
+  with the rehearsal tree's `src/` prepended to `PYTHONPATH` when it has one,
+  because an editable install would otherwise test the checkout it came from).
+  `--method` selects squash, merge or rebase.
+
+  A new verb rather than a mode of `deliver`, because `deliver`'s invariant is
+  that naming an id is the approval and there is no flag that approves N
+  children; a landing is inherently every piece of the contract, and the
+  per-piece approval already happened when each was delivered. Not a
+  scheduler: dispatch stays a flat fan-out, and this runs after it landed.
+  Verified against the two contracts this repo has actually dispatched.
+
 ### Fixed
 
 - **The first-run backfill's default is one value everywhere, and a finished
