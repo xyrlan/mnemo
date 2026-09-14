@@ -24,6 +24,14 @@ user demonstrably asked for in their own words; that count is the strongest
 claim this command makes. The issue that asked for this (#237) ruled out
 productivity, session length and token claims, and so does the output.
 
+That label has been written by three different bars (#244), so the report
+splits it by provenance (#257): **gate-verified** — the quote passes
+:func:`mnemo.core.extract.evidence.page_verifies` against a source briefing
+*today* — and **label only** — ``confidence: verified`` whose quote the gate
+cannot re-check, chiefly the 2026-09-02 ``mnemo reclassify`` keep verdicts,
+which cite briefings written before the ``## Corrections`` section existed.
+Both are printed; the gate-verified number is the one to quote.
+
 Composed from what already exists: transcript discovery and the
 ``sources:`` → session map are :mod:`mnemo.core.mcp.recall_sessions`'s; the
 decision is the hook's. What could *not* be composed: ``mnemo recall`` scores
@@ -74,6 +82,7 @@ class RuleFacts:
     taught_by: frozenset  # session ids the rule was extracted from
     learned_at: Optional[float]  # unix seconds the page entered the vault
     correction_backed: bool  # verified feedback page citing the user's words
+    gate_verified: bool = False  # ...and the quote passes today's evidence gate
 
 
 @dataclass(frozen=True)
@@ -84,6 +93,7 @@ class Injection:
     slug: str
     bucket: str
     correction_backed: bool
+    gate_verified: bool = False
 
 
 # --- reading the transcripts --------------------------------------------------
@@ -212,7 +222,13 @@ def rule_facts(vault_root: Path) -> dict[str, RuleFacts]:
 
     Same walk and visibility gate as the reflex index builder, so a slug the
     index can rank always has facts here.
+
+    ``correction_backed`` is the label as written (``confidence: verified``
+    with a quote). ``gate_verified`` re-asks the evidence gate of that page
+    today, with the very predicate ``verify_page`` uses — one briefing read
+    per verified page, nothing cached, so the same vault gives the same split.
     """
+    from mnemo.core.extract.evidence import page_verifies
     from mnemo.core.filters import derive_rule_slug, is_consumer_visible
     from mnemo.core.reclassify_types import split_frontmatter
 
@@ -245,10 +261,14 @@ def rule_facts(vault_root: Path) -> dict[str, RuleFacts]:
                 learned_at = _parse_ts(fm.get(key))
                 if learned_at is not None:
                     break
+            backed = bool(quote) and str(fm.get("confidence") or "") == "verified"
             out[slug] = RuleFacts(
                 taught_by=frozenset(taught_by),
                 learned_at=learned_at,
-                correction_backed=bool(quote) and str(fm.get("confidence") or "") == "verified",
+                correction_backed=backed,
+                gate_verified=backed and page_verifies(
+                    evidence, [s for s in sources_raw if isinstance(s, str)], vault_root,
+                ),
             )
     return out
 
@@ -339,6 +359,7 @@ def run(
                 session_id=prompt.session_id, project=prompt.project, ts=prompt.ts,
                 slug=slug, bucket=classify(f, prompt),
                 correction_backed=bool(f and f.correction_backed),
+                gate_verified=bool(f and f.gate_verified),
             ))
 
     return Replay(prompts=prompts, injections=injections, silence=silence,
@@ -362,13 +383,19 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int) -> dict:
+def aggregate(
+    replay: Replay, *, vault_rules: int, correction_backed_rules: int, gate_verified_rules: int = 0,
+) -> dict:
     """Counts first, rates only where the sample carries them.
 
     A prompt lands in the *best* bucket any of its rules did: a prompt that
     got one carried rule and one hindsight rule is a prompt the vault helped
     with. Rule-level counts are reported alongside so nothing is hidden by
     that choice.
+
+    Every ``correction_backed`` figure is the union; ``gate_verified`` and
+    ``label_only`` are its two halves (#257). ``gate_verified_rules`` is how
+    many of ``correction_backed_rules`` pass the gate today.
     """
     prompts = replay.prompts
     n = len(prompts)
@@ -380,27 +407,38 @@ def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int)
 
     prompt_bucket = {b: 0 for b in _BUCKET_ORDER}
     prompt_carried_backed = 0
+    prompt_carried_gate = 0
+    prompt_carried_label = 0
     for key, injs in by_prompt.items():
         best = min(injs, key=lambda i: _BUCKET_ORDER.index(i.bucket)).bucket
         prompt_bucket[best] += 1
-        if any(i.bucket == CARRIED and i.correction_backed for i in injs):
+        carried_backed = [i for i in injs if i.bucket == CARRIED and i.correction_backed]
+        if carried_backed:
             prompt_carried_backed += 1
+        # A prompt is credited to the stronger half when any of its rules earns it.
+        if any(i.gate_verified for i in carried_backed):
+            prompt_carried_gate += 1
+        elif carried_backed:
+            prompt_carried_label += 1
 
     inj_bucket = {b: 0 for b in _BUCKET_ORDER}
     for inj in replay.injections:
         inj_bucket[inj.bucket] += 1
     carried_injections = [i for i in replay.injections if i.bucket == CARRIED]
     carried_backed_injections = [i for i in carried_injections if i.correction_backed]
+    carried_gate_injections = [i for i in carried_backed_injections if i.gate_verified]
 
     carried_slugs = {i.slug for i in carried_injections}
     carried_backed_slugs = {i.slug for i in carried_backed_injections}
+    carried_gate_slugs = {i.slug for i in carried_gate_injections}
 
     counts: dict[str, int] = {}
     for inj in carried_injections:
         counts[inj.slug] = counts.get(inj.slug, 0) + 1
     top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     top_carried = [
-        {"slug": slug, "prompts": c, "correction_backed": slug in carried_backed_slugs}
+        {"slug": slug, "prompts": c, "correction_backed": slug in carried_backed_slugs,
+         "gate_verified": slug in carried_gate_slugs}
         for slug, c in top
     ]
 
@@ -408,18 +446,26 @@ def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int)
     if n >= MIN_PROMPTS_FOR_RATE:
         lo, hi = wilson_interval(prompt_bucket[CARRIED], n)
         blo, bhi = wilson_interval(prompt_carried_backed, n)
+        glo, ghi = wilson_interval(prompt_carried_gate, n)
         rate = {
             "carried": round(prompt_bucket[CARRIED] / n, 4),
             "carried_ci95": [round(lo, 4), round(hi, 4)],
             "carried_correction_backed": round(prompt_carried_backed / n, 4),
             "carried_correction_backed_ci95": [round(blo, 4), round(bhi, 4)],
+            "carried_gate_verified": round(prompt_carried_gate / n, 4),
+            "carried_gate_verified_ci95": [round(glo, 4), round(ghi, 4)],
             "fired": round(replay.fired_prompts / n, 4),
         }
 
     return {
         "harness": "replay",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "vault": {"rules": vault_rules, "correction_backed": correction_backed_rules},
+        "vault": {
+            "rules": vault_rules,
+            "correction_backed": correction_backed_rules,
+            "gate_verified": gate_verified_rules,
+            "label_only": correction_backed_rules - gate_verified_rules,
+        },
         "transcripts": {
             "sessions": len(sessions),
             "prompts": n,
@@ -431,6 +477,8 @@ def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int)
             "fired": replay.fired_prompts,
             "carried": prompt_bucket[CARRIED],
             "carried_correction_backed": prompt_carried_backed,
+            "carried_gate_verified": prompt_carried_gate,
+            "carried_label_only": prompt_carried_label,
             "hindsight": prompt_bucket[HINDSIGHT],
             "not_yet_learned": prompt_bucket[NOT_YET_LEARNED],
             "undated": prompt_bucket[UNDATED],
@@ -439,6 +487,8 @@ def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int)
             "total": len(replay.injections),
             "carried": inj_bucket[CARRIED],
             "carried_correction_backed": len(carried_backed_injections),
+            "carried_gate_verified": len(carried_gate_injections),
+            "carried_label_only": len(carried_backed_injections) - len(carried_gate_injections),
             "hindsight": inj_bucket[HINDSIGHT],
             "not_yet_learned": inj_bucket[NOT_YET_LEARNED],
             "undated": inj_bucket[UNDATED],
@@ -446,6 +496,8 @@ def aggregate(replay: Replay, *, vault_rules: int, correction_backed_rules: int)
         "rules": {
             "carried_distinct": len(carried_slugs),
             "carried_correction_backed_distinct": len(carried_backed_slugs),
+            "carried_gate_verified_distinct": len(carried_gate_slugs),
+            "carried_label_only_distinct": len(carried_backed_slugs - carried_gate_slugs),
         },
         "rate": rate,
         "min_prompts_for_rate": MIN_PROMPTS_FOR_RATE,
@@ -480,27 +532,33 @@ def format_report(report: dict) -> str:
     lines.append("mnemo replay — your transcripts against your vault")
     lines.append("")
     lines.append(f"prompts replayed        {n:>6}   ({t['sessions']} sessions, {span})")
-    lines.append(f"rules in the vault      {v['rules']:>6}   ({v['correction_backed']} cite a correction you typed)")
+    lines.append(f"rules in the vault      {v['rules']:>6}   ({v['correction_backed']} cite a correction you typed: "
+                 f"{v['gate_verified']} verified by the evidence gate today, {v['label_only']} label only)")
     lines.append("")
     lines.append("would a rule from an earlier session have come back to you?")
     lines.append("")
     lines.append(f"  reflex would have fired            {p['fired']:>6}   prompts   {_pct(p['fired'], n)}")
     if rate:
         lo, hi = rate["carried_ci95"]
-        blo, bhi = rate["carried_correction_backed_ci95"]
+        glo, ghi = rate["carried_gate_verified_ci95"]
         lines.append(f"  ├─ rule from an EARLIER session   {p['carried']:>6}   prompts   "
                      f"{_pct(p['carried'], n)}  (95% CI {100*lo:.1f}–{100*hi:.1f}%)   ← the vault's contribution")
-        lines.append(f"  │    citing your own words         {p['carried_correction_backed']:>6}   prompts   "
-                     f"{_pct(p['carried_correction_backed'], n)}  (95% CI {100*blo:.1f}–{100*bhi:.1f}%)")
+        lines.append(f"  │    citing your own words         {p['carried_gate_verified']:>6}   prompts   "
+                     f"{_pct(p['carried_gate_verified'], n)}  (95% CI {100*glo:.1f}–{100*ghi:.1f}%)"
+                     f"   verified by the evidence gate today")
     else:
         lines.append(f"  ├─ rule from an EARLIER session   {p['carried']:>6}   prompts   ← the vault's contribution")
-        lines.append(f"  │    citing your own words         {p['carried_correction_backed']:>6}   prompts")
+        lines.append(f"  │    citing your own words         {p['carried_gate_verified']:>6}   prompts"
+                     f"   verified by the evidence gate today")
+    lines.append(f"  │    label only, gate can't check  {p['carried_label_only']:>6}   prompts"
+                 f"   a `verified` from mnemo reclassify; its briefing has no Corrections to check against")
     lines.append(f"  ├─ rule from this SAME session     {p['hindsight']:>6}   prompts   hindsight — the vault could not have helped")
     lines.append(f"  └─ rule not learned yet            {p['not_yet_learned'] + p['undated']:>6}   prompts   "
                  f"today's vault fires, but the rule postdates the prompt")
     lines.append("")
     lines.append(f"  distinct rules carried across sessions   {report['rules']['carried_distinct']}"
-                 f"   ({report['rules']['carried_correction_backed_distinct']} correction-backed)")
+                 f"   ({report['rules']['carried_gate_verified_distinct']} gate-verified, "
+                 f"{report['rules']['carried_label_only_distinct']} label only)")
     lines.append(f"  rule injections in total                 {inj['total']}"
                  f"   (carried {inj['carried']}, hindsight {inj['hindsight']}, "
                  f"not yet learned {inj['not_yet_learned'] + inj['undated']})")
@@ -511,7 +569,12 @@ def format_report(report: dict) -> str:
         lines.append("")
         lines.append("most carried rules")
         for row in report["top_carried"]:
-            mark = "  ✓ your words" if row["correction_backed"] else ""
+            if row.get("gate_verified"):
+                mark = "  ✓ your words"
+            elif row["correction_backed"]:
+                mark = "  ~ label only"
+            else:
+                mark = ""
             lines.append(f"  {row['prompts']:>4}   {row['slug']}{mark}")
     if report.get("silence"):
         lines.append("")

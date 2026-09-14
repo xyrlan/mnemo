@@ -49,6 +49,21 @@ def quote_verified(evidence: dict | None, vault_root: Path) -> bool:
     return any(corrections.quote_matches_turn(quote, it.quote) for it in items)
 
 
+def page_verifies(evidence: dict | None, source_files, vault_root: Path) -> bool:
+    """The whole bar, in one place: the quote passes :func:`quote_verified`
+    **and** the briefing it cites is one of the page's own ``source_files``.
+
+    Without the second half a page can cite any briefing in the vault and
+    inherit its verification, laundering one project's correction into
+    another's rule. ``mnemo replay`` re-asks this of every ``confidence:
+    verified`` page on disk to tell a gate-verified label from one that
+    ``mnemo reclassify`` wrote against a briefing with no ``## Corrections``
+    (#257); the same predicate, so the two can never disagree.
+    """
+    cited = evidence.get("source") if isinstance(evidence, dict) else None
+    return cited in (source_files or ()) and quote_verified(evidence, vault_root)
+
+
 def verify_page(page: ExtractedPage, vault_root: Path) -> ExtractedPage:
     """Return the page marked verified, or demoted to a staged reference page.
 
@@ -69,8 +84,7 @@ def verify_page(page: ExtractedPage, vault_root: Path) -> ExtractedPage:
     # The quote must come from a briefing this page was actually built from.
     # Without this a page can cite any briefing in the vault and inherit its
     # verification, laundering one project's correction into another's rule.
-    cited = page.evidence.get("source") if isinstance(page.evidence, dict) else None
-    verifies = cited in page.source_files and quote_verified(page.evidence, vault_root)
+    verifies = page_verifies(page.evidence, page.source_files, vault_root)
     if page.type == "reference":
         if verifies:
             return replace(page, type="feedback", confidence="verified", unverified_feedback=False)

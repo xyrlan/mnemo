@@ -103,20 +103,27 @@ through the hook's own decision and sorts every rule that would have fired by
 *when the vault learned it*. The maintainer's vault, 2026-09-14:
 
 ```
-prompts replayed          2097   (212 sessions, 2026-08-03 → 2026-09-14)
-rules in the vault        1820   (78 cite a correction you typed)
+prompts replayed          2107   (219 sessions, 2026-08-03 → 2026-09-14)
+rules in the vault        1830   (78 cite a correction you typed: 18 verified by the evidence gate today, 60 label only)
 
-  reflex would have fired               225   prompts   10.7%
+  reflex would have fired               230   prompts   10.9%
   ├─ rule from an EARLIER session      116   prompts   5.5%  (95% CI 4.6–6.6%)   ← the vault's contribution
-  │    citing your own words              3   prompts   0.1%  (95% CI 0.1–0.4%)
+  │    citing your own words              0   prompts   0.0%  (95% CI 0.0–0.2%)   verified by the evidence gate today
+  │    label only, gate can't check       3   prompts   a `verified` from mnemo reclassify; its briefing has no Corrections to check against
   ├─ rule from this SAME session         24   prompts   hindsight — the vault could not have helped
-  └─ rule not learned yet                85   prompts   today's vault fires, but the rule postdates the prompt
+  └─ rule not learned yet                90   prompts   today's vault fires, but the rule postdates the prompt
 
 not measured: whether an injected rule changed the answer; tokens, session length, or time saved; what CLAUDE.md or auto-memory would have covered instead.
 ```
 
 The earlier-session line is the only one the vault can take credit for; a
 naive replay would claim all three. A rate only once there are enough prompts.
+"Your own words" is the strongest claim on the page, so it is held to the
+evidence gate as it stands today: the quote must sit in the `## Corrections`
+of a briefing the rule was built from. A `confidence: verified` the gate
+cannot re-check — the 2026-09 `mnemo reclassify` labels cite briefings
+written before that section existed — is printed on its own line and never
+quoted as the number.
 
 ## How it compares
 
