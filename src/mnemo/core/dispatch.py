@@ -554,7 +554,7 @@ def spawn_child(
     args = ["claude", "--bg"]
     if model:
         args += ["--model", model]
-    if lean and not child_profile.env_opts_out():
+    if child_profile.is_lean(lean):
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.
         # Alongside --model, never instead of it: the two choose different

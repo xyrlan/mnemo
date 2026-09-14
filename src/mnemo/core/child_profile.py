@@ -275,3 +275,16 @@ def env_opts_out() -> bool:
     """
     value = os.environ.get("MNEMO_DISPATCH_FULL_PROFILE", "").strip().lower()
     return value not in ("", "0", "false", "no", "off")
+
+
+def is_lean(requested: bool = True) -> bool:
+    """Whether a child will *actually* start lean, environment included.
+
+    The single answer to that question, because there are two ways to opt out
+    — the flag and the environment variable — and anything that consults only
+    one of them can disagree with what the spawn does. That is not academic:
+    the report used to read ``profile: lean`` for a child that
+    ``MNEMO_DISPATCH_FULL_PROFILE=1`` had just started on the full profile,
+    which is the one thing the line exists to tell the truth about.
+    """
+    return requested and not env_opts_out()

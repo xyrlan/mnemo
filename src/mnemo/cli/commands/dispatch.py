@@ -217,10 +217,14 @@ def _report(results: list, *, lean: bool = True) -> int:
         print(f"{_label(r.issue)}  FAILED: {r.error}")
 
     if started:
-        print()
-        if lean:
-            from mnemo.core import child_profile
+        from mnemo.core import child_profile
 
+        print()
+        # What the spawn actually did, not what was asked for: the
+        # environment variable opts out too, and a report that consulted only
+        # the flag would announce a lean child that started on the full
+        # profile.
+        if child_profile.is_lean(lean):
             # What the child does *not* have is the surprising half, so it is
             # stated once per dispatch rather than left to be discovered when
             # a child cannot find a tool the maintainer takes for granted.
@@ -234,7 +238,12 @@ def _report(results: list, *, lean: bool = True) -> int:
             for gap in child_profile.missing_pieces():
                 print(f"    incomplete: {gap}")
         else:
-            print("  profile: full user profile (--full-profile)")
+            # Name which of the two opt-outs is in force, so a maintainer who
+            # exported the variable in a previous shell and forgot is not left
+            # wondering why --full-profile appears to be on.
+            why = ("MNEMO_DISPATCH_FULL_PROFILE" if child_profile.env_opts_out()
+                   else "--full-profile")
+            print(f"  profile: full user profile ({why})")
         print("  queue:  mnemo sessions")
         # Only a child whose id was actually read back can be attached. When
         # none was, the hint is omitted rather than printed with an empty

@@ -265,7 +265,7 @@ def test_lean_travels_from_dispatch_all_to_the_spawn(installed, tmp_path, monkey
     """The flag is only useful if it survives the orchestration layer."""
     seen: dict = {}
 
-    def fake_spawn(prompt, *, cwd, lean=True):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True):
         seen["lean"] = lean
         return "a1b2c3d4"
 
@@ -334,3 +334,37 @@ def test_mnemo_not_installed_is_not_labelled_WARNING(monkeypatch, capsys, tmp_pa
     out = capsys.readouterr().out
     assert "incomplete:" in out and "mnemo init" in out
     assert "WARNING" not in out
+
+
+def test_the_report_tells_the_truth_when_the_environment_opts_out(
+    installed, capsys, tmp_path, monkeypatch
+) -> None:
+    """The report used to read ``profile: lean`` for a child that
+    ``MNEMO_DISPATCH_FULL_PROFILE=1`` had just started on the full profile —
+    the one thing the line exists to be right about."""
+    from mnemo.cli.commands import dispatch as dispatch_cmd
+
+    monkeypatch.setenv("MNEMO_DISPATCH_FULL_PROFILE", "1")
+
+    # lean=True is what the *flag* asked for; the environment overrides it.
+    dispatch_cmd._report(
+        [dispatch.Dispatched(issue=1, worktree=tmp_path, short_id="a1b2c3d4")],
+        lean=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "profile: lean" not in out
+    assert "full user profile" in out
+    assert "MNEMO_DISPATCH_FULL_PROFILE" in out
+
+
+def test_is_lean_is_the_single_answer(monkeypatch) -> None:
+    """Both opt-outs run through one function, so the spawn and the report
+    cannot disagree about what the child got."""
+    monkeypatch.delenv("MNEMO_DISPATCH_FULL_PROFILE", raising=False)
+    assert child_profile.is_lean(True) is True
+    assert child_profile.is_lean(False) is False
+
+    monkeypatch.setenv("MNEMO_DISPATCH_FULL_PROFILE", "1")
+    assert child_profile.is_lean(True) is False   # the environment wins
+    assert child_profile.is_lean(False) is False
