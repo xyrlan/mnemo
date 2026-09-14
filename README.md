@@ -238,6 +238,15 @@ teammate without mnemo gets them too, and leaving mnemo costs you nothing.
 `mnemo init --host cursor` (or `codex`) registers the MCP server there and
 `mnemo export --host cursor` writes the rules where that tool looks.
 
+Rules can also travel between vaults, through the repo. `mnemo publish`
+writes the rules for the repo you're in to `.mnemo-shared/<type>/<slug>.md`
+— your quote kept, your vault paths dropped, an opaque vault id as
+provenance and never a name or an email — for you to commit like any other
+file. A teammate runs `mnemo import`: every rule is staged in their
+`shared/_inbox/` for review, never promoted, marked as another
+contributor's words rather than their own, and a rerun brings only what
+changed. `mnemo status` says when the published tree is behind your vault.
+
 Everything else is a CLI subcommand (`mnemo help --all`): `mnemo open`,
 `mnemo fix`, `mnemo backfill`, `mnemo reclassify`, `mnemo autopilot`, and the
 rest. The status line (`mnemo · 9 topics · 7↓ today`, plus `N esperando` while
