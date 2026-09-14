@@ -2,6 +2,7 @@
 rules and let today's evidence gate decide (#257).
 
     mnemo reverify              # dry run (LLM, one call per session) → .mnemo/reverify-plan.json
+    mnemo reverify --fresh      # ...ignoring the scratch briefings of the last dry run
     mnemo reverify --apply      # execute the saved dry run (no LLM)
     mnemo reverify --undo ID    # restore every touched file, byte for byte
 
@@ -54,7 +55,8 @@ def cmd_reverify(args: argparse.Namespace) -> int:
         return 0
 
     cfg = load_config()
-    report = RV.run(vault, scratch=scratch, briefer=RV.default_briefer(cfg))
+    briefer = RV.default_briefer(cfg, fresh=bool(getattr(args, "fresh", False)))
+    report = RV.run(vault, scratch=scratch, briefer=briefer)
     RV.save_report(report, plan_path)
     if use_json:
         print(plan_path.read_text(encoding="utf-8"))

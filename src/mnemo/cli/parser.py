@@ -359,6 +359,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     reverify.add_argument("--apply", action="store_true", help="execute the saved dry run (no LLM calls)")
     reverify.add_argument("--undo", metavar="RUN_ID", help="restore every file a previous --apply touched, byte for byte")
+    reverify.add_argument("--fresh", action="store_true",
+                          help="re-brief every session again instead of reusing the scratch briefings of the last dry run")
     reverify.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     reclass = sub.add_parser(
         "reclassify",

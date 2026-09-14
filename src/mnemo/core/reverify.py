@@ -18,9 +18,12 @@ a scratch root, and the page's quote is looked up in the regenerated
 
 Outcomes, per page:
 
-* **verified** — the quote is in the regenerated Corrections. ``--apply``
-  rewrites ``evidence.source`` to the bare briefing path and installs the
-  regenerated briefing, so ``page_verifies`` passes from then on.
+* **verified** — the quote is in the regenerated Corrections, or the
+  regenerated item is a tighter span of the same turn (the current prompt
+  naming the correction with different boundaries). ``--apply`` rewrites
+  ``evidence.source`` to the bare briefing path, narrows the quote to the
+  briefing's when the item was the shorter one, and installs the regenerated
+  briefing, so ``page_verifies`` passes from then on.
 * **fails** — re-briefed, and the quote is still not a correction the
   current prompt would name. ``--apply`` demotes it to a ``reference`` page
   carrying ``demoted_from: feedback``, exactly as ``mnemo reclassify`` does.
@@ -167,15 +170,22 @@ def candidates(vault_root: Path) -> list[Candidate]:
 
 # --- the dry run -----------------------------------------------------------------
 
-def default_briefer(cfg: dict) -> Briefer:
+def default_briefer(cfg: dict, *, fresh: bool = False) -> Briefer:
     """The ordinary briefing path, pointed at a scratch vault root so the
-    vault's own briefings are not touched by a dry run."""
-    from mnemo.core.briefing import generate_session_briefing
+    vault's own briefings are not touched by a dry run.
+
+    A scratch briefing whose ``transcript_sha256`` still matches is reused,
+    so a rerun re-buckets the briefings the user already inspected without
+    a second LLM pass that could decide differently; ``fresh`` forces one.
+    """
+    from mnemo.core import briefing as briefing_mod
 
     def _brief(jsonl: Path, agent: str, session_id: str, out_root: Path) -> Path:
         scratch_cfg = dict(cfg)
         scratch_cfg["vaultRoot"] = str(out_root)
-        written = generate_session_briefing(jsonl, agent, scratch_cfg, min_mutations=0)
+        written = briefing_mod.generate_session_briefing(
+            jsonl, agent, scratch_cfg, min_mutations=0, reuse_unchanged=not fresh,
+        )
         if written is None:
             raise RuntimeError("briefing skipped")
         return written
@@ -183,8 +193,28 @@ def default_briefer(cfg: dict) -> Briefer:
     return _brief
 
 
-def _outcome(c: Candidate, status: str, detail: str = "") -> Outcome:
-    return Outcome(**asdict(c), status=status, detail=detail)
+def _outcome(c: Candidate, status: str, detail: str = "", *, quote: Optional[str] = None) -> Outcome:
+    fields = asdict(c)
+    if quote is not None:
+        fields["quote"] = quote
+    return Outcome(**fields, status=status, detail=detail)
+
+
+def _match(page_quote: str, items: list) -> Optional[tuple]:
+    """(item, quote to keep) when the regenerated Corrections back the page.
+
+    Today's gate reads page-quote ⊆ item-quote. The re-brief may quote the
+    same turn with tighter boundaries — item-quote ⊆ page-quote — which is
+    the same correction named again; then the page keeps the briefing's
+    span, itself held to ``quote_is_specific``, so the gate passes tomorrow.
+    """
+    for it in items:
+        if corrections.quote_matches_turn(page_quote, it.quote):
+            return it, page_quote
+    for it in items:
+        if corrections.quote_matches_turn(it.quote, page_quote) and corrections.quote_is_specific(it.quote):
+            return it, it.quote
+    return None
 
 
 def run(
@@ -237,9 +267,11 @@ def run(
                 report.outcomes.append(_outcome(
                     c, QUOTE_TOO_SHORT, f"under {corrections.MIN_CONTENT_TOKENS} content words"))
                 continue
-            hit = next((it for it in items if corrections.quote_matches_turn(c.quote, it.quote)), None)
+            hit = _match(c.quote, items)
             if hit is not None:
-                report.outcomes.append(_outcome(c, VERIFIED, f"→ {hit.rule}"))
+                item, keep_quote = hit
+                narrowed = "" if keep_quote == c.quote else " (quote narrowed to the briefing's span)"
+                report.outcomes.append(_outcome(c, VERIFIED, f"→ {item.rule}{narrowed}", quote=keep_quote))
             else:
                 report.outcomes.append(_outcome(
                     c, FAILS, f"{len(items)} correction(s) in the new briefing, none carries the quote"))

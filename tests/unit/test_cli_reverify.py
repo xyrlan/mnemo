@@ -21,7 +21,7 @@ def wired(env, monkeypatch):
     monkeypatch.setattr(cli, "_resolve_vault", lambda: vault)
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(vault / "mnemo.config.json"))
     briefer = FakeBriefer([Q_KEPT])
-    monkeypatch.setattr(RV, "default_briefer", lambda cfg: briefer)
+    monkeypatch.setattr(RV, "default_briefer", lambda cfg, **kw: briefer)
     real_run = RV.run
     monkeypatch.setattr(RV, "run", lambda v, **kw: real_run(v, projects_root=projects, **kw))
     return vault, briefer

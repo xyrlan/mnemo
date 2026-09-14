@@ -243,3 +243,57 @@ def test_report_round_trips_through_json(env, tmp_path):
     loaded = RV.load_report(path)
     assert loaded.run_id == report.run_id
     assert [(o.slug, o.status) for o in loaded.outcomes] == [(o.slug, o.status) for o in report.outcomes]
+
+
+# --- the re-brief picks a shorter span of the same turn -----------------------------
+
+def test_a_shorter_span_of_the_pages_quote_verifies_and_apply_narrows_the_quote(env):
+    """The regenerated briefing quotes the same user turn with tighter
+    boundaries. That is the current prompt naming the correction; the page's
+    quote is narrowed to the briefing's so ``page_verifies`` holds tomorrow."""
+    vault, projects = env
+    shorter = "never sum the rows, use the global total"  # inside Q_KEPT, ≥5 content words
+    scratch = vault / ".mnemo" / "reverify"
+    report = RV.run(vault, scratch=scratch, projects_root=projects, briefer=FakeBriefer([shorter]))
+    by_slug = {o.slug: o for o in report.outcomes}
+    assert by_slug["kept-rule"].status == RV.VERIFIED
+    assert by_slug["kept-rule"].quote == shorter
+
+    RV.apply(vault, report, scratch=scratch)
+    fm, _ = split_frontmatter((vault / "shared" / "feedback" / "kept-file.md").read_text(encoding="utf-8"))
+    assert fm["evidence"]["quote"] == shorter
+    assert page_verifies(fm["evidence"], fm["sources"], vault) is True
+
+
+def test_a_shorter_span_that_is_itself_too_short_does_not_verify(env):
+    vault, projects = env
+    report = RV.run(vault, scratch=vault / ".mnemo" / "reverify", projects_root=projects,
+                    briefer=FakeBriefer(["never sum the rows"]))
+    assert {o.slug: o.status for o in report.outcomes}["kept-rule"] == RV.FAILS
+
+
+# --- rerunning reuses the scratch briefings unless told otherwise -------------------
+
+def test_default_briefer_reuses_an_unchanged_scratch_briefing_unless_fresh(monkeypatch, tmp_path):
+    from mnemo.core import briefing as B
+
+    seen: list[dict] = []
+
+    def fake_generate(jsonl, agent, cfg, **kw):
+        seen.append({"vaultRoot": cfg.get("vaultRoot"), **kw})
+        out = Path(cfg["vaultRoot"]) / "bots" / agent / "briefings" / "sessions" / f"{jsonl.stem}.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("# b\n", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(B, "generate_session_briefing", fake_generate)
+    jsonl = tmp_path / f"{SID_A}.jsonl"
+    jsonl.write_text("{}\n", encoding="utf-8")
+    scratch = tmp_path / "scratch"
+
+    RV.default_briefer({"vaultRoot": "/real/vault"})(jsonl, "alpha", SID_A, scratch)
+    RV.default_briefer({"vaultRoot": "/real/vault"}, fresh=True)(jsonl, "alpha", SID_A, scratch)
+
+    assert seen[0]["vaultRoot"] == str(scratch) and seen[0]["reuse_unchanged"] is True
+    assert seen[1]["reuse_unchanged"] is False
+    assert all(s["min_mutations"] == 0 for s in seen)
