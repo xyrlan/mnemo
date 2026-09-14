@@ -194,7 +194,10 @@ def _land(states, *, root: Path, args: argparse.Namespace, contract_path: str) -
 
     print()
     print("POUSO")
-    steps = landing.merge_prs(states, repo_root=root, method=method)
+    steps = landing.merge_prs(
+        states, repo_root=root, method=method,
+        admin=bool(getattr(args, "admin", False)),
+    )
     for step in steps:
         mark = "·" if step.skipped else ("✓" if step.ok else "✗")
         print(f"  {mark} {step.slug}: {step.detail}")

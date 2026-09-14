@@ -149,6 +149,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              "(default: python -m pytest -q)")
     land_p.add_argument("--method", choices=["squash", "merge", "rebase"],
                         default="squash", help="gh pr merge method (default: squash)")
+    land_p.add_argument("--admin", action="store_true",
+                        help="pass --admin to gh pr merge (a branch protection you own "
+                             "and are choosing to bypass; never implied)")
     sub.add_parser("doctor", help="full diagnostic with actionable fixes")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")

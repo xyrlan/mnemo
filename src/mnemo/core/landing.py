@@ -506,11 +506,15 @@ def merge_prs(
     *,
     repo_root: Path | str,
     method: str = "squash",
+    admin: bool = False,
 ) -> list[Step]:
     """``gh pr merge`` each open piece in order. Stops at the first refusal.
 
-    Never ``--admin``: a branch protection that refuses the merge is a rule
-    the maintainer set, and this command is not the place to override it.
+    Not ``--admin`` by default: a branch protection that refuses the merge is
+    a rule the maintainer set, and this command is not the place to override
+    it on its own. ``admin=True`` passes ``--admin`` through, for the
+    maintainer who typed ``--admin`` — on this repo master requires a
+    code-owner approval no one else can give, so every merge is one.
     The refusal's stderr is the step's detail, and a rerun skips whatever did
     land — ``gh`` reports it as ``MERGED`` — so a landing that stopped
     part-way is resumed by running it again.
@@ -525,7 +529,8 @@ def merge_prs(
             continue
         try:
             result = subprocess.run(
-                ["gh", "pr", "merge", str(state.pr), f"--{method}"],
+                ["gh", "pr", "merge", str(state.pr), f"--{method}"]
+                + (["--admin"] if admin else []),
                 cwd=str(repo_root), capture_output=True, text=True,
             )
         except (FileNotFoundError, OSError) as exc:

@@ -584,3 +584,14 @@ def test_merge_prs_takes_the_method(monkeypatch) -> None:
     landing.merge_prs([_state("a", "https://x/pull/1")], repo_root="/repo", method="rebase")
 
     assert calls[0][-1] == "--rebase"
+
+
+def test_merge_prs_never_passes_admin_unless_asked(monkeypatch) -> None:
+    """A branch protection is the maintainer's rule; only their `--admin` bypasses it."""
+    calls = _gh_merge(monkeypatch)
+
+    landing.merge_prs([_state("a", "https://x/pull/1")], repo_root="/repo")
+    assert "--admin" not in calls[0]
+
+    landing.merge_prs([_state("a", "https://x/pull/1")], repo_root="/repo", admin=True)
+    assert calls[1][-1] == "--admin" and "--squash" in calls[1]
