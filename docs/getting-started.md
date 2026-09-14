@@ -837,9 +837,13 @@ orthogonal and a filter written against `state` can look right and be wrong.
 `--consume-unblocks` is the one that is not about looking. When you answer a
 blocked session, that moment is a correction worth learning from, and mnemo
 records a marker for it; this redeems the markers and prints what it learned.
-The `SessionEnd` hook runs it for you in the background — running it by hand is
-for when you want to see the result. It ignores `--all` and the current
-directory, because an unblocked session is worth learning from wherever it ran.
+The marker comes from the session's transcript, not from catching `tempo`
+mid-flip: every `mnemo sessions` and every `SessionEnd` reads each background
+session's transcript forward from where the last one stopped, and any answer
+it finds there is recorded however long ago it landed. The `SessionEnd` hook
+then runs the consumer for you in the background — running it by hand is for
+when you want to see the result. It ignores `--all` and the current directory,
+because an unblocked session is worth learning from wherever it ran.
 
 ### It never reaches Claude
 
