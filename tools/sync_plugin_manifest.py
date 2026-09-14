@@ -46,6 +46,32 @@ def _sync_plugin_commands(commands_dir: Path) -> None:
             stale.unlink()
 
 
+def _sync_plugin_skills(skills_dir: Path) -> None:
+    """Regenerate the plugin's skills/ directory from the packaged skills.
+
+    Claude Code loads a plugin's skills from ``skills/<name>/SKILL.md`` at
+    the plugin root, and a wheel can only carry files inside the package, so
+    the file exists twice. The package copy is the one that gets edited; this
+    keeps the plugin's copy identical, as it does for commands/.
+    """
+    from mnemo.install.settings import SKILLS, read_skill
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for name in SKILLS:
+        target = skills_dir / name / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(read_skill(name))
+    # A skill that left the package must leave the plugin too, or the plugin
+    # keeps offering something `mnemo init` no longer installs.
+    for stale in skills_dir.iterdir():
+        if stale.is_dir() and stale.name not in SKILLS:
+            skill = stale / "SKILL.md"
+            if skill.exists():
+                skill.unlink()
+            if not any(stale.iterdir()):
+                stale.rmdir()
+
+
 def sync(repo_root: Path, version: str) -> None:
     sys.path.insert(0, str(repo_root / "src"))
 
@@ -61,6 +87,7 @@ def sync(repo_root: Path, version: str) -> None:
     manifest_path.write_text(json.dumps(data, indent=2) + "\n")
 
     _sync_plugin_commands(repo_root / "commands")
+    _sync_plugin_skills(repo_root / "skills")
     _sync_marketplace(plugin_dir / "marketplace.json", version)
 
 
@@ -71,4 +98,4 @@ if __name__ == "__main__":
     m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
     version = m.group(1) if m else "0.0.0"
     sync(repo_root, version)
-    print(f".claude-plugin/{{plugin,marketplace}}.json regenerated (version {version})")
+    print(f".claude-plugin/{{plugin,marketplace}}.json, commands/ and skills/ regenerated (version {version})")

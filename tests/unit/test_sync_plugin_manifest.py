@@ -52,7 +52,7 @@ def test_sync_generates_the_plugin_command_files(tmp_path: Path):
     # so an extra file here is an extra entry a user has to read past.
     # init/uninstall have no meaning under a plugin: it declares its own hooks
     # and MCP server, and `/plugin uninstall mnemo` is the uninstall.
-    assert names == {"status", "why", "doctor", "learn", "help"}
+    assert names == {"status", "why", "doctor", "learn", "dispatch", "help"}
 
 
 def test_generated_commands_go_through_the_launcher(tmp_path: Path):
@@ -94,3 +94,29 @@ def test_sync_fails_loudly_when_the_marketplace_lacks_an_mnemo_entry(tmp_path: P
 
     with pytest.raises(SystemExit, match="mnemo"):
         sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+
+def test_sync_generates_the_plugin_skill_files(tmp_path: Path):
+    """Claude Code loads a plugin's skills from skills/<name>/SKILL.md by
+    convention, so the packaged copy has to be mirrored there (#233)."""
+    from mnemo.install.settings import SKILLS, read_skill
+
+    _plugin_dir(tmp_path)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    for name in SKILLS:
+        copy = tmp_path / "skills" / name / "SKILL.md"
+        assert copy.read_text() == read_skill(name)
+        assert copy.read_text().startswith("---\nname: " + name)
+
+
+def test_sync_removes_a_skill_that_left_the_package(tmp_path: Path):
+    _plugin_dir(tmp_path)
+    stale = tmp_path / "skills" / "renamed-away"
+    stale.mkdir(parents=True)
+    (stale / "SKILL.md").write_text("stale")
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    assert not stale.exists()

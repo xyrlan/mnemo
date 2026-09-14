@@ -422,6 +422,24 @@ SLASH_COMMAND_TAG = "<!-- mnemo:slash-command -->"
 # written at `mnemo init` must point at the mnemo that is actually installed
 # rather than a bare `python3` that may resolve elsewhere. See
 # _render_slash_command, and PLUGIN_COMMANDS below for the plugin's own set.
+# The one verb of the dispatch loop that belongs in the menu. It is the
+# entry point: its output names the queue (`mnemo sessions`), and the README
+# names the third verb (`mnemo deliver`) once, end to end. The other two stay
+# CLI-only on purpose — the queue is designed never to be written into a
+# session's context, and a slash command would do exactly that.
+#
+# `arguments` appends `$ARGUMENTS` to the rendered command line, so
+# `/mnemo:dispatch 197 198` and `/mnemo:dispatch --contract plan.md` reach the
+# CLI unchanged; with nothing after the name the CLI's own "nothing to
+# dispatch" line explains what it wanted.
+DISPATCH_COMMAND: dict[str, Any] = {
+    "description": "spawn a background child per issue, or per piece of a contract "
+                   "(then `mnemo sessions` to watch them, `mnemo deliver` to ship)",
+    "args": ("dispatch",),
+    "arguments": True,
+    "argument_hint": "[issue ...] | --contract <path> [--dry-run]",
+}
+
 SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "init":              {"description": "first-run setup (global)",
                           "args": ("init",)},
@@ -439,6 +457,7 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
                           "args": ("uninstall", "--project")},
     "learn":             {"description": "learn from this session now: briefing + extraction, then the rule fires on your next prompt",
                           "args": ("learn",)},
+    "dispatch":          DISPATCH_COMMAND,
     "help":              {"description": "list commands",
                           "args": ("help",)},
 }
@@ -447,11 +466,13 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
 # design: the plugin declares its own hooks and MCP server, so there is nothing
 # for them to wire or unwire — `/plugin uninstall mnemo` is the uninstall.
 #
-# Deliberately five. A slash menu of nine made the rare commands (open, fix,
+# Deliberately short. A slash menu of nine made the rare commands (open, fix,
 # statusline, migrate) as prominent as the daily loop, and none of them is
 # something a user reaches for more than once; they stay available as CLI
 # subcommands (`mnemo open`, `mnemo fix`, `mnemo statusline --install`,
-# `mnemo migrate-plugin`) and `mnemo help` still lists them.
+# `mnemo migrate-plugin`) and `mnemo help` still lists them. `dispatch` is
+# the exception (#233): it is a loop of its own, and with no entry in the
+# menu the loop was unreachable from inside a session.
 PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
     "status":  {"description": "vault state + hook health", "args": ("status",)},
     "why":     {"description": "why the per-prompt recall fired, or stayed silent, on your last prompts",
@@ -459,43 +480,67 @@ PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
     "doctor":  {"description": "full diagnostic", "args": ("doctor",)},
     "learn":   {"description": "learn from this session now: briefing + extraction, then the rule fires on your next prompt",
                 "args": ("learn",)},
+    "dispatch": DISPATCH_COMMAND,
     "help":    {"description": "list commands", "args": ("help",)},
 }
 
 
-def render_plugin_command(spec: dict[str, Any]) -> str:
-    """Render a plugin command file.
+def _frontmatter(spec: dict[str, Any]) -> str:
+    """The YAML block Claude Code reads a command's menu entry from.
 
-    Goes through ${CLAUDE_PLUGIN_ROOT} rather than a resolved path: the plugin
+    It has to be the first bytes of the file: a line above the opening
+    ``---`` — a comment, a blank — makes Claude Code treat the whole file as
+    body, and the entry then shows up in the menu with that stray line as
+    its description and with ``disable-model-invocation`` unread (#233).
+    """
+    # Both values double-quoted. Unquoted, `learn`'s "now: briefing" is a
+    # nested mapping to a strict YAML parser and the hint's leading `[` a
+    # sequence; either way the whole block fails to parse and the entry
+    # loses its description.
+    desc = spec["description"].replace('"', '\\"')
+    lines = ["---", f'description: "{desc}"']
+    hint = spec.get("argument_hint")
+    if hint:
+        lines.append(f'argument-hint: "{hint}"')
+    lines += ["allowed-tools: Bash", "disable-model-invocation: true", "---"]
+    return "\n".join(lines) + "\n"
+
+
+def _argv(spec: dict[str, Any]) -> tuple[str, ...]:
+    """The command's argv, with ``$ARGUMENTS`` appended when it takes any.
+
+    Claude Code substitutes the placeholder with whatever followed the slash
+    command before the bash line runs, so the user's own words reach the CLI
+    as its arguments; with nothing after the name it expands to nothing.
+    """
+    args = tuple(spec["args"])
+    if spec.get("arguments"):
+        args += ("$ARGUMENTS",)
+    return args
+
+
+def render_plugin_command(spec: dict[str, Any]) -> str:
+    """Render one plugin command: through the launcher, never a resolved path.
+
+    ``${CLAUDE_PLUGIN_ROOT}`` is expanded by Claude Code at run time. The plugin
     is generated once and installed on every platform, so it cannot bake in a
     location, and the launcher is what knows where the binary actually lives.
     """
-    desc = spec["description"].replace('"', '\\"')
-    args = " ".join(spec["args"])
+    args = " ".join(_argv(spec))
     return (
-        "---\n"
-        f"description: {desc}\n"
-        "allowed-tools: Bash\n"
-        "disable-model-invocation: true\n"
-        "---\n"
-        "\n"
-        f'!`"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {args}`\n'
+        _frontmatter(spec)
+        + "\n"
+        + f'!`"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {args}`\n'
     )
 
 
 def _render_slash_command(name: str, spec: dict[str, Any]) -> str:
-    desc = spec["description"].replace('"', '\\"')
-    body = (
-        f"{SLASH_COMMAND_TAG}\n"
-        "---\n"
-        f"description: {desc}\n"
-        "allowed-tools: Bash\n"
-        "disable-model-invocation: true\n"
-        "---\n"
-        "\n"
-        f"!`{self_command(*spec['args'])}`\n"
+    return (
+        _frontmatter(spec)
+        + f"{SLASH_COMMAND_TAG}\n"
+        + "\n"
+        + f"!`{self_command(*_argv(spec))}`\n"
     )
-    return body
 
 
 def inject_slash_commands(commands_dir: Path) -> None:
@@ -534,3 +579,100 @@ def uninject_slash_commands(commands_dir: Path) -> None:
                 path.unlink()
             except OSError:
                 pass
+
+
+# --- skills (#233) -----------------------------------------------------------
+#
+# A skill is a directory holding a ``SKILL.md`` under ``~/.claude/skills/``
+# (global) or ``<cwd>/.claude/skills/`` (project). The plugin ships the same
+# directories at its root and Claude Code finds them by convention; an
+# install that never went through the plugin has to write them itself, which
+# is what ``inject_skills`` does at ``mnemo init``. The files come from the
+# package (``mnemo/skills/<name>/SKILL.md``), which is also what
+# ``tools/sync_plugin_manifest.py`` copies to the plugin's ``skills/``.
+#
+# Ownership is marked the way the slash commands are, with a tag — placed
+# *after* the frontmatter, which has to stay the first bytes of the file or
+# Claude Code reads the whole thing as body.
+
+SKILL_TAG = "<!-- mnemo:skill -->"
+
+#: Every skill the package ships, by directory name.
+SKILLS: tuple[str, ...] = ("decomposing-for-dispatch",)
+
+
+def read_skill(name: str) -> str:
+    """The packaged ``SKILL.md`` for *name*, verbatim."""
+    try:
+        from importlib import resources
+
+        root = resources.files("mnemo.skills")
+    except (ImportError, AttributeError):
+        # Python 3.8: ``resources.files`` does not exist, and ``read_text``
+        # cannot reach a subdirectory. The package is on disk either way.
+        import mnemo.skills as pkg
+
+        root = Path(pkg.__file__).parent
+    return (root / name / "SKILL.md").read_text(encoding="utf-8")
+
+
+def _tag_after_frontmatter(text: str, tag: str) -> str:
+    """Insert *tag* on its own line right after the closing ``---``.
+
+    Anything above the opening ``---`` would stop Claude Code parsing the
+    frontmatter; a tag at the very end would be lost the first time someone
+    edits the file. Directly under the frontmatter is the one place that is
+    both safe and stable. Text without frontmatter gets the tag as its first
+    line, since there is then nothing to keep it under.
+    """
+    if text.startswith("---\n"):
+        close = text.find("\n---\n", 3)
+        if close != -1:
+            cut = close + len("\n---\n")
+            return text[:cut] + tag + "\n" + text[cut:]
+    return tag + "\n" + text
+
+
+def render_skill(name: str) -> str:
+    """The ``SKILL.md`` ``mnemo init`` writes: the packaged text, tagged."""
+    return _tag_after_frontmatter(read_skill(name), SKILL_TAG)
+
+
+def inject_skills(skills_dir: Path) -> None:
+    """Write every packaged skill under ``skills_dir``. Idempotent.
+
+    A mnemo-tagged file is overwritten so an upgrade refreshes it. A
+    ``SKILL.md`` without the tag belongs to someone else — a skill of the
+    same name the user wrote — and is left alone, as for slash commands.
+    """
+    skills_dir = Path(skills_dir)
+    for name in SKILLS:
+        target = skills_dir / name / "SKILL.md"
+        if target.exists():
+            try:
+                if SKILL_TAG not in target.read_text(encoding="utf-8"):
+                    continue
+            except OSError:
+                continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_skill(name), encoding="utf-8")
+
+
+def uninject_skills(skills_dir: Path) -> None:
+    """Remove mnemo-tagged skills; leave any other ``SKILL.md`` in place.
+
+    Only mnemo's own names are looked at — never a sweep of the directory —
+    and the directory is dropped only once it holds nothing else, so a
+    supporting file the user added next to the skill survives.
+    """
+    skills_dir = Path(skills_dir)
+    for name in SKILLS:
+        target = skills_dir / name / "SKILL.md"
+        try:
+            if not target.exists() or SKILL_TAG not in target.read_text(encoding="utf-8"):
+                continue
+            target.unlink()
+            if not any(target.parent.iterdir()):
+                target.parent.rmdir()
+        except OSError:
+            continue

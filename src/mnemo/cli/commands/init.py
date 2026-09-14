@@ -283,6 +283,16 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    # 5d'. Skills. The plugin ships these by convention; this path has to
+    # write them, or `decompose this for dispatch` finds nothing (#233).
+    target_skills = target_settings.parent / "skills"
+    say(f"Registering skills in {target_skills}…")
+    try:
+        inj.inject_skills(target_skills)
+    except OSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
     # 5e. Project scope — ignore install artifacts in version control
     if project:
         _ensure_gitignore(cwd)

@@ -61,6 +61,30 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   from `recall-sessions`' transcript discovery and the hook's decision; why
   `mnemo recall` could not be folded in is in the module docstring. (#237)
 
+- **The dispatch loop is reachable from inside a session.** The
+  `decomposing-for-dispatch` skill existed in the repo since #216 and reached
+  no install: the plugin loads `skills/` by convention, but `mnemo init` wrote
+  commands and never skills, so a direct install could not load it at all. The
+  skill is now package data (`mnemo/skills/`), `mnemo init` writes it to
+  `~/.claude/skills/` (or `<cwd>/.claude/skills/` with `--project`) and
+  `mnemo uninstall` removes it, `tools/sync_plugin_manifest.py` mirrors it to
+  the plugin's `skills/` the way it already did `commands/`, and CI fails when
+  the two copies drift. `/mnemo:dispatch` joins the slash menu on both install
+  paths, passing its arguments through (`/mnemo:dispatch 197 198`,
+  `/mnemo:dispatch --contract plan.md --dry-run`); `sessions` and `deliver`
+  stay CLI-only, because the queue is designed never to land in a session's
+  context. The README and getting-started now name the loop once, end to end:
+  `dispatch` → `sessions` → `deliver`. (#233)
+
+- **`mnemo init`'s slash commands showed up with no description and were
+  visible to the model.** The ownership tag was written *above* the YAML
+  frontmatter, and Claude Code only reads frontmatter that starts on line 1 —
+  so every direct-install command lost its `description`, `allowed-tools` and
+  `disable-model-invocation`, and nine entries the plugin hides from the model
+  were listed to it on every session. The tag now sits right under the
+  closing `---`, and both descriptions and argument hints are quoted, since
+  `learn`'s "now: briefing" was a nested mapping to a strict YAML parser
+  rather than text. Re-running `mnemo init` rewrites the files. (#233)
 
 ## [1.5.0] — 2026-09-13
 

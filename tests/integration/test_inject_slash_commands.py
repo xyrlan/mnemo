@@ -5,7 +5,7 @@ from mnemo.install import settings as inj
 
 EXPECTED_NAMES = {
     "init", "init-project", "uninstall", "uninstall-project",
-    "status", "why", "doctor", "learn", "help",
+    "status", "why", "doctor", "learn", "dispatch", "help",
 }
 
 

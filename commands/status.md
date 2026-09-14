@@ -1,5 +1,5 @@
 ---
-description: vault state + hook health
+description: "vault state + hook health"
 allowed-tools: Bash
 disable-model-invocation: true
 ---

@@ -33,7 +33,7 @@ mnemo = "mnemo.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mnemo = ["templates/*"]
+mnemo = ["templates/*", "skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

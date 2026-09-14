@@ -166,6 +166,7 @@ waiting. Details in
 mnemo replay    your transcripts against your vault: what would have come back, and from when
 /mnemo:doctor   full diagnostic with actionable fixes
 /mnemo:learn    learn from this session now
+/mnemo:dispatch spawn a background child per issue, or per piece of a contract
 /mnemo:help     list commands
 ```
 
@@ -182,13 +183,22 @@ registers mnemo's MCP server there and writes the rules file that tool reads
 (`.cursor/rules/mnemo.mdc`, `AGENTS.md`). Learning still happens in Claude
 Code; those tools get what it learned.
 
-Running several Claude Code sessions in the background? `mnemo sessions` prints
-them as one queue with the ones blocked on a human at the top, and shows what
-each of the others is doing — the last tool, its target, and a mark when the
-same one keeps coming back, so a session that is looping stops reading like a
-session that is working. `mnemo session <short_id>` opens one of them up.
-Neither ever reaches Claude: no hook and no MCP tool exposes them, because the
-context they would spend is the thing they exist to save. See
+Have several issues that can be built at once? That is one loop, three
+commands. `mnemo dispatch 197 198` (or `/mnemo:dispatch 197 198` from inside a
+session) spawns one background Claude Code session per issue, each in its own
+worktree and branch. `mnemo sessions` is the queue: it prints them with the
+ones blocked on a human at the top, and shows what each of the others is doing
+— the last tool, its target, and a mark when the same one keeps coming back,
+so a session that is looping stops reading like a session that is working.
+`mnemo session <short_id>` opens one of them up. `mnemo deliver <short_id>`
+pushes what a finished child built and opens its pull request, `Closes #N`
+included. When the unit of work is a feature rather than an issue, the
+`decomposing-for-dispatch` skill — shipped by the plugin and by `mnemo init`
+alike, so "decompose this for dispatch" loads it in any session — writes the
+contract that `mnemo dispatch --contract <path>` spawns one child per piece
+from. Neither the queue nor dispatch ever reaches Claude on its own: no hook
+and no MCP tool exposes them, because the context they would spend is the
+thing they exist to save. See
 [docs/getting-started.md](docs/getting-started.md#watching-background-sessions).
 
 Everything else is a CLI subcommand (`mnemo help --all`): `mnemo open`,

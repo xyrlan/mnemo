@@ -236,6 +236,32 @@ def test_init_registers_slash_commands(tmp_home: Path):
     assert f"!`{self_command('init', '--project')}`" in init_project
 
 
+def test_init_registers_the_packaged_skills(tmp_home: Path):
+    """`mnemo init` wrote commands but never skills, so an install that
+    skipped the plugin could not load `decomposing-for-dispatch` (#233)."""
+    from mnemo.install.settings import SKILLS, SKILL_TAG, read_skill
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+
+    for name in SKILLS:
+        skill = tmp_home / ".claude" / "skills" / name / "SKILL.md"
+        assert skill.is_file()
+        body = skill.read_text()
+        assert body.startswith("---\nname: " + name)
+        assert SKILL_TAG in body
+        assert body.replace(SKILL_TAG + "\n", "", 1) == read_skill(name)
+
+
+def test_uninstall_strips_the_skills(tmp_home: Path):
+    from mnemo.install.settings import SKILLS
+
+    cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
+    cli.main(["uninstall", "--yes"])
+
+    for name in SKILLS:
+        assert not (tmp_home / ".claude" / "skills" / name).exists()
+
+
 def test_uninstall_strips_slash_commands(tmp_home: Path):
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
     cli.main(["uninstall", "--yes"])

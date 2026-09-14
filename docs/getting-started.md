@@ -162,7 +162,10 @@ It's idempotent; running it twice is safe. On first run it will:
 4. Register the stdio MCP server in `~/.claude.json`.
 5. Wire the additive status line composer, preserving any `statusLine` you
    already had.
-6. Mirror existing Claude Code memories from `~/.claude/projects/*/memory/`
+6. Write the slash commands to `~/.claude/commands/` and the skills to
+   `~/.claude/skills/` — the same `/mnemo:*` menu and the same
+   `decomposing-for-dispatch` skill the plugin ships by convention.
+7. Mirror existing Claude Code memories from `~/.claude/projects/*/memory/`
    into `bots/<repo>/memory/`.
 
 In `--project` mode, everything lands under `<cwd>/.claude/`, `<cwd>/.mcp.json`,
@@ -462,6 +465,19 @@ Claude Code can run sessions in the background, and once there are six of them
 the bottleneck stops being the machine and becomes you: every one of them may
 or may not be waiting for an answer, and the only way to find out used to be
 attaching to each in turn.
+
+Most of them get there through `mnemo dispatch`, which is the front of a
+three-command loop: `mnemo dispatch 197 198` (or `/mnemo:dispatch 197 198`
+inside a session) spawns one child per issue in its own worktree, the queue
+below tells you which one needs you, and `mnemo deliver <short_id>` pushes a
+finished child's branch and opens its pull request. A feature that is not yet
+issues goes through the `decomposing-for-dispatch` skill first — it writes the
+contract `mnemo dispatch --contract <path>` reads, one child per piece — and
+`mnemo dispatch --contract --example` prints the format. The skill ships with
+the plugin and with `mnemo init`, so asking any session to "decompose this for
+dispatch" loads it. Only `dispatch` has a slash command: the queue is kept out
+of every session's context on purpose (see below), and a slash command would
+put it exactly there.
 
 ```bash
 mnemo sessions
