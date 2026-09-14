@@ -66,6 +66,11 @@ class Session:
     updated_at: str | None = None
     children: tuple[dict[str, Any], ...] = ()
     live: bool | None = None
+    #: The model this session runs on, read from ``respawnFlags`` (#268).
+    #: ``None`` only when the flags do not name one — every real session
+    #: measured on 2.1.270 did, including those spawned with no ``--model``
+    #: at all, because Claude Code resolves the machine default into them.
+    model: str | None = None
 
     @property
     def is_blocked(self) -> bool:
@@ -157,6 +162,33 @@ def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def model_from(data: dict[str, Any]) -> str | None:
+    """The model a session runs on, out of its ``state.json`` (#268).
+
+    Read from ``respawnFlags`` — the argv Claude Code would re-spawn this
+    session with — and **not** from the sibling ``model`` key, which is
+    ``null`` on every real session measured (23 of 23 on 2.1.270), including
+    one deliberately spawned with ``--model haiku``. The flags are where the
+    answer actually lives, and they carry it even when the dispatcher passed
+    nothing, because Claude Code resolves the machine's default into them:
+    the default children of 2026-09-14 read ``["--model",
+    "claude-fable-5-1[1m]"]``.
+
+    Preferring the raw ``model`` key "when it is set" would be a trap rather
+    than a fallback: it is the field an upstream change is most likely to
+    start filling in with something *different* from what the child is
+    running on. One source, named in ``claude_cli``'s ``bg-model-flag``
+    assumption, which the live test checks.
+    """
+    flags = data.get("respawnFlags")
+    if not isinstance(flags, list):
+        return None
+    for index, flag in enumerate(flags):
+        if flag == "--model" and index + 1 < len(flags):
+            return _str_or_none(flags[index + 1])
+    return None
+
+
 def _parse(short_id: str, data: dict[str, Any]) -> Session:
     children = data.get("children")
     return Session(
@@ -173,6 +205,7 @@ def _parse(short_id: str, data: dict[str, Any]) -> Session:
         session_id=_str_or_none(data.get("sessionId")),
         link_scan_path=_str_or_none(data.get("linkScanPath")),
         updated_at=_str_or_none(data.get("updatedAt")),
+        model=model_from(data),
         children=tuple(c for c in children if isinstance(c, dict)) if isinstance(children, list) else (),
     )
 

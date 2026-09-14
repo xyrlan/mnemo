@@ -584,6 +584,41 @@ refused rather than dispatched. So is a contract naming an unknown piece, a
 duplicate or unaddressable slug, a piece with no files, or a piece consuming
 from itself, all before any worktree exists.
 
+### Choosing the model
+
+A child runs on whatever `~/.claude/settings.json` resolves to unless you say
+otherwise. That is one price for every kind of work: the child that designs a
+decomposition and the child that sweeps an encoding fix across 44 call sites
+cost the same.
+
+```bash
+mnemo dispatch 255 246 --model haiku     # both children, one model
+mnemo dispatch 244 --model opus          # this one needs the judgement
+```
+
+The flag takes what `claude --model` takes — an alias (`haiku`, `sonnet`,
+`opus`) or a full id. mnemo does not keep a list of valid models: Claude Code
+owns that vocabulary, and an unknown id fails in the child's own startup where
+the error names the real one.
+
+A contract piece may carry its own, which wins over the flag — the contract
+was written and reviewed knowing what each piece is, and a blanket from the
+command line should not silently re-price it:
+
+```markdown
+## storage
+
+- **files:** src/app/storage.py, tests/unit/test_storage.py
+- **exposes:** `load(key) -> Record | None`
+- **model:** haiku
+```
+
+`--dry-run` prints what each child would get, per piece, before anything is
+spent. Afterwards `mnemo session <short_id>` names the model a child is on,
+and `mnemo sessions` ends with one line naming the models in play across the
+whole queue — a footer rather than a column, because the same id repeated on
+every row would cost 20 characters of width to say nothing.
+
 ### Watching, and answering
 
 `mnemo sessions` is the queue; the [next section](#watching-background-sessions)

@@ -195,6 +195,41 @@ def _label(s: Session, budget: int = LABEL_WIDTH) -> str:
     return f"{head} {cut.rstrip()}…"
 
 
+def _models(sessions: list[Session]) -> str:
+    """One line naming the models in play, or '' when there is nothing to say.
+
+    A **footer**, not a column, and the reasoning is measured rather than
+    aesthetic (#268). Real rows already run 87-135 columns against an 80-column
+    terminal; a model column would add up to 20 more. Worse, it would repeat
+    itself: 18 of 23 real sessions on 2026-09-14 carried the same
+    ``claude-fable-5-1[1m]``, so the column would be the same string on nearly
+    every row — the definition of a column that does not pay for its width.
+
+    What a maintainer actually asks of the queue is *are my children on what I
+    think they are*, and that is a question about the set, not about any one
+    row. Counted and sorted by count, so the outlier — the one child on a
+    cheaper model, or the one still on the expensive default — reads at the
+    end of the line.
+
+    Still printed when every session agrees: "all of them are on X" is the
+    answer to the question, and a line that vanishes whenever the answer is
+    uniform teaches the reader to distrust its absence. Omitted only when
+    nothing on disk records a model at all — an older Claude Code, or a queue
+    of sessions this dispatcher never saw.
+    """
+    counts: dict[str, int] = {}
+    for s in sessions:
+        if s.model:
+            counts[s.model] = counts.get(s.model, 0) + 1
+    if not counts:
+        return ""
+    parts = [
+        f"{model} ×{count}" if count > 1 else model
+        for model, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    return "  modelos: " + ", ".join(parts)
+
+
 def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> str:
     """Render the whole queue, blocked first.
 
@@ -259,6 +294,9 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> st
             lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {s.needs or s.detail or '—'}")
         lines.append("")
 
+    models = _models(sessions)
+    if models:
+        lines.append(models)
     if waiting:
         lines.append(f"  attach: claude attach {waiting[0].short_id}")
     if abandoned:

@@ -47,6 +47,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     issues = list(getattr(args, "issues", []) or [])
     contract_path = getattr(args, "contract", None)
+    model = getattr(args, "model", None) or None
 
     # Before the git check, not after: printing the format spawns nothing, and
     # it is the one thing someone runs *before* they have a repo to dispatch
@@ -82,10 +83,10 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         # functions of the issue numbers, so the plan can be checked first.
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
-            print(f"#{issue}  {core.branch_name(issue)}  {tree}")
+            print(f"#{issue}  {core.branch_name(issue)}  {tree}{_model_suffix(model)}")
         return 0
 
-    return _report(core.dispatch_all(issues, repo_root=root))
+    return _report(core.dispatch_all(issues, repo_root=root, model=model))
 
 
 def _print_example(contract_path: str | None) -> int:
@@ -119,6 +120,18 @@ def _print_example(contract_path: str | None) -> int:
     return 0
 
 
+def _model_suffix(model: str | None) -> str:
+    """``"  [haiku]"``, or nothing when no model was chosen (#268).
+
+    Nothing rather than ``[default]``: a dispatch that names no model is the
+    unchanged case, and a word in the column would make every line claim a
+    choice nobody made. The resolved id is not invented here either — it lives
+    on the machine's settings, and ``mnemo sessions`` reads it back off the
+    child's own ``state.json`` once the child exists.
+    """
+    return f"  [{model}]" if model else ""
+
+
 def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> int:
     """Read, validate, then dispatch — refusing before any tree is created."""
     from mnemo.core import contracts
@@ -134,16 +147,22 @@ def _dispatch_contract(path: str, *, root: Path, args: argparse.Namespace) -> in
         print(f"contract unusable: {path}: {exc}")
         return 1
 
+    model = getattr(args, "model", None) or None
+
     if getattr(args, "dry_run", False):
         for piece in contract.pieces:
             target = f"c-{piece.slug}"
             tree = core.worktree_path(target, repo_root=root)
             branch = core.branch_name(target, feature=contract.feature)
-            print(f"{piece.slug}  {branch}  {tree}")
+            # The piece's own model wins, exactly as it will at spawn — so a
+            # dry run shows what would actually be spent per child, which is
+            # the one question the flag creates.
+            print(f"{piece.slug}  {branch}  {tree}"
+                  f"{_model_suffix(piece.model or model)}")
         return 0
 
     try:
-        results = core.dispatch_contract(contract, repo_root=root)
+        results = core.dispatch_contract(contract, repo_root=root, model=model)
     except core.DispatchError as exc:
         print(str(exc))
         return 1
@@ -166,7 +185,8 @@ def _report(results: list) -> int:
     failed = [r for r in results if r.error is not None]
 
     for r in started:
-        print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}")
+        print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}"
+              f"{_model_suffix(getattr(r, 'model', None))}")
         if r.warning:
             # The child is running — the tree was kept for it — but something
             # about the `claude` CLI did not look as expected (#235). Printed

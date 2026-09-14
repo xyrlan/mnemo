@@ -123,6 +123,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "redirect it to a file to start one")
     dispatch_p.add_argument("--dry-run", dest="dry_run", action="store_true",
                             help="print the worktree and branch per child without spawning")
+    # No default and no allowlist: omitted, the spawn is the byte-identical
+    # command it was before, and the child resolves whatever the machine's
+    # settings say. Claude Code owns the vocabulary of model ids (#268).
+    dispatch_p.add_argument("--model", metavar="MODEL",
+                            help="model every child of this dispatch runs on "
+                                 "(alias like haiku/sonnet/opus, or a full id); "
+                                 "a contract piece's own `model:` wins over it")
     deliver_p = sub.add_parser(
         "deliver",
         help="review what a dispatch produced, or push + open a PR for named children")
