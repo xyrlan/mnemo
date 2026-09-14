@@ -120,6 +120,8 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
     # Normalized here too: the stored cwd may be the canonical form while the
     # live one arrives through a worktree symlink. See jobs.normalize_cwd.
+    # The scope is a repo and its dispatch worktrees, not one directory — see
+    # jobs.in_scope for why equality hid every child this tool exists for.
     scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
 
     def _read():
@@ -188,4 +190,19 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
     found = _read()
     print(render_queue(found, _activities(found)))
+    if not found and scope is not None:
+        # An empty scoped queue and an empty machine render identically, and
+        # the first one is a lie by omission: #281 sat on four waiting
+        # sessions — one blocked five hours — because the queue said nothing
+        # and nothing reads as "nothing is running". Only the *count* is
+        # printed; listing them here would quietly make `--all` the default.
+        #
+        # The second read costs one pass over the jobs dir, and only on the
+        # path where there is nothing else to show.
+        try:
+            elsewhere = len(read_sessions())
+        except Exception:
+            elsewhere = 0
+        if elsewhere:
+            print(f"  {elsewhere} em outros diretórios (mnemo sessions --all)")
     return 0

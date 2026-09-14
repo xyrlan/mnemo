@@ -227,6 +227,51 @@ def normalize_cwd(path: str | None) -> str | None:
         return path
 
 
+def _repo_root(path: str | None) -> str | None:
+    """The repo a dispatch worktree belongs to, or *path* when it is not one.
+
+    ``dispatch.worktree_path`` puts a child in ``<repo>-wt-<issue>`` beside
+    the repo it came from, so the directory name carries the parent's identity
+    and nothing has to be written down to recover it.
+
+    Only the two shapes dispatch itself writes are folded — the parsing is
+    ``dispatch.issue_for_cwd``, whose regex is anchored so a hand-made
+    ``mnemo-wt-feature`` stays its own scope. A prefix match would be the
+    obvious shortcut and is wrong: it files ``clubinho-old`` under
+    ``clubinho``, putting an unrelated repo's sessions in this queue.
+    """
+    if not path:
+        return None
+    from mnemo.core.dispatch import WORKTREE_SUFFIX, issue_for_cwd
+
+    if issue_for_cwd(path) is None:
+        return path
+    # `-wt-` cannot be absent here: issue_for_cwd matched on it.
+    return str(path).rstrip("/").rsplit(WORKTREE_SUFFIX, 1)[0]
+
+
+def in_scope(session_cwd: str | None, scope: str | None) -> bool:
+    """Whether a session started in *session_cwd* belongs to *scope*'s queue.
+
+    A repo and its dispatch worktrees are **one** queue: the maintainer types
+    ``mnemo sessions`` in ``~/github/clubinho`` and every child it dispatched
+    lives in ``~/github/clubinho-wt-<issue>``. Comparing the two directories
+    for equality — what this did until #281 — prints an empty queue while a
+    child sits blocked asking a question, and an empty queue reads as "nothing
+    is running". The bug was not that the filter was wrong; it was that being
+    wrong looked exactly like being right.
+
+    Both sides are folded to their repo, so the relation is symmetric: a child
+    running this inside its own worktree sees its siblings, and still sees
+    itself. A session with no recorded ``cwd`` never matches a scoped query.
+    """
+    if scope is None:
+        return True
+    if session_cwd is None:
+        return False
+    return _repo_root(normalize_cwd(session_cwd)) == _repo_root(scope)
+
+
 def read_sessions(root: Path | None = None, *, cwd: str | None = None,
                   claude_home: Path | None = None) -> list[Session]:
     """Every readable background session under *root* (default: real jobs dir).
@@ -234,8 +279,8 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None,
     Unreadable or malformed entries are skipped, never raised: one corrupt
     file must not take out the whole listing, and a directory we cannot list
     at all reads the same as one that is not there. Pass *cwd* to keep only
-    sessions started under that directory; both sides are normalized, and a
-    session with no recorded ``cwd`` never matches a scoped query.
+    sessions belonging to that directory's queue — the directory itself and
+    the dispatch worktrees beside it, see :func:`in_scope`.
 
     Each session is stamped with ``live`` from the daemon roster (#196). The
     roster is read **once** for the whole listing: the statusline calls this
@@ -276,7 +321,7 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None,
         if not isinstance(data, dict):
             continue
         session = _parse(entry.name, data)
-        if cwd is not None and normalize_cwd(session.cwd) != scope:
+        if cwd is not None and not in_scope(session.cwd, scope):
             continue
         if roster is not None:
             session = replace(session, live=_liveness.is_live(entry.name, roster=roster))
