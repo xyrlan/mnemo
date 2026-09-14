@@ -80,6 +80,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A dispatch child stopped after its worktree was removed no longer files
+  its briefing under `bots/<repo>-wt-N/`.** (#247) #225 made every naming
+  path canonical, and the `session_end` hook's log line did use the name
+  session_start had cached. Its briefing and proposer helpers, though, still
+  re-resolved the agent from the hook's `cwd` on their own — a decision from
+  when the cache held the naive name. The dispatcher's normal sequence is
+  merge the PR, `git worktree remove --force` the tree, then `claude stop`
+  the child, so by the time SessionEnd fires the cwd is a path with nothing
+  on disk; the resolver finds no `.git` above it and returns the basename.
+  On 2026-09-13 that wrote `bots/mnemo-wt-236/briefings/` 55 seconds after
+  the tree was gone, while the "session ended" line beside it went under
+  `bots/mnemo/`. Both helpers now take the name `main()` resolved (session
+  cache first, canonical resolution only on a miss), and `cwd` is used
+  solely to find the transcript, which outlives the tree. Regression tests
+  drive the hook from a removed `_make_worktree` and assert the spawned
+  briefing names the main repo.
+
 - **The first-run backfill's default is one value everywhere, and a finished
   sweep now says so.** `backfill.autoOnFirstSession` has been `false` in
   `config.DEFAULTS` since 1.1.0, and the README and `docs/configuration.md`

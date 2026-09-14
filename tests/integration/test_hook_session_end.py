@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import sys
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from mnemo.core import session
+from mnemo.core import agent, session
 from mnemo.hooks import session_end
 
 
@@ -73,4 +76,49 @@ def test_session_end_cache_miss_logs_under_canonical_project(
     assert rc == 0
     today = f"{date.today().isoformat()}.md"
     assert (hook_env / "bots" / "wtrepo" / "logs" / today).exists()
+    assert not (hook_env / "bots" / "wtrepo-feature-x").exists()
+
+
+def test_session_end_briefing_keeps_the_cached_name_after_the_tree_is_removed(
+    hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """#247: the briefing must not re-resolve the agent from a cwd that is gone.
+
+    The sequence on 2026-09-13 (dispatcher transcript ``24d4dc06``): PR merged
+    21:40, ``git worktree remove --force ../mnemo-wt-236`` 21:41,
+    ``claude stop 23b62795`` 21:42. SessionEnd then fired with
+    ``cwd=~/github/mnemo-wt-236`` and nothing on disk at that path. The log
+    line used the name session_start had cached (``mnemo``); the briefing
+    re-resolved from the dead cwd, found no ``.git`` above it, and got the
+    basename back (``mnemo-wt-236``) — one orphan namespace per stopped child.
+    """
+    worktree = _make_worktree(tmp_path, repo_name="wtrepo")
+    # What session_start records, while the tree still exists.
+    session.save("wt-gone", asdict(agent.resolve_canonical_agent(str(worktree))))
+    # The transcript lives at the path Claude Code derives from the cwd string,
+    # and outlives the tree.
+    encoded = str(worktree).replace(os.sep, "-")
+    jsonl = Path.home() / ".claude" / "projects" / encoded / "wt-gone.jsonl"
+    jsonl.parent.mkdir(parents=True)
+    jsonl.write_text("{}\n", encoding="utf-8")
+    (hook_env / "mnemo.config.json").write_text(
+        json.dumps({"vaultRoot": str(hook_env), "briefings": {"enabled": True}}),
+        encoding="utf-8",
+    )
+    shutil.rmtree(worktree)  # `git worktree remove --force` leaves nothing behind
+
+    spawned: dict[str, str] = {}
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_briefing",
+        lambda _jsonl, agent_name: spawned.update(agent=agent_name),
+    )
+    payload = json.dumps(
+        {"session_id": "wt-gone", "reason": "other", "cwd": str(worktree)}
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert session_end.main() == 0
+
+    today = f"{date.today().isoformat()}.md"
+    assert (hook_env / "bots" / "wtrepo" / "logs" / today).exists()
+    assert spawned["agent"] == "wtrepo"
     assert not (hook_env / "bots" / "wtrepo-feature-x").exists()

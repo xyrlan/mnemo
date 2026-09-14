@@ -432,10 +432,11 @@ def test_schedule_briefing_spawns_when_enabled_and_jsonl_exists(tmp_path, monkey
 
     session_end._maybe_schedule_briefing(cfg, vault, "agent_a", session_id="sidA", cwd="/tmp/cwd")
     assert len(called) == 1
-    # Briefing writer resolves the canonical agent from cwd (not from agent_name).
-    # `/tmp/cwd` has no .git, so resolve_canonical_agent falls back to resolve_agent,
-    # which derives the agent name from the cwd basename: "cwd".
-    assert called[0][1] == "cwd"
+    # The storage agent is the name main() resolved for the session (#247);
+    # cwd only locates the transcript. Pre-#247 this re-resolved from cwd and
+    # got "cwd" — the basename of a path with no .git — which is exactly how
+    # a removed worktree became an orphan namespace.
+    assert called[0][1] == "agent_a"
     assert called[0][0].name == "sidA.jsonl"
 
 
@@ -516,9 +517,7 @@ from mnemo.hooks import session_end as se_mod
 def test_maybe_schedule_propose_marks_analyzed_on_success(tmp_path):
     with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=True), \
          patch("mnemo.autopilot.proposer.eos_extractor.analyze_session") as analyze, \
-         patch("mnemo.core.agent.resolve_canonical_agent") as resolve, \
          patch("mnemo.core.session.mark_analyzed") as mark:
-        resolve.return_value.name = "proj-x"
         se_mod._maybe_schedule_propose(
             cfg={}, vault_root=tmp_path, agent_name="proj-x",
             session_id="sid-success", cwd=str(tmp_path),
@@ -541,14 +540,32 @@ def test_maybe_schedule_propose_marks_analyzed_when_kill_switch_off(tmp_path):
 def test_maybe_schedule_propose_swallows_mark_analyzed_failure(tmp_path):
     with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=True), \
          patch("mnemo.autopilot.proposer.eos_extractor.analyze_session"), \
-         patch("mnemo.core.agent.resolve_canonical_agent") as resolve, \
          patch("mnemo.core.session.mark_analyzed", side_effect=OSError("boom")):
-        resolve.return_value.name = "proj-x"
         # Must not raise
         se_mod._maybe_schedule_propose(
             cfg={}, vault_root=tmp_path, agent_name="proj-x",
             session_id="sid-mark-fail", cwd=str(tmp_path),
         )
+
+
+def test_maybe_schedule_propose_keeps_the_cached_project_after_the_tree_is_removed(tmp_path):
+    """#247: same defect as the briefing — never re-resolve from a cwd that is gone.
+
+    A dispatched worktree is removed before its child is stopped, so by the
+    time SessionEnd runs the cwd has no ``.git`` above it and a fresh
+    resolution returns the basename. The project is the name ``main()``
+    resolved (session cache first), not a second look at the tree.
+    """
+    gone = tmp_path / "proj-feature-x"  # removed before SessionEnd; never exists here
+    with patch("mnemo.autopilot.core.kill_switch.is_active", return_value=True), \
+         patch("mnemo.autopilot.proposer.eos_extractor.analyze_session") as analyze, \
+         patch("mnemo.core.session.mark_analyzed"):
+        se_mod._maybe_schedule_propose(
+            cfg={}, vault_root=tmp_path, agent_name="proj",
+            session_id="sid-gone", cwd=str(gone),
+        )
+    analyze.assert_called_once()
+    assert analyze.call_args.kwargs["project"] == "proj"
 
 
 # --- the sweep the module docstring promises (#176) -------------------------
