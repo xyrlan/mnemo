@@ -116,7 +116,9 @@ def test_prompt_never_prescribes_an_approach() -> None:
 
     params = set(inspect.signature(dispatch.build_prompt).parameters)
 
-    assert params == {"issue", "title", "body"}
+    # `repo_root` is context — where this repo keeps its changelog — not a
+    # way in for a preferred solution.
+    assert params == {"issue", "title", "body", "repo_root"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:
@@ -203,3 +205,54 @@ def test_an_approach_cannot_reach_a_child_through_the_contract(tmp_path: Path) -
 
     with pytest.raises(contracts.ContractError):
         contracts.parse_contract(target)
+
+
+# --- where the child documents its change: a boundary, not an approach -------
+#
+# Five children dispatched in parallel (#233–#237) touched disjoint code and
+# still conflicted with each other in one file: each added its changelog entry
+# at the top of `## [Unreleased]`. A repo that keeps `changelog.d/` fragments
+# is told to write there; a repo that does not is told nothing, so dispatch in
+# a repo without the convention does not sprout a directory nobody assembles.
+
+
+def test_prompt_sends_the_changelog_entry_to_a_fragment_when_the_repo_keeps_them(
+    tmp_path,
+) -> None:
+    (tmp_path / "changelog.d").mkdir()
+
+    prompt = dispatch.build_prompt(
+        246, title="changelog conflicts", body=ISSUE_BODY, repo_root=tmp_path,
+    )
+
+    assert "changelog.d/246.<section>.md" in prompt
+    assert "do not edit `changelog.md`" in prompt.lower()
+
+
+def test_prompt_says_nothing_about_fragments_when_the_repo_has_none(tmp_path) -> None:
+    prompt = dispatch.build_prompt(
+        246, title="changelog conflicts", body=ISSUE_BODY, repo_root=tmp_path,
+    )
+
+    assert "changelog.d" not in prompt
+
+
+def test_prompt_without_a_repo_root_says_nothing_about_fragments() -> None:
+    prompt = dispatch.build_prompt(246, title="changelog conflicts", body=ISSUE_BODY)
+
+    assert "changelog.d" not in prompt
+
+
+def test_piece_prompt_names_a_fragment_per_piece_when_the_repo_keeps_them(tmp_path) -> None:
+    (tmp_path / "changelog.d").mkdir()
+
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch", repo_root=tmp_path)
+
+    assert "changelog.d/contract-dispatch-parser.<section>.md" in text
+    assert "do not edit `changelog.md`" in text.lower()
+
+
+def test_piece_prompt_says_nothing_about_fragments_when_the_repo_has_none(tmp_path) -> None:
+    text = dispatch.build_piece_prompt(PIECE, feature="contract-dispatch", repo_root=tmp_path)
+
+    assert "changelog.d" not in text

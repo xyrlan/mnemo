@@ -154,3 +154,21 @@ def test_windows_ci_failure_is_not_suppressed():
     # Without this the job inherits GitHub's 6-hour default, so a hang holds a
     # runner slot for most of a day before surfacing as anything.
     assert job.get("timeout-minutes"), "the Windows job needs a timeout"
+
+
+def test_a_release_refuses_to_publish_with_changelog_fragments_pending(jobs: dict):
+    """changelog.d/ is assembled into CHANGELOG.md by hand at release (#246).
+
+    Forgetting is the likely failure, and the tag would then publish a version
+    whose notes sit in files nobody reads. The guard runs in the first publish
+    job, before anything irreversible: the version number is not burned, and
+    the fix is assemble, commit, re-tag.
+    """
+    steps = jobs["publish-pypi"]["steps"]
+    guard = next(
+        (i for i, s in enumerate(steps) if "assemble_changelog.py --fail-if-pending" in s.get("run", "")),
+        None,
+    )
+    assert guard is not None, "publish-pypi has no changelog.d/ guard"
+    publish = next(i for i, s in enumerate(steps) if s.get("name") == "Publish to PyPI")
+    assert guard < publish
