@@ -39,7 +39,10 @@ def test_passes_the_normalized_cwd_to_the_reader(monkeypatch, tmp_path: Path) ->
 
     seen = _run(monkeypatch, str(link) + "/")
 
-    assert seen == [str(real.resolve())]
+    # The scope the queue is read with. An empty result adds a second,
+    # unscoped read to count what is elsewhere (#281), so pin the first —
+    # asserting on the whole list would be pinning that follow-up by accident.
+    assert seen[0] == str(real.resolve())
 
 
 def test_all_passes_no_scope(monkeypatch, tmp_path: Path) -> None:
@@ -342,3 +345,65 @@ def test_append_implies_watch(monkeypatch, capsys, tmp_path: Path, _ticker) -> N
     assert sessions_cmd.cmd_sessions(_watch_args(watch=False, append=True)) == 0
 
     assert "a.py" in capsys.readouterr().out
+
+
+# --- an empty scoped queue must not hide a non-empty machine (#281) --------
+
+
+def _scoped_reads(monkeypatch, scoped, unscoped, cwd="/repo"):
+    """Serve *scoped* to a scoped read and *unscoped* to an unscoped one."""
+    def fake_read_sessions(root=None, *, cwd=None):
+        return scoped if cwd is not None else unscoped
+
+    monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions", fake_read_sessions)
+    monkeypatch.setattr("os.getcwd", lambda: cwd)
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: Path("/vault"))
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.sweep", lambda sessions, *, vault_root: 0
+    )
+
+
+def test_an_empty_scope_names_the_sessions_elsewhere(monkeypatch, capsys) -> None:
+    # The failure #281 recorded: the queue answered "nothing is running" while
+    # four sessions waited, one of them blocked for five hours. Being wrong
+    # looked exactly like being right, so the empty case has to speak.
+    _scoped_reads(monkeypatch, scoped=[], unscoped=[object(), object()])
+
+    args = argparse.Namespace(json=False, watch=False, **{"all": False})
+    assert sessions_cmd.cmd_sessions(args) == 0
+
+    out = capsys.readouterr().out
+    assert "2" in out
+    assert "--all" in out
+
+
+def test_an_empty_machine_says_nothing_extra(monkeypatch, capsys) -> None:
+    # Nothing anywhere: the plain empty line is the whole truth, and a pointer
+    # to `--all` would send the user after a queue that is also empty.
+    _scoped_reads(monkeypatch, scoped=[], unscoped=[])
+
+    args = argparse.Namespace(json=False, watch=False, **{"all": False})
+    assert sessions_cmd.cmd_sessions(args) == 0
+
+    assert "--all" not in capsys.readouterr().out
+
+
+def test_a_non_empty_scope_says_nothing_extra(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "mnemo.core.sessions.render.render_queue", lambda s, a=None: "the queue"
+    )
+    _scoped_reads(monkeypatch, scoped=[object()], unscoped=[object(), object()])
+
+    args = argparse.Namespace(json=False, watch=False, **{"all": False})
+    assert sessions_cmd.cmd_sessions(args) == 0
+
+    assert "--all" not in capsys.readouterr().out
+
+
+def test_the_all_flag_never_points_at_itself(monkeypatch, capsys) -> None:
+    _scoped_reads(monkeypatch, scoped=[], unscoped=[])
+
+    args = argparse.Namespace(json=False, watch=False, **{"all": True})
+    assert sessions_cmd.cmd_sessions(args) == 0
+
+    assert "--all" not in capsys.readouterr().out
