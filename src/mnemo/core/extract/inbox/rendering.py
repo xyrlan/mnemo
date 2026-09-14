@@ -84,6 +84,28 @@ def _render_nested_block(key: str, data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: Frontmatter keys :func:`_render_page` stamps from the run id. They move on
+#: every run by construction, so they are not evidence that a page changed.
+_RUN_STAMPED_KEYS = ("extracted_at:", "extraction_run:", "last_sync:")
+
+
+def _same_but_for_run_stamps(old: str, new: str) -> bool:
+    """True when two renders differ only in their run-id stamps.
+
+    Used by every path that stages a ``.proposed.md`` without writing a state
+    entry (#187 cross-type proposals, #248 user-owned pages): with no entry the
+    unchanged fast path never fires, so an unconditional write would churn an
+    unreviewed proposal on every extract run with only these lines moving.
+    """
+    def strip(text: str) -> list[str]:
+        return [
+            line for line in text.splitlines()
+            if not line.startswith(_RUN_STAMPED_KEYS)
+        ]
+
+    return strip(old) == strip(new)
+
+
 def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
 
