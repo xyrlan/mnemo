@@ -37,3 +37,6 @@ from mnemo.cli.commands.doctor_checks.rules import (  # noqa: F401
     _doctor_check_universal_promotion,
     _doctor_check_unpromoted_universal_candidates,
 )
+from mnemo.cli.commands.doctor_checks.share import (  # noqa: F401
+    _doctor_check_share_published,
+)

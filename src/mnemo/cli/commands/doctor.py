@@ -21,6 +21,7 @@ from mnemo.cli.commands.doctor_checks import (
     orphan_worktree_briefings,
     reflex,
     rules,
+    share,
 )
 from mnemo.cli.parser import command
 
@@ -52,6 +53,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("stripped_enforce",      rules._doctor_check_stripped_enforce),
     ("install_backfill",      install_backfill._doctor_check_install_backfill),
     ("hosts",                 hosts._doctor_check_hosts),
+    ("share_published",       share._doctor_check_share_published),
     ("duplicate_install",     duplicate_install._doctor_check_duplicate_install),
 ]
 
