@@ -93,5 +93,5 @@ def _write_session_report(request):
     terminalreporter = request.config.pluginmanager.get_plugin("terminalreporter")
     if terminalreporter is not None:
         terminalreporter.write_sep("=", "recall report")
-        terminalreporter.write_line(format_report(report))
+        terminalreporter.write_line(format_report(report, results))
         terminalreporter.write_line(f"(written to {_REPORT_PATH})")
