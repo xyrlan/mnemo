@@ -89,15 +89,19 @@ for what it does and how to review the result.
 | `backfill.minFileMutations` | `1` | Sessions that touched fewer files than this are skipped without an LLM call |
 | `backfill.autoOnFirstSession` | `false` | Run the one-time backfill automatically on the first session (off: the first session shows a one-line invitation instead) |
 
-The automatic sweep runs **once per vault**, and only after it finishes: a
-sweep that dies because the `claude` CLI is unreachable leaves the one-shot
-unspent, and the next session tries again.
-
-To upgrade without it ever running:
+The automatic sweep is **off by default**. To opt in:
 
 ```json
-{ "backfill": { "autoOnFirstSession": false } }
+{ "backfill": { "autoOnFirstSession": true } }
 ```
+
+When on, it runs **once per vault**, and only after it finishes: a sweep that
+dies because the `claude` CLI is unreachable leaves the one-shot unspent, and
+the next session tries again. Everything it produces is staged under
+`shared/_inbox/` for review, never promoted — and while those staged pages are
+the only rules in the vault, every session start carries one line saying how
+many are waiting and what to do with them (see the `[mnemo] … staged` notice
+under [What mnemo tells the agent at session start](#what-mnemo-tells-the-agent-at-session-start)).
 
 **The first-run notice.** With `backfill.autoOnFirstSession` left at its
 default `false`, nothing is swept automatically. Instead, the first session in
@@ -204,7 +208,7 @@ self-fix PRs are opened, no outcomes are polled. Set
 
 At `SessionStart` mnemo hands the agent a block of context. Everything in it
 is disclosure — you can read exactly what mnemo is telling the agent on your
-behalf, and each part can be switched off. At most three pieces appear:
+behalf, and each part can be switched off. At most four pieces appear:
 
 1. **The topic envelope** — the list of memory topics available for this
    project, so the agent knows what it can ask for. Controlled by
@@ -214,7 +218,15 @@ behalf, and each part can be switched off. At most three pieces appear:
    shown once per repo when past transcripts are available to backfill and
    `backfill.autoOnFirstSession` is off. See the `backfill` section above.
 
-3. **The learned-rule announcement** — what extraction promoted since this
+3. **The staged-reconstruction notice** — a single line beginning
+   `[mnemo] N rule(s) reconstructed from your past sessions are staged …`,
+   shown while backfilled rules are waiting in `shared/_inbox/` **and the
+   vault has no live rule at all**. It is read from the vault on every
+   session start, with no once-shown marker: it repeats while that is true
+   and stops on its own once you move or delete the staged pages, or any
+   rule goes live. It never promotes anything.
+
+4. **The learned-rule announcement** — what extraction promoted since this
    project last looked, opened by `[mnemo learned since your last session]`
    and closed by `[/mnemo learned]`. One bullet per rule, each ending in its
    undo: `veto: mnemo disable-rule <slug>`. A rule marked `verified` also

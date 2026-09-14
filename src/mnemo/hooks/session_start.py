@@ -275,10 +275,18 @@ def _maybe_schedule_install_backfill(
     try:
         from mnemo.core.backfill import ledger as _ledger
 
+        from mnemo.core.config import DEFAULTS
+
         backfill_cfg = cfg.get("backfill") or {}
         if not backfill_cfg.get("enabled", True):
             return
-        if not backfill_cfg.get("autoOnFirstSession", True):
+        # The fallback is the documented default, read from the one place it
+        # is defined. `load_config` deep-merges DEFAULTS, so in production the
+        # key is always present and a wrong literal here is never exercised —
+        # which is exactly how it sat at the opposite of the docs (#234).
+        if not backfill_cfg.get(
+            "autoOnFirstSession", DEFAULTS["backfill"]["autoOnFirstSession"]
+        ):
             return
 
         if _ledger.load(vault_root).get("installRunDone"):
@@ -360,6 +368,101 @@ def _first_run_notice(vault_root: Path, cfg: dict, project: str) -> str:
         try:
             from mnemo.core import errors as _e
             _e.log_error(vault_root, "session_start.first_run_notice", exc)
+        except Exception:
+            pass
+        return ""
+
+
+def _has_live_rule(shared: Path) -> bool:
+    """True when any rule page sits directly in a live ``shared/<type>/`` dir.
+
+    ``_inbox`` and ``_archive`` (every underscore dir) are not live, and a
+    ``.proposed.md`` sibling is a rewrite, not a rule — same exclusions as
+    ``filters.iter_shared_pages``, without its sorted full walk.
+    """
+    from mnemo.core import filters as _filters
+
+    try:
+        with os.scandir(shared) as dirs:
+            for d in dirs:
+                if not d.is_dir() or d.name.startswith("_"):
+                    continue
+                with os.scandir(d.path) as pages:
+                    for f in pages:
+                        if (
+                            f.is_file()
+                            and f.name.endswith(".md")
+                            and not _filters.is_proposed_sibling(Path(f.path))
+                        ):
+                            return True
+    except OSError:
+        return False
+    return False
+
+
+def _staged_backfill_notice(vault_root: Path) -> str:
+    """One line while reconstructed rules wait in ``_inbox`` and nothing is live.
+
+    The first-run sweep stages everything it produces in ``shared/_inbox/``
+    (backfilled pages are reconstructions and are never auto-promoted), and
+    the reflex injects nothing from there. On a fresh vault that makes the
+    sweep's entire output invisible from inside a session: the vault proper
+    is still empty, so the next session injects nothing, and "the sweep
+    staged twenty rules" is indistinguishable from "mnemo did nothing". The
+    only surface that listed them was ``mnemo doctor`` (#234).
+
+    Deliberately **stateless** — no ``firstRunNoticeShown``-style marker. A
+    once-ever marker is spent the first time its condition is checked, not
+    the first time it is true, which is how #229's warning went silent for
+    three days. This reads the vault every session start and repeats while
+    the condition holds; it stops on its own the moment the user acts,
+    because the review move it asks for (keeper into ``shared/<type>/``, the
+    rest deleted) is what clears it.
+
+    Deliberately **narrow** — only while there is *no live rule at all*. That
+    is the state the issue measured for, and the only one in which silence
+    reads as failure. Once anything is live the user sees injection, and
+    ``doctor`` still lists whatever is staged.
+
+    Read-only: it counts, it never promotes. Fail-silent, like the rest of
+    the session-start path; a single unreadable staged page is skipped, not
+    fatal.
+    """
+    try:
+        from mnemo.core import filters as _filters
+        from mnemo.core.backfill.origin import is_backfill_frontmatter
+
+        shared = Path(vault_root) / "shared"
+        # The common case is a vault with live rules, and it must cost next to
+        # nothing: one look into each live type dir, no full walk. The walk
+        # below is only reached by a vault that is empty apart from _inbox.
+        if _has_live_rule(shared):
+            return ""
+        staged = 0
+        for md in _filters.iter_shared_pages(vault_root, include_inbox=True):
+            rel = md.relative_to(shared).parts[:-1]
+            if _filters.INBOX_DIR not in rel:
+                return ""  # a live rule exists; the vault is no longer empty
+            try:
+                fm = _filters.parse_frontmatter(
+                    md.read_text(encoding="utf-8", errors="replace")
+                )
+            except Exception:
+                continue
+            if is_backfill_frontmatter(fm):
+                staged += 1
+        if not staged:
+            return ""
+        return (
+            f"[mnemo] {staged} rule(s) reconstructed from your past sessions "
+            f"are staged in shared/{_filters.INBOX_DIR}/ and nothing is live yet "
+            "— read each one, move the keepers to shared/<same type>/, delete "
+            "the rest (`mnemo doctor` lists them)."
+        )
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.staged_backfill_notice", exc)
         except Exception:
             pass
         return ""
@@ -585,6 +688,15 @@ def main() -> int:
                 if notice:
                     payload_text = (
                         payload_text + "\n\n" + notice if payload_text else notice
+                    )
+                # What the sweep left waiting, while the vault is otherwise
+                # empty. Same standing as the first-run notice: it is the
+                # only news on exactly the session it exists for.
+                staged_notice = _staged_backfill_notice(vault)
+                if staged_notice:
+                    payload_text = (
+                        payload_text + "\n\n" + staged_notice
+                        if payload_text else staged_notice
                     )
                 # Same rule as the notice: a vault whose only news is a rule it
                 # just learned still has news worth sending.

@@ -3,7 +3,11 @@
 Four things have to be true or the feature silently does nothing for the user
 it exists to help:
 
-1. it fires without being asked, on the first session after install;
+1. it fires on the first session after install when — and only when —
+   ``backfill.autoOnFirstSession`` is on. The flag is off by default
+   (``config.DEFAULTS``), and the hook's own fallback must agree with that
+   default, or a caller handing it a config block without the key gets the
+   opposite of what every document promises (#234);
 2. it does not fire twice — not on the next session, and not from a second
    window opened in the same instant;
 3. it fires **in the session's repo**. ``mnemo backfill --install-run`` picks
@@ -55,6 +59,26 @@ def _recorder(monkeypatch) -> list[dict]:
         session_start, "_spawn_detached_backfill", lambda **kw: calls.append(kw)
     )
     return calls
+
+
+def test_a_config_block_without_the_flag_follows_the_documented_default(vault, monkeypatch):
+    """#234: the fallback for a missing ``autoOnFirstSession`` is the documented one.
+
+    ``load_config`` deep-merges ``DEFAULTS`` so a production config always
+    carries the key, which is exactly why a wrong literal fallback survives:
+    nothing exercises it. Pin it to ``DEFAULTS`` so the two cannot drift.
+    """
+    from mnemo.core.config import DEFAULTS
+
+    assert DEFAULTS["backfill"]["autoOnFirstSession"] is False, "the documented default"
+    calls = _recorder(monkeypatch)
+    cfg = _cfg(vault)
+    del cfg["backfill"]["autoOnFirstSession"]
+
+    session_start._maybe_schedule_install_backfill(cfg, vault, cwd="/repo")
+
+    assert calls == [], "a missing flag must mean the documented default, not the opposite"
+    assert ledger.spawn_lock_age(vault) is None, "nothing launched, so nothing is held"
 
 
 def test_the_suite_wide_spawn_guard_is_active():
