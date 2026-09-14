@@ -399,7 +399,10 @@ def test_ready_reports_an_existing_pr_without_it_blocking_readiness(
 
     What to do about the PR is the caller's decision, not readiness's.
     """
-    monkeypatch.setattr(delivery, "pr_for", lambda b, **kw: "https://x/pull/1")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/1", state="OPEN"),
+    )
     tree = _worktree(repo, "c-delivery", "feat/f/delivery")
     _commit(tree)
 
@@ -431,8 +434,9 @@ def test_pr_lookup_derives_an_issue_branch_when_the_tree_is_gone(
     """
     seen: list[str] = []
     monkeypatch.setattr(
-        delivery, "pr_for",
-        lambda branch, **kw: seen.append(branch) or "https://x/pull/9",
+        delivery, "pr_info",
+        lambda branch, **kw: seen.append(branch)
+        or delivery.PR(url="https://x/pull/9", state="OPEN"),
     )
     from mnemo.core.sessions.jobs import Session
 
@@ -464,7 +468,7 @@ def test_pr_lookup_reads_the_live_branch_off_the_worktree(
     tree = _worktree(repo, "c-delivery", "feat/dispatch-last-metre/delivery")
     seen: list[str] = []
     monkeypatch.setattr(
-        delivery, "pr_for", lambda branch, **kw: seen.append(branch) or None,
+        delivery, "pr_info", lambda branch, **kw: seen.append(branch) or None,
     )
     from mnemo.core.sessions.jobs import Session
 
