@@ -115,11 +115,16 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         print(f"{state.label}: {state.reason}")
         return False
 
-    if state.pr:
+    if state.pr and state.pr_state == "OPEN":
         # Not an error and not a push. Delivering twice would open a duplicate
         # PR for the same branch, and the maintainer who wants the existing
         # one updated can push it themselves — that is a different decision
         # from the one this command takes, and it is already reviewed.
+        #
+        # Only an OPEN one. A MERGED or CLOSED PR on this branch name is a
+        # previous life of the name — `fix/issue-158` was dispatched twice,
+        # two days apart — and the commits ahead of master now are new work
+        # that `gh pr create` will open a new PR for.
         print(f"{state.label}: PR já existe — {state.pr}")
         return False
 

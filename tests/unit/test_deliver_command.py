@@ -44,6 +44,7 @@ def repo(tmp_path: Path) -> Path:
 def no_network(monkeypatch: pytest.MonkeyPatch):
     """Never reach GitHub, and never push. Each test opts in to what it needs."""
     monkeypatch.setattr(delivery, "pr_for", lambda branch, **kw: None)
+    monkeypatch.setattr(delivery, "pr_info", lambda branch, **kw: None)
 
 
 @pytest.fixture
@@ -203,11 +204,35 @@ def test_an_existing_pr_stops_a_second_delivery(
 ) -> None:
     """Delivering twice would open a duplicate PR for the same branch."""
     _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
-    monkeypatch.setattr(delivery, "pr_for", lambda b, **kw: "https://x/pull/7")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/7", state="OPEN"),
+    )
 
     assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 1
     assert pushed == []
     assert "https://x/pull/7" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("state", ["MERGED", "CLOSED"])
+def test_a_dead_pr_on_a_reused_branch_name_does_not_block_delivery(
+    in_repo: Path, pushed: list, monkeypatch, capsys, state: str
+) -> None:
+    """`fix/issue-158` carried PR #192, merged two days before the issue was
+    dispatched again; the second child's work was refused as "PR já existe"
+    against a PR that had already landed. Only an OPEN PR is a duplicate."""
+    _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/192", state=state),
+    )
+    monkeypatch.setattr(delivery, "open_pr", lambda *a, **kw: "https://x/pull/249")
+
+    assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 0
+    assert pushed == [("push", "feat/f/delivery")]
+    out = capsys.readouterr().out
+    assert "https://x/pull/249" in out
+    assert "já existe" not in out
 
 
 def test_a_failed_push_does_not_open_a_pr(in_repo: Path, monkeypatch, capsys) -> None:
@@ -289,7 +314,10 @@ def test_review_names_an_existing_pr_rather_than_hiding_the_row(
 ) -> None:
     """A branch pushed again after review comments is the same row shape."""
     _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
-    monkeypatch.setattr(delivery, "pr_for", lambda b, **kw: "https://x/pull/7")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/7", state="OPEN"),
+    )
 
     deliver.cmd_deliver(_args(review=True))
 

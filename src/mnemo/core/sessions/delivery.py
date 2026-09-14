@@ -78,6 +78,12 @@ class Readiness:
     ahead: int = 0
     diffstat: str = ""
     pr: str | None = None
+    #: ``gh``'s state for ``pr`` — ``OPEN``, ``MERGED``, ``CLOSED`` — or ``""``.
+    #: A branch name gets reused: ``fix/issue-158`` carried PR #192 (merged
+    #: 2026-09-12) and a fresh dispatch of the same issue on 2026-09-14 was
+    #: refused as "PR já existe" against that dead PR. Only an OPEN PR is one
+    #: that delivering again would duplicate.
+    pr_state: str = ""
     reason: str = ""
 
     @property
@@ -329,7 +335,9 @@ def ready(worktree: Path | str, *, repo_root: Path | str) -> Readiness:
     clean = _is_clean(tree)
     ahead = _ahead(branch, worktree=tree)
     stat = _diffstat(branch, worktree=tree) if ahead else ""
-    pr = pr_for(branch, repo_root=repo_root)
+    info = pr_info(branch, repo_root=repo_root)
+    pr = info.url if info else None
+    pr_state = info.state if info else ""
 
     reason = ""
     if not clean and ahead == 0:
@@ -343,7 +351,7 @@ def ready(worktree: Path | str, *, repo_root: Path | str) -> Readiness:
 
     return Readiness(
         worktree=tree, branch=branch, target=target, clean=clean,
-        ahead=ahead, diffstat=stat, pr=pr, reason=reason,
+        ahead=ahead, diffstat=stat, pr=pr, pr_state=pr_state, reason=reason,
     )
 
 
