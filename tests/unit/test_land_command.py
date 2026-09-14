@@ -288,3 +288,31 @@ def test_land_defaults_to_the_read_only_view() -> None:
 
     assert args.merge is False
     assert args.method == "squash"
+
+
+# --- --suite splitting on Windows (#236, windows CI) --------------------------
+
+
+def test_split_suite_keeps_windows_paths_and_unquotes_code():
+    """POSIX splitting ate the backslashes of an unquoted interpreter path
+    (`WinError 2` on the windows job); non-POSIX splitting keeps them but
+    also keeps the quotes, which would hand `-c` a string literal."""
+    cmd = r'C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe -c "import sys; sys.exit(0)"'
+    assert land.split_suite(cmd, windows=True) == [
+        r"C:\hostedtoolcache\windows\Python\3.11.9\x64\python.exe",
+        "-c",
+        "import sys; sys.exit(0)",
+    ]
+    # The default, which `shlex.quote` wraps in single quotes on every OS.
+    quoted = r"'C:\Python\python.exe' -m pytest -q"
+    assert land.split_suite(quoted, windows=True) == [r"C:\Python\python.exe", "-m", "pytest", "-q"]
+    # POSIX is untouched: same input, the shell's rules.
+    assert land.split_suite("python -c 'import sys; sys.exit(0)'", windows=False) == [
+        "python", "-c", "import sys; sys.exit(0)",
+    ]
+
+
+def test_split_suite_posix_reproduces_the_windows_failure():
+    """The pre-fix behaviour, pinned so the reason for the branch stays visible."""
+    cmd = r"C:\hostedtoolcache\python.exe -c x"
+    assert land.split_suite(cmd, windows=False)[0] == "C:hostedtoolcachepython.exe"

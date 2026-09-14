@@ -31,6 +31,7 @@ landed as a PR, and it is sequential by nature.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -43,6 +44,31 @@ from mnemo.cli.parser import command
 # PYTHONPATH when there is one, so a src-layout repo tests the merged tree
 # and not whatever editable install the interpreter carries.
 DEFAULT_SUITE = f"{shlex.quote(sys.executable)} -m pytest -q"
+
+
+def split_suite(cmd: str, *, windows: bool | None = None) -> list[str]:
+    """``--suite`` as argv, on both path conventions.
+
+    POSIX ``shlex.split`` treats a backslash as an escape, so an unquoted
+    Windows interpreter path — ``C:\\hostedtoolcache\\...\\python.exe`` — comes
+    out with every separator eaten and the suite fails with ``WinError 2``
+    (caught on the windows CI job of #236). On Windows the split runs in
+    non-POSIX mode, which keeps backslashes and also keeps the quotes around
+    a quoted token, so one layer of matching quotes is stripped from each
+    token: ``python -c "import sys; sys.exit(0)"`` reaches ``-c`` as code, not
+    as a string literal. ``windows`` is injectable for the test; production
+    reads ``os.name``.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return shlex.split(cmd)
+    out: list[str] = []
+    for token in shlex.split(cmd, posix=False):
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1]
+        out.append(token)
+    return out
 
 
 def _repo_root() -> Path | None:
@@ -143,7 +169,7 @@ def _land(states, *, root: Path, args: argparse.Namespace, contract_path: str) -
     if all(s.merged for s in states):
         return 0
 
-    suite = shlex.split(str(getattr(args, "suite", None) or DEFAULT_SUITE))
+    suite = split_suite(str(getattr(args, "suite", None) or DEFAULT_SUITE))
     method = str(getattr(args, "method", None) or "squash")
 
     print()
