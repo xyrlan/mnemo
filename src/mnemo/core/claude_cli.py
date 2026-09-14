@@ -207,6 +207,36 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         verified=_V,
     ),
     Assumption(
+        key="daemon-spare-pool",
+        claim=(
+            "The daemon keeps ONE idle pre-warmed process: a `bg-pty-host … "
+            "--bg-spare <x>.claim.sock` whose child is `claude bg-spare`. A "
+            "`--bg` claims it and the daemon spawns its replacement at once "
+            "(every one of 86 `claimed-spare` lines in `daemon.log` is followed "
+            "within 5 ms by exactly one `spare spawned`), so dispatching N "
+            "children leaves one idle spare, not N. A claimed spare keeps its "
+            "argv for life — `ps | grep bg-spare` counts running children too; "
+            "the roster's `workers[<id>].pid` is the host pid and is what tells "
+            "them apart, with `supervisorPid` as the spare's expected parent. "
+            "The daemon itself reaps spares a previous daemon left "
+            "(`orphan-spare reap`) and retires finished children it keeps "
+            "resident (`retire <id>: settled, idle 8h`, sooner with "
+            "`[low memory]`); `claude stop` on a `done` child ends its process "
+            "(8 `settled (killed)` ids still read state=done, none in the "
+            "roster) while leaving state=done. No subcommand, flag or setting "
+            "drains or caps the pool (`claude daemon --help`, `claude --help`), "
+            "and killing the spare only makes the daemon spawn another, so "
+            "mnemo reports it and retires nothing."
+        ),
+        used_by="doctor background_processes via sessions.residents.census",
+        verified=f"{VERIFIED_AGAINST} on 2026-09-14",
+        how=(
+            "hand measurement (#280): daemon.log vs roster.json vs `ps`; the "
+            "live test checks one idle spare after a spawn and that `stop` "
+            "ends the worker's process"
+        ),
+    ),
+    Assumption(
         key="resume-bifurcates",
         claim=(
             "`claude --resume <id>` on a *running* background session starts "

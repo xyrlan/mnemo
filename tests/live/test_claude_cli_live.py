@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from mnemo.core import child_profile, claude_cli, dispatch
-from mnemo.core.sessions import jobs, liveness
+from mnemo.core.sessions import jobs, liveness, residents
 
 pytestmark = [pytest.mark.live_claude, pytest.mark.real_spawn]
 
@@ -147,6 +147,26 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
         assert short_id in roster, f"daemon-roster-pid: {short_id} not in workers"
         assert session.live is True, "daemon-roster-pid: read_sessions did not stamp live=True"
 
+        # daemon-spare-pool: the spawn claimed the idle spare, the daemon
+        # replaced it, and the census files the child as a worker, not a spare.
+        worker_pid = roster[short_id]
+
+        def _census():
+            table = residents.read_ps()
+            assert table is not None, "daemon-spare-pool: `ps` unreadable"
+            states = {s.short_id: s.state for s in jobs.read_sessions(real_claude / "jobs")}
+            return residents.census(residents.parse_ps(table),
+                                    residents.read_roster_raw(real_claude), states)
+
+        pool = _until(lambda: (lambda c: c if len(c.spares) == 1 else None)(_census()), seconds=15)
+        assert pool, f"daemon-spare-pool: expected one idle spare after a spawn, got {_census().spares}"
+        assert worker_pid in {w.pid for w in pool.workers}, (
+            f"daemon-spare-pool: worker pid {worker_pid} not filed as a worker"
+        )
+        assert worker_pid not in {s.pid for s in pool.spares}, (
+            "daemon-spare-pool: a claimed spare was counted as idle"
+        )
+
         # Let the one-word child finish, then check the terminal vocabulary
         # and the transcript it leaves behind.
         finished = _until(
@@ -214,6 +234,11 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
         assert stop.returncode == 0, f"stop-rm-noninteractive: stop rc={stop.returncode} {stop.stderr!r}"
         after = _state(state_path)
         assert after and after.get("state") in ("done", "stopped") and after.get("tempo") == "idle", after
+        # daemon-spare-pool: stop on a done child ends its process — what the
+        # doctor hint for finished-but-resident children tells a maintainer.
+        assert _until(lambda: not liveness.pid_alive(worker_pid), seconds=30), (
+            f"daemon-spare-pool: `claude stop` left worker pid {worker_pid} running"
+        )
     finally:
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)

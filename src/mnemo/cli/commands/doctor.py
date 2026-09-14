@@ -13,6 +13,7 @@ from pathlib import Path
 
 from mnemo.cli.commands.doctor_checks import (
     activation,
+    background_processes,
     duplicate_install,
     fidelity,
     hosts,
@@ -57,6 +58,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("share_published",       share._doctor_check_share_published),
     ("stale_citations",       stale._doctor_check_stale_citations),
     ("duplicate_install",     duplicate_install._doctor_check_duplicate_install),
+    ("background_processes",  background_processes._doctor_check_background_processes),
 ]
 
 
