@@ -389,6 +389,15 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="write each rule's whole body (default: its first paragraph and your quote)")
     export.add_argument("--dry-run", action="store_true", help="print the block, write nothing")
     export.add_argument("--remove", action="store_true", help="delete the exported file / block and its manifest")
+    publish = sub.add_parser(
+        "publish",
+        help="write this repo's rules into the repo (.mnemo-shared/) for a teammate's `mnemo import`",
+    )
+    publish.add_argument("--project", default=None, help="publish another project's rules instead of the cwd's")
+    publish.add_argument("--types", default="feedback",
+                         help="page types to include (default: feedback; user pages carry names and emails)")
+    publish.add_argument("--dry-run", action="store_true", help="print what would change, write nothing")
+    publish.add_argument("--remove", action="store_true", help="delete this vault's published files and the manifest")
     disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
     sub.add_parser("list-enforced", help="audit rules with enforce blocks (can block tool calls)")

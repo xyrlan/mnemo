@@ -151,6 +151,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_numbers_status(vault)
     _print_learned_status(vault)
     _print_export_status(vault)
+    _print_publish_status(vault)
     return 0
 
 
@@ -246,6 +247,35 @@ def _print_export_status(vault: Path) -> None:
     noun = "rule" if total == 1 else "rules"
     state = "up to date" if differing == 0 else f"{differing} differ from the vault now, run mnemo export"
     print(f"\nExport: {total} {noun} → {data.get('path')} ({state})")
+
+
+def _print_publish_status(vault: Path) -> None:
+    """One line when this project has a published rules tree (``mnemo publish``):
+    how many rules, where, and whether the vault has moved on since. Silent when
+    never published, or when the tree cannot be judged from here."""
+    import os as _os
+    from mnemo.core.agent import resolve_agent
+    from mnemo.core.share import publish as publish_mod
+
+    project = _current_project()
+    if not project:
+        return
+    data = publish_mod.read_manifest(vault, project)
+    if not data:
+        return
+    try:
+        from mnemo.cli.commands.export import configured_universal_threshold
+        repo_root = Path(resolve_agent(_os.getcwd()).repo_root)
+        stale = publish_mod.staleness(vault, project=project, repo_root=repo_root,
+                                      universal_threshold=configured_universal_threshold())
+    except Exception:  # noqa: BLE001 — a status line is not worth a traceback
+        return
+    if stale is None:
+        return
+    total, differing = stale
+    noun = "rule" if total == 1 else "rules"
+    state = "up to date" if differing == 0 else f"{differing} differ from the vault now, run mnemo publish"
+    print(f"\nPublished: {total} {noun} → {data.get('path')} ({state})")
 
 
 def _print_hosts_status() -> None:
