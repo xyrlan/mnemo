@@ -74,6 +74,6 @@ def cmd_recall(args: argparse.Namespace) -> int:
     if use_json:
         print(_json.dumps(payload, indent=2))
     else:
-        print(format_report(report))
+        print(format_report(report, results))
         print(f"\n(written to {report_path})")
     return 0

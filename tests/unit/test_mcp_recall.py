@@ -236,6 +236,29 @@ class TestAggregate:
         # MRR = (1/1 + 1/2 + 1/4 + 0) / 4 = 1.75 / 4 = 0.4375
         assert r["mrr"] == pytest.approx(0.4375)
 
+    def test_buried_is_split_from_absent(self) -> None:
+        """#158: every historical "miss" was a rule *returned* at rank 6–65,
+        never one missing from the result. The report must say which."""
+        results = [
+            self._result("top", 1),
+            self._result("six", 6),
+            self._result("deep", 11),
+            self._result("gone", None),
+        ]
+        r = aggregate(results)
+        assert r["buried"] == ["six", "deep"]   # returned, outside top-5
+        assert r["absent"] == ["gone"]          # not returned at all
+        assert r["buried_rank_max"] == 11
+        # ``misses`` keeps its rank>10-or-absent meaning for the autopilot
+        # digest and miss collector, which read it by name.
+        assert r["misses"] == ["deep", "gone"]
+
+    def test_buried_rank_max_is_none_when_nothing_is_buried(self) -> None:
+        r = aggregate([self._result("a", 1), self._result("b", None)])
+        assert r["buried"] == []
+        assert r["absent"] == ["b"]
+        assert r["buried_rank_max"] is None
+
     def test_p95_reflects_slowest(self) -> None:
         latencies = [1.0, 2.0, 3.0, 4.0, 100.0]
         results = [self._result(f"c{i}", 1, l) for i, l in enumerate(latencies)]
@@ -278,8 +301,34 @@ class TestFormatReport:
             "elapsed_ms": 1.0,
         }])
         out = format_report(report)
-        assert "misses (1)" in out
+        assert "misses (1, rank > 10 or absent)" in out
         assert "- gone" in out
+
+    def test_outside_top5_line_separates_buried_from_absent(self) -> None:
+        """#158: the headline must not let a buried rule read as a missing one."""
+        def _r(id_, rank, n):
+            return {
+                "id": id_, "project": "p", "topic": "t", "expect_slug": "s",
+                "hit": rank is not None and rank <= 10, "rank": rank,
+                "result_count": n, "elapsed_ms": 1.0,
+            }
+        results = [_r("top", 1, 20), _r("six", 6, 20), _r("deep", 34, 41), _r("gone", None, 0)]
+        out = format_report(aggregate(results), results)
+        assert "outside top-5      : 3 = buried 2 (rank 6–34) + absent 1" in out
+        # each listed miss says where the rule actually sat, and in how many
+        assert "- deep  rank 34/41" in out
+        assert "absent (1):" in out
+        assert "- gone" in out
+
+    def test_outside_top5_line_omits_range_when_nothing_buried(self) -> None:
+        results = [{
+            "id": "ok", "project": "p", "topic": "t", "expect_slug": "s",
+            "hit": True, "rank": 1, "result_count": 1, "elapsed_ms": 1.0,
+        }]
+        out = format_report(aggregate(results), results)
+        assert "outside top-5      : 0 = buried 0 + absent 0" in out
+        assert "rank 1–" not in out
+        assert "absent (" not in out
 
     def test_footer_when_below_threshold(self) -> None:
         report = aggregate(

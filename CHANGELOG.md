@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`mnemo recall` now says whether a missed rule was buried or absent.**
+  Every "miss" the harness has ever reported was a rule that *was* returned,
+  at rank 6–65, never one missing from the list — but the report only
+  printed `misses (45):` and a bare id, which reads as "not found" and led
+  one design (#154) to build reach the vault did not need. The report now
+  carries `buried` (returned, rank > 5) and `absent` (rank None) as separate
+  lists, prints `outside top-5 : N = buried B (rank 6–max) + absent A` under
+  the headline, and shows `rank 34/41` next to each listed miss. `misses`
+  keeps its rank-over-ten meaning, since the autopilot digest and miss
+  collector read it by name. (#158)
+
 - **The `claude` CLI behaviours dispatch depends on are now stated in one
   place, tested against the installed binary, and loud when they break.**
   `mnemo dispatch`, `mnemo sessions` and `mnemo deliver` rely on things Claude

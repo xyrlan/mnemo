@@ -90,6 +90,11 @@ class Report(TypedDict):
     mrr: float
     p95_latency_ms: float
     misses: list[str]  # case ids with rank > 10 (or absent)
+    # #158: a "miss" is almost never a rule that was not returned. Both lists
+    # are disjoint and together cover every case outside the top 5.
+    buried: list[str]  # returned, but at rank > 5
+    absent: list[str]  # not in the returned list at all (rank None)
+    buried_rank_max: int | None  # deepest rank among ``buried``; None if empty
     log_entries: int | None  # size of the access log at measurement time
     phase3_threshold: int  # ranking-change unlock threshold (log entries)
     orphan_dropped: int  # bootstrap pairs whose expect_slug is no longer in the vault
@@ -406,6 +411,9 @@ def aggregate(
     )
     p95 = _percentile([r["elapsed_ms"] for r in results], 95.0)
     misses = [r["id"] for r in results if r["rank"] is None or r["rank"] > 10]
+    buried = [r["id"] for r in results if r["rank"] is not None and r["rank"] > 5]
+    absent = [r["id"] for r in results if r["rank"] is None]
+    buried_ranks = [r["rank"] for r in results if r["rank"] is not None and r["rank"] > 5]
     queried = [r for r in results if r.get("query")]
     unqueried = [r for r in results if not r.get("query")]
     return {
@@ -419,6 +427,9 @@ def aggregate(
         "mrr": round(mrr, 4),
         "p95_latency_ms": round(p95, 3),
         "misses": misses,
+        "buried": buried,
+        "absent": absent,
+        "buried_rank_max": max(buried_ranks) if buried_ranks else None,
         "log_entries": log_entries,
         "phase3_threshold": PHASE3_THRESHOLD,
         "orphan_dropped": orphan_dropped,
@@ -427,8 +438,13 @@ def aggregate(
     }
 
 
-def format_report(report: Report) -> str:
-    """Human-readable one-screen summary."""
+def format_report(report: Report, results: list[CaseResult] | None = None) -> str:
+    """Human-readable one-screen summary.
+
+    When *results* is given, each listed miss also shows the rank the rule
+    actually held and the size of the list it was returned in — so a reader
+    sees "rank 34/41" and not a rule that was never found (#158).
+    """
     lines = [
         f"cases              : {report['cases']}",
         f"primacy@3 / @5 /@10: {report['primacy_at_3']} / {report['primacy_at_5']} / {report['primacy_at_10']}",
@@ -436,6 +452,16 @@ def format_report(report: Report) -> str:
         f"MRR                : {report['mrr']:.4f}",
         f"p95 latency        : {report['p95_latency_ms']:.2f} ms",
     ]
+    buried = report.get("buried", [])
+    absent = report.get("absent", [])
+    rank_max = report.get("buried_rank_max")
+    buried_txt = f"buried {len(buried)}"
+    if buried and rank_max is not None:
+        buried_txt += f" (rank 6–{rank_max})"
+    lines.append(
+        f"outside top-5      : {len(buried) + len(absent)} = {buried_txt} + absent {len(absent)}"
+    )
+    where = {r["id"]: (r["rank"], r["result_count"]) for r in (results or [])}
     queried = report.get("queried")
     if queried and queried["cases"]:
         unq = report["unqueried"]
@@ -451,8 +477,14 @@ def format_report(report: Report) -> str:
     if orphan:
         lines.append(f"orphan cases dropped: {orphan}")
     if report["misses"]:
-        lines.append(f"misses ({len(report['misses'])}):")
+        lines.append(f"misses ({len(report['misses'])}, rank > 10 or absent):")
         for m in report["misses"]:
+            rank, n = where.get(m, (None, None))
+            suffix = f"  rank {rank}/{n}" if rank is not None else ""
+            lines.append(f"  - {m}{suffix}")
+    if absent:
+        lines.append(f"absent ({len(absent)}):")
+        for m in absent:
             lines.append(f"  - {m}")
     n = report.get("log_entries")
     if n is not None:
