@@ -26,11 +26,11 @@ def _make_worktree(tmp_path: Path) -> tuple[Path, Path]:
     git_dir.mkdir()
     wt_gitdir = git_dir / "worktrees" / "feature-x"
     wt_gitdir.mkdir(parents=True)
-    (wt_gitdir / "commondir").write_text("../..\n")
+    (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
 
     worktree = tmp_path / "proj-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n")
+    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
     return main, worktree
 
 

@@ -18,7 +18,7 @@ _MNemo = ".mnemo"
 
 def _write_jsonl(path: Path, entries: list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
 def _iso(ts: str) -> datetime:
@@ -48,7 +48,7 @@ def test_read_mcp_access_log_filters_by_since(tmp_path: Path):
 def test_read_mcp_access_log_skips_malformed(tmp_path: Path):
     path = tmp_path / _MNemo / "mcp-access-log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"timestamp": "2026-04-25T00:00:00Z"}\n{invalid}\n')
+    path.write_text('{"timestamp": "2026-04-25T00:00:00Z"}\n{invalid}\n', encoding="utf-8")
     since = _iso("2026-01-01T00:00:00Z")
     result = read_mcp_access_log(tmp_path, since_dt=since)
     assert len(result) == 1
@@ -90,7 +90,7 @@ def test_read_reflex_log_filters_by_since(tmp_path: Path):
 def test_read_reflex_log_skips_malformed(tmp_path: Path):
     path = tmp_path / _MNemo / "reflex-log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"ts": "2026-04-25T00:00:00Z"}\nnot-json\n')
+    path.write_text('{"ts": "2026-04-25T00:00:00Z"}\nnot-json\n', encoding="utf-8")
     since = _iso("2026-01-01T00:00:00Z")
     result = read_reflex_log(tmp_path, since_dt=since)
     assert len(result) == 1
@@ -149,7 +149,7 @@ def test_read_recall_report_valid(tmp_path: Path):
     }
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     result = read_recall_report(tmp_path)
     assert result is not None
     assert result["report"]["primacy_rate_at_5"] == 0.9
@@ -159,6 +159,6 @@ def test_read_recall_report_valid(tmp_path: Path):
 def test_read_recall_report_malformed(tmp_path: Path):
     path = tmp_path / _MNemo / "recall-report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("not-json")
+    path.write_text("not-json", encoding="utf-8")
     result = read_recall_report(tmp_path)
     assert result is None

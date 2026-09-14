@@ -32,7 +32,7 @@ def test_bare_statusline_still_emits_the_segment(capsys, monkeypatch, tmp_path: 
 def test_install_wires_the_composer_into_settings(monkeypatch, tmp_path: Path):
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({"model": "opus"}))
+    settings.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_path)})
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: tmp_path)
@@ -40,7 +40,7 @@ def test_install_wires_the_composer_into_settings(monkeypatch, tmp_path: Path):
     rc = COMMANDS["statusline"](argparse.Namespace(install=True, remove=False))
 
     assert rc == 0
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["statusLine"]["command"].endswith("statusline-compose")
     assert data["model"] == "opus", "unrelated settings must survive"
 
@@ -48,16 +48,16 @@ def test_install_wires_the_composer_into_settings(monkeypatch, tmp_path: Path):
 def test_install_is_idempotent(monkeypatch, tmp_path: Path):
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({}))
+    settings.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_path)})
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: tmp_path)
 
     COMMANDS["statusline"](argparse.Namespace(install=True, remove=False))
-    first = json.loads(settings.read_text())
+    first = json.loads(settings.read_text(encoding="utf-8"))
     COMMANDS["statusline"](argparse.Namespace(install=True, remove=False))
 
-    assert json.loads(settings.read_text()) == first
+    assert json.loads(settings.read_text(encoding="utf-8")) == first
 
 
 def test_install_preserves_an_existing_status_line(monkeypatch, tmp_path: Path):
@@ -66,14 +66,14 @@ def test_install_preserves_an_existing_status_line(monkeypatch, tmp_path: Path):
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "my-own-prompt"}
-    }))
+    }), encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_path)})
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: tmp_path)
 
     COMMANDS["statusline"](argparse.Namespace(install=True, remove=False))
 
-    saved = json.loads((tmp_path / ".mnemo" / "statusline-original.json").read_text())
+    saved = json.loads((tmp_path / ".mnemo" / "statusline-original.json").read_text(encoding="utf-8"))
     assert saved["command"] == "my-own-prompt"
 
 
@@ -82,7 +82,7 @@ def test_remove_restores_what_was_there_before(monkeypatch, tmp_path: Path):
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "my-own-prompt"}
-    }))
+    }), encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {"vaultRoot": str(tmp_path)})
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda cfg: tmp_path)
@@ -90,7 +90,7 @@ def test_remove_restores_what_was_there_before(monkeypatch, tmp_path: Path):
     COMMANDS["statusline"](argparse.Namespace(install=True, remove=False))
     COMMANDS["statusline"](argparse.Namespace(install=False, remove=True))
 
-    assert json.loads(settings.read_text())["statusLine"]["command"] == "my-own-prompt"
+    assert json.loads(settings.read_text(encoding="utf-8"))["statusLine"]["command"] == "my-own-prompt"
 
 
 def test_the_flags_are_reachable_from_the_parser():

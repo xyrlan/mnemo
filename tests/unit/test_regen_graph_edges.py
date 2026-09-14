@@ -206,7 +206,7 @@ def test_refresh_relativizes_absolute_source_paths(tmp_path: Path) -> None:
         ],
     )
     _refresh_one(md, tmp_path)
-    section = md.read_text().split(GRAPH_SECTION_MARKER)[1]
+    section = md.read_text(encoding="utf-8").split(GRAPH_SECTION_MARKER)[1]
 
     assert "[[bots/proj/briefings/sessions/s1]]" in section
     assert "[[bots/proj/briefings/sessions/s2]]" in section
@@ -219,5 +219,5 @@ def test_refresh_leaves_paths_outside_the_vault_alone(tmp_path: Path) -> None:
     inherit that rather than mangle them into a bogus relative link."""
     md = _seed_rule(tmp_path, "outside", sources=["/etc/somewhere/notes.md"])
     _refresh_one(md, tmp_path)
-    section = md.read_text().split(GRAPH_SECTION_MARKER)[1]
+    section = md.read_text(encoding="utf-8").split(GRAPH_SECTION_MARKER)[1]
     assert "[[/etc/somewhere/notes]]" in section

@@ -199,9 +199,9 @@ def test_rule_facts_skips_drafts_like_the_index_does(tmp_path):
     vault = tmp_path / "vault"
     _rule(vault, "live", sources=["bots/a/memory/x.md"], extracted_at="2026-01-01T00:00:00")
     _rule(vault, "evolving", sources=["bots/a/memory/x.md"], extracted_at="2026-01-01T00:00:00")
-    text = (vault / "shared" / "feedback" / "evolving.md").read_text()
+    text = (vault / "shared" / "feedback" / "evolving.md").read_text(encoding="utf-8")
     (vault / "shared" / "feedback" / "evolving.md").write_text(
-        text.replace("stability: stable", "stability: evolving"))
+        text.replace("stability: stable", "stability: evolving"), encoding="utf-8")
 
     facts = R.rule_facts(vault)
     assert set(facts) == {"live"}

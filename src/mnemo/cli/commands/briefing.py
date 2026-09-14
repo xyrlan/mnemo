@@ -44,7 +44,7 @@ def cmd_briefing(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    devnull = open(os.devnull, "w")
+    devnull = open(os.devnull, "w", encoding="utf-8")
     try:
         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
             try:

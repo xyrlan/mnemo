@@ -31,7 +31,7 @@ def plugin_root(tmp_path: Path) -> Path:
     root = tmp_path / "plugin"
     (root / ".claude-plugin").mkdir(parents=True)
     (root / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "mnemo", "version": "9.9.9", "description": "x"})
+        json.dumps({"name": "mnemo", "version": "9.9.9", "description": "x"}), encoding="utf-8"
     )
     (root / "bin").mkdir()
     shutil.copy(LAUNCH, root / "bin" / "launch")
@@ -60,7 +60,7 @@ def install_fake_binary(data_dir: Path, version: str = "9.9.9") -> Path:
     target = f"{'darwin' if sys.platform == 'darwin' else 'linux'}-{arch}"
     binary = data_dir / "bin" / version / target / "mnemo"
     binary.parent.mkdir(parents=True)
-    binary.write_text('#!/usr/bin/env bash\necho "STUB ARGS: $*"\nexit 0\n')
+    binary.write_text('#!/usr/bin/env bash\necho "STUB ARGS: $*"\nexit 0\n', encoding="utf-8")
     binary.chmod(0o755)
     return binary
 
@@ -116,7 +116,7 @@ def test_a_missing_manifest_is_survivable(plugin_root: Path, tmp_path: Path):
 
 
 def test_a_malformed_manifest_is_survivable(plugin_root: Path, tmp_path: Path):
-    (plugin_root / ".claude-plugin" / "plugin.json").write_text("{ not json")
+    (plugin_root / ".claude-plugin" / "plugin.json").write_text("{ not json", encoding="utf-8")
 
     result = run(plugin_root, tmp_path / "data", "hook", "session_start")
 
@@ -128,7 +128,7 @@ def test_cache_is_keyed_by_version_so_an_update_refetches(plugin_root: Path, tmp
     data = tmp_path / "data"
     install_fake_binary(data, version="9.9.9")
     (plugin_root / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "mnemo", "version": "9.9.10", "description": "x"})
+        json.dumps({"name": "mnemo", "version": "9.9.10", "description": "x"}), encoding="utf-8"
     )
 
     result = run(plugin_root, data, "hook", "user_prompt_submit")
@@ -170,13 +170,13 @@ def test_source_checkout_runs_python_when_plugin_root_unset(tmp_path: Path):
     editable source tree instead of fetching a release binary."""
     root = tmp_path / "repo"
     (root / ".claude-plugin").mkdir(parents=True)
-    (root / ".claude-plugin" / "plugin.json").write_text('{"version": "9.9.9"}')
+    (root / ".claude-plugin" / "plugin.json").write_text('{"version": "9.9.9"}', encoding="utf-8")
     (root / "bin").mkdir()
     shutil.copy(LAUNCH, root / "bin" / "launch")
     (root / "src" / "mnemo").mkdir(parents=True)
-    (root / "src" / "mnemo" / "__init__.py").write_text("")
+    (root / "src" / "mnemo" / "__init__.py").write_text("", encoding="utf-8")
     (root / "src" / "mnemo" / "__main__.py").write_text(
-        "import sys; print('SOURCE-TREE', sys.argv[1:])\n"
+        "import sys; print('SOURCE-TREE', sys.argv[1:])\n", encoding="utf-8"
     )
     (root / "src" / "mnemo_claude.egg-info").mkdir()
     env = {
@@ -200,9 +200,9 @@ def test_source_checkout_runs_python_when_plugin_root_unset(tmp_path: Path):
 def test_plugin_root_set_ignores_source_tree(plugin_root: Path, tmp_path: Path):
     """A plugin clone also has src/; only the unset env var opens the dev path."""
     (plugin_root / "src" / "mnemo").mkdir(parents=True)
-    (plugin_root / "src" / "mnemo" / "__init__.py").write_text("")
+    (plugin_root / "src" / "mnemo" / "__init__.py").write_text("", encoding="utf-8")
     (plugin_root / "src" / "mnemo" / "__main__.py").write_text(
-        "print('SOURCE-TREE')\n"
+        "print('SOURCE-TREE')\n", encoding="utf-8"
     )
     (plugin_root / "src" / "mnemo_claude.egg-info").mkdir()
     data = tmp_path / "data"

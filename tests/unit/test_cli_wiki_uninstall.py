@@ -19,7 +19,7 @@ def test_uninstall_removes_hooks_keeps_vault(tmp_home: Path):
     rc = cli.main(["uninstall", "--yes"])
     assert rc == 0
     assert vault.exists()  # vault preserved
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     cmds = [
         h.get("command", "")
         for ev in data.get("hooks", {}).values()

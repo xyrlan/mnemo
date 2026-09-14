@@ -449,7 +449,7 @@ def test_proposed_siblings_are_not_consumer_visible(tmp_path: Path) -> None:
     live = d / "clubinho__deploy.md"
     draft = d / "clubinho__deploy.proposed.md"
     for p in (live, draft):
-        p.write_text("---\nname: Deploy\nslug: clubinho__deploy\ntype: project\n---\n\nbody\n")
+        p.write_text("---\nname: Deploy\nslug: clubinho__deploy\ntype: project\n---\n\nbody\n", encoding="utf-8")
 
     assert is_consumer_visible(live, {}, tmp_path) is True
     assert is_consumer_visible(draft, {}, tmp_path) is False
@@ -461,7 +461,7 @@ def test_update_proposed_siblings_are_not_consumer_visible(tmp_path: Path) -> No
     d = tmp_path / "shared" / "feedback"
     d.mkdir(parents=True)
     draft = d / "use-yarn.update-proposed.md"
-    draft.write_text("---\nname: Use yarn\ntype: feedback\n---\n\nbody\n")
+    draft.write_text("---\nname: Use yarn\ntype: feedback\n---\n\nbody\n", encoding="utf-8")
     assert is_consumer_visible(draft, {}, tmp_path) is False
 
 
@@ -472,9 +472,9 @@ def test_iter_shared_pages_skips_proposed_siblings(tmp_path: Path) -> None:
     activation index."""
     d = tmp_path / "shared" / "project"
     d.mkdir(parents=True)
-    (d / "a.md").write_text("x")
-    (d / "a.proposed.md").write_text("x")
-    (d / "b.update-proposed.md").write_text("x")
+    (d / "a.md").write_text("x", encoding="utf-8")
+    (d / "a.proposed.md").write_text("x", encoding="utf-8")
+    (d / "b.update-proposed.md").write_text("x", encoding="utf-8")
 
     found = {p.name for p in iter_shared_pages(tmp_path)}
     assert found == {"a.md"}

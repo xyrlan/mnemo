@@ -20,20 +20,20 @@ from mnemo.core.atomic import atomic_write_bytes
 def test_writes_content_readably(tmp_path):
     target = tmp_path / "out.json"
     atomic_write_bytes(target, b'{"a": 1}')
-    assert json.loads(target.read_text()) == {"a": 1}
+    assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
 
 
 def test_overwrites_existing_target(tmp_path):
     target = tmp_path / "out.json"
-    target.write_text("old")
+    target.write_text("old", encoding="utf-8")
     atomic_write_bytes(target, b"new")
-    assert target.read_text() == "new"
+    assert target.read_text(encoding="utf-8") == "new"
 
 
 def test_creates_parent_dirs(tmp_path):
     target = tmp_path / "deep" / "nested" / "out.json"
     atomic_write_bytes(target, b"x")
-    assert target.read_text() == "x"
+    assert target.read_text(encoding="utf-8") == "x"
 
 
 def test_each_call_uses_its_own_tmp_file(tmp_path, monkeypatch):
@@ -85,7 +85,7 @@ def test_concurrent_writers_never_raise(tmp_path):
 
     assert errors == []
     # Last write wins; whatever survived must be one writer's intact payload.
-    data = json.loads(target.read_text())
+    data = json.loads(target.read_text(encoding="utf-8"))
     assert set(data) == {"writer", "i"}
 
 

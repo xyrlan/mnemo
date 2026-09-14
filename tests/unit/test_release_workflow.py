@@ -22,7 +22,7 @@ WORKFLOW = REPO / ".github" / "workflows" / "release.yml"
 
 @pytest.fixture(scope="module")
 def jobs() -> dict:
-    return yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
 
 
 def _needs(job: dict) -> set[str]:
@@ -75,7 +75,7 @@ def test_a_manual_run_can_never_publish():
     Every publishing job must therefore be guarded on the ref being a tag —
     otherwise triggering a test build would release from a branch.
     """
-    wf = yaml.safe_load(WORKFLOW.read_text())
+    wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     triggers = wf[True] if True in wf else wf["on"]
     assert "workflow_dispatch" in triggers
 
@@ -86,7 +86,7 @@ def test_a_manual_run_can_never_publish():
 
 def test_the_build_job_is_not_tag_guarded():
     """It is the whole point of a manual run."""
-    wf = yaml.safe_load(WORKFLOW.read_text())
+    wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     assert "if" not in wf["jobs"]["build-binaries"]
 
 
@@ -113,7 +113,7 @@ def test_binary_build_pipes_stdout_before_publishing():
     existing smoke test missed it because it ran the binary on a terminal.
     Redirecting to a file is what reproduces it.
     """
-    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     steps = jobs["build-binaries"]["steps"]
     piped = [s for s in steps if "piped" in str(s.get("name", "")).lower()]
     assert piped, "the binary build must exercise a piped stdout before publishing"
@@ -130,7 +130,7 @@ def test_windows_ci_runs_a_command_end_to_end():
     They never invoke a command end to end, so no assertion could have caught
     it. The CI job needs at least one real run through a pipe.
     """
-    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     steps = ci["jobs"]["windows"]["steps"]
     piped = [s for s in steps if "piped" in str(s.get("name", "")).lower()]
     assert piped, "the Windows CI job must run the CLI through a pipe, not only pytest"
@@ -145,7 +145,7 @@ def test_windows_ci_failure_is_not_suppressed():
     with Windows broken. A regression here is invisible by construction, so
     assert the suppression stays gone.
     """
-    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     job = ci["jobs"]["windows"]
     assert not job.get("continue-on-error"), (
         "the Windows job must be able to fail — `continue-on-error` hides the "

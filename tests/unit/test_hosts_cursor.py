@@ -10,7 +10,7 @@ def test_cursor_registers_global_and_project(tmp_home: Path, tmp_path: Path):
     host = get_host("cursor")
     r = host.register_mcp(project=False, cwd=tmp_path)
     assert Path(r.path) == tmp_home / ".cursor" / "mcp.json" and r.method == "json"
-    data = json.loads((tmp_home / ".cursor" / "mcp.json").read_text())
+    data = json.loads((tmp_home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
     assert data["mcpServers"]["mnemo"]["args"][-1] == "mcp-server"
 
     r2 = host.register_mcp(project=True, cwd=tmp_path)
@@ -25,10 +25,10 @@ def test_cursor_preserves_other_servers_and_unregisters(tmp_home: Path, tmp_path
     p.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
     host = get_host("cursor")
     host.register_mcp(project=False, cwd=tmp_path)
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     assert set(data["mcpServers"]) == {"other", "mnemo"}
     host.unregister_mcp(project=False, cwd=tmp_path)
-    assert set(json.loads(p.read_text())["mcpServers"]) == {"other"}
+    assert set(json.loads(p.read_text(encoding="utf-8"))["mcpServers"]) == {"other"}
 
 
 def test_cursor_export_target_and_describe(tmp_home: Path, tmp_path: Path):

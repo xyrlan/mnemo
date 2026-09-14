@@ -77,7 +77,7 @@ def write_preempt_cache(
         "ttl_minutes": ttl_minutes,
         "branch": branch,
     }
-    _cache_path(vault_root).write_text(json.dumps(data, indent=2, sort_keys=True))
+    _cache_path(vault_root).write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def read_preempt_cache(*, vault_root: Path, cwd: Optional[Path] = None) -> Optional[Dict]:

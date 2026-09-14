@@ -117,7 +117,7 @@ def test_read_log_parses_current_file(tmp_path):
     (vault / ".mnemo").mkdir()
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
     lines = [json.dumps(_entry(tool="a")), json.dumps(_entry(tool="b"))]
-    log.write_text("\n".join(lines) + "\n")
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
     entries = read_log(vault)
     assert [e["tool"] for e in entries] == ["a", "b"]
 
@@ -126,7 +126,7 @@ def test_read_log_skips_malformed_lines(tmp_path):
     vault = tmp_path
     (vault / ".mnemo").mkdir()
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
-    log.write_text(json.dumps(_entry(tool="a")) + "\nnot-json\n" + json.dumps(_entry(tool="b")) + "\n")
+    log.write_text(json.dumps(_entry(tool="a")) + "\nnot-json\n" + json.dumps(_entry(tool="b")) + "\n", encoding="utf-8")
     entries = read_log(vault)
     assert [e["tool"] for e in entries] == ["a", "b"]
 
@@ -134,8 +134,8 @@ def test_read_log_skips_malformed_lines(tmp_path):
 def test_read_log_includes_rotated(tmp_path):
     vault = tmp_path
     (vault / ".mnemo").mkdir()
-    (vault / ".mnemo" / "mcp-access-log.jsonl").write_text(json.dumps(_entry(tool="current")) + "\n")
-    (vault / ".mnemo" / "mcp-access-log.jsonl.1").write_text(json.dumps(_entry(tool="old")) + "\n")
+    (vault / ".mnemo" / "mcp-access-log.jsonl").write_text(json.dumps(_entry(tool="current")) + "\n", encoding="utf-8")
+    (vault / ".mnemo" / "mcp-access-log.jsonl.1").write_text(json.dumps(_entry(tool="old")) + "\n", encoding="utf-8")
     entries = read_log(vault)
     tools = [e["tool"] for e in entries]
     assert set(tools) == {"current", "old"}

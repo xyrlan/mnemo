@@ -57,8 +57,8 @@ def _doctor_check_statusline_drift(vault: Path) -> bool:
             continue
         settings_seen = True
         try:
-            data = _json.loads(settings_path.read_text())
-        except (OSError, _json.JSONDecodeError):
+            data = _json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, _json.JSONDecodeError):
             return True  # other doctor checks will report the malformed file
         current = data.get("statusLine")
         if (

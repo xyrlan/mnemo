@@ -56,7 +56,7 @@ def test_check_settings_false_skips_the_settings_probe(tmp_home: Path):
     """Hosts that never write ~/.claude/settings.json must not be blocked by it."""
     settings = tmp_home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text("{}")
+    settings.write_text("{}", encoding="utf-8")
     settings.chmod(0o444)
     try:
         blocked = preflight.run_preflight(vault_root=tmp_home / "mnemo")

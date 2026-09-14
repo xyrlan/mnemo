@@ -21,11 +21,11 @@ def _make_vault(tmp_path: Path) -> Path:
         "  deny_pattern: 'curl .*example\\.com'\n"
         "  reason: 'blocked'\n"
         "---\n"
-        "Body.\n"
+        "Body.\n", encoding="utf-8"
     )
     (vault / "shared" / "feedback" / "plain-rule.md").write_text(
         "---\nname: plain\ndescription: x\ntype: feedback\n"
-        "sources:\n  - bots/a/memory/b.md\ntags:\n  - demo\n---\nBody\n"
+        "sources:\n  - bots/a/memory/b.md\ntags:\n  - demo\n---\nBody\n", encoding="utf-8"
     )
     return vault
 

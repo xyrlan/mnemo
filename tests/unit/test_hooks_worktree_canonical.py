@@ -34,10 +34,10 @@ def _make_worktree(tmp_path: Path, *, repo_name: str = "myproject") -> Path:
     git_dir.mkdir()
     wt_dir = git_dir / "worktrees" / "feature-x"
     wt_dir.mkdir(parents=True)
-    (wt_dir / "commondir").write_text("../..\n")
+    (wt_dir / "commondir").write_text("../..\n", encoding="utf-8")
     worktree = tmp_path / f"{repo_name}-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {wt_dir}\n")
+    (worktree / ".git").write_text(f"gitdir: {wt_dir}\n", encoding="utf-8")
     return worktree
 
 
@@ -80,7 +80,7 @@ def _enable_reflex(vault: Path, monkeypatch) -> None:
     (vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(vault),
         "reflex": {"enabled": True},
-    }))
+    }), encoding="utf-8")
 
 
 def _run_hook(stdin_payload: dict) -> tuple[int, str]:
@@ -159,7 +159,7 @@ def test_pre_tool_use_enforce_denies_from_worktree(tmp_path, tmp_vault, monkeypa
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "enforcement": {"enabled": True},
-    }))
+    }), encoding="utf-8")
 
     out = io.StringIO()
     payload = {

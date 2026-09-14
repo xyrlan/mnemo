@@ -39,7 +39,7 @@ def test_session_start_records_inject_entry(tmp_path: Path, monkeypatch) -> None
     )
 
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
-    entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
     inj = [e for e in entries if e["tool"] == "session_start.inject"]
     assert len(inj) == 1
     assert inj[0]["included_briefing"] is True

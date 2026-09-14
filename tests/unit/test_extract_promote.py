@@ -13,7 +13,7 @@ def _mk_project_file(tmp_vault: Path, agent: str, stem: str, body: str = "projec
     mem_dir.mkdir(parents=True, exist_ok=True)
     path = mem_dir / f"{stem}.md"
     content = f"---\nname: {stem}\ndescription: desc\ntype: project\n---\n{body}\n"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return scanner._read_memory_file(path, agent=agent)
 
 
@@ -52,7 +52,7 @@ def test_promote_overwrite_when_source_changes(tmp_vault: Path):
     f2 = _mk_project_file(tmp_vault, "a", "project_x", body="v2")
     result = promote.promote_projects([f2], state, tmp_vault)
     target = tmp_vault / "shared" / "project" / "a__x.md"
-    assert "v2" in target.read_text()
+    assert "v2" in target.read_text(encoding="utf-8")
     assert "project/a__x" in result.overwrite_safe
 
 
@@ -62,7 +62,7 @@ def test_promote_sibling_when_user_edits_promoted_file(tmp_vault: Path):
     promote.promote_projects([f], state, tmp_vault)
 
     target = tmp_vault / "shared" / "project" / "a__x.md"
-    target.write_text(target.read_text() + "\n\n(user note)\n")
+    target.write_text(target.read_text(encoding="utf-8") + "\n\n(user note)\n", encoding="utf-8")
 
     f2 = _mk_project_file(tmp_vault, "a", "project_x", body="v2")
     result = promote.promote_projects([f2], state, tmp_vault)
@@ -74,7 +74,7 @@ def test_promote_sibling_when_user_edits_promoted_file(tmp_vault: Path):
     sibling = tmp_vault / "shared" / "_inbox" / "project" / "a__x.proposed.md"
     assert sibling.exists()
     assert not (tmp_vault / "shared" / "project" / "a__x.proposed.md").exists()
-    assert "(user note)" in target.read_text()
+    assert "(user note)" in target.read_text(encoding="utf-8")
     assert len(result.sibling_proposed) == 1
 
 
@@ -100,8 +100,8 @@ def test_promote_namespaces_by_agent(tmp_vault: Path):
     target_a = tmp_vault / "shared" / "project" / "agent-a__same-name.md"
     target_b = tmp_vault / "shared" / "project" / "agent-b__same-name.md"
     assert target_a.exists() and target_b.exists()
-    assert "a body" in target_a.read_text()
-    assert "b body" in target_b.read_text()
+    assert "a body" in target_a.read_text(encoding="utf-8")
+    assert "b body" in target_b.read_text(encoding="utf-8")
 
 
 def test_project_page_includes_runtime_false_marker(tmp_vault: Path):

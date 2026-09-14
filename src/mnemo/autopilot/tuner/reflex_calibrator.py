@@ -258,7 +258,7 @@ def write_reflex_config(config: ReflexConfig, vault_root: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
     try:
-        tmp.write_text(json.dumps(config.to_dict(), indent=2, sort_keys=True))
+        tmp.write_text(json.dumps(config.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, target)
     except OSError:
         if tmp.exists():
@@ -273,7 +273,7 @@ def load_reflex_config(project: str, vault_root: Path) -> Optional[ReflexConfig]
     """Load ReflexConfig from .mnemo/reflex-config.{project}.json. Returns None if missing."""
     path = _reflex_config_path(project, vault_root)
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return ReflexConfig.from_dict(data)
     except (FileNotFoundError, KeyError, ValueError, TypeError):
         return None

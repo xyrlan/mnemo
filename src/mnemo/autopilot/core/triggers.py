@@ -41,14 +41,14 @@ def _read(vault_root: Path) -> dict:
     if not p.exists():
         return {"schema_version": SCHEMA_VERSION, "runs": {}}
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {"schema_version": SCHEMA_VERSION, "runs": {}}
 
 
 def _write(vault_root: Path, data: dict) -> None:
     ensure_autopilot_dir(vault_root)
-    runs_path(vault_root).write_text(json.dumps(data, indent=2, sort_keys=True))
+    runs_path(vault_root).write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def last_run(*, vault_root: Path, name: str) -> Optional[str]:

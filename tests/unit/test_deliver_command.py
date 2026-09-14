@@ -34,7 +34,7 @@ def repo(tmp_path: Path) -> Path:
     _run(["git", "init", "-b", "master"], cwd=root)
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
     _run(["git", "config", "user.name", "t"], cwd=root)
-    (root / "README.md").write_text("base\n")
+    (root / "README.md").write_text("base\n", encoding="utf-8")
     _run(["git", "add", "README.md"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
     return root
@@ -56,7 +56,7 @@ def in_repo(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _ready_tree(repo: Path, target: str, branch: str) -> Path:
     tree = repo.parent / f"mnemo-wt-{target}"
     _run(["git", "worktree", "add", "-b", branch, str(tree)], cwd=repo)
-    (tree / "work.py").write_text("x = 1\n")
+    (tree / "work.py").write_text("x = 1\n", encoding="utf-8")
     _run(["git", "add", "work.py"], cwd=tree)
     _run(["git", "commit", "-m", "work"], cwd=tree)
     return tree
@@ -135,7 +135,7 @@ def test_a_tree_that_is_not_ready_is_refused_never_pushed(
     in_repo: Path, pushed: list, capsys
 ) -> None:
     tree = _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
-    (tree / "dirty.py").write_text("x = 2\n")  # uncommitted
+    (tree / "dirty.py").write_text("x = 2\n", encoding="utf-8")  # uncommitted
 
     assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 1
     assert pushed == []

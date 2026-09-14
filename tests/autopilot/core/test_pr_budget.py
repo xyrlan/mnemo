@@ -70,9 +70,9 @@ def test_window_rolls_over_after_utc_day(tmp_path: Path, monkeypatch):
     # roll the window manually to a previous day
     from mnemo.autopilot.core._dirs import autopilot_budget_path
     p = autopilot_budget_path(tmp_path)
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     data["window_start"] = "2000-01-01T00:00:00Z"
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
 
     ok, _ = can_open(vault_root=tmp_path, category="doctor_self_fix")
     assert ok is True

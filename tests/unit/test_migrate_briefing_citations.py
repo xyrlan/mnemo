@@ -51,10 +51,10 @@ def _make_vault(tmp_path: Path) -> tuple[Path, Path]:
     (main / ".git").mkdir()
     wt_gitdir = main / ".git" / "worktrees" / "feature-x"
     wt_gitdir.mkdir(parents=True)
-    (wt_gitdir / "commondir").write_text("../..\n")
+    (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
     worktree = tmp_path / "myproj-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n")
+    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
 
     orphan = vault / "bots" / "myproj-feature-x" / "briefings" / "sessions"
     orphan.mkdir(parents=True)

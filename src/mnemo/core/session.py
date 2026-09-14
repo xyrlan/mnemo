@@ -47,7 +47,7 @@ def save(session_id: str, info: dict[str, Any]) -> None:
             dir=cache_dir, prefix=f"{target.stem}.", suffix=".json.tmp"
         )
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
             os.replace(tmp_name, target)
             return
@@ -74,7 +74,7 @@ def save(session_id: str, info: dict[str, Any]) -> None:
 def load(session_id: str) -> dict[str, Any] | None:
     target = _cache_file(session_id)
     try:
-        return json.loads(target.read_text())
+        return json.loads(target.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError, ValueError):
@@ -139,7 +139,7 @@ def iter_unanalyzed(max_age_seconds: float = 26 * 3600) -> list[dict[str, Any]]:
         try:
             if f.stat().st_mtime < cutoff:
                 continue
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             continue
         if not isinstance(data, dict):

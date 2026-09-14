@@ -15,7 +15,7 @@ def test_log_error_writes_jsonl(tmp_vault: Path):
         raise ValueError("boom")
     except ValueError as e:
         errors.log_error(tmp_vault, "session_start", e)
-    log = (tmp_vault / ".errors.log").read_text().strip().splitlines()
+    log = (tmp_vault / ".errors.log").read_text(encoding="utf-8").strip().splitlines()
     assert len(log) == 1
     entry = json.loads(log[0])
     assert entry["where"] == "session_start"
@@ -59,7 +59,7 @@ def test_should_run_ignores_old_errors(tmp_vault: Path):
     log_path = tmp_vault / ".errors.log"
     old = (datetime.now() - timedelta(hours=2)).isoformat()
     lines = [json.dumps({"timestamp": old, "where": "x", "kind": "E", "message": "m"}) for _ in range(20)]
-    log_path.write_text("\n".join(lines) + "\n")
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert errors.should_run(tmp_vault) is True
 
 

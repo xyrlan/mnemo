@@ -15,7 +15,7 @@ def _write_claude_json_with_mnemo(path: Path) -> None:
         "mcpServers": {
             "mnemo": {"command": "python", "args": ["-m", "mnemo", "mcp-server"]},
         },
-    }))
+    }), encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)

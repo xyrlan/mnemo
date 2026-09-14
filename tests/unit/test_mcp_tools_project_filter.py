@@ -91,7 +91,7 @@ def _write_page(
         f"{body}"
     )
     target = target_dir / f"{slug}.md"
-    target.write_text(text)
+    target.write_text(text, encoding="utf-8")
     return target
 
 
@@ -239,12 +239,12 @@ def test_read_mnemo_rule_finds_rule_when_name_differs_from_filename(tmp_vault):
         "---\n\n"
         f"{body}"
     )
-    (target_dir / f"{file_stem}.md").write_text(text)
+    (target_dir / f"{file_stem}.md").write_text(text, encoding="utf-8")
 
     # Build and persist the index — this is the code path used in production.
     index = rule_activation.build_index(tmp_vault)
     (tmp_vault / ".mnemo").mkdir(exist_ok=True)
-    (tmp_vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps(index))
+    (tmp_vault / ".mnemo" / "rule-activation-index.json").write_text(json.dumps(index), encoding="utf-8")
 
     # NON-NEGOTIABLE: build_index must persist file_stem. Without it,
     # read_mnemo_rule silently falls through to an O(N) glob on every call

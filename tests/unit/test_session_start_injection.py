@@ -21,7 +21,7 @@ def _write_feedback(vault: Path, stem: str, *, name: str, tags: list[str], sourc
     )
     target = vault / "shared" / "feedback" / f"{stem}.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
+    target.write_text(content, encoding="utf-8")
 
 
 def test_injection_envelope_has_project_token(tmp_vault):

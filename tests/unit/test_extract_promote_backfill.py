@@ -32,7 +32,7 @@ def _mk_project_file(
     path = mem_dir / f"{stem}.md"
     stamp = "metadata:\n  origin: backfill\n" if backfill else ""
     content = f"---\nname: {stem}\ndescription: desc\ntype: project\n{stamp}---\n{body}\n"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return scanner._read_memory_file(path, agent=agent)
 
 
@@ -61,7 +61,7 @@ def test_real_harvest_output_stages_in_inbox(tmp_vault: Path):
             description="How deploys work",
             body="Reconstructed project context.",
             session_id="0c8f-uuid",
-        )
+        ), encoding="utf-8"
     )
     f = scanner._read_memory_file(path, agent="alpha")
     assert f.type == "project"
@@ -115,7 +115,7 @@ def test_staged_project_page_keeps_the_origin_stamp(tmp_vault: Path):
     promote.promote_projects([f], state, tmp_vault)
 
     staged = tmp_vault / "shared" / "_inbox" / "project" / "a__x.md"
-    text = staged.read_text()
+    text = staged.read_text(encoding="utf-8")
     assert "\norigin: backfill\n" in text, "stamp must be written top-level"
     assert filters_parse(text).get("origin") == "backfill"
     fm, _body = scanner.parse_frontmatter(text)
@@ -129,7 +129,7 @@ def test_promoted_project_page_carries_no_origin_stamp(tmp_vault: Path):
     promote.promote_projects([f], state, tmp_vault)
 
     promoted = tmp_vault / "shared" / "project" / "a__x.md"
-    fm, _body = scanner.parse_frontmatter(promoted.read_text())
+    fm, _body = scanner.parse_frontmatter(promoted.read_text(encoding="utf-8"))
     assert "origin" not in fm
 
 
@@ -175,6 +175,6 @@ def test_edited_backfill_source_rewrites_the_staged_page(tmp_vault: Path):
     result = promote.promote_projects([f2], state, tmp_vault)
 
     staged = tmp_vault / "shared" / "_inbox" / "project" / "a__x.md"
-    assert "v2" in staged.read_text()
+    assert "v2" in staged.read_text(encoding="utf-8")
     assert "project/a__x" in result.overwrite_safe
     assert not (tmp_vault / "shared" / "project" / "a__x.md").exists()

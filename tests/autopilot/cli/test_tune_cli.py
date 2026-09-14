@@ -65,7 +65,7 @@ class TestTuneCLI:
         d = tmp_path / ".mnemo"
         d.mkdir(parents=True, exist_ok=True)
         cases = [{"id": "c1", "project": "p", "topic": "t", "expect_slug": "slug-0"}]
-        (d / "recall-cases.frozen.json").write_text(json.dumps(cases))
+        (d / "recall-cases.frozen.json").write_text(json.dumps(cases), encoding="utf-8")
 
         rc, out = _run(
             monkeypatch, tmp_path,

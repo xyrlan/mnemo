@@ -219,7 +219,7 @@ def _do_status(args: argparse.Namespace) -> int:
 
     bp = autopilot_budget_path(vault)
     if bp.exists():
-        data = json.loads(bp.read_text())
+        data = json.loads(bp.read_text(encoding="utf-8"))
         print(f"Budget window start: {data.get('window_start')}")
         counts = data.get("counts", {})
         if counts:

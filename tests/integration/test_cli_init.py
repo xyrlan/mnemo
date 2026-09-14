@@ -19,12 +19,12 @@ def test_init_yes_creates_vault_and_injects(tmp_home: Path, capsys: pytest.Captu
     assert (vault / "mnemo.config.json").exists()
     settings_path = tmp_home / ".claude" / "settings.json"
     assert settings_path.exists()
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     assert "SessionStart" in data["hooks"]
     # v0.5: MCP server registered in ~/.claude.json (separate file from settings.json)
     claude_json_path = tmp_home / ".claude.json"
     assert claude_json_path.exists()
-    mcp_data = json.loads(claude_json_path.read_text())
+    mcp_data = json.loads(claude_json_path.read_text(encoding="utf-8"))
     assert "mnemo" in mcp_data["mcpServers"]
     assert mcp_data["mcpServers"]["mnemo"]["args"] == ["-m", "mnemo", "mcp-server"]
 
@@ -33,7 +33,7 @@ def test_init_idempotent_for_mcp_server(tmp_home: Path):
     args = ["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"]
     assert cli.main(args) == 0
     assert cli.main(args) == 0
-    mcp_data = json.loads((tmp_home / ".claude.json").read_text())
+    mcp_data = json.loads((tmp_home / ".claude.json").read_text(encoding="utf-8"))
     # Still exactly one mnemo entry after two inits
     assert list(mcp_data["mcpServers"].keys()).count("mnemo") == 1
 
@@ -44,14 +44,14 @@ def test_uninstall_removes_mcp_server_entry(tmp_home: Path):
     assert rc == 0
     claude_json_path = tmp_home / ".claude.json"
     if claude_json_path.exists():
-        data = json.loads(claude_json_path.read_text())
+        data = json.loads(claude_json_path.read_text(encoding="utf-8"))
         # mcpServers either gone entirely or no mnemo entry
         assert "mnemo" not in data.get("mcpServers", {})
 
 
 def test_init_installs_statusline_composer(tmp_home: Path):
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
-    settings = json.loads((tmp_home / ".claude" / "settings.json").read_text())
+    settings = json.loads((tmp_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert "statusLine" in settings
     assert settings["statusLine"]["command"].endswith("statusline-compose")
 
@@ -61,16 +61,16 @@ def test_init_preserves_user_statusline_via_composer(tmp_home: Path):
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
-    }))
+    }), encoding="utf-8")
 
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
 
     # statusLine in settings.json now points at composer
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     assert data["statusLine"]["command"].endswith("statusline-compose")
     # Original captured in mnemo state
     state_path = tmp_home / "vault" / ".mnemo" / "statusline-original.json"
-    state = json.loads(state_path.read_text())
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["command"] == "/home/user/my-prompt.sh"
 
 
@@ -79,12 +79,12 @@ def test_uninstall_restores_user_statusline(tmp_home: Path):
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
-    }))
+    }), encoding="utf-8")
 
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "vault"), "--no-mirror", "--quiet"])
     cli.main(["uninstall", "--yes"])
 
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     # Original restored
     assert data["statusLine"]["command"] == "/home/user/my-prompt.sh"
 
@@ -146,9 +146,9 @@ def test_init_project_writes_local_only(tmp_home: Path, monkeypatch: pytest.Monk
     assert (proj / ".mcp.json").exists()
     assert (proj / ".mnemo").is_dir()
     assert (proj / ".mnemo" / "mnemo.config.json").exists()
-    settings = json.loads((proj / ".claude" / "settings.json").read_text())
+    settings = json.loads((proj / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert "SessionStart" in settings["hooks"]
-    mcp = json.loads((proj / ".mcp.json").read_text())
+    mcp = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))
     assert "mnemo" in mcp["mcpServers"]
 
 
@@ -165,7 +165,7 @@ def test_init_project_idempotent(tmp_home: Path, monkeypatch: pytest.MonkeyPatch
     args = ["init", "--project", "--yes", "--no-mirror", "--quiet"]
     assert cli.main(args) == 0
     assert cli.main(args) == 0
-    mcp = json.loads((proj / ".mcp.json").read_text())
+    mcp = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))
     assert list(mcp["mcpServers"].keys()).count("mnemo") == 1
 
 
@@ -185,14 +185,14 @@ def test_init_project_warns_on_global_coexistence(
 
 def test_init_project_appends_gitignore(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
     proj = _project_workspace(tmp_home, monkeypatch)
-    (proj / ".gitignore").write_text("# pre-existing\nnode_modules/\n")
+    (proj / ".gitignore").write_text("# pre-existing\nnode_modules/\n", encoding="utf-8")
     cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
-    text = (proj / ".gitignore").read_text()
+    text = (proj / ".gitignore").read_text(encoding="utf-8")
     assert "node_modules/" in text
     assert ".claude/" in text
     assert ".mnemo/" in text
     cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
-    text2 = (proj / ".gitignore").read_text()
+    text2 = (proj / ".gitignore").read_text(encoding="utf-8")
     assert text2.count(".claude/") == 1
     assert text2.count(".mnemo/") == 1
 
@@ -202,12 +202,12 @@ def test_uninstall_project_cleans_local_only(tmp_home: Path, monkeypatch: pytest
     cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"])
     rc = cli.main(["uninstall", "--project", "--yes"])
     assert rc == 0
-    settings = json.loads((proj / ".claude" / "settings.json").read_text())
+    settings = json.loads((proj / ".claude" / "settings.json").read_text(encoding="utf-8"))
     for entries in settings.get("hooks", {}).values():
         for entry in entries:
             for h in entry.get("hooks", []):
                 assert "mnemo.hooks." not in h.get("command", "")
-    mcp = json.loads((proj / ".mcp.json").read_text())
+    mcp = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))
     assert "mnemo" not in mcp.get("mcpServers", {})
     assert (proj / ".mnemo").is_dir()
 
@@ -231,7 +231,7 @@ def test_init_registers_slash_commands(tmp_home: Path):
     files = {p.stem for p in commands_dir.glob("*.md")}
     assert "init-project" in files
     assert "init" in files
-    init_project = (commands_dir / "init-project.md").read_text()
+    init_project = (commands_dir / "init-project.md").read_text(encoding="utf-8")
     from mnemo._selfexec import self_command
     assert f"!`{self_command('init', '--project')}`" in init_project
 
@@ -246,7 +246,7 @@ def test_init_registers_the_packaged_skills(tmp_home: Path):
     for name in SKILLS:
         skill = tmp_home / ".claude" / "skills" / name / "SKILL.md"
         assert skill.is_file()
-        body = skill.read_text()
+        body = skill.read_text(encoding="utf-8")
         assert body.startswith("---\nname: " + name)
         assert SKILL_TAG in body
         assert body.replace(SKILL_TAG + "\n", "", 1) == read_skill(name)

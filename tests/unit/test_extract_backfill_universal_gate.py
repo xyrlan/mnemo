@@ -37,7 +37,7 @@ def _memory_file(root: Path, agent: str, *, origin: str | None) -> None:
 def _vault(tmp_path: Path, *, origin: str | None) -> Path:
     root = tmp_path / "vault"
     (root / "shared").mkdir(parents=True)
-    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}))
+    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}), encoding="utf-8")
     for agent in ("alpha", "beta"):
         _memory_file(root, agent, origin=origin)
     return root
@@ -87,7 +87,7 @@ def test_mixed_origin_page_never_reaches_sacred_dir(tmp_path, monkeypatch):
     """
     root = tmp_path / "vault"
     (root / "shared").mkdir(parents=True)
-    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}))
+    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}), encoding="utf-8")
     _memory_file(root, "alpha", origin="backfill")
     _memory_file(root, "beta", origin=None)
     _stub(monkeypatch)

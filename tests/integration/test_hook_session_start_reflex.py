@@ -16,7 +16,7 @@ def test_session_start_writes_reflex_index(tmp_vault, monkeypatch):
         "injection": {"enabled": False},
         "enforcement": {"enabled": False},
         "enrichment": {"enabled": False},
-    }))
+    }), encoding="utf-8")
     # Minimal feedback rule so the index has a doc.
     fb_dir = tmp_vault / "shared" / "feedback"
     fb_dir.mkdir(parents=True, exist_ok=True)

@@ -16,7 +16,7 @@ def test_entry_stores_rule_path(tmp_path: Path):
         "tags:\n"
         "  - demo\n"
         "---\n"
-        "Body.\n"
+        "Body.\n", encoding="utf-8"
     )
     index = build_index(vault)
     rules = index.get("rules", {})

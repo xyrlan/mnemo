@@ -21,8 +21,8 @@ NOTICE_MARKER = "plugin-migration-notified"
 
 def _hook_commands(settings_path: Path) -> list[str]:
     try:
-        data = json.loads(settings_path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return []
     if not isinstance(data, dict):
         return []
@@ -78,7 +78,7 @@ def should_notify(state_path: Path) -> bool:
 def mark_notified(state_path: Path) -> None:
     state_path = Path(state_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(NOTICE_MARKER)
+    state_path.write_text(NOTICE_MARKER, encoding="utf-8")
 
 
 def notice(settings_paths: Iterable[Path]) -> str:

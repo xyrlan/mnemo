@@ -22,7 +22,7 @@ _PIN_LINE = re.compile(r'^(const PIN_SPEC = ")[^"]*(";)$', re.MULTILINE)
 
 
 def _read_pyproject_version(pyproject_path: Path) -> str:
-    text = pyproject_path.read_text()
+    text = pyproject_path.read_text(encoding="utf-8")
     m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     if not m:
         raise SystemExit(f"Could not find version in {pyproject_path}")
@@ -44,14 +44,14 @@ def build_pin_spec(version: str) -> str:
 
 def _sync_pin_spec(bootstrap_path: Path, version: str) -> str:
     spec = build_pin_spec(version)
-    text = bootstrap_path.read_text()
+    text = bootstrap_path.read_text(encoding="utf-8")
     new_text, count = _PIN_LINE.subn(lambda m: f"{m.group(1)}{spec}{m.group(2)}", text)
     if count != 1:
         raise SystemExit(
             'Expected exactly one `const PIN_SPEC = "...";` line in '
             f"{bootstrap_path}, found {count}"
         )
-    bootstrap_path.write_text(new_text)
+    bootstrap_path.write_text(new_text, encoding="utf-8")
     return spec
 
 
@@ -59,9 +59,9 @@ def sync(repo_root: Path) -> str:
     version = _read_pyproject_version(repo_root / "pyproject.toml")
 
     npm_pkg = repo_root / "npm" / "package.json"
-    data = json.loads(npm_pkg.read_text())
+    data = json.loads(npm_pkg.read_text(encoding="utf-8"))
     data["version"] = version
-    npm_pkg.write_text(json.dumps(data, indent=2) + "\n")
+    npm_pkg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     _sync_pin_spec(repo_root / "npm" / "lib" / "bootstrap.js", version)
     return version

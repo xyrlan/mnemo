@@ -96,7 +96,7 @@ def test_collect_misses_with_misses(monkeypatch, tmp_path, capsys):
         ],
     }
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
-    (tmp_path / ".mnemo" / "recall-report.json").write_text(_json.dumps(data))
+    (tmp_path / ".mnemo" / "recall-report.json").write_text(_json.dumps(data), encoding="utf-8")
 
     rc, out, _ = _run(
         monkeypatch, tmp_path, "autopilot", "collect-misses",
@@ -119,5 +119,5 @@ def test_autopilot_on_activates_state(monkeypatch, tmp_path, capsys):
 
     state_path = tmp_path / ".mnemo" / "autopilot.json"
     assert state_path.exists()
-    data = json.loads(state_path.read_text())
+    data = json.loads(state_path.read_text(encoding="utf-8"))
     assert data["state"] == "on"

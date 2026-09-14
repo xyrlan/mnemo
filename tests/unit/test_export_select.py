@@ -38,7 +38,7 @@ def test_inbox_archive_and_evolving_are_skipped(tmp_vault: Path):
     write_rule(tmp_vault, slug="flux", stability="evolving")
     archived = tmp_vault / "shared" / "_archive" / "reclassify-x" / "originals" / "feedback"
     archived.mkdir(parents=True)
-    (archived / "old.md").write_text("---\nname: old\nslug: old\ntype: feedback\nsources:\n  - bots/app/b.md\n---\nx\n")
+    (archived / "old.md").write_text("---\nname: old\nslug: old\ntype: feedback\nsources:\n  - bots/app/b.md\n---\nx\n", encoding="utf-8")
     write_rule(tmp_vault, slug="live")
 
     assert [r.slug for r in select_rules(tmp_vault, project="app")] == ["live"]

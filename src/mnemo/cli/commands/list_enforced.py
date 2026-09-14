@@ -12,7 +12,7 @@ from mnemo.core.filters import iter_shared_pages, parse_frontmatter
 def _iter_enforced(vault_root: Path):
     for md in iter_shared_pages(vault_root, include_inbox=False):
         try:
-            text = md.read_text()
+            text = md.read_text(encoding="utf-8")
         except OSError:
             continue
         fm = parse_frontmatter(text)

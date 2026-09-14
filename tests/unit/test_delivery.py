@@ -53,7 +53,7 @@ def repo(tmp_path: Path) -> Path:
     _run(["git", "init", "-b", "master"], cwd=root)
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
     _run(["git", "config", "user.name", "t"], cwd=root)
-    (root / "README.md").write_text("base\n")
+    (root / "README.md").write_text("base\n", encoding="utf-8")
     _run(["git", "add", "README.md"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
     return root
@@ -67,7 +67,7 @@ def _worktree(repo: Path, target: str, branch: str) -> Path:
 
 
 def _commit(tree: Path, name: str = "work.py", body: str = "x = 1\n") -> None:
-    (tree / name).write_text(body)
+    (tree / name).write_text(body, encoding="utf-8")
     _run(["git", "add", name], cwd=tree)
     _run(["git", "commit", "-m", f"add {name}"], cwd=tree)
 
@@ -124,7 +124,7 @@ def test_readiness_survives_the_session_being_gone(repo: Path) -> None:
 def test_uncommitted_work_is_refused_with_a_reason(repo: Path) -> None:
     tree = _worktree(repo, "c-delivery", "feat/f/delivery")
     _commit(tree)
-    (tree / "work.py").write_text("x = 2\n")  # modified, uncommitted
+    (tree / "work.py").write_text("x = 2\n", encoding="utf-8")  # modified, uncommitted
 
     state = delivery.ready(tree, repo_root=repo)
 
@@ -143,7 +143,7 @@ def test_an_untracked_file_makes_a_tree_dirty(repo: Path) -> None:
     """
     tree = _worktree(repo, "c-delivery", "feat/f/delivery")
     _commit(tree)
-    (tree / "forgotten.py").write_text("y = 2\n")
+    (tree / "forgotten.py").write_text("y = 2\n", encoding="utf-8")
 
     state = delivery.ready(tree, repo_root=repo)
 
@@ -202,7 +202,7 @@ def test_the_diffstat_describes_only_this_branchs_work(repo: Path) -> None:
     tree = _worktree(repo, "c-delivery", "feat/f/delivery")
     _commit(tree)
     # master moves on, after the child branched.
-    (repo / "unrelated.py").write_text("z = 3\n")
+    (repo / "unrelated.py").write_text("z = 3\n", encoding="utf-8")
     _run(["git", "add", "unrelated.py"], cwd=repo)
     _run(["git", "commit", "-m", "unrelated"], cwd=repo)
 

@@ -28,7 +28,7 @@ def test_session_end_logs_and_clears_cache(hook_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
     rc = session_end.main()
     assert rc == 0
-    log = (hook_env / "bots" / "myrepo" / "logs" / f"{date.today().isoformat()}.md").read_text()
+    log = (hook_env / "bots" / "myrepo" / "logs" / f"{date.today().isoformat()}.md").read_text(encoding="utf-8")
     assert "🔴 session ended (exit)" in log
     assert session.load("S1") is None
 
@@ -40,7 +40,7 @@ def test_session_end_falls_back_when_cache_missing(hook_env: Path, tmp_path: Pat
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
     rc = session_end.main()
     assert rc == 0
-    log = (hook_env / "bots" / "r3" / "logs" / f"{date.today().isoformat()}.md").read_text()
+    log = (hook_env / "bots" / "r3" / "logs" / f"{date.today().isoformat()}.md").read_text(encoding="utf-8")
     assert "🔴 session ended (compact)" in log
 
 
@@ -52,10 +52,10 @@ def _make_worktree(tmp_path: Path, *, repo_name: str) -> Path:
     git_dir.mkdir()
     wt_dir = git_dir / "worktrees" / "feature-x"
     wt_dir.mkdir(parents=True)
-    (wt_dir / "commondir").write_text("../..\n")
+    (wt_dir / "commondir").write_text("../..\n", encoding="utf-8")
     worktree = tmp_path / f"{repo_name}-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {wt_dir}\n")
+    (worktree / ".git").write_text(f"gitdir: {wt_dir}\n", encoding="utf-8")
     return worktree
 
 

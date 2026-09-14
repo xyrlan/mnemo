@@ -32,8 +32,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = ("src", "tools", "tests")
 
-# Names whose text mode is implied (no mode argument at all).
-_TEXT_ONLY = {"read_text", "write_text"}
+# Names whose text mode is implied: position of a positional ``encoding``.
+_TEXT_ONLY = {"read_text": 0, "write_text": 1}
 # Names that take a mode: position of the mode argument, and whether the
 # receiver may be a module whose same-named function is *not* text I/O.
 _MODED = {"open": 1, "fdopen": 1, "NamedTemporaryFile": 0, "TemporaryFile": 0}
@@ -82,7 +82,8 @@ def bare_text_io_calls(source: str, filename: str = "<string>") -> list[tuple[in
         if name is None or any(kw.arg == "encoding" for kw in node.keywords):
             continue
         if name in _TEXT_ONLY:
-            hits.append((node.lineno, name))
+            if len(node.args) <= _TEXT_ONLY[name]:
+                hits.append((node.lineno, name))
         elif name in _MODED:
             if name == "open" and _receiver_module(node) in _NOT_TEXT_IO:
                 continue
@@ -136,6 +137,8 @@ def test_every_text_read_and_write_names_its_encoding(root: str) -> None:
         ("io.TextIOWrapper(buf)", ["TextIOWrapper"]),
         # Named, binary, or not file I/O at all: never flagged.
         ("p.read_text(encoding='utf-8')", []),
+        ("p.read_text('utf-8')", []),
+        ("p.write_text(body, 'utf-8')", []),
         ("p.write_text(body, encoding='utf-8')", []),
         ("open(p, encoding='utf-8')", []),
         ("open(p, 'rb')", []),
@@ -225,12 +228,12 @@ def test_slash_command_probe_tolerates_foreign_bytes(cp1252_default, tmp_path: P
     commands.mkdir()
     name = next(iter(s.SLASH_COMMANDS))
     theirs = commands / f"{name}.md"
-    theirs.write_bytes("# Meu comando — não é do mnemo\n".encode("latin-1"))
+    theirs.write_bytes("# Meu comando, não é do mnemo\n".encode("latin-1"))
     other = commands / "other.md"
     other.write_bytes(b"\xff\xfe not utf-8 at all\n")
 
     s.inject_slash_commands(commands)
-    assert theirs.read_bytes() == "# Meu comando — não é do mnemo\n".encode("latin-1")
+    assert theirs.read_bytes() == "# Meu comando, não é do mnemo\n".encode("latin-1")
 
     s.uninject_slash_commands(commands)
     assert theirs.exists() and other.exists()

@@ -18,7 +18,7 @@ def test_increment_creates_file_and_starts_at_one(tmp_vault: Path):
     counter.increment(tmp_vault)
     assert counter.read_today(tmp_vault) == 1
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     assert data["date"] == date.today().isoformat()
     assert data["count"] == 1
 
@@ -33,12 +33,12 @@ def test_increment_resets_when_date_rolls_over(tmp_vault: Path):
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"date": yesterday, "count": 99}))
+    path.write_text(json.dumps({"date": yesterday, "count": 99}), encoding="utf-8")
 
     counter.increment(tmp_vault)
 
     assert counter.read_today(tmp_vault) == 1
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     assert data["date"] == date.today().isoformat()
 
 
@@ -46,21 +46,21 @@ def test_read_today_returns_zero_for_yesterday_file(tmp_vault: Path):
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"date": yesterday, "count": 99}))
+    path.write_text(json.dumps({"date": yesterday, "count": 99}), encoding="utf-8")
     assert counter.read_today(tmp_vault) == 0
 
 
 def test_read_today_handles_corrupt_json(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not valid json")
+    path.write_text("{not valid json", encoding="utf-8")
     assert counter.read_today(tmp_vault) == 0
 
 
 def test_increment_recovers_from_corrupt_file(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("garbage")
+    path.write_text("garbage", encoding="utf-8")
 
     counter.increment(tmp_vault)
 
@@ -70,7 +70,7 @@ def test_increment_recovers_from_corrupt_file(tmp_vault: Path):
 def test_read_today_handles_non_dict_root(tmp_vault: Path):
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("[1, 2, 3]")
+    path.write_text("[1, 2, 3]", encoding="utf-8")
     assert counter.read_today(tmp_vault) == 0
 
 
@@ -78,7 +78,7 @@ def test_read_today_handles_non_int_count(tmp_vault: Path):
     today = date.today().isoformat()
     path = tmp_vault / ".mnemo" / "mcp-call-counter.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"date": today, "count": "not-a-number"}))
+    path.write_text(json.dumps({"date": today, "count": "not-a-number"}), encoding="utf-8")
     assert counter.read_today(tmp_vault) == 0
 
 

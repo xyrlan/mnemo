@@ -20,7 +20,7 @@ from mnemo.hooks import user_prompt_submit as hook
 def _write_config(vault, project, **kwargs):
     path = vault / ".mnemo" / f"reflex-config.{project}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"project": project, **kwargs}))
+    path.write_text(json.dumps({"project": project, **kwargs}), encoding="utf-8")
     return path
 
 
@@ -46,7 +46,7 @@ def test_missing_file_returns_empty(tmp_vault):
 def test_corrupt_file_returns_empty(tmp_vault):
     path = tmp_vault / ".mnemo" / "reflex-config.broken.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not json")
+    path.write_text("{not json", encoding="utf-8")
     assert load_project_thresholds(tmp_vault, "broken") == {}
 
 
@@ -80,14 +80,14 @@ def _enable_reflex(vault, monkeypatch, thresholds=None):
     (vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(vault),
         "reflex": reflex,
-    }))
+    }), encoding="utf-8")
 
 
 def _log_entries(vault) -> list[dict]:
     path = vault / ".mnemo" / "reflex-log.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_hook_applies_per_project_calibration_over_defaults(

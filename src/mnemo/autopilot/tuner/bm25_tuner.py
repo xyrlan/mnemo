@@ -65,7 +65,7 @@ def write_bm25_config(config: BM25Config, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp.write_text(json.dumps(config.to_dict(), indent=2, sort_keys=True))
+        tmp.write_text(json.dumps(config.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
     except OSError:
         if tmp.exists():
@@ -79,7 +79,7 @@ def write_bm25_config(config: BM25Config, path: Path) -> None:
 def load_bm25_config(path: Path) -> Optional[BM25Config]:
     """Load BM25Config from path. Returns None if missing or invalid."""
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return BM25Config.from_dict(data)
     except (FileNotFoundError, KeyError, ValueError, TypeError):
         return None

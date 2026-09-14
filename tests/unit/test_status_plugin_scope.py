@@ -53,7 +53,7 @@ def _make_plugin(tmp_path: Path) -> Path:
                             "hooks": [{"type": "command", "command": "x hook pre_tool_use"}]}],
             "SessionEnd": [{"hooks": [{"type": "command", "command": "x hook session_end"}]}],
         }
-    }))
+    }), encoding="utf-8")
     return root
 
 
@@ -86,7 +86,7 @@ def test_a_plugin_with_an_unreadable_hooks_file_is_not_a_crash(
 ):
     plugin = tmp_path / "plugin"
     (plugin / "hooks").mkdir(parents=True)
-    (plugin / "hooks" / "hooks.json").write_text("{ not json")
+    (plugin / "hooks" / "hooks.json").write_text("{ not json", encoding="utf-8")
 
     out = _status(monkeypatch, plugin)
 

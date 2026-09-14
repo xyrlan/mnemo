@@ -44,7 +44,7 @@ def _read(vault_root: Path) -> dict:
             "counts": {},
             "recent_outcomes": [],
         }
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     # roll over if window aged out
     try:
         ws = datetime.strptime(data["window_start"], "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -61,7 +61,7 @@ def _read(vault_root: Path) -> dict:
 def _write(vault_root: Path, data: dict) -> None:
     ensure_autopilot_dir(vault_root)
     autopilot_budget_path(vault_root).write_text(
-        json.dumps(data, indent=2, sort_keys=True)
+        json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
     )
 
 

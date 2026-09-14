@@ -90,7 +90,7 @@ def env(tmp_vault: Path, tmp_home: Path, monkeypatch):
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_vault / "mnemo.config.json"))
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault), "reflex": {"enabled": True},
-    }))
+    }), encoding="utf-8")
     return tmp_vault, tmp_home
 
 
@@ -121,7 +121,7 @@ def test_replay_reports_and_writes(env, capsys):
     assert re.search(r"citing your own words\s+1\s+prompts", out)
     assert re.search(r"SAME session\s+1\s+prompts", out)
     assert "no rate is printed" in out
-    report = json.loads((vault / ".mnemo" / "replay-report.json").read_text())
+    report = json.loads((vault / ".mnemo" / "replay-report.json").read_text(encoding="utf-8"))
     assert report["prompts"]["carried"] == 1
     assert report["prompts"]["carried_correction_backed"] == 1
     assert report["prompts"]["carried_gate_verified"] == 1

@@ -34,7 +34,7 @@ def repo(tmp_path: Path) -> Path:
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
     _run(["git", "config", "user.name", "t"], cwd=root)
     (root / "src").mkdir()
-    (root / "src" / "base.py").write_text("BASE = 1\n")
+    (root / "src" / "base.py").write_text("BASE = 1\n", encoding="utf-8")
     _run(["git", "add", "src/base.py"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
     return root
@@ -47,7 +47,7 @@ def _branch(repo: Path, branch: str, files: dict[str, str]) -> None:
     for name, body in files.items():
         path = tree / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body)
+        path.write_text(body, encoding="utf-8")
         _run(["git", "add", name], cwd=tree)
     _run(["git", "commit", "-m", f"work on {branch}"], cwd=tree)
     _run(["git", "worktree", "remove", "--force", str(tree)], cwd=repo)
@@ -271,7 +271,7 @@ def test_inspect_refuses_a_piece_whose_branch_is_gone(repo: Path, gh_prs) -> Non
 def test_inspect_checks_a_merged_piece_on_the_base(repo: Path, gh_prs) -> None:
     """Merged and branch deleted is the normal end state: its work is in master."""
     gh_prs["feat/f/storage"] = (1, "MERGED")
-    (repo / "src" / "storage.py").write_text("def load(key):\n    pass\n")
+    (repo / "src" / "storage.py").write_text("def load(key):\n    pass\n", encoding="utf-8")
     _run(["git", "add", "src/storage.py"], cwd=repo)
     _run(["git", "commit", "-m", "storage landed"], cwd=repo)
 
@@ -361,7 +361,7 @@ def test_rehearse_merges_each_piece_in_order_and_runs_the_suite_each_time(
 
     assert result.ok, result.steps
     assert [s.slug for s in result.steps] == ["storage", "api"]
-    runs = log.read_text().splitlines()
+    runs = log.read_text(encoding="utf-8").splitlines()
     assert len(runs) == 2
     assert all(name.startswith("mnemo-land-") for name in runs)
     assert _worktrees(repo) == before  # the rehearsal tree is gone
@@ -385,7 +385,7 @@ def test_rehearse_stops_at_the_first_conflict(repo: Path, gh_prs, tmp_path) -> N
     assert not result.ok
     assert result.failed.slug == "b"
     assert "conflict" in result.failed.detail.lower()
-    assert len(log.read_text().splitlines()) == 1  # a's suite ran; b never merged
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1  # a's suite ran; b never merged
     assert _worktrees(repo) == before
 
 
@@ -479,13 +479,13 @@ def test_rehearse_stops_at_a_red_suite_with_its_output(repo: Path, gh_prs, tmp_p
     assert not result.ok
     assert result.failed.slug == "storage"
     assert "suite" in result.failed.detail
-    assert len(log.read_text().splitlines()) == 1  # api never ran
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1  # api never ran
 
 
 def test_rehearse_skips_a_merged_piece(repo: Path, gh_prs, tmp_path) -> None:
     gh_prs["feat/f/storage"] = (1, "MERGED")
     gh_prs["feat/f/api"] = (2, "OPEN")
-    (repo / "src" / "storage.py").write_text("def load(key):\n    pass\n")
+    (repo / "src" / "storage.py").write_text("def load(key):\n    pass\n", encoding="utf-8")
     _run(["git", "add", "src/storage.py"], cwd=repo)
     _run(["git", "commit", "-m", "storage landed"], cwd=repo)
     _branch(repo, "feat/f/api", {"src/api.py": "def handler(req):\n    pass\n"})
@@ -496,7 +496,7 @@ def test_rehearse_skips_a_merged_piece(repo: Path, gh_prs, tmp_path) -> None:
 
     assert result.ok
     assert [(s.slug, s.skipped) for s in result.steps] == [("storage", True), ("api", False)]
-    assert len(log.read_text().splitlines()) == 1
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_rehearse_refuses_states_that_are_not_landable(repo: Path, gh_prs, tmp_path) -> None:
@@ -524,7 +524,7 @@ def test_rehearse_prepends_src_to_pythonpath_when_the_tree_has_one(
 
     assert landing.rehearse(states, repo_root=repo, suite=suite).ok
 
-    parts = seen.read_text().split(os.pathsep)
+    parts = seen.read_text(encoding="utf-8").split(os.pathsep)
     first = Path(parts[0])
     assert first.name == "src" and first.parent.name.startswith("mnemo-land-")
     assert parts[1] == "/elsewhere"

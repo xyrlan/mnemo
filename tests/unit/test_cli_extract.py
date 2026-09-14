@@ -35,7 +35,7 @@ def patched_run_extraction(monkeypatch):
 
 def test_extract_parses_subcommand(tmp_vault, tmp_home, patched_run_extraction, capsys, monkeypatch):
     cfg_path = tmp_vault / "mnemo.config.json"
-    cfg_path.write_text(json.dumps({"vaultRoot": str(tmp_vault)}))
+    cfg_path.write_text(json.dumps({"vaultRoot": str(tmp_vault)}), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))
     rc = cli.main(["extract"])
     assert rc == 0
@@ -48,14 +48,14 @@ def test_extract_parses_subcommand(tmp_vault, tmp_home, patched_run_extraction, 
 
 def test_extract_dry_run_flag(tmp_vault, tmp_home, patched_run_extraction, monkeypatch):
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_vault / "mnemo.config.json"))
-    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}))
+    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}), encoding="utf-8")
     cli.main(["extract", "--dry-run"])
     assert patched_run_extraction["dry_run"] is True
 
 
 def test_extract_force_flag(tmp_vault, tmp_home, patched_run_extraction, monkeypatch):
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_vault / "mnemo.config.json"))
-    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}))
+    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}), encoding="utf-8")
     cli.main(["extract", "--force"])
     assert patched_run_extraction["force"] is True
 
@@ -72,7 +72,7 @@ def test_extract_prints_dollar_amount_when_not_subscription(tmp_vault, tmp_home,
         return s
     monkeypatch.setattr("mnemo.core.extract.run_extraction", fake_run)
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_vault / "mnemo.config.json"))
-    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}))
+    (tmp_vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(tmp_vault)}), encoding="utf-8")
 
     cli.main(["extract"])
     out = capsys.readouterr().out

@@ -20,8 +20,8 @@ def _count_mnemo_hooks(settings_path: Path, expected_events: tuple[str, ...]) ->
     if not settings_path.exists():
         return 0
     try:
-        data = json.loads(settings_path.read_text())
-    except json.JSONDecodeError:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     return sum(
         1
@@ -85,8 +85,8 @@ def _count_plugin_hooks(expected_events: tuple[str, ...]) -> int | None:
     if not root:
         return None
     try:
-        data = json.loads((Path(root) / "hooks" / "hooks.json").read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads((Path(root) / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return 0
     hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
     return sum(

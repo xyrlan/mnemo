@@ -13,7 +13,7 @@ def _rule(root: Path, slug: str, quote: str | None):
     ev = f"evidence:\n  quote: '{quote}'\n  source: bots/a/briefings/sessions/1.md\n" if quote else ""
     (d / f"{slug}.md").write_text(
         f"---\nname: Rule {slug}\nslug: {slug}\ndescription: d\ntype: feedback\nconfidence: verified\n{ev}"
-        f"sources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - x\n---\nbody text\n")
+        f"sources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - x\n---\nbody text\n", encoding="utf-8")
 
 
 def test_evidence_quote_is_a_scored_field(tmp_path):

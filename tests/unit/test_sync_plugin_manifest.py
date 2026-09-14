@@ -12,11 +12,11 @@ def _plugin_dir(tmp_path: Path) -> Path:
     manifest.write_text(json.dumps({
         "name": "mnemo", "version": "0.0.0", "description": "x",
         "commands": [],
-    }))
+    }), encoding="utf-8")
     (manifest.parent / "marketplace.json").write_text(json.dumps({
         "name": "mnemo-marketplace",
         "plugins": [{"name": "mnemo", "source": "github:xyrlan/mnemo", "version": "0.4.0"}],
-    }))
+    }), encoding="utf-8")
     return manifest.parent
 
 
@@ -25,7 +25,7 @@ def test_sync_bumps_the_manifest_version(tmp_path: Path):
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.12.0")
 
-    assert json.loads(manifest.read_text())["version"] == "0.12.0"
+    assert json.loads(manifest.read_text(encoding="utf-8"))["version"] == "0.12.0"
 
 
 def test_sync_drops_the_legacy_commands_array(tmp_path: Path):
@@ -38,7 +38,7 @@ def test_sync_drops_the_legacy_commands_array(tmp_path: Path):
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 
-    assert "commands" not in json.loads(manifest.read_text())
+    assert "commands" not in json.loads(manifest.read_text(encoding="utf-8"))
 
 
 def test_sync_generates_the_plugin_command_files(tmp_path: Path):
@@ -61,7 +61,7 @@ def test_generated_commands_go_through_the_launcher(tmp_path: Path):
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 
-    body = (tmp_path / "commands" / "status.md").read_text()
+    body = (tmp_path / "commands" / "status.md").read_text(encoding="utf-8")
     assert '!`"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd" status`' in body
     assert "python3" not in body
 
@@ -70,7 +70,7 @@ def test_sync_removes_a_command_file_that_no_longer_exists(tmp_path: Path):
     _plugin_dir(tmp_path)
     commands = tmp_path / "commands"
     commands.mkdir()
-    (commands / "renamed-away.md").write_text("stale")
+    (commands / "renamed-away.md").write_text("stale", encoding="utf-8")
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 
@@ -83,14 +83,14 @@ def test_sync_also_bumps_the_marketplace_listing(tmp_path: Path):
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 
-    entry = json.loads(marketplace.read_text())["plugins"][0]
+    entry = json.loads(marketplace.read_text(encoding="utf-8"))["plugins"][0]
     assert entry["version"] == "0.16.0"
     assert entry["source"] == "github:xyrlan/mnemo"  # untouched
 
 
 def test_sync_fails_loudly_when_the_marketplace_lacks_an_mnemo_entry(tmp_path: Path):
     marketplace = _plugin_dir(tmp_path) / "marketplace.json"
-    marketplace.write_text(json.dumps({"name": "mnemo-marketplace", "plugins": []}))
+    marketplace.write_text(json.dumps({"name": "mnemo-marketplace", "plugins": []}), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="mnemo"):
         sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
@@ -115,7 +115,7 @@ def test_sync_removes_a_skill_that_left_the_package(tmp_path: Path):
     _plugin_dir(tmp_path)
     stale = tmp_path / "skills" / "renamed-away"
     stale.mkdir(parents=True)
-    (stale / "SKILL.md").write_text("stale")
+    (stale / "SKILL.md").write_text("stale", encoding="utf-8")
 
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 

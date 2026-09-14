@@ -17,11 +17,11 @@ def test_disable_rule_sets_runtime_false(tmp_path: Path, capsys):
         "tags:\n"
         "  - demo\n"
         "---\n"
-        "Body line 1.\nBody line 2.\n"
+        "Body line 1.\nBody line 2.\n", encoding="utf-8"
     )
     rc = dr.run_disable_rule(vault, slug="example-rule")
     assert rc == 0
-    text = rule.read_text()
+    text = rule.read_text(encoding="utf-8")
     assert "runtime: false" in text.split("---", 2)[1]
     assert "Body line 1." in text   # body untouched
 
@@ -45,11 +45,11 @@ def test_disable_rule_idempotent(tmp_path: Path):
         "sources:\n  - bots/a/memory/b.md\n"
         "tags:\n  - t\n"
         "runtime: false\n"
-        "---\nBody\n"
+        "---\nBody\n", encoding="utf-8"
     )
     rc = dr.run_disable_rule(vault, slug="x")
     assert rc == 0
-    assert rule.read_text().count("runtime: false") == 1
+    assert rule.read_text(encoding="utf-8").count("runtime: false") == 1
 
 
 def test_disable_rule_ignores_archive(tmp_path: Path, capsys):

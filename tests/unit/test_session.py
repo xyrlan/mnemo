@@ -27,7 +27,7 @@ def test_load_missing_returns_none(tmp_tempdir: Path):
 def test_load_corrupted_returns_none_and_deletes(tmp_tempdir: Path):
     session.save("xyz", {"a": 1})
     cache_file = session._cache_file("xyz")
-    cache_file.write_text("{not valid json")
+    cache_file.write_text("{not valid json", encoding="utf-8")
     assert session.load("xyz") is None
     assert not cache_file.exists()
 
@@ -106,7 +106,7 @@ def test_iter_unanalyzed_filters_by_age(tmp_path, monkeypatch):
 
 def test_iter_unanalyzed_skips_malformed_files(tmp_path, monkeypatch):
     monkeypatch.setattr(session_mod, "_cache_dir", lambda: tmp_path)
-    (tmp_path / "session-broken.json").write_text("not-json{{{")
+    (tmp_path / "session-broken.json").write_text("not-json{{{", encoding="utf-8")
     session_mod.save("sid-ok", {"name": "p", "started_at": "x", "cwd_at_start": "/a"})
 
     entries = session_mod.iter_unanalyzed(max_age_seconds=26 * 3600)
@@ -196,7 +196,7 @@ def test_cleanup_stale_removes_orphaned_tmp_files(tmp_tempdir: Path):
     """Crashed writers leave tmp files; nothing else sweeps them."""
     session.save("keep", {"a": 1})
     orphan = session._cache_dir() / "session-dead.abc123.json.tmp"
-    orphan.write_text("{}")
+    orphan.write_text("{}", encoding="utf-8")
     ancient = time.time() - 100_000
     os.utime(orphan, (ancient, ancient))
 

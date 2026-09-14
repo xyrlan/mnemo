@@ -7,7 +7,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_plugin_json_well_formed():
-    data = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
+    data = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert data["name"] == "mnemo"
     assert data["version"]
 
@@ -27,7 +27,7 @@ def test_plugin_hooks_cover_every_event_mnemo_installs():
     sys.path.insert(0, str(REPO / "src"))
     from mnemo.install.settings import HOOK_DEFINITIONS
 
-    hooks = json.loads((REPO / "hooks" / "hooks.json").read_text())["hooks"]
+    hooks = json.loads((REPO / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     assert set(hooks) == set(HOOK_DEFINITIONS)
     for event, defn in HOOK_DEFINITIONS.items():
         entry = hooks[event][0]
@@ -39,7 +39,7 @@ def test_plugin_hooks_cover_every_event_mnemo_installs():
 
 def test_plugin_commands_never_hardcode_an_interpreter():
     for path in (REPO / "commands").glob("*.md"):
-        body = path.read_text()
+        body = path.read_text(encoding="utf-8")
         assert "${CLAUDE_PLUGIN_ROOT}" in body, path.name
         assert "python3" not in body, path.name
 
@@ -47,7 +47,7 @@ def test_plugin_commands_never_hardcode_an_interpreter():
 def test_plugin_commands_open_with_their_frontmatter():
     """Anything above the first `---` turns the frontmatter into body text."""
     for path in (REPO / "commands").glob("*.md"):
-        assert path.read_text().startswith('---\ndescription: "'), path.name
+        assert path.read_text(encoding="utf-8").startswith('---\ndescription: "'), path.name
 
 
 def test_plugin_ships_every_packaged_skill_verbatim():
@@ -75,7 +75,7 @@ def test_plugin_ships_every_packaged_skill_verbatim():
 
 
 def test_marketplace_json_well_formed():
-    data = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text())
+    data = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert data["name"]
     assert "plugins" in data
 
@@ -93,7 +93,7 @@ def test_mcp_json_spawns_through_git_not_bash_or_cmd():
     `git` is on PATH wherever a plugin got cloned, and a `!` alias runs
     through git's own sh — which on Windows carries bash with it — with
     `$CLAUDE_PLUGIN_ROOT` read at runtime, untouched by either expander."""
-    data = json.loads((REPO / ".mcp.json").read_text())
+    data = json.loads((REPO / ".mcp.json").read_text(encoding="utf-8"))
     server = data["mcpServers"]["mnemo"]
     assert server["command"] == "git"
     args = server["args"]
@@ -109,6 +109,6 @@ def test_launchers_are_pinned_to_lf():
     """core.autocrlf=true (the Git for Windows default) would otherwise check
     both out with CRLF; sh/bash then fail on the stray \\r and bin/launch,
     which fails open, hides it."""
-    attrs = (REPO / ".gitattributes").read_text()
+    attrs = (REPO / ".gitattributes").read_text(encoding="utf-8")
     assert "bin/launch text eol=lf" in attrs
     assert "bin/mnemo.cmd text eol=lf" in attrs

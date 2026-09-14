@@ -21,7 +21,7 @@ def test_hook_returns_silence_on_disabled_reflex(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "reflex": {"enabled": False},
-    }))
+    }), encoding="utf-8")
 
     rc, stdout = _run_hook({
         "cwd": str(tmp_vault),
@@ -138,7 +138,7 @@ def _log_entries(vault) -> list[dict]:
     path = vault / ".mnemo" / "reflex-log.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_a_silenced_decision_records_the_scores_that_silenced_it(
@@ -238,4 +238,4 @@ def _enable_reflex(vault, monkeypatch, thresholds=None):
     (vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(vault),
         "reflex": reflex,
-    }))
+    }), encoding="utf-8")

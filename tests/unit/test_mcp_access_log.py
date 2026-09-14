@@ -37,7 +37,7 @@ def test_record_appends_valid_jsonl(tmp_path, monkeypatch):
 
     log_path = vault / ".mnemo" / "mcp-access-log.jsonl"
     assert log_path.exists()
-    lines = log_path.read_text().strip().splitlines()
+    lines = log_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
     parsed = json.loads(lines[0])
     assert parsed["tool"] == "list_rules_by_topic"
@@ -70,7 +70,7 @@ def test_record_rotation_integration(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     (vault / ".mnemo").mkdir(parents=True)
     log_path = vault / ".mnemo" / "mcp-access-log.jsonl"
-    log_path.write_text("x" * 2000)
+    log_path.write_text("x" * 2000, encoding="utf-8")
     monkeypatch.setattr(
         "mnemo.core.mcp.access_log._load_telemetry_config",
         lambda: (True, 1000),
@@ -111,7 +111,7 @@ def test_record_truncates_long_string_values(tmp_path, monkeypatch):
     entry = _make_entry(args={"topic": "a" * 2000})
     record(vault, entry)
     log_path = vault / ".mnemo" / "mcp-access-log.jsonl"
-    parsed = json.loads(log_path.read_text().strip())
+    parsed = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert len(parsed["args"]["topic"]) <= 1030
 
 
@@ -124,7 +124,7 @@ def test_record_entry_schema_has_required_fields(tmp_path, monkeypatch):
     )
     record(vault, _make_entry())
     log_path = vault / ".mnemo" / "mcp-access-log.jsonl"
-    parsed = json.loads(log_path.read_text().strip())
+    parsed = json.loads(log_path.read_text(encoding="utf-8").strip())
     for key in ("timestamp", "tool", "args", "scope_requested",
                 "scope_effective", "project", "result_count",
                 "hit_slugs", "elapsed_ms"):

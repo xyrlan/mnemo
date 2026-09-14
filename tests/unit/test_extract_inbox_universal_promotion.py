@@ -113,7 +113,7 @@ def test_handler_writes_to_shared_and_removes_inbox_copy(tmp_path: Path):
     inbox_dir = vault / "shared" / "_inbox" / "feedback"
     inbox_dir.mkdir(parents=True)
     inbox_copy = inbox_dir / "p.md"
-    inbox_copy.write_text("stale staging content")
+    inbox_copy.write_text("stale staging content", encoding="utf-8")
 
     state = ExtractionState(last_run=None)
     result = ApplyResult()
@@ -132,7 +132,7 @@ def test_handler_writes_to_shared_and_removes_inbox_copy(tmp_path: Path):
     assert not inbox_copy.exists()
     assert state.entries["feedback/p"].status == "promoted"
     assert "feedback/p" in result.universal_promoted
-    rendered = dest.read_text()
+    rendered = dest.read_text(encoding="utf-8")
     assert "bots/proj-a/briefings/sessions/aaa.md" in rendered
     assert "bots/proj-b/briefings/sessions/bbb.md" in rendered
 
@@ -144,7 +144,7 @@ def test_handler_handles_absolute_path_sources(tmp_path: Path):
     inbox_dir = vault / "shared" / "_inbox" / "feedback"
     inbox_dir.mkdir(parents=True)
     inbox_copy = inbox_dir / "p.md"
-    inbox_copy.write_text("stale")
+    inbox_copy.write_text("stale", encoding="utf-8")
 
     state = ExtractionState(last_run=None)
     result = ApplyResult()
@@ -194,7 +194,7 @@ def test_handler_safe_overwrites_existing_unedited_dest(tmp_path: Path):
     )
     inbox_copy = vault / "shared" / "_inbox" / "feedback" / "p.md"
     inbox_copy.parent.mkdir(parents=True, exist_ok=True)
-    inbox_copy.write_text("noop")
+    inbox_copy.write_text("noop", encoding="utf-8")
 
     state = ExtractionState(last_run=None, entries={"feedback/p": entry})
     result = ApplyResult()
@@ -205,7 +205,7 @@ def test_handler_safe_overwrites_existing_unedited_dest(tmp_path: Path):
 
     assert "feedback/p" in result.universal_promoted
     assert not result.sibling_bounced  # safe overwrite, no conflict
-    rendered = dest.read_text()
+    rendered = dest.read_text(encoding="utf-8")
     # Both prior projects + new project C survive the union.
     assert "bots/proj-a/briefings/sessions/aaa.md" in rendered
     assert "bots/proj-b/briefings/sessions/bbb.md" in rendered
@@ -217,7 +217,7 @@ def test_handler_bounces_sibling_when_dest_user_edited(tmp_path: Path):
     dest_dir = vault / "shared" / "feedback"
     dest_dir.mkdir(parents=True)
     dest = dest_dir / "p.md"
-    dest.write_text("user-edited content distinct from any render")
+    dest.write_text("user-edited content distinct from any render", encoding="utf-8")
 
     entry = StateEntry(
         source_files=["bots/proj-a/briefings/sessions/aaa.md"],
@@ -234,7 +234,7 @@ def test_handler_bounces_sibling_when_dest_user_edited(tmp_path: Path):
     )
     inbox_copy = vault / "shared" / "_inbox" / "feedback" / "p.md"
     inbox_copy.parent.mkdir(parents=True, exist_ok=True)
-    inbox_copy.write_text("staging")
+    inbox_copy.write_text("staging", encoding="utf-8")
 
     state = ExtractionState(last_run=None, entries={"feedback/p": entry})
     result = ApplyResult()
@@ -246,7 +246,7 @@ def test_handler_bounces_sibling_when_dest_user_edited(tmp_path: Path):
     # User-edited dest: bounce sibling, leave original dest + state untouched.
     assert not result.universal_promoted
     assert result.sibling_bounced
-    assert dest.read_text() == "user-edited content distinct from any render"
+    assert dest.read_text(encoding="utf-8") == "user-edited content distinct from any render"
     sibling = vault / "shared" / "_inbox" / "feedback" / "p.proposed.md"
     assert sibling.exists()
 
