@@ -19,14 +19,17 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
+from mnemo.core.activity.exploration import Exploration, Meter
 from mnemo.core.activity.summarize import Activity, recent_actions, summarize
 from mnemo.core.activity.tail import WINDOW, read_tail
 
 __all__ = [
     "Activity",
+    "Exploration",
     "WINDOW",
     "activities_for",
     "activity_for",
+    "exploration_for",
     "read_tail",
     "recent_actions",
     "summarize",
@@ -76,3 +79,38 @@ def activities_for(
         if act is not None:
             out[short_id] = act
     return out
+
+
+def exploration_for(path: Optional[str], cwd: Optional[str] = None) -> Optional[Exploration]:
+    """Measure the transcript at *path* up to its first mutation (#269).
+
+    Reads **forward from byte 0** and stops at the first mutation, unlike
+    :func:`read_tail`, which starts from the end: the answer lives at the head
+    of the file. Not cheap, and measured rather than assumed — on the 50
+    dispatch transcripts of 2026-09-14 the first mutation sat a median 59% of
+    the way in (702KB median, 1.27MB max), because the opening turns carry the
+    system prompt, skill and tool listings. All 31 sessions in the queue that
+    day measured in 135ms, and the queue reads a finished one once per process.
+
+    ``None`` when there is no path or the file cannot be read. A transcript
+    with no tool use at all measures as zero uses, not ``None``: it was read.
+    """
+    import json
+
+    if not path:
+        return None
+    meter = Meter(cwd)
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written is not evidence yet
+                try:
+                    event = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if meter.feed(event):
+                    break
+    except OSError:
+        return None
+    return meter.result

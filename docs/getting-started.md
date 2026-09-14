@@ -831,6 +831,34 @@ test.
 There is no `--follow`. You look, you decide, and `claude attach <short_id>`
 is how you get inside — that is Claude Code's job, not mnemo's.
 
+### What a child spent before its first edit
+
+A dispatched child starts out knowing the vault, and still pays to find its way
+around a repo the parent already knew. The PRONTAS rows end with that price, and
+a line under the table sums it across the finished children:
+
+```
+PRONTAS (2)
+  934f353f  #247 dispatch orphan namespace     #262                  64k  32u/+107k
+  aafd88e7  c-format format share-rules piece  #259                  33k  9u/+41k
+
+  antes da 1ª edição (u/+tokens): 41 usos, +148k em 2 sessões prontas
+```
+
+`32u/+107k` is 32 tool uses before the child first changed its working tree,
+and 107k tokens of context added to the window in that time — on top of the
+first turn's baseline (system prompt, skills, hooks, the task, whatever reflex
+injected), which `mnemo session <short_id>` prints alongside how many reflex
+rules the opening prompt carried. `≥` in front means the child never edited,
+so the count is a floor.
+
+"Changed its tree" is not "called `Edit`": a child that writes with
+`cat >> tests/…` or a Python heredoc has edited, and a `Write` to a memory note
+outside the repo has not. The Bash half reads command text, so it can be wrong;
+`tools/measure_exploration.py --list` prints the edit it picked for every
+dispatch transcript on disk, and splits the numbers by how many reflex rules
+each child got — correlation over what happened, not a controlled test.
+
 ### Flags
 
 ```bash
