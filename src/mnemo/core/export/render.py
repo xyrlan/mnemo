@@ -52,7 +52,12 @@ def render_entry(rule: ExportRule, *, full: bool = False) -> str:
     body = body.replace("<!-- mnemo:", "<!--​ mnemo:")
     parts = [head] + ([body] if body else [])
     if rule.quote:
-        parts.append(f'> you said: "{rule.quote}"')
+        # An imported rule's quote is someone else's correction. Presenting
+        # it as "you said" would make the reader the author of words they
+        # never typed; the vault already keeps it out of every other "you
+        # said" surface through ``confidence: verified-elsewhere``.
+        who = "another contributor said" if rule.imported else "you said"
+        parts.append(f'> {who}: "{rule.quote}"')
     return "\n".join(parts) + "\n"
 
 

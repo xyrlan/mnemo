@@ -210,3 +210,33 @@ def test_entry_hash_follows_the_format():
     other = _rule(body=_LONG_BODY.replace("CI diffs it", "CI rejects it"))
     assert entry_hash(rule) == entry_hash(other)
     assert entry_hash(rule, full=True) != entry_hash(other, full=True)
+
+
+# --- imported rules (share-rules) ------------------------------------------
+
+def test_imported_quote_is_another_contributors_not_yours():
+    from mnemo.core.export.render import render_entry
+
+    text = render_entry(_rule(imported=True))
+    assert text.rstrip().endswith(
+        '> another contributor said: "never use npm in this repo, always yarn"'
+    )
+    assert "you said" not in text
+
+
+def test_imported_rule_without_quote_has_no_attribution_line():
+    from mnemo.core.export.render import render_entry
+
+    text = render_entry(_rule(imported=True, quote=None))
+    assert "said" not in text
+
+
+def test_entry_hash_is_unchanged_for_native_rules_and_differs_for_imported():
+    """The export manifest pins native hashes; only an imported page may move."""
+    from mnemo.core.export.render import entry_hash, render_entry
+
+    native = _rule()
+    assert entry_hash(native) == entry_hash(_rule(imported=False))
+    assert render_entry(native) == render_entry(_rule(imported=False))
+    assert entry_hash(native) != entry_hash(_rule(imported=True))
+    assert entry_hash(_rule(quote=None)) == entry_hash(_rule(quote=None, imported=True))

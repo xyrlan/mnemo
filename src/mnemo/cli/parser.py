@@ -235,6 +235,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="clear previously failed sessions so they are attempted again",
     )
     bf.add_argument("--install-run", action="store_true", help=argparse.SUPPRESS)
+    imp = sub.add_parser(
+        "import",
+        help="stage a published rules tree (.mnemo-shared/) into this vault, in shared/_inbox/ for review",
+    )
+    imp.add_argument(
+        "path", nargs="?", default=None,
+        help="a .mnemo-shared/ directory (default: this repo's)",
+    )
+    imp.add_argument("--dry-run", action="store_true", help="print every routing decision, write nothing")
     # Hidden subparsers: omit ``help=`` entirely so argparse doesn't create a
     # ChoicesPseudoAction for them. Passing ``help=argparse.SUPPRESS`` was the
     # documented way to hide a subparser, but Python 3.14 regressed it: the
