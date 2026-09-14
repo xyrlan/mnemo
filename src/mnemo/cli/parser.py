@@ -25,6 +25,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "migrate-plugin",
     "dedup-rules",
     "reclassify",
+    "reverify",
     "list-enforced",
     "regen-graph-edges",
     "rewrites",
@@ -352,6 +353,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--undo", metavar="RUN_ID",
         help="restore every file a previous apply touched, byte for byte",
     )
+    reverify = sub.add_parser(
+        "reverify",
+        help="re-brief the sessions behind label-only verified rules and let today's evidence gate decide (dry run; --apply to execute)",
+    )
+    reverify.add_argument("--apply", action="store_true", help="execute the saved dry run (no LLM calls)")
+    reverify.add_argument("--undo", metavar="RUN_ID", help="restore every file a previous --apply touched, byte for byte")
+    reverify.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     reclass = sub.add_parser(
         "reclassify",
         help="grade legacy feedback rules with an LLM (plan by default; --apply to execute)",

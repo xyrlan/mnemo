@@ -47,7 +47,17 @@ def _rewrite_keep(
     lines = text[start:close].splitlines()
     out: list[str] = []
     inserted = False
+    # A page reclassify itself kept once already carries ``evidence:``; a
+    # second keep (``mnemo reverify``, #257) must replace that block, not
+    # leave two top-level keys for the parser to pick between.
+    in_evidence = False
     for line in lines:
+        if in_evidence and (line.startswith("  ") or not line.strip()):
+            continue
+        in_evidence = False
+        if line.startswith("evidence:"):
+            in_evidence = True
+            continue
         if not inserted and line.startswith("confidence:"):
             out.append("confidence: verified")
             inserted = True
@@ -81,6 +91,11 @@ def _rewrite_demote(text: str) -> str:
     out: list[str] = []
     done = False
     for line in lines:
+        # The page's own ``confidence:`` / ``demoted_from:`` would otherwise
+        # follow the ones written here, and the parser keeps the last key it
+        # sees — a demoted page reading ``confidence: verified`` (#257).
+        if line.startswith("confidence:") or line.startswith("demoted_from:"):
+            continue
         if not done and line.startswith("type:"):
             out.append("type: reference")
             out.append("confidence: inferred")
