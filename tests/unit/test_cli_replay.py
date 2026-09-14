@@ -125,7 +125,11 @@ def test_replay_reports_and_writes(env, capsys):
     assert report["prompts"]["carried"] == 1
     assert report["prompts"]["carried_correction_backed"] == 1
     assert report["prompts"]["carried_gate_verified"] == 1
-    assert report["vault"] == {"rules": 7, "correction_backed": 2, "gate_verified": 1, "label_only": 1}
+    assert report["vault"] == {
+        "rules": 7, "correction_backed": 2, "gate_verified": 1, "label_only": 1,
+        # No CI-backed rule in this vault, so every correction is the user's (#272).
+        "correction_backed_by_origin": {"user": 2, "ci": 0},
+    }
     assert re.search(r"citing your own words\s+1\s+prompts", out)
     assert re.search(r"label only, gate can't check\s+0\s+prompts", out)
     assert "project" not in report

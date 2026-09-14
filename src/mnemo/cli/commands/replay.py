@@ -20,6 +20,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
     import json as _json
 
     from mnemo import cli  # late binding, as every other command does
+    from mnemo.core import ci_corrections
     from mnemo.core import config as cfg_mod
     from mnemo.core.reflex import replay as rp
     from mnemo.core.reflex.index import build_index
@@ -57,6 +58,10 @@ def cmd_replay(args: argparse.Namespace) -> int:
         vault_rules=int(index["doc_count"]),
         correction_backed_rules=sum(1 for f in facts.values() if f.correction_backed),
         gate_verified_rules=sum(1 for f in facts.values() if f.gate_verified),
+        correction_backed_by_origin={
+            origin: sum(1 for f in facts.values() if f.correction_backed and f.origin == origin)
+            for origin in (ci_corrections.ORIGIN_USER, ci_corrections.ORIGIN_CI)
+        },
     )
     if only_project:
         report["project"] = only_project
