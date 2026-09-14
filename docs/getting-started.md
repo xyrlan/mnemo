@@ -436,6 +436,7 @@ command that still exists.
 
 ```bash
 mnemo status    # vault state, hook health, last auto-run, currently-running state
+mnemo replay    # replay your transcripts: how often an earlier session's rule would have fired
 mnemo doctor    # full diagnostic: statusLine drift, stale locks, recent failures
 mnemo extract   # manual extraction (also rebuilds the HOME dashboard)
 mnemo fix       # reset the extraction circuit breaker after repeated failures

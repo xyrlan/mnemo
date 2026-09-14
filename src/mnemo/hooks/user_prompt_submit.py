@@ -26,9 +26,9 @@ def main() -> int:
         from mnemo.core import errors, paths
         from mnemo.core.agent import resolve_agent, resolve_canonical_agent
         from mnemo.core.mcp import session_state
-        from mnemo.core.reflex import bm25, gates
+        from mnemo.core.reflex.decide import decide
         from mnemo.core.reflex.index import load_index
-        from mnemo.core.reflex.tokenizer import tokenize_query
+        from mnemo.core.reflex.project_config import load_project_thresholds
 
         cfg = cfg_mod.load_config()
         reflex_cfg = cfg.get("reflex") or {}
@@ -55,70 +55,26 @@ def main() -> int:
             _log_silence(vault, sid, project, prompt_raw, reason="session_cap_reached")
             return 0
 
-        # Pre-gate: min 3 distinct non-stopword tokens.
-        thresholds = (reflex_cfg.get("thresholds") or {})
-        min_tokens = int(thresholds.get("minQueryTokens", 3))
-        q_tokens = tokenize_query(prompt_raw)
-        if len(set(q_tokens)) < min_tokens:
-            _log_silence(vault, sid, project, prompt_raw, reason="below_min_tokens")
-            return 0
-
-        index = load_index(vault)
-        if index is None:
-            _log_silence(vault, sid, project, prompt_raw, reason="index_missing")
-            return 0
-
-        # Candidate slugs — project scope (local + universal).
-        candidates = _candidates_for_project(index, project)
-        if not candidates:
-            _log_silence(vault, sid, project, prompt_raw, reason="index_missing")
-            return 0
-
-        # Score
-        weights = (reflex_cfg.get("bm25f") or {}).get("fieldWeights") or bm25.DEFAULT_WEIGHTS
-        params = reflex_cfg.get("bm25f") or bm25.DEFAULT_PARAMS
-        scores = bm25.score_docs(index, query_tokens=q_tokens,
-                                 candidate_slugs=candidates,
-                                 weights=weights, params=params)
-
-        # Triple-gate. Per-project calibration (written by the autopilot's
-        # reflex_calibrator) wins over global config, per key.
-        from mnemo.core.reflex.project_config import load_project_thresholds
-
+        # Rank + triple-gate. The decision itself is pure and shared with
+        # `mnemo replay` (core.reflex.decide) so a replay measures this hook
+        # and not a copy of it. Per-project calibration (written by the
+        # autopilot's reflex_calibrator) wins over global config, per key.
+        # The index is passed as a loader so a prompt the token pre-gate
+        # rejects never pays for reading it.
         overrides = load_project_thresholds(vault, project)
-        doc_tokens_by_slug = _doc_token_sets(index, [slug for slug, _ in scores[:2]])
-        gate_thresholds = {
-            "term_overlap_min": int(overrides.get(
-                "term_overlap_min", thresholds.get("termOverlapMin", 2))),
-            "relative_gap": float(overrides.get(
-                "relative_gap", thresholds.get("relativeGap", 1.5))),
-            "absolute_floor": float(overrides.get(
-                "absolute_floor", thresholds.get("absoluteFloor", 2.0))),
-            "floor_reference_docs": int(overrides.get(
-                "floor_reference_docs", thresholds.get("floorReferenceDocs", 30))),
-        }
-        doc_count = int(index.get("doc_count", 0))
-        result = gates.evaluate_gates(
-            scores,
-            query_tokens=q_tokens,
-            doc_tokens_by_slug=doc_tokens_by_slug,
-            thresholds=gate_thresholds,
-            doc_count=doc_count,
-        )
-        # Record what was actually used so every later _log_silence/_log_emission
-        # (all pass thresholds=gate_thresholds) carries it — `mnemo why` needs
-        # both the configured floor and the effective one to explain a scaled
-        # decision. `absolute_floor` stays the configured value.
-        if result.effective_floor is not None:
-            gate_thresholds["absolute_floor_effective"] = result.effective_floor
-        gate_thresholds["doc_count"] = doc_count
+        decision = decide(lambda: load_index(vault), project=project,
+                          prompt=prompt_raw, reflex_cfg=reflex_cfg,
+                          overrides=overrides)
         # The receipt: the ranking and the numbers this decision was made on.
-        # Everything past this point had rules scored, so a silence here can be
-        # explained rather than merely named — see `core.reflex.receipts`.
-        receipt = _receipt(scores)
-        if not result.accepted_slugs:
+        # Both are empty when the decision was made before ranking ran
+        # (`below_min_tokens`, `index_missing`), and `_log_silence` omits the
+        # keys — a silence there is "retrieval never ran", not "found nothing".
+        # See `core.reflex.receipts`.
+        receipt = _receipt(decision.scores)
+        gate_thresholds = decision.thresholds
+        if not decision.accepted:
             _log_silence(vault, sid, project, prompt_raw,
-                         reason=result.silence_reason or "index_missing",
+                         reason=decision.silence_reason or "index_missing",
                          candidates=receipt, thresholds=gate_thresholds)
             return 0
 
@@ -130,8 +86,8 @@ def main() -> int:
         # would have refused).
         from mnemo.core.export.manifest import exported_slugs_for
         exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
-                          & set(result.accepted_slugs))
-        accepted = [s for s in result.accepted_slugs if s not in exported]
+                          & set(decision.accepted))
+        accepted = [s for s in decision.accepted if s not in exported]
         if not accepted:
             _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
                          candidates=receipt, thresholds=gate_thresholds,
@@ -147,12 +103,12 @@ def main() -> int:
                          exported=exported)
             return 0
 
-        _emit_reflex_context(index, survivors)
+        _emit_reflex_context(decision.index, survivors)
         for slug in survivors:
             session_state.add_injection(vault, slug=slug, sid=sid, now_ts=now_ts)
             session_state.bump_emission(vault, sid=sid, kind="reflex", now_ts=now_ts)
 
-        score_map = dict(scores)
+        score_map = dict(decision.scores)
         _log_emission(vault, sid, project, prompt_raw, survivors,
                       scores=[score_map.get(s, 0.0) for s in survivors],
                       candidates=receipt, thresholds=gate_thresholds,
@@ -164,25 +120,6 @@ def main() -> int:
         except Exception:
             pass
     return 0
-
-
-def _candidates_for_project(index: dict, project: str) -> list[str]:
-    docs = index.get("docs") or {}
-    return [
-        slug for slug, doc in docs.items()
-        if project in (doc.get("projects") or []) or doc.get("universal")
-    ]
-
-
-def _doc_token_sets(index: dict, slugs: list[str]) -> dict[str, set[str]]:
-    """Rebuild per-doc token UNION (across all 4 fields) for triple-gate overlap check."""
-    out: dict[str, set[str]] = {s: set() for s in slugs}
-    target = set(slugs)
-    for term, entries in (index.get("postings") or {}).items():
-        for entry in entries:
-            if entry["slug"] in target:
-                out[entry["slug"]].add(term)
-    return out
 
 
 def _emit_reflex_context(index: dict, slugs: list[str]) -> None:

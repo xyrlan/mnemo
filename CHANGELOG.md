@@ -42,6 +42,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   and clearing itself once the user moves or deletes the pages or anything
   goes live. It counts; it never promotes. (#234)
 
+### Added
+
+- **`mnemo replay` — the first number about *your* vault that has a
+  baseline.** `mnemo status` reports how often reflex fired; nothing said
+  whether what it fired was worth anything. `replay` reads every Claude Code
+  transcript on disk, replays each prompt you typed through the hook's own
+  decision (`core.reflex.decide`, now shared with the hook rather than copied),
+  and sorts every rule that would have fired by *when the vault learned it*:
+  from an earlier session (the only bucket the vault can take credit for),
+  from the same session (hindsight — Claude had it anyway), or not yet learned
+  at the time (a naive replay's over-count, shown and excluded). Inside the
+  first bucket it counts the rules that cite a correction you typed. Counts
+  always; a rate with a 95% interval only past 30 prompts. Session cap and the
+  day-level injected cache are simulated from the transcript clock; export
+  suppression is not, and the output says so. No claim about tokens, time or
+  productivity — the issue ruled those out and so does the report. Composed
+  from `recall-sessions`' transcript discovery and the hook's decision; why
+  `mnemo recall` could not be folded in is in the module docstring. (#237)
+
+
 ## [1.5.0] — 2026-09-13
 
 ### Added

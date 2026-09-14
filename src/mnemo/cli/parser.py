@@ -260,6 +260,12 @@ def _build_parser() -> argparse.ArgumentParser:
     why.add_argument("--limit", type=int, default=10, help="how many decisions to show (default 10)")
     why.add_argument("--all-projects", action="store_true", help="include decisions from every repo, not just this one")
     why.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    replay = sub.add_parser(
+        "replay",
+        help="replay your own transcripts against your vault: how often a rule from an earlier session would have come back",
+    )
+    replay.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    replay.add_argument("--project", default=None, help="only prompts typed in this project (default: every project)")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")
