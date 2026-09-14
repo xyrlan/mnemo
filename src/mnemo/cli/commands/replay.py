@@ -56,6 +56,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         result,
         vault_rules=int(index["doc_count"]),
         correction_backed_rules=sum(1 for f in facts.values() if f.correction_backed),
+        gate_verified_rules=sum(1 for f in facts.values() if f.gate_verified),
     )
     if only_project:
         report["project"] = only_project

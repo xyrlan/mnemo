@@ -24,6 +24,12 @@ def _seed_vault(vault: Path) -> None:
         b = vault / "bots" / "alpha" / "briefings" / "sessions" / f"{sid}.md"
         b.parent.mkdir(parents=True, exist_ok=True)
         b.write_text("# briefing\n", encoding="utf-8")
+    # A's briefing carries the quote in ``## Corrections`` — what today's gate reads.
+    (vault / "bots" / "alpha" / "briefings" / "sessions" / f"{SID_A}.md").write_text(
+        "# briefing\n\n## Corrections\n"
+        '- "always mock prisma with jest-mock-extended in tests" → mock prisma that way\n',
+        encoding="utf-8",
+    )
     learned = (T0 + timedelta(hours=1)).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
     (feedback / "use-prisma-mock.md").write_text(
         "---\nname: use-prisma-mock\ntype: feedback\n"
@@ -32,9 +38,23 @@ def _seed_vault(vault: Path) -> None:
         "tags:\n  - prisma\n  - testing\n"
         f"sources:\n  - bots/alpha/briefings/sessions/{SID_A}.md\n"
         "evidence:\n  quote: 'always mock prisma with jest-mock-extended in tests'\n"
-        f"  source: 'briefing: bots/alpha/briefings/sessions/{SID_A}.md — user turns, turn 1'\n"
+        f"  source: bots/alpha/briefings/sessions/{SID_A}.md\n"
         "stability: stable\n---\n"
         "Mock the Prisma client in tests using jest-mock-extended.\n",
+        encoding="utf-8",
+    )
+    # A reclassify-era label: verified, quote present, but the cited briefing has
+    # no ``## Corrections`` and the source is prose — today's gate cannot re-check it.
+    (feedback / "label-only-rule.md").write_text(
+        "---\nname: label-only-rule\ntype: feedback\n"
+        "description: Keep prisma queries out of react components\n"
+        f"extracted_at: {learned}\nconfidence: verified\n"
+        "tags:\n  - prisma\n  - react\n"
+        f"sources:\n  - bots/alpha/briefings/sessions/{SID_B}.md\n"
+        "evidence:\n  quote: 'keep the prisma queries out of the react components please'\n"
+        f"  source: 'briefing: bots/alpha/briefings/sessions/{SID_B}.md — user turns, turn 4'\n"
+        "stability: stable\n---\n"
+        "Prisma queries live in the data layer, never in components.\n",
         encoding="utf-8",
     )
     for i, (name, desc, tag) in enumerate([
@@ -104,7 +124,10 @@ def test_replay_reports_and_writes(env, capsys):
     report = json.loads((vault / ".mnemo" / "replay-report.json").read_text())
     assert report["prompts"]["carried"] == 1
     assert report["prompts"]["carried_correction_backed"] == 1
-    assert report["vault"] == {"rules": 6, "correction_backed": 1}
+    assert report["prompts"]["carried_gate_verified"] == 1
+    assert report["vault"] == {"rules": 7, "correction_backed": 2, "gate_verified": 1, "label_only": 1}
+    assert re.search(r"citing your own words\s+1\s+prompts", out)
+    assert re.search(r"label only, gate can't check\s+0\s+prompts", out)
     assert "project" not in report
 
 

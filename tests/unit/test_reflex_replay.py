@@ -309,8 +309,9 @@ def _fake(prompts, injections, silence=None, fired=None):
 
 
 def _inj(sid, at, slug, bucket, backed=False):
+    """``backed`` here is the strong kind: verified by the gate, not just labelled."""
     return R.Injection(session_id=sid, project="alpha", ts=at.timestamp(), slug=slug,
-                       bucket=bucket, correction_backed=backed)
+                       bucket=bucket, correction_backed=backed, gate_verified=backed)
 
 
 def test_aggregate_credits_a_prompt_by_its_best_bucket():
@@ -322,15 +323,19 @@ def test_aggregate_credits_a_prompt_by_its_best_bucket():
         _inj(SID_B, at + timedelta(minutes=1), "r3", R.NOT_YET_LEARNED),
     ]
 
-    report = R.aggregate(_fake(prompts, injections), vault_rules=10, correction_backed_rules=1)
+    report = R.aggregate(_fake(prompts, injections), vault_rules=10, correction_backed_rules=1,
+                         gate_verified_rules=1)
 
     assert report["prompts"] == {
         "total": 3, "fired": 2, "carried": 1, "carried_correction_backed": 1,
+        "carried_gate_verified": 1, "carried_label_only": 0,
         "hindsight": 0, "not_yet_learned": 1, "undated": 0,
     }
     assert report["injections"]["carried"] == 1 and report["injections"]["hindsight"] == 1
-    assert report["rules"] == {"carried_distinct": 1, "carried_correction_backed_distinct": 1}
-    assert report["top_carried"] == [{"slug": "r1", "prompts": 1, "correction_backed": True}]
+    assert report["rules"] == {"carried_distinct": 1, "carried_correction_backed_distinct": 1,
+                               "carried_gate_verified_distinct": 1, "carried_label_only_distinct": 0}
+    assert report["top_carried"] == [{"slug": "r1", "prompts": 1, "correction_backed": True,
+                                      "gate_verified": True}]
     assert report["rate"] is None, "three prompts is not a rate"
     assert report["transcripts"] == {"sessions": 1, "prompts": 3, "first": "2026-09-03", "last": "2026-09-03"}
 
@@ -406,3 +411,127 @@ def test_end_to_end_same_inputs_same_report(env):
     first, second = once(), once()
     assert first == second
     assert first["prompts"]["carried"] == 1 and first["prompts"]["hindsight"] == 1
+
+
+# --- provenance: gate-verified vs label-only (#257) ---------------------------
+
+def _corrections_briefing(vault: Path, project: str, sid: str, quote: str) -> str:
+    """A briefing whose ``## Corrections`` carries *quote* — what today's gate reads."""
+    from mnemo.core import corrections
+
+    rel = _briefing(vault, project, sid)
+    item = corrections.Correction(quote=quote, rule="do the thing")
+    (vault / rel).write_text("# briefing\n\n" + corrections.render_section([item]), encoding="utf-8")
+    return rel
+
+
+def test_rule_facts_tells_a_gate_verified_label_from_a_label_only_one(env):
+    """A ``confidence: verified`` written by ``mnemo reclassify`` in 2026-09 cites a
+    briefing that has no ``## Corrections`` at all; today's gate cannot re-check
+    it. Both count as correction-backed; only one is verified by the gate."""
+    vault, _projects = env
+    quote = "never sum the rows, use the global total from the api"
+    src_b = _corrections_briefing(vault, "alpha", SID_B, quote)
+    _rule(vault, "gate-verified", sources=[src_b], extracted_at="2026-09-02T10:00:00",
+          desc="gate verified rule", body="gate body", tags=("g",),
+          extra=f"confidence: verified\nevidence:\n  quote: '{quote}'\n  source: '{src_b}'\n")
+    src_c = _briefing(vault, "alpha", SID_C)  # no Corrections section
+    _rule(vault, "label-only", sources=[src_c], extracted_at="2026-09-02T10:00:00",
+          desc="label only rule", body="label body", tags=("l",),
+          extra=(f"confidence: verified\nevidence:\n  quote: '{quote}'\n"
+                 f"  source: 'briefing: {src_c} — user turns, turn 3'\n"))
+
+    facts = R.rule_facts(vault)
+
+    assert facts["gate-verified"].correction_backed is True
+    assert facts["gate-verified"].gate_verified is True
+    assert facts["label-only"].correction_backed is True
+    assert facts["label-only"].gate_verified is False
+    assert facts["use-prisma-mock"].gate_verified is False
+
+
+def test_rule_facts_gate_refuses_a_quote_from_a_briefing_the_rule_was_not_built_from(env):
+    """Same bar as ``evidence.verify_page``: the cited briefing must be one of the
+    page's own sources, or one project's correction launders another's rule."""
+    vault, _projects = env
+    quote = "never sum the rows, use the global total from the api"
+    src_b = _corrections_briefing(vault, "alpha", SID_B, quote)
+    src_c = _briefing(vault, "alpha", SID_C)
+    _rule(vault, "laundered", sources=[src_c], extracted_at="2026-09-02T10:00:00",
+          desc="laundered rule", body="laundered body", tags=("w",),
+          extra=f"confidence: verified\nevidence:\n  quote: '{quote}'\n  source: '{src_b}'\n")
+
+    facts = R.rule_facts(vault)
+    assert facts["laundered"].correction_backed is True
+    assert facts["laundered"].gate_verified is False
+
+
+def _ginj(sid, at, slug, bucket, *, gate):
+    return R.Injection(session_id=sid, project="alpha", ts=at.timestamp(), slug=slug,
+                       bucket=bucket, correction_backed=True, gate_verified=gate)
+
+
+def test_aggregate_splits_correction_backed_by_provenance():
+    at = T0 + timedelta(days=2)
+    prompts = [_p(SID_B, at), _p(SID_B, at + timedelta(minutes=1)), _p(SID_B, at + timedelta(minutes=2))]
+    injections = [
+        _ginj(SID_B, at, "gate-rule", R.CARRIED, gate=True),
+        _ginj(SID_B, at + timedelta(minutes=1), "label-rule", R.CARRIED, gate=False),
+        _ginj(SID_B, at + timedelta(minutes=2), "same-session", R.HINDSIGHT, gate=True),
+    ]
+
+    report = R.aggregate(_fake(prompts, injections), vault_rules=10,
+                         correction_backed_rules=3, gate_verified_rules=1)
+
+    assert report["vault"] == {"rules": 10, "correction_backed": 3, "gate_verified": 1, "label_only": 2}
+    assert report["prompts"]["carried_correction_backed"] == 2
+    assert report["prompts"]["carried_gate_verified"] == 1
+    assert report["prompts"]["carried_label_only"] == 1
+    assert report["injections"]["carried_gate_verified"] == 1
+    assert report["injections"]["carried_label_only"] == 1
+    assert report["rules"]["carried_gate_verified_distinct"] == 1
+    assert report["rules"]["carried_label_only_distinct"] == 1
+    assert report["top_carried"] == [
+        {"slug": "gate-rule", "prompts": 1, "correction_backed": True, "gate_verified": True},
+        {"slug": "label-rule", "prompts": 1, "correction_backed": True, "gate_verified": False},
+    ]
+
+
+def test_aggregate_rate_carries_the_gate_verified_share():
+    at = T0
+    prompts = [_p(SID_B, at + timedelta(minutes=i)) for i in range(R.MIN_PROMPTS_FOR_RATE)]
+    injections = [
+        _ginj(SID_B, at, "gate-rule", R.CARRIED, gate=True),
+        _ginj(SID_B, at + timedelta(minutes=1), "label-rule", R.CARRIED, gate=False),
+        _ginj(SID_B, at + timedelta(minutes=2), "label-rule-2", R.CARRIED, gate=False),
+    ]
+    report = R.aggregate(_fake(prompts, injections), vault_rules=10,
+                         correction_backed_rules=3, gate_verified_rules=1)
+
+    assert report["rate"]["carried_correction_backed"] == 0.1
+    assert report["rate"]["carried_gate_verified"] == pytest.approx(1 / 30, abs=1e-4)
+    lo, hi = report["rate"]["carried_gate_verified_ci95"]
+    assert lo < 1 / 30 < hi
+
+
+def test_format_report_prints_both_provenances():
+    at = T0
+    prompts = [_p(SID_B, at + timedelta(minutes=i)) for i in range(40)]
+    injections = [
+        _ginj(SID_B, at, "gate-rule", R.CARRIED, gate=True),
+        _ginj(SID_B, at + timedelta(minutes=1), "label-rule", R.CARRIED, gate=False),
+    ]
+    report = R.aggregate(_fake(prompts, injections), vault_rules=10,
+                         correction_backed_rules=3, gate_verified_rules=1)
+
+    text = R.format_report(report)
+
+    def has(pattern: str) -> bool:
+        return re.search(pattern, text) is not None
+
+    assert has(r"rules in the vault\s+10\s+\(3 cite a correction you typed: 1 verified by the evidence gate today, 2 label only\)")
+    assert has(r"citing your own words\s+1\s+prompts\s+2\.5%\s+\(95% CI [\d.]+–[\d.]+%\)\s+verified by the evidence gate today")
+    assert has(r"label only, gate can't check\s+1\s+prompts")
+    assert has(r"distinct rules carried across sessions\s+2\s+\(1 gate-verified, 1 label only\)")
+    assert "gate-rule  ✓ your words" in text
+    assert "label-rule  ~ label only" in text
