@@ -47,7 +47,7 @@ def test_briefing_writes_telemetry_entry(tmp_path: Path, monkeypatch) -> None:
     assert out is not None
 
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
-    entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
     llm_entries = [e for e in entries if e.get("tool") == "llm.call"]
     assert len(llm_entries) == 1
     e = llm_entries[0]

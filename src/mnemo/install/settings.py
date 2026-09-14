@@ -122,7 +122,15 @@ def _build_entry(event: str, defn: dict[str, Any]) -> dict[str, Any]:
 def _read_settings(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    text = path.read_text()
+    try:
+        # Claude Code writes this file as UTF-8 on every platform; reading it
+        # with the platform default (cp1252 on Windows) garbles non-ASCII paths.
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise SettingsError(
+            f"Cannot decode {path} as UTF-8. mnemo refuses to overwrite a malformed "
+            f"settings.json. Re-save the file as UTF-8 and re-run /mnemo init. ({e})"
+        )
     if not text.strip():
         return {}
     try:
@@ -156,7 +164,8 @@ def _backup(path: Path) -> None:
         return
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     backup = path.with_name(f"{path.name}.bak.{stamp}")
-    backup.write_text(path.read_text())
+    # A byte copy: the backup must reproduce the file exactly, whatever it holds.
+    backup.write_bytes(path.read_bytes())
 
 
 def _with_lock(path: Path):
@@ -197,7 +206,7 @@ def _do_inject(settings_path: Path) -> None:
         existing.append(_build_entry(event, defn))
         hooks[event] = existing
 
-    settings_path.write_text(json.dumps(data, indent=2))
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def uninject_hooks(settings_path: Path) -> None:
@@ -228,7 +237,7 @@ def _do_uninject(settings_path: Path) -> None:
                 hooks.pop(event)
     if not hooks:
         data.pop("hooks", None)
-    settings_path.write_text(json.dumps(data, indent=2))
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # --- v0.5: MCP server registration in ~/.claude.json ---
@@ -268,7 +277,7 @@ def _do_inject_mcp(claude_json_path: Path) -> None:
     _backup(claude_json_path)
     servers = data.setdefault("mcpServers", {})
     servers[MCPSERVER_NAME] = _mcp_server_spec()
-    claude_json_path.write_text(json.dumps(data, indent=2))
+    claude_json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def uninject_mcp_servers(claude_json_path: Path) -> None:
@@ -294,7 +303,7 @@ def _do_uninject_mcp(claude_json_path: Path) -> None:
     servers.pop(MCPSERVER_NAME, None)
     if not servers:
         data.pop("mcpServers", None)
-    claude_json_path.write_text(json.dumps(data, indent=2))
+    claude_json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # --- v0.5: statusLine additive composer registration ---
@@ -360,7 +369,7 @@ def _do_inject_statusline(settings_path: Path, vault_root: Path) -> None:
         "type": "command",
         "command": _statusline_compose_command(),
     }
-    settings_path.write_text(json.dumps(data, indent=2))
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def uninject_statusline(settings_path: Path, vault_root: Path) -> None:
@@ -401,7 +410,7 @@ def _do_uninject_statusline(settings_path: Path, vault_root: Path) -> None:
         data.pop("statusLine", None)
 
     sl_mod.clear_state(vault_root)
-    settings_path.write_text(json.dumps(data, indent=2))
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # --- v0.13: slash command registration (replaces /plugin install dance) ---
@@ -557,11 +566,13 @@ def inject_slash_commands(commands_dir: Path) -> None:
         # If a non-mnemo file is already at this path, leave it alone.
         if target.exists():
             try:
-                if SLASH_COMMAND_TAG not in target.read_text():
+                # The probe only looks for an ASCII tag; a third-party file
+                # saved in another encoding is left alone, not a crash.
+                if SLASH_COMMAND_TAG not in target.read_text(encoding="utf-8", errors="replace"):
                     continue
             except OSError:
                 continue
-        target.write_text(_render_slash_command(name, spec))
+        target.write_text(_render_slash_command(name, spec), encoding="utf-8")
 
 
 def uninject_slash_commands(commands_dir: Path) -> None:
@@ -571,7 +582,7 @@ def uninject_slash_commands(commands_dir: Path) -> None:
         return
     for path in commands_dir.glob("*.md"):
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         if SLASH_COMMAND_TAG in text:

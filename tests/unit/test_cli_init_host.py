@@ -41,7 +41,7 @@ def test_init_cursor_registers_mcp_scaffolds_vault_and_exports(tmp_home: Path, r
     rc = cli.main(["init", "--host", "cursor", "--yes", "--vault-root", str(vault), "--no-mirror"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert (repo / ".cursor" / "rules" / "mnemo.mdc").exists()
     assert "exported 1 rule" in out
     assert "learns from Claude Code sessions" in out
@@ -75,7 +75,7 @@ def test_uninstall_cursor_removes_only_the_cursor_entry(tmp_home: Path, repo: Pa
     cli.main(["init", "--host", "cursor", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror"])
     rc = cli.main(["uninstall", "--host", "cursor", "--yes"])
     assert rc == 0
-    data = json.loads((tmp_home / ".cursor" / "mcp.json").read_text())
+    data = json.loads((tmp_home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
     assert "mnemo" not in data.get("mcpServers", {})
     assert "cursor" in capsys.readouterr().out
 
@@ -102,7 +102,7 @@ def test_init_cursor_survives_a_broken_rules_file(tmp_home: Path, repo: Path, ca
     assert rc == 0
     assert "rules file not written" in captured.err
     assert "mnemo export --host cursor" in captured.err
-    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    assert "mnemo" in json.loads((tmp_home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX chmod semantics not honored on Windows")
@@ -111,7 +111,7 @@ def test_init_cursor_ignores_an_unwritable_claude_settings(tmp_home: Path, repo:
     """Cursor never writes ~/.claude/settings.json, so it must not gate on it."""
     settings = tmp_home / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text("{}")
+    settings.write_text("{}", encoding="utf-8")
     settings.chmod(0o444)
     try:
         rc = cli.main(["init", "--host", "cursor", "--yes",

@@ -74,7 +74,7 @@ def test_deny_envelope_contains_rule_path_and_hint(monkeypatch, tmp_vault: Path)
         "  deny_pattern: 'curl .*example\\.com'\n"
         "  reason: 'no external fetch'\n"
         "---\n"
-        "Body.\n"
+        "Body.\n", encoding="utf-8"
     )
 
     project_dir = _make_git_project(vault, project)

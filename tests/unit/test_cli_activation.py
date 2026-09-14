@@ -60,7 +60,7 @@ def _write_index(vault: Path, *, enforce_rules: list | None = None, enrich_rules
     }
     mnemo_dir = vault / ".mnemo"
     mnemo_dir.mkdir(parents=True, exist_ok=True)
-    (mnemo_dir / "rule-activation-index.json").write_text(json.dumps(index))
+    (mnemo_dir / "rule-activation-index.json").write_text(json.dumps(index), encoding="utf-8")
 
 
 def _write_denial_log(vault: Path, entries: list[dict]) -> None:
@@ -68,7 +68,7 @@ def _write_denial_log(vault: Path, entries: list[dict]) -> None:
     mnemo_dir = vault / ".mnemo"
     mnemo_dir.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(e) for e in entries]
-    (mnemo_dir / "denial-log.jsonl").write_text("\n".join(lines) + ("\n" if lines else ""))
+    (mnemo_dir / "denial-log.jsonl").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _write_feedback_file(vault: Path, slug: str, *, enforce: dict | None = None, activates_on: dict | None = None, sources: list[str] | None = None) -> Path:
@@ -109,7 +109,7 @@ def _write_feedback_file(vault: Path, slug: str, *, enforce: dict | None = None,
     fm_lines.append("")
     fm_lines.append("Rule body content here.")
     path = feedback_dir / f"{slug}.md"
-    path.write_text("\n".join(fm_lines))
+    path.write_text("\n".join(fm_lines), encoding="utf-8")
     return path
 
 
@@ -420,7 +420,7 @@ def _write_claude_json_with_mnemo(path: Path) -> None:
         "mcpServers": {
             "mnemo": {"command": "python", "args": ["-m", "mnemo", "mcp-server"]},
         },
-    }))
+    }), encoding="utf-8")
 
 
 def test_statusline_shows_activation_segments_when_enabled(tmp_vault, tmp_path, monkeypatch):
@@ -577,7 +577,7 @@ def test_cmd_status_hooks_installed_count_derives_from_hook_definitions(tmp_path
             for event, defn in HOOK_DEFINITIONS.items()
         }
     }
-    (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+    (home / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(home)) if isinstance(p, str) else p)
 
@@ -622,7 +622,7 @@ def test_cmd_status_shows_malformed_count_when_index_has_malformed(tmp_path, mon
             {"path": "shared/feedback/broken2.md", "error": "activates_on.path_globs is empty"},
         ],
     }
-    (mnemo_dir / "rule-activation-index.json").write_text(json.dumps(index))
+    (mnemo_dir / "rule-activation-index.json").write_text(json.dumps(index), encoding="utf-8")
 
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {
         "vaultRoot": str(vault),

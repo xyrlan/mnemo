@@ -38,10 +38,10 @@ def test_should_run_true_when_old_run(tmp_path: Path):
     mark_run(vault_root=tmp_path, name="x")
     # backdate by 8 days
     p = runs_path(tmp_path)
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     old = (datetime.now(timezone.utc) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
     data["runs"]["x"]["last_run_at"] = old
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     assert should_run(vault_root=tmp_path, name="x", interval_days=7) is True
 
 
@@ -49,7 +49,7 @@ def test_mark_run_failure_does_not_update_last_run(tmp_path: Path):
     set_state(vault_root=tmp_path, state="on")
     mark_run(vault_root=tmp_path, name="x", success=False, error="boom")
     assert last_run(vault_root=tmp_path, name="x") is None
-    data = json.loads(runs_path(tmp_path).read_text())
+    data = json.loads(runs_path(tmp_path).read_text(encoding="utf-8"))
     assert data["runs"]["x"]["last_error"] == "boom"
     assert "last_attempt_at" in data["runs"]["x"]
 
@@ -58,7 +58,7 @@ def test_mark_run_success_clears_prior_error(tmp_path: Path):
     set_state(vault_root=tmp_path, state="on")
     mark_run(vault_root=tmp_path, name="x", success=False, error="boom")
     mark_run(vault_root=tmp_path, name="x", success=True)
-    data = json.loads(runs_path(tmp_path).read_text())
+    data = json.loads(runs_path(tmp_path).read_text(encoding="utf-8"))
     assert "last_error" not in data["runs"]["x"]
     assert data["runs"]["x"]["last_run_at"] is not None
 
@@ -85,7 +85,7 @@ def test_run_inline_swallows_exception(tmp_path: Path):
     ok = run_inline(vault_root=tmp_path, name="x", fn=fn)
     assert ok is False
     assert last_run(vault_root=tmp_path, name="x") is None
-    data = json.loads(runs_path(tmp_path).read_text())
+    data = json.loads(runs_path(tmp_path).read_text(encoding="utf-8"))
     assert "boom" in data["runs"]["x"]["last_error"]
 
 
@@ -107,7 +107,7 @@ def test_run_detached_records_attempt(tmp_path: Path, monkeypatch):
     # prevents re-launching the same job every SessionStart while the
     # subprocess is still running. Failures land in autopilot-runs.log.
     assert last_run(vault_root=tmp_path, name="bg") is not None
-    data = json.loads(runs_path(tmp_path).read_text())
+    data = json.loads(runs_path(tmp_path).read_text(encoding="utf-8"))
     assert "last_error" not in data["runs"]["bg"]
 
 
@@ -121,5 +121,5 @@ def test_run_detached_swallows_oserror(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("mnemo.autopilot.core.triggers.subprocess.Popen", boom)
     # should not raise
     run_detached(vault_root=tmp_path, name="bg", argv=["x"])
-    data = json.loads(runs_path(tmp_path).read_text())
+    data = json.loads(runs_path(tmp_path).read_text(encoding="utf-8"))
     assert "nope" in data["runs"]["bg"]["last_error"]

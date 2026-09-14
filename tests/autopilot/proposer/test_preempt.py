@@ -38,7 +38,7 @@ def _fresh_cache(
     }
     cache_dir = tmp_path / ".mnemo"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    _cache_path(tmp_path).write_text(json.dumps(data, indent=2))
+    _cache_path(tmp_path).write_text(json.dumps(data, indent=2), encoding="utf-8")
     return data
 
 
@@ -54,7 +54,7 @@ def test_write_preempt_cache_creates_file(tmp_path: Path):
         )
     path = _cache_path(tmp_path)
     assert path.exists()
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     assert data["project"] == "my-project"
     assert "slug-a" in data["slugs"]
     assert data["branch"] == "main"
@@ -68,7 +68,7 @@ def test_write_preempt_cache_truncates_to_10(tmp_path: Path):
             project="p",
             slugs=[f"slug-{i}" for i in range(20)],
         )
-    data = json.loads(_cache_path(tmp_path).read_text())
+    data = json.loads(_cache_path(tmp_path).read_text(encoding="utf-8"))
     assert len(data["slugs"]) == 10
 
 
@@ -133,7 +133,7 @@ def test_read_preempt_cache_none_when_stale(tmp_path: Path):
 
 def test_read_preempt_cache_none_on_corrupt_json(tmp_path: Path):
     (tmp_path / ".mnemo").mkdir()
-    _cache_path(tmp_path).write_text("{invalid json}")
+    _cache_path(tmp_path).write_text("{invalid json}", encoding="utf-8")
     result = read_preempt_cache(vault_root=tmp_path)
     assert result is None
 

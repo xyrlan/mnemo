@@ -58,7 +58,7 @@ def test_extract_logs_llm_call_per_chunk(tmp_path: Path, monkeypatch) -> None:
     extract_mod.run_extraction(cfg)
 
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
-    entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
     consolidation = [e for e in entries if e.get("tool") == "llm.call"
                      and e.get("purpose", "").startswith("consolidation:")]
     assert len(consolidation) >= 1

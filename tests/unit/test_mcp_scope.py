@@ -61,7 +61,7 @@ def _write_feedback(vault: Path, stem: str, *, name: str, tags: list[str], sourc
     )
     target = vault / "shared" / "feedback" / f"{stem}.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
+    target.write_text(content, encoding="utf-8")
 
 
 def test_list_rules_by_topic_returns_local_and_universal(tmp_vault):
@@ -172,7 +172,7 @@ def test_fallback_slug_matches_fast_path_when_name_differs_from_stem(tmp_vault):
         "tags:\n  - code-style\n"
         "sources:\n  - bots/alpha/memory/f.md\n"
         "---\n\n"
-        "Body.\n"
+        "Body.\n", encoding="utf-8"
     )
 
     # Fast path: write index, query should return slug "use-tabs"

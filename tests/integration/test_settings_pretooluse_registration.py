@@ -21,7 +21,7 @@ def test_inject_hooks_registers_pretooluse_with_matcher(tmp_home: Path):
 
     inj.inject_hooks(settings_path)
 
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data["hooks"]
 
     # PreToolUse must be present
@@ -84,11 +84,11 @@ def test_strip_mnemo_entries_removes_pretooluse_on_uninstall(tmp_home: Path):
             ]
         }
     }
-    settings_path.write_text(json.dumps(initial))
+    settings_path.write_text(json.dumps(initial), encoding="utf-8")
 
     inj.uninject_hooks(settings_path)
 
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data.get("hooks", {})
 
     # User-owned entry must survive
@@ -128,11 +128,11 @@ def test_strip_mnemo_entries_removes_pretooluse_key_when_only_mnemo(tmp_home: Pa
             ]
         }
     }
-    settings_path.write_text(json.dumps(initial))
+    settings_path.write_text(json.dumps(initial), encoding="utf-8")
 
     inj.uninject_hooks(settings_path)
 
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data.get("hooks", {})
 
     # PreToolUse key must be absent (or empty list) — match existing convention

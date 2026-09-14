@@ -28,7 +28,7 @@ def _setup_vault(tmp_path: Path) -> None:
         json.dumps({
             "schema_version": 1, "state": "on", "paused_until": None,
             "last_changed_at": None, "last_changed_by": None,
-        })
+        }), encoding="utf-8"
     )
 
 

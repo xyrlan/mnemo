@@ -64,7 +64,7 @@ def test_scan_discovers_briefings_sessions_dir(tmp_vault: Path):
         "---\n\n"
         "# Briefing — agent_a — sid42\n\n"
         "## Decisions made\n"
-        "- Chose Zustand over Redux because smaller API surface.\n"
+        "- Chose Zustand over Redux because smaller API surface.\n", encoding="utf-8"
     )
 
     result = scanner.scan(tmp_vault, _empty_state())
@@ -86,12 +86,12 @@ def test_scan_briefing_and_memory_files_coexist(tmp_vault: Path):
     memory_dir = tmp_vault / "bots" / "agent_a" / "memory"
     memory_dir.mkdir(parents=True)
     (memory_dir / "feedback_use_yarn.md").write_text(
-        "---\nname: Use yarn\ntype: feedback\n---\nbody"
+        "---\nname: Use yarn\ntype: feedback\n---\nbody", encoding="utf-8"
     )
     briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
     briefings_dir.mkdir(parents=True)
     (briefings_dir / "sid.md").write_text(
-        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body"
+        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body", encoding="utf-8"
     )
 
     result = scanner.scan(tmp_vault, _empty_state())
@@ -105,7 +105,7 @@ def test_scan_briefing_unchanged_source_hash_skipped_on_second_run(tmp_vault: Pa
     briefings_dir = tmp_vault / "bots" / "agent_a" / "briefings" / "sessions"
     briefings_dir.mkdir(parents=True)
     (briefings_dir / "sid.md").write_text(
-        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body"
+        "---\ntype: briefing\nagent: agent_a\nsession_id: sid\n---\n# body", encoding="utf-8"
     )
 
     first = scanner.scan(tmp_vault, _empty_state())
@@ -131,7 +131,7 @@ def test_scan_unknown_type_defaults_to_feedback(tmp_vault: Path):
     agent_dir = tmp_vault / "bots" / "x" / "memory"
     agent_dir.mkdir(parents=True)
     (agent_dir / "weird.md").write_text(
-        "---\nname: Weird\ndescription: Weird\ntype: alien\n---\nbody"
+        "---\nname: Weird\ndescription: Weird\ntype: alien\n---\nbody", encoding="utf-8"
     )
     result = scanner.scan(tmp_vault, _empty_state())
     assert len(result.by_type["feedback"]) == 1
@@ -141,7 +141,7 @@ def test_scan_unknown_type_defaults_to_feedback(tmp_vault: Path):
 def test_scan_missing_frontmatter_defaults_to_feedback(tmp_vault: Path):
     agent_dir = tmp_vault / "bots" / "x" / "memory"
     agent_dir.mkdir(parents=True)
-    (agent_dir / "bare.md").write_text("no frontmatter at all\njust body")
+    (agent_dir / "bare.md").write_text("no frontmatter at all\njust body", encoding="utf-8")
     result = scanner.scan(tmp_vault, _empty_state())
     assert len(result.by_type["feedback"]) == 1
 
@@ -171,7 +171,7 @@ def test_scan_detects_content_change(populated_vault: Path):
     # Mutate one file
     for f in first.by_type["feedback"]:
         if "use_yarn" in f.path.name:
-            f.path.write_text(f.path.read_text() + "\n\n(updated)\n")
+            f.path.write_text(f.path.read_text(encoding="utf-8") + "\n\n(updated)\n", encoding="utf-8")
             break
     result = scanner.scan(populated_vault, _empty_state())
     yarn_file = next(f for f in result.by_type["feedback"] if "use_yarn" in f.path.name)

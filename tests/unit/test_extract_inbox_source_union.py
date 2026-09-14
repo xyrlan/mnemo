@@ -70,7 +70,7 @@ def test_cross_project_sources_union_on_reextraction(tmp_path: Path) -> None:
         "bots/proj-b/briefings/sessions/bbb.md",
     ]
 
-    rendered = target.read_text()
+    rendered = target.read_text(encoding="utf-8")
     assert "bots/proj-a/briefings/sessions/aaa.md" in rendered
     assert "bots/proj-b/briefings/sessions/bbb.md" in rendered
 

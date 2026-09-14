@@ -44,7 +44,7 @@ def test_background_writes_last_auto_run_on_success(tmp_path, monkeypatch):
 
     last_run = vault / ".mnemo" / "last-auto-run.json"
     assert last_run.exists()
-    payload = json.loads(last_run.read_text())
+    payload = json.loads(last_run.read_text(encoding="utf-8"))
     assert payload["exit_code"] == 0
     assert payload["mode"] == "background"
 
@@ -65,7 +65,7 @@ def test_background_skips_last_auto_run_on_lock_contention(tmp_path, monkeypatch
     assert not last_run.exists(), "lock-contended runs must not overwrite the success record"
     errors_log = vault / ".errors.log"
     assert errors_log.exists()
-    assert "extract.bg.lock" in errors_log.read_text()
+    assert "extract.bg.lock" in errors_log.read_text(encoding="utf-8")
 
 
 def test_background_flag_hidden_from_help(capsys):

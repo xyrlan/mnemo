@@ -67,7 +67,7 @@ def _run_extract_background(cfg: dict, args: argparse.Namespace) -> int:
     from mnemo.core import errors as err_mod, extract as extract_mod, paths as paths_mod
 
     vault_root = paths_mod.vault_root(cfg)
-    devnull = open(os.devnull, "w")
+    devnull = open(os.devnull, "w", encoding="utf-8")
     try:
         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
             try:

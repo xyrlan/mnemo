@@ -20,7 +20,7 @@ def test_session_start_main_emits_briefing_and_logs_telemetry(
         "injection": {"enabled": True, "telemetry": {"enabled": True}},
         "briefings": {"enabled": True, "injectLastOnSessionStart": True},
         "capture": {"sessionStartEnd": False},
-    }))
+    }), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))
 
     sessions_dir = tmp_vault / "bots" / "vault" / "briefings" / "sessions"
@@ -58,7 +58,7 @@ def test_session_start_main_emits_briefing_and_logs_telemetry(
 
     # 5. Assert telemetry entry was written.
     log = tmp_vault / ".mnemo" / "mcp-access-log.jsonl"
-    entries = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
     inj = [e for e in entries if e.get("tool") == "session_start.inject"]
     assert len(inj) == 1
     assert inj[0]["included_briefing"] is True

@@ -27,7 +27,7 @@ FIX = Path(__file__).parent / "fixtures"
 def golden_vault(tmp_path: Path) -> Path:
     dst = tmp_path / "vault"
     shutil.copytree(FIX / "golden_vault", dst)
-    (dst / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(dst)}))
+    (dst / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(dst)}), encoding="utf-8")
     (dst / "bots").mkdir(exist_ok=True)
     return dst
 

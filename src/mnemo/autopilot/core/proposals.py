@@ -87,12 +87,12 @@ def write_proposal(
         status="pending",
         created_at=now,
     )
-    target.write_text(json.dumps(asdict(p), indent=2, sort_keys=True))
+    target.write_text(json.dumps(asdict(p), indent=2, sort_keys=True), encoding="utf-8")
     return p
 
 
 def _read_one(path: Path) -> Proposal:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return Proposal(
         id=data["id"],
         kind=data["kind"],
@@ -148,12 +148,12 @@ def update_status(
     target = _path_for(vault_root, proposal_id)
     if not target.exists():
         raise FileNotFoundError(f"proposal {proposal_id!r} not found at {target}")
-    data = json.loads(target.read_text())
+    data = json.loads(target.read_text(encoding="utf-8"))
     data["status"] = status
     data["decided_at"] = _now_iso()
     if applied_pr is not None:
         data["applied_pr"] = applied_pr
-    target.write_text(json.dumps(data, indent=2, sort_keys=True))
+    target.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     return _read_one(target)
 
 

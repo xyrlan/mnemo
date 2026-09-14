@@ -27,8 +27,8 @@ def _has_global_mnemo_install(home_settings: Path) -> bool:
     if not home_settings.exists():
         return False
     try:
-        data = json.loads(home_settings.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(home_settings.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(data, dict):
         return False
@@ -49,9 +49,11 @@ def _ensure_gitignore(cwd: Path, entries: tuple[str, ...] = GITIGNORE_ENTRIES) -
     """Append missing mnemo entries to ``<cwd>/.gitignore`` (idempotent)."""
     gi = cwd / ".gitignore"
     existing_lines: list[str] = []
+    # The user owns this file: surrogateescape carries any byte that is not
+    # UTF-8 through the read and back out of the write unchanged.
     if gi.exists():
         try:
-            existing_lines = gi.read_text().splitlines()
+            existing_lines = gi.read_text(encoding="utf-8", errors="surrogateescape").splitlines()
         except OSError:
             return
     have = {line.strip() for line in existing_lines}
@@ -61,7 +63,11 @@ def _ensure_gitignore(cwd: Path, entries: tuple[str, ...] = GITIGNORE_ENTRIES) -
     block = ["", "# mnemo (project-scoped install)"] + list(missing)
     new_text = "\n".join(existing_lines + block).rstrip("\n") + "\n"
     try:
-        gi.write_text(new_text)
+        # newline="\n": on Windows, text mode would rewrite the user's LF file
+        # as CRLF on every init; the file is theirs and comes back byte for
+        # byte apart from the entries added.
+        with gi.open("w", encoding="utf-8", errors="surrogateescape", newline="\n") as fh:
+            fh.write(new_text)
     except OSError:
         pass
 

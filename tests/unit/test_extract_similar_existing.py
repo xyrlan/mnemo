@@ -30,7 +30,7 @@ def _seed(root: Path, state: ExtractionState, slug: str, name: str, body: str = 
     d = root / "shared" / "feedback"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{slug}.md"
-    path.write_text(f"---\nname: {name}\ndescription: {name}\ntype: feedback\nsources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - ads\n---\n{body}\n")
+    path.write_text(f"---\nname: {name}\ndescription: {name}\ntype: feedback\nsources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - ads\n---\n{body}\n", encoding="utf-8")
     # written_hash must match the file on disk: the auto-promoted branch treats a
     # mismatch as "user edited this page" and bounces to a .proposed.md sibling
     # without touching the entry, which is not the path under test here.

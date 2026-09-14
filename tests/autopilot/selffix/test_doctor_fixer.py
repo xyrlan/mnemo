@@ -221,7 +221,7 @@ def test_open_doctor_fix_pr_dry_run_no_pr_opened(tmp_path: Path) -> None:
     import json
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
+                    "last_changed_at": None, "last_changed_by": None}), encoding="utf-8"
     )
 
     with patch("mnemo.autopilot.selffix.doctor_fixer._gh.open_pr") as mock_pr:
@@ -256,7 +256,7 @@ def test_open_doctor_fix_pr_records_budget_on_success(tmp_path: Path) -> None:
     import json
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
+                    "last_changed_at": None, "last_changed_by": None}), encoding="utf-8"
     )
 
     with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_worktree",
@@ -298,7 +298,7 @@ def test_open_doctor_fix_pr_aborts_when_pytest_fails(tmp_path: Path) -> None:
     import json
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
+                    "last_changed_at": None, "last_changed_by": None}), encoding="utf-8"
     )
 
     with patch("mnemo.autopilot.selffix.doctor_fixer._gh.create_worktree",

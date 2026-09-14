@@ -21,11 +21,11 @@ def _composer_cmd() -> str:
 def test_inject_statusline_into_empty_settings(tmp_path: Path, tmp_vault: Path):
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text("{}")
+    settings.write_text("{}", encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["statusLine"]["type"] == "command"
     assert data["statusLine"]["command"].endswith("statusline-compose")
     # State file says no original existed
@@ -38,11 +38,11 @@ def test_inject_statusline_preserves_user_command(tmp_path: Path, tmp_vault: Pat
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
-    }))
+    }), encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     # statusLine in settings.json now points at composer
     assert data["statusLine"]["command"].endswith("statusline-compose")
     # Original command captured for restore
@@ -58,7 +58,7 @@ def test_inject_statusline_idempotent_when_already_composer(tmp_path: Path, tmp_
     # First install — capture a real original
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
-    }))
+    }), encoding="utf-8")
     inj.inject_statusline(settings, tmp_vault)
 
     # Manually verify state captured the user command
@@ -79,11 +79,11 @@ def test_inject_statusline_preserves_unrelated_keys(tmp_path: Path, tmp_vault: P
     settings.write_text(json.dumps({
         "permissions": {"allow": ["Bash"]},
         "hooks": {"SessionStart": []},
-    }))
+    }), encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["permissions"] == {"allow": ["Bash"]}
     assert data["hooks"] == {"SessionStart": []}
     assert "statusLine" in data
@@ -93,7 +93,7 @@ def test_inject_statusline_creates_settings_file(tmp_path: Path, tmp_vault: Path
     settings = tmp_path / ".claude" / "settings.json"
     inj.inject_statusline(settings, tmp_vault)
     assert settings.exists()
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert "statusLine" in data
 
 
@@ -105,12 +105,12 @@ def test_uninject_statusline_restores_original(tmp_path: Path, tmp_vault: Path):
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/home/user/my-prompt.sh"},
-    }))
+    }), encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
     inj.uninject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["statusLine"]["command"] == "/home/user/my-prompt.sh"
     assert sl.read_state(tmp_vault) is None
 
@@ -118,12 +118,12 @@ def test_uninject_statusline_restores_original(tmp_path: Path, tmp_vault: Path):
 def test_uninject_statusline_removes_key_when_no_original(tmp_path: Path, tmp_vault: Path):
     settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text("{}")
+    settings.write_text("{}", encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
     inj.uninject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert "statusLine" not in data
     assert sl.read_state(tmp_vault) is None
 
@@ -134,11 +134,11 @@ def test_uninject_statusline_leaves_user_custom_alone(tmp_path: Path, tmp_vault:
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps({
         "statusLine": {"type": "command", "command": "/some/other/prompt.sh"},
-    }))
+    }), encoding="utf-8")
 
     inj.uninject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["statusLine"]["command"] == "/some/other/prompt.sh"
 
 
@@ -154,11 +154,11 @@ def test_inject_uninject_round_trip_with_user_command(tmp_path: Path, tmp_vault:
         "statusLine": {"type": "command", "command": "echo hi"},
         "theme": "dark",
     }
-    settings.write_text(json.dumps(original))
+    settings.write_text(json.dumps(original), encoding="utf-8")
 
     inj.inject_statusline(settings, tmp_vault)
     inj.uninject_statusline(settings, tmp_vault)
 
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     assert data["statusLine"]["command"] == "echo hi"
     assert data["theme"] == "dark"

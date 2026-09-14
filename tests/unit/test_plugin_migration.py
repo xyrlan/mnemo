@@ -25,7 +25,7 @@ def _settings_with_mnemo_hooks(path: Path) -> Path:
 
 def test_no_legacy_install_is_reported_for_a_clean_machine(tmp_path: Path):
     settings = tmp_path / "settings.json"
-    settings.write_text(json.dumps({"hooks": {}}))
+    settings.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
 
     assert migration.find_legacy_installs([settings]) == []
 
@@ -52,7 +52,7 @@ def test_reports_every_scope_that_carries_a_legacy_install(tmp_path: Path):
 
 def test_a_malformed_settings_file_is_not_a_crash(tmp_path: Path):
     settings = tmp_path / "settings.json"
-    settings.write_text("{ not json")
+    settings.write_text("{ not json", encoding="utf-8")
 
     assert migration.find_legacy_installs([settings]) == []
 
@@ -63,23 +63,23 @@ def test_third_party_hooks_are_not_mistaken_for_ours(tmp_path: Path):
         "hooks": {"SessionStart": [{"hooks": [
             {"type": "command", "command": "/home/x/mnemo-notes/bin/backup.sh"},
         ]}]}
-    }))
+    }), encoding="utf-8")
 
     assert migration.find_legacy_installs([settings]) == []
 
 
 def test_migrate_strips_mnemo_hooks_and_leaves_everything_else(tmp_path: Path):
     settings = _settings_with_mnemo_hooks(tmp_path / "settings.json")
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     data["hooks"].setdefault("SessionStart", []).append(
         {"hooks": [{"type": "command", "command": "/usr/local/bin/other-tool"}]}
     )
     data["model"] = "opus"
-    settings.write_text(json.dumps(data))
+    settings.write_text(json.dumps(data), encoding="utf-8")
 
     migration.migrate([settings])
 
-    after = json.loads(settings.read_text())
+    after = json.loads(settings.read_text(encoding="utf-8"))
     remaining = [
         h["command"]
         for entries in after.get("hooks", {}).values()
@@ -92,23 +92,23 @@ def test_migrate_strips_mnemo_hooks_and_leaves_everything_else(tmp_path: Path):
 
 def test_migrate_backs_up_before_touching_anything(tmp_path: Path):
     settings = _settings_with_mnemo_hooks(tmp_path / "settings.json")
-    before = settings.read_text()
+    before = settings.read_text(encoding="utf-8")
 
     migration.migrate([settings])
 
     backups = list(tmp_path.glob("settings.json.bak.*"))
     assert len(backups) == 1
-    assert backups[0].read_text() == before
+    assert backups[0].read_text(encoding="utf-8") == before
 
 
 def test_migrate_is_idempotent(tmp_path: Path):
     settings = _settings_with_mnemo_hooks(tmp_path / "settings.json")
 
     migration.migrate([settings])
-    first = json.loads(settings.read_text())
+    first = json.loads(settings.read_text(encoding="utf-8"))
     migration.migrate([settings])
 
-    assert json.loads(settings.read_text()) == first
+    assert json.loads(settings.read_text(encoding="utf-8")) == first
 
 
 def test_notice_is_emitted_once_then_suppressed(tmp_path: Path):
@@ -135,8 +135,8 @@ def test_every_installed_event_is_detectable(tmp_path: Path, event: str):
     settings = tmp_path / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     inject_hooks(settings)
-    data = json.loads(settings.read_text())
+    data = json.loads(settings.read_text(encoding="utf-8"))
     data["hooks"] = {event: data["hooks"][event]}
-    settings.write_text(json.dumps(data))
+    settings.write_text(json.dumps(data), encoding="utf-8")
 
     assert migration.find_legacy_installs([settings]) == [settings]

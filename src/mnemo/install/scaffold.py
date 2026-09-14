@@ -58,4 +58,4 @@ def scaffold_vault(vault_root: Path) -> None:
     if not cfg_path.exists():
         cfg = json.loads(_read_template("mnemo.config.json"))
         cfg["vaultRoot"] = str(vault_root)
-        cfg_path.write_text(json.dumps(cfg, indent=2))
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")

@@ -25,7 +25,7 @@ def test_enrichment_skips_when_slug_already_injected(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "enrichment": {"enabled": True, "maxEmissionsPerSession": 15},
-    }))
+    }), encoding="utf-8")
     # Pre-populate cache: use-prisma-mock was already injected.
     session_state.add_injection(tmp_vault, slug="use-prisma-mock", sid="sid-a", now_ts=100)
 
@@ -38,7 +38,7 @@ def test_enrichment_returns_silence_when_cap_reached(tmp_vault, monkeypatch):
     (tmp_vault / "mnemo.config.json").write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "enrichment": {"enabled": True, "maxEmissionsPerSession": 1},
-    }))
+    }), encoding="utf-8")
     # Bump enrich_count to 1 so we're already AT cap.
     session_state.bump_emission(tmp_vault, sid="sid-cap", kind="enrich", now_ts=1)
 

@@ -16,10 +16,10 @@ def _make_repo_with_worktree_briefings(tmp_path: Path) -> tuple[Path, Path, Path
     (main / ".git").mkdir()
     wt_gitdir = main / ".git" / "worktrees" / "feature-x"
     wt_gitdir.mkdir(parents=True)
-    (wt_gitdir / "commondir").write_text("../..\n")
+    (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
     worktree = tmp_path / "myproj-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n")
+    (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
 
     # Orphan briefing under the worktree's old agent dir.
     orphan_dir = vault / "bots" / "myproj-feature-x" / "briefings" / "sessions"
@@ -51,7 +51,7 @@ def test_migrate_moves_orphans(tmp_path: Path, monkeypatch) -> None:
     assert rc == 0
     moved = vault / "bots" / "myproj" / "briefings" / "sessions" / "session-1.md"
     assert moved.exists()
-    assert moved.read_text() == "orphan briefing"
+    assert moved.read_text(encoding="utf-8") == "orphan briefing"
     # Source removed.
     assert not (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
 
@@ -72,7 +72,7 @@ def test_migrate_skips_collisions(tmp_path: Path, capsys, monkeypatch) -> None:
     # Original orphan stays in place.
     assert (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
     # Canonical file untouched.
-    assert (canonical_dir / "session-1.md").read_text() == "existing canonical"
+    assert (canonical_dir / "session-1.md").read_text(encoding="utf-8") == "existing canonical"
 
 
 def test_migrate_noop_when_nothing_to_move(tmp_path: Path, capsys, monkeypatch) -> None:

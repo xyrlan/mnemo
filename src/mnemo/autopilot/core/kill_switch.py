@@ -34,7 +34,7 @@ def _read(vault_root: Path) -> dict:
             "last_changed_at": None,
             "last_changed_by": None,
         }
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def get_state(*, vault_root: Path) -> str:
@@ -78,5 +78,5 @@ def set_state(
         "last_changed_by": source,
     }
     autopilot_state_path(vault_root).write_text(
-        json.dumps(data, indent=2, sort_keys=True)
+        json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
     )

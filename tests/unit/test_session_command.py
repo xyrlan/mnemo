@@ -37,7 +37,7 @@ def session_with_actions(monkeypatch, tmp_path):
         _event("Edit", "file_path", "/r/detector.py", "2026-09-13T14:03:02.000Z"),
         _event("Bash", "description", "Run tests", "2026-09-13T14:03:40.000Z"),
         _event("Grep", "pattern", "linkScanOffset", "2026-09-13T14:04:15.000Z"),
-    ]) + "\n")
+    ]) + "\n", encoding="utf-8")
 
     session = Session(short_id="abc", tempo="active", state="active", name="measure-edges",
                       cwd="/Users/x/github/mnemo-wt-203", live=True,
@@ -113,7 +113,7 @@ def test_transcript_with_no_tool_use_says_so(monkeypatch, tmp_path, capsys):
         "type": "assistant", "timestamp": "2026-09-13T14:00:00.000Z",
         "message": {"role": "assistant", "content": [
             {"type": "text", "text": "thinking about it"}]},
-    }) + "\n")
+    }) + "\n", encoding="utf-8")
     monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions",
                         lambda **kw: [Session(short_id="abc", name="child",
                                               link_scan_path=str(p))])
@@ -174,7 +174,7 @@ def test_the_mark_stays_rare_on_ordinary_work(capsys, monkeypatch, tmp_path):
     p.write_text("\n".join(
         _event("Edit", "file_path", "/r/f%d.py" % i, "2026-09-13T14:0%d:00.000Z" % i)
         for i in range(6)
-    ) + "\n")
+    ) + "\n", encoding="utf-8")
     monkeypatch.setattr("mnemo.core.sessions.jobs.read_sessions",
                         lambda **kw: [Session(short_id="abc", name="child",
                                               link_scan_path=str(p))])

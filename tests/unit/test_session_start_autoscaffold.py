@@ -44,7 +44,7 @@ def test_scaffolds_a_vault_that_was_never_initialised(monkeypatch, tmp_path: Pat
 def test_does_not_clobber_an_existing_dashboard(monkeypatch, tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
-    (vault / "HOME.md").write_text("# my notes, hands off\n")
+    (vault / "HOME.md").write_text("# my notes, hands off\n", encoding="utf-8")
     monkeypatch.setattr(
         "mnemo.core.paths.vault_root", lambda _cfg=None: vault, raising=False
     )
@@ -53,7 +53,7 @@ def test_does_not_clobber_an_existing_dashboard(monkeypatch, tmp_path: Path):
 
     _run(monkeypatch, tmp_path, cwd)
 
-    assert (vault / "HOME.md").read_text() == "# my notes, hands off\n"
+    assert (vault / "HOME.md").read_text(encoding="utf-8") == "# my notes, hands off\n"
 
 
 def test_a_scaffold_failure_does_not_break_the_session(monkeypatch, tmp_path: Path):

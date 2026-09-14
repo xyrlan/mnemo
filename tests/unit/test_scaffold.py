@@ -150,15 +150,15 @@ def test_readme_template_does_not_mention_removed_working_dir(tmp_path: Path):
 def test_scaffold_idempotent(tmp_path: Path):
     vault = tmp_path / "vault"
     scaffold.scaffold_vault(vault)
-    (vault / "HOME.md").write_text("# user customized")
+    (vault / "HOME.md").write_text("# user customized", encoding="utf-8")
     scaffold.scaffold_vault(vault)
-    assert (vault / "HOME.md").read_text() == "# user customized"
+    assert (vault / "HOME.md").read_text(encoding="utf-8") == "# user customized"
 
 
 def test_scaffold_writes_config_with_vault_root(tmp_path: Path):
     vault = tmp_path / "vault"
     scaffold.scaffold_vault(vault)
-    cfg = json.loads((vault / "mnemo.config.json").read_text())
+    cfg = json.loads((vault / "mnemo.config.json").read_text(encoding="utf-8"))
     assert cfg["vaultRoot"] == str(vault)
 
 
@@ -221,5 +221,5 @@ def test_scaffold_preserves_user_tuned_obsidian_config(tmp_path: Path):
 
     scaffold.scaffold_vault(vault)
 
-    assert json.loads(graph_path.read_text())["search"] == "user tuned"
-    assert json.loads(app_path.read_text())["userIgnoreFilters"] == []
+    assert json.loads(graph_path.read_text(encoding="utf-8"))["search"] == "user tuned"
+    assert json.loads(app_path.read_text(encoding="utf-8"))["userIgnoreFilters"] == []

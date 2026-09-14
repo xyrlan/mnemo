@@ -34,7 +34,7 @@ def repo(tmp_path: Path) -> Path:
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
     _run(["git", "config", "user.name", "t"], cwd=root)
     (root / "src").mkdir()
-    (root / "src" / "base.py").write_text("BASE = 1\n")
+    (root / "src" / "base.py").write_text("BASE = 1\n", encoding="utf-8")
     _run(["git", "add", "src/base.py"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
     return root
@@ -46,7 +46,7 @@ def _branch(repo: Path, branch: str, files: dict[str, str]) -> None:
     for name, body in files.items():
         path = tree / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body)
+        path.write_text(body, encoding="utf-8")
         _run(["git", "add", name], cwd=tree)
     _run(["git", "commit", "-m", f"work on {branch}"], cwd=tree)
     _run(["git", "worktree", "remove", "--force", str(tree)], cwd=repo)
@@ -175,7 +175,7 @@ def test_the_view_says_why_a_piece_cannot_land_and_exits_1(
 
 def test_an_unusable_contract_is_refused_by_path(in_repo: Path, tmp_path: Path, capsys) -> None:
     path = tmp_path / "plan.md"
-    path.write_text("# a plan, not a contract\n")
+    path.write_text("# a plan, not a contract\n", encoding="utf-8")
 
     assert land.cmd_land(_args(path)) == 1
     assert f"contract unusable: {path}" in capsys.readouterr().out
@@ -186,7 +186,7 @@ def test_a_cycle_is_refused(in_repo: Path, tmp_path: Path, gh: dict, capsys) -> 
     path.write_text(
         "---\nfeature: f\nverdict: parallel\n---\n\n"
         "## a\n- **files:** a.py\n- **consumes:** `g()` from b\n\n"
-        "## b\n- **files:** b.py\n- **consumes:** `f()` from a\n"
+        "## b\n- **files:** b.py\n- **consumes:** `f()` from a\n", encoding="utf-8"
     )
 
     assert land.cmd_land(_args(path)) == 1

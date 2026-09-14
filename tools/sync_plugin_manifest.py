@@ -20,7 +20,7 @@ PLUGIN_NAME = "mnemo"
 
 
 def _sync_marketplace(marketplace_path: Path, version: str) -> None:
-    data = json.loads(marketplace_path.read_text())
+    data = json.loads(marketplace_path.read_text(encoding="utf-8"))
     entries = [p for p in data.get("plugins", []) if p.get("name") == PLUGIN_NAME]
     if len(entries) != 1:
         raise SystemExit(
@@ -28,7 +28,7 @@ def _sync_marketplace(marketplace_path: Path, version: str) -> None:
             f"found {len(entries)}"
         )
     entries[0]["version"] = version
-    marketplace_path.write_text(json.dumps(data, indent=2) + "\n")
+    marketplace_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _sync_plugin_commands(commands_dir: Path) -> None:
@@ -38,7 +38,7 @@ def _sync_plugin_commands(commands_dir: Path) -> None:
     commands_dir.mkdir(parents=True, exist_ok=True)
     expected = {f"{name}.md" for name in PLUGIN_COMMANDS}
     for name, spec in PLUGIN_COMMANDS.items():
-        (commands_dir / f"{name}.md").write_text(render_plugin_command(spec))
+        (commands_dir / f"{name}.md").write_text(render_plugin_command(spec), encoding="utf-8")
     # Drop files for commands that no longer exist, so a rename can't leave a
     # stale command behind that still invokes a subcommand we removed.
     for stale in commands_dir.glob("*.md"):
@@ -77,14 +77,14 @@ def sync(repo_root: Path, version: str) -> None:
 
     plugin_dir = repo_root / ".claude-plugin"
     manifest_path = plugin_dir / "plugin.json"
-    data = json.loads(manifest_path.read_text())
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
     data["version"] = version
     # The manifest used to carry a `commands` array. Claude Code discovers
     # commands from the commands/ directory instead, and every entry in that
     # array invoked `python3 -m mnemo`, which a plugin install has no way to
     # run. Generating the directory (below) replaces it.
     data.pop("commands", None)
-    manifest_path.write_text(json.dumps(data, indent=2) + "\n")
+    manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     _sync_plugin_commands(repo_root / "commands")
     _sync_plugin_skills(repo_root / "skills")
@@ -94,7 +94,7 @@ def sync(repo_root: Path, version: str) -> None:
 if __name__ == "__main__":
     repo_root = Path(__file__).resolve().parent.parent
     import re
-    pyproject_text = (repo_root / "pyproject.toml").read_text()
+    pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
     m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
     version = m.group(1) if m else "0.0.0"
     sync(repo_root, version)

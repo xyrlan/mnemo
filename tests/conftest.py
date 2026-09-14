@@ -79,7 +79,7 @@ def tmp_vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     (root / "bots").mkdir(parents=True)
     (root / "shared").mkdir()
-    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}))
+    (root / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(root)}), encoding="utf-8")
     return root
 
 

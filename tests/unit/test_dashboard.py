@@ -38,7 +38,7 @@ def _write_page(
         "tags:\n"
         f"{tag_yaml}\n"
         "---\n\n"
-        f"body of {slug}\n"
+        f"body of {slug}\n", encoding="utf-8"
     )
 
 
@@ -49,7 +49,7 @@ def test_update_home_md_creates_home_when_missing(tmp_path: Path) -> None:
     out = update_home_md(_cfg(tmp_path))
     assert out == tmp_path / "HOME.md"
     assert out.exists()
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert BLOCK_END in text
     assert "use-yarn" in text
@@ -64,7 +64,7 @@ def test_update_home_md_groups_multi_source_under_cross_agent_section(tmp_path: 
                 sources=["bots/a/memory/z.md"],
                 tags=["auto-promoted", "react"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     multi_idx = text.find("Cross-agent synthesized rules")
     single_idx = text.find("Auto-promoted direct reformats")
     assert multi_idx != -1
@@ -85,7 +85,7 @@ def test_update_home_md_excludes_inbox_drafts(tmp_path: Path) -> None:
                 sources=["a"],
                 tags=["auto-promoted", "workflow"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert "visible" in text
     assert "draft" not in text
 
@@ -100,7 +100,7 @@ def test_update_home_md_includes_hand_promoted_needs_review(tmp_path: Path) -> N
                 sources=["a"],
                 tags=["needs-review", "auth"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert "pending" in text
     assert "#needs-review" not in text
 
@@ -111,7 +111,7 @@ def test_update_home_md_excludes_evolving(tmp_path: Path) -> None:
                 tags=["auto-promoted", "state-management"],
                 stability="evolving")
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert "unsettled" not in text
 
 
@@ -123,7 +123,7 @@ def test_update_home_md_renders_by_topic_section(tmp_path: Path) -> None:
     _write_page(tmp_path, "feedback", "rule-c",
                 sources=["a"], tags=["auto-promoted", "react"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert "### By topic" in text
     assert "#### #git" in text
     assert "#### #react" in text
@@ -145,12 +145,12 @@ def test_update_home_md_replaces_existing_block(tmp_path: Path) -> None:
         f"{BLOCK_END}\n"
         "\n"
         "## My personal notes\n"
-        "Random thoughts the user wrote.\n"
+        "Random thoughts the user wrote.\n", encoding="utf-8"
     )
     _write_page(tmp_path, "feedback", "new-rule",
                 sources=["a"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = home.read_text()
+    text = home.read_text(encoding="utf-8")
     assert "STALE DASHBOARD" not in text
     assert "new-rule" in text
     # User content below the block is preserved
@@ -167,12 +167,12 @@ def test_update_home_md_appends_block_when_missing_preserving_user_content(tmp_p
         "---\n"
         "# My vault\n"
         "\n"
-        "Here is some user-authored landing content.\n"
+        "Here is some user-authored landing content.\n", encoding="utf-8"
     )
     _write_page(tmp_path, "feedback", "new-rule",
                 sources=["a"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = home.read_text()
+    text = home.read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert "new-rule" in text
     assert "Here is some user-authored landing content" in text
@@ -182,7 +182,7 @@ def test_update_home_md_appends_block_when_missing_preserving_user_content(tmp_p
 
 def test_update_home_md_empty_vault_shows_placeholder(tmp_path: Path) -> None:
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert "No consumer-visible pages yet" in text
 
@@ -191,9 +191,9 @@ def test_update_home_md_is_idempotent_on_second_call(tmp_path: Path) -> None:
     """Back-to-back calls should produce near-identical output (only timestamp differs)."""
     _write_page(tmp_path, "feedback", "x", sources=["a"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    first = (tmp_path / "HOME.md").read_text()
+    first = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     update_home_md(_cfg(tmp_path))
-    second = (tmp_path / "HOME.md").read_text()
+    second = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     # Strip timestamps for comparison
     import re
     pattern = re.compile(r"_Last updated: [^_]+_")
@@ -204,7 +204,7 @@ def test_update_home_md_path_qualified_wikilinks(tmp_path: Path) -> None:
     _write_page(tmp_path, "feedback", "slug-a", sources=["a"],
                 tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert "[[shared/feedback/slug-a]]" in text
 
 
@@ -214,17 +214,17 @@ def test_update_home_md_multi_source_sorts_before_single(tmp_path: Path) -> None
     _write_page(tmp_path, "feedback", "merged",
                 sources=["a", "b", "c"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     assert text.find("merged") < text.find("solo")
 
 
 def test_update_home_md_no_existing_block_but_no_frontmatter(tmp_path: Path) -> None:
     home = tmp_path / "HOME.md"
-    home.write_text("# Just a heading\n\nuser content\n")
+    home.write_text("# Just a heading\n\nuser content\n", encoding="utf-8")
     _write_page(tmp_path, "feedback", "r", sources=["a"],
                 tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = home.read_text()
+    text = home.read_text(encoding="utf-8")
     assert BLOCK_BEGIN in text
     assert "user content" in text
     assert text.find(BLOCK_BEGIN) < text.find("user content")
@@ -241,7 +241,7 @@ def test_dashboard_caps_high_trust_section(tmp_path: Path) -> None:
         _write_page(tmp_path, "reference", f"multi-{i:03d}",
                     sources=["a", "b"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     section = text.split("### ")[1]
     assert section.count("\n- [[") == dashboard.MAX_HIGH_TRUST
     assert "5 more" in text
@@ -261,7 +261,7 @@ def test_dashboard_summarizes_single_source_rules_without_listing_them(tmp_path:
     _write_page(tmp_path, "reference", "trusted",
                 sources=["a", "b"], tags=["auto-promoted", "git"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
 
     tier = text.split("### Auto-promoted direct reformats")[1].split("###")[0]
     assert "[[shared/reference/solo-one]]" not in tier
@@ -281,7 +281,7 @@ def test_dashboard_caps_each_topic_bucket(tmp_path: Path) -> None:
         _write_page(tmp_path, "reference", f"t-{i:03d}",
                     sources=["a"], tags=["auto-promoted", "testing"])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     bucket = text.split("#### #testing")[1]
     assert bucket.count("\n- [[") == dashboard.MAX_PER_TOPIC
     # Heading states the true size, so the cap is visible rather than silent.
@@ -297,7 +297,7 @@ def test_dashboard_link_count_stays_bounded_on_a_large_vault(tmp_path: Path) -> 
         _write_page(tmp_path, "reference", f"r-{i:03d}",
                     sources=["a"], tags=["auto-promoted", topics[i % 3]])
     update_home_md(_cfg(tmp_path))
-    text = (tmp_path / "HOME.md").read_text()
+    text = (tmp_path / "HOME.md").read_text(encoding="utf-8")
     links = text.count("- [[")
     ceiling = dashboard.MAX_HIGH_TRUST + len(topics) * dashboard.MAX_PER_TOPIC
     assert links <= ceiling, f"dashboard emitted {links} wikilinks, ceiling {ceiling}"

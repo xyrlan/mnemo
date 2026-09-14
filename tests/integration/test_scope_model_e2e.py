@@ -26,7 +26,7 @@ def _write_feedback(vault: Path, stem: str, *, name: str, tags: list[str], sourc
         f"tags:\n{fm_tags}\n"
         f"sources:\n{fm_sources}\n"
         "---\n\n"
-        f"Body of {name}.\n"
+        f"Body of {name}.\n", encoding="utf-8"
     )
 
 
@@ -34,7 +34,7 @@ def _legacy_list(vault: Path, topic: str, project: str) -> set[str]:
     """Replica of the v0.6.2 list_rules_by_topic project-filter logic."""
     out: set[str] = set()
     for md in (vault / "shared" / "feedback").glob("*.md"):
-        fm = parse_frontmatter(md.read_text())
+        fm = parse_frontmatter(md.read_text(encoding="utf-8"))
         if not is_consumer_visible(md, fm, vault):
             continue
         if topic not in topic_tags(fm):

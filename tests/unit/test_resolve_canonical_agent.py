@@ -28,11 +28,11 @@ def test_canonical_agent_worktree_resolves_to_main(tmp_path: Path) -> None:
     git_dir.mkdir()
     worktrees_dir = git_dir / "worktrees" / "feature-x"
     worktrees_dir.mkdir(parents=True)
-    (worktrees_dir / "commondir").write_text("../..\n")  # points back to git_dir
+    (worktrees_dir / "commondir").write_text("../..\n", encoding="utf-8")  # points back to git_dir
 
     worktree = tmp_path / "myproject-feature-x"
     worktree.mkdir()
-    (worktree / ".git").write_text(f"gitdir: {worktrees_dir}\n")
+    (worktree / ".git").write_text(f"gitdir: {worktrees_dir}\n", encoding="utf-8")
 
     info = agent.resolve_canonical_agent(str(worktree))
     assert info.name == "myproject"
@@ -52,7 +52,7 @@ def test_canonical_agent_malformed_git_file_falls_back(tmp_path: Path) -> None:
     """A `.git` file with no parseable `gitdir:` line degrades to current basename."""
     repo = tmp_path / "weird"
     repo.mkdir()
-    (repo / ".git").write_text("not a real gitdir pointer\n")
+    (repo / ".git").write_text("not a real gitdir pointer\n", encoding="utf-8")
     info = agent.resolve_canonical_agent(str(repo))
     assert info.name == "weird"
     assert info.has_git is True
@@ -64,6 +64,6 @@ def test_canonical_agent_missing_commondir_falls_back(tmp_path: Path) -> None:
     repo.mkdir()
     fake_target = tmp_path / "fake-gitdir"
     fake_target.mkdir()
-    (repo / ".git").write_text(f"gitdir: {fake_target}\n")
+    (repo / ".git").write_text(f"gitdir: {fake_target}\n", encoding="utf-8")
     info = agent.resolve_canonical_agent(str(repo))
     assert info.name == "broken"

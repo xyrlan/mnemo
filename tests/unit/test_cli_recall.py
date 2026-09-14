@@ -71,7 +71,7 @@ def test_recall_bootstraps_and_prints_report(
     assert "cases              : 1" in out
     assert (vault / ".mnemo" / "recall-cases.json").is_file()
     assert (vault / ".mnemo" / "recall-report.json").is_file()
-    payload = json.loads((vault / ".mnemo" / "recall-report.json").read_text())
+    payload = json.loads((vault / ".mnemo" / "recall-report.json").read_text(encoding="utf-8"))
     assert payload["report"]["primacy_at_3"] == 1
     assert "generated_at" in payload
     assert payload["report"]["log_entries"] == 2  # 2 entries in the seed log
@@ -154,7 +154,7 @@ def test_recall_no_bootstrap_reuses_existing(
     cli.main(["recall"])
     capsys.readouterr()  # clear
     # Tamper with log — ensure --no-bootstrap ignores it
-    (vault / ".mnemo" / "mcp-access-log.jsonl").write_text("garbage\n")
+    (vault / ".mnemo" / "mcp-access-log.jsonl").write_text("garbage\n", encoding="utf-8")
     rc = cli.main(["recall", "--no-bootstrap"])
     out = capsys.readouterr().out
     assert rc == 0

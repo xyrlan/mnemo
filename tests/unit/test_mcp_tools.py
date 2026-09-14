@@ -43,7 +43,7 @@ def _write_page(
         f"{body}"
     )
     target = target_dir / f"{slug}.md"
-    target.write_text(text)
+    target.write_text(text, encoding="utf-8")
     return target
 
 

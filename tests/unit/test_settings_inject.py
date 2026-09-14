@@ -11,7 +11,7 @@ from mnemo.install import settings
 def test_inject_into_empty_settings(tmp_home: Path):
     settings_path = tmp_home / ".claude" / "settings.json"
     settings.inject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data["hooks"]
     # v0.3.1 removed UserPromptSubmit (legacy write-only logger) and PostToolUse.
     # v0.8.0 re-introduced UserPromptSubmit — now a *read* hook (Prompt Reflex
@@ -31,7 +31,7 @@ def test_hook_command_is_directly_executable(tmp_home: Path):
 
     settings_path = tmp_home / ".claude" / "settings.json"
     settings.inject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     # An "executable token" must be either:
     #  - an absolute POSIX path: /usr/bin/python3
     #  - an absolute Windows path: C:\Python311\python.exe (or with forward slashes)
@@ -95,9 +95,9 @@ def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
             "PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "/py -m mnemo.hooks.post_tool_use"}]}],
         }
     }
-    settings_path.write_text(json.dumps(legacy))
+    settings_path.write_text(json.dumps(legacy), encoding="utf-8")
     settings.inject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data.get("hooks", {})
 
     # PostToolUse stays gone.
@@ -122,7 +122,7 @@ def test_inject_strips_legacy_removed_hooks(tmp_home: Path):
 def test_inject_creates_backup(tmp_home: Path):
     settings_path = tmp_home / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
-    settings_path.write_text(json.dumps({"existing": True}))
+    settings_path.write_text(json.dumps({"existing": True}), encoding="utf-8")
     settings.inject_hooks(settings_path)
     backups = list(settings_path.parent.glob("settings.json.bak.*"))
     assert len(backups) == 1
@@ -136,9 +136,9 @@ def test_inject_preserves_other_plugin_hooks(tmp_home: Path):
             "SessionStart": [{"hooks": [{"type": "command", "command": "other-plugin-hook"}]}],
         }
     }
-    settings_path.write_text(json.dumps(other))
+    settings_path.write_text(json.dumps(other), encoding="utf-8")
     settings.inject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     starts = data["hooks"]["SessionStart"]
     cmds = [
         h["command"]
@@ -153,7 +153,7 @@ def test_inject_idempotent(tmp_home: Path):
     settings_path = tmp_home / ".claude" / "settings.json"
     settings.inject_hooks(settings_path)
     settings.inject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     starts = data["hooks"]["SessionStart"]
     mnemo_count = sum(
         1
@@ -172,10 +172,10 @@ def test_uninject_removes_only_mnemo(tmp_home: Path):
             "SessionStart": [{"hooks": [{"type": "command", "command": "other-plugin-hook"}]}],
         }
     }
-    settings_path.write_text(json.dumps(other))
+    settings_path.write_text(json.dumps(other), encoding="utf-8")
     settings.inject_hooks(settings_path)
     settings.uninject_hooks(settings_path)
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     cmds = [
         h["command"]
         for entry in data["hooks"].get("SessionStart", [])
@@ -188,6 +188,6 @@ def test_uninject_removes_only_mnemo(tmp_home: Path):
 def test_inject_aborts_on_malformed_settings(tmp_home: Path):
     settings_path = tmp_home / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
-    settings_path.write_text("{not json")
+    settings_path.write_text("{not json", encoding="utf-8")
     with pytest.raises(settings.SettingsError):
         settings.inject_hooks(settings_path)

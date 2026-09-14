@@ -11,7 +11,7 @@ from mnemo.core.mcp import session_state
 def test_session_end_evicts_session_emissions_entry(tmp_vault, monkeypatch):
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_vault / "mnemo.config.json"))
     (tmp_vault / "mnemo.config.json").write_text(
-        json.dumps({"vaultRoot": str(tmp_vault)})
+        json.dumps({"vaultRoot": str(tmp_vault)}), encoding="utf-8"
     )
     session_state.bump_emission(tmp_vault, sid="sid-to-evict", kind="reflex", now_ts=1)
     session_state.bump_emission(tmp_vault, sid="sid-survives", kind="reflex", now_ts=2)

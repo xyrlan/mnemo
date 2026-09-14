@@ -23,7 +23,7 @@ def _set_config(vault: Path, **overrides):
     cfg_path = vault / "mnemo.config.json"
     base = {"vaultRoot": str(vault)}
     base.update(overrides)
-    cfg_path.write_text(json.dumps(base))
+    cfg_path.write_text(json.dumps(base), encoding="utf-8")
 
 
 def _write_feedback_page(
@@ -75,7 +75,7 @@ def _write_feedback_page(
         "---\n\nRule body.\n"
     )
     path = target_dir / f"{slug}.md"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -127,7 +127,7 @@ def test_session_start_rebuilds_index_when_enforcement_enabled(
     assert rc == 0
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     assert index_path.exists(), "rule-activation-index.json must be written"
-    idx = json.loads(index_path.read_text())
+    idx = json.loads(index_path.read_text(encoding="utf-8"))
     assert idx.get("schema_version") == 4
     assert "project-a" in idx["by_project"] and any(
         idx["rules"][s].get("enforce")
@@ -161,7 +161,7 @@ def test_session_start_rebuilds_index_when_enrichment_enabled(
     assert rc == 0
     index_path = hook_env / ".mnemo" / "rule-activation-index.json"
     assert index_path.exists(), "rule-activation-index.json must be written"
-    idx = json.loads(index_path.read_text())
+    idx = json.loads(index_path.read_text(encoding="utf-8"))
     assert "project-a" in idx["by_project"] and any(
         idx["rules"][s].get("activates_on")
         for s in idx["by_project"]["project-a"]["local_slugs"]
@@ -336,5 +336,5 @@ def test_session_start_index_rebuild_failure_is_logged_not_raised(
 
     error_log = hook_env / ".errors.log"
     assert error_log.exists(), ".errors.log must be written"
-    log_text = error_log.read_text()
+    log_text = error_log.read_text(encoding="utf-8")
     assert "session_start.rule_activation_index" in log_text

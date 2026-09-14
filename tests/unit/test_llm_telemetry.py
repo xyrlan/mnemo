@@ -12,7 +12,7 @@ def _read_log(vault: Path) -> list[dict]:
     log = vault / ".mnemo" / "mcp-access-log.jsonl"
     if not log.exists():
         return []
-    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_record_llm_call_writes_entry(tmp_path: Path, monkeypatch) -> None:

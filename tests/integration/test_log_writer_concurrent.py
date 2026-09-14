@@ -29,7 +29,7 @@ def test_concurrent_log_writes(tmp_vault: Path):
         t.join()
 
     log_path = tmp_vault / "bots" / "agent" / "logs" / f"{date.today().isoformat()}.md"
-    content = log_path.read_text()
+    content = log_path.read_text(encoding="utf-8")
     expected_lines = n_threads * n_lines
     matches = re.findall(r"thread-(\d+)-line-(\d+)", content)
     assert len(matches) == expected_lines, (

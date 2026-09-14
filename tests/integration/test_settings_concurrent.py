@@ -27,7 +27,7 @@ def test_concurrent_inject_hooks(tmp_home: Path):
         t.join()
 
     assert not errors, f"unexpected errors: {errors}"
-    data = json.loads(settings_path.read_text())
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = data["hooks"]
     # v0.3.1: only SessionStart and SessionEnd are registered; the write-only
     # UserPromptSubmit and PostToolUse hooks were removed.

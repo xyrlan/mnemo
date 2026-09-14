@@ -29,7 +29,7 @@ def test_session_end_spawns_background_when_auto_enabled(tmp_path, monkeypatch):
     (vault / ".mnemo").mkdir(parents=True)
     (vault / "bots" / "agent_a" / "memory").mkdir(parents=True)
     (vault / "bots" / "agent_a" / "memory" / "feedback_x.md").write_text(
-        "---\ntype: feedback\n---\nbody\n"
+        "---\ntype: feedback\n---\nbody\n", encoding="utf-8"
     )
 
     cfg = {
@@ -68,7 +68,7 @@ def test_session_end_does_not_spawn_when_auto_disabled(tmp_path, monkeypatch):
     (vault / ".mnemo").mkdir(parents=True)
     (vault / "bots" / "agent_a" / "memory").mkdir(parents=True)
     (vault / "bots" / "agent_a" / "memory" / "feedback_x.md").write_text(
-        "---\ntype: feedback\n---\nbody\n"
+        "---\ntype: feedback\n---\nbody\n", encoding="utf-8"
     )
 
     cfg = {

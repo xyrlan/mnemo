@@ -34,7 +34,7 @@ def _vault_writable(vault_root: Path) -> bool:
     try:
         parent.mkdir(parents=True, exist_ok=True)
         probe = parent / ".mnemo-write-test"
-        probe.write_text("ok")
+        probe.write_text("ok", encoding="utf-8")
         probe.unlink()
         return True
     except OSError:

@@ -39,7 +39,7 @@ def test_injected_skill_keeps_the_frontmatter_first_and_the_tag_under_it(skills_
 def test_inject_skills_is_idempotent_and_refreshes_its_own_file(skills_dir: Path):
     inj.inject_skills(skills_dir)
     target = skills_dir / "decomposing-for-dispatch" / "SKILL.md"
-    target.write_text(inj.SKILL_TAG + "\nan older version\n")
+    target.write_text(inj.SKILL_TAG + "\nan older version\n", encoding="utf-8")
 
     inj.inject_skills(skills_dir)
 
@@ -50,41 +50,41 @@ def test_inject_skills_is_idempotent_and_refreshes_its_own_file(skills_dir: Path
 def test_inject_skills_leaves_a_users_skill_of_the_same_name_alone(skills_dir: Path):
     theirs = skills_dir / "decomposing-for-dispatch" / "SKILL.md"
     theirs.parent.mkdir(parents=True)
-    theirs.write_text("---\nname: decomposing-for-dispatch\n---\n\nMine.\n")
+    theirs.write_text("---\nname: decomposing-for-dispatch\n---\n\nMine.\n", encoding="utf-8")
 
     inj.inject_skills(skills_dir)
 
-    assert theirs.read_text().endswith("Mine.\n")
+    assert theirs.read_text(encoding="utf-8").endswith("Mine.\n")
 
 
 def test_uninject_skills_removes_only_mnemo_tagged_files(skills_dir: Path):
     theirs = skills_dir / "their-skill" / "SKILL.md"
     theirs.parent.mkdir(parents=True)
-    theirs.write_text("---\nname: their-skill\n---\n\nTheirs.\n")
+    theirs.write_text("---\nname: their-skill\n---\n\nTheirs.\n", encoding="utf-8")
     inj.inject_skills(skills_dir)
 
     inj.uninject_skills(skills_dir)
 
     assert {p.name for p in skills_dir.iterdir()} == {"their-skill"}
-    assert theirs.read_text().endswith("Theirs.\n")
+    assert theirs.read_text(encoding="utf-8").endswith("Theirs.\n")
 
 
 def test_uninject_skills_keeps_a_directory_the_user_added_to(skills_dir: Path):
     """A supporting file next to SKILL.md is theirs; only the skill goes."""
     inj.inject_skills(skills_dir)
     extra = skills_dir / "decomposing-for-dispatch" / "notes.md"
-    extra.write_text("keep me\n")
+    extra.write_text("keep me\n", encoding="utf-8")
 
     inj.uninject_skills(skills_dir)
 
     assert not (skills_dir / "decomposing-for-dispatch" / "SKILL.md").exists()
-    assert extra.read_text() == "keep me\n"
+    assert extra.read_text(encoding="utf-8") == "keep me\n"
 
 
 def test_uninject_skills_spares_an_untagged_skill_under_mnemos_name(skills_dir: Path):
     theirs = skills_dir / "decomposing-for-dispatch" / "SKILL.md"
     theirs.parent.mkdir(parents=True)
-    theirs.write_text("---\nname: decomposing-for-dispatch\n---\n\nMine.\n")
+    theirs.write_text("---\nname: decomposing-for-dispatch\n---\n\nMine.\n", encoding="utf-8")
 
     inj.uninject_skills(skills_dir)
 

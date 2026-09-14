@@ -39,7 +39,7 @@ def test_real_llm_extraction_roundtrip(tmp_vault, tmp_home, memory_fixture):
             "costSoftCap": None,
         },
     }
-    (tmp_vault / "mnemo.config.json").write_text(json.dumps(cfg))
+    (tmp_vault / "mnemo.config.json").write_text(json.dumps(cfg), encoding="utf-8")
 
     summary = run_extraction(cfg)
 
@@ -53,7 +53,7 @@ def test_real_llm_extraction_roundtrip(tmp_vault, tmp_home, memory_fixture):
     assert len(produced) >= 1
 
     # Spot-check content: frontmatter + non-empty body
-    sample = produced[0].read_text()
+    sample = produced[0].read_text(encoding="utf-8")
     assert "---" in sample
     assert "needs-review" in sample
     assert len(sample.strip()) > 100

@@ -83,7 +83,7 @@ def _seed(
     marker = "demoted_from: feedback\n" if demoted else ""
     path.write_text(
         f"---\nname: {name}\ndescription: {name}\ntype: {page_type}\n{marker}"
-        f"sources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - navigation\n---\n{body}\n"
+        f"sources:\n  - bots/a/briefings/sessions/1.md\ntags:\n  - navigation\n---\n{body}\n", encoding="utf-8"
     )
     state.entries[f"{page_type}/{slug}"] = StateEntry(
         source_files=["bots/a/briefings/sessions/1.md"],
@@ -173,7 +173,7 @@ def test_ignores_a_promoted_and_staged_copy_of_the_same_type(tmp_path):
     staged = tmp_path / "shared" / "_inbox" / "feedback"
     staged.mkdir(parents=True, exist_ok=True)
     (staged / "backup-by-risk-not-ritual.md").write_text(
-        "---\nname: Backup by risk\ntype: feedback\n---\nStaged copy.\n"
+        "---\nname: Backup by risk\ntype: feedback\n---\nStaged copy.\n", encoding="utf-8"
     )
     page = _page("backup-by-risk-not-ritual", "feedback", "Backup by risk")
 
@@ -254,14 +254,14 @@ def test_cross_type_duplicate_stages_a_proposal_and_spares_the_sacred_page(tmp_p
     state = ExtractionState(last_run=None)
     sacred = _seed(tmp_path, state, "chain-navigation-no-odometry", "feedback",
                    "Chain-based navigation, no odometry")
-    before = sacred.read_text()
+    before = sacred.read_text(encoding="utf-8")
     page = _page("chain-navigation-no-odometry", "reference",
                  "Chain-based navigation without odometry dependency")
 
     result = apply_pages([page], state, tmp_path, run_id="r1")
 
     # The sacred feedback page is byte-identical.
-    assert sacred.read_text() == before
+    assert sacred.read_text(encoding="utf-8") == before
     # No second live page was minted under the other type.
     assert not (tmp_path / "shared" / "reference" / "chain-navigation-no-odometry.md").exists()
     # A proposal is staged for review, keyed to the type it would merge into.
@@ -291,12 +291,12 @@ def test_restaging_the_same_proposal_does_not_churn_the_file(tmp_path):
 
     apply_pages([_page("chain-navigation-no-odometry", "reference", "Chain nav")],
                 state, tmp_path, run_id="2026-09-12T10:00:00")
-    first = proposal.read_text()
+    first = proposal.read_text(encoding="utf-8")
 
     apply_pages([_page("chain-navigation-no-odometry", "reference", "Chain nav")],
                 state, tmp_path, run_id="2026-09-12T11:30:00")
 
-    assert proposal.read_text() == first
+    assert proposal.read_text(encoding="utf-8") == first
 
 
 def test_restaging_does_rewrite_when_the_rule_itself_changed(tmp_path):
@@ -310,14 +310,14 @@ def test_restaging_does_rewrite_when_the_rule_itself_changed(tmp_path):
 
     apply_pages([_page("chain-navigation-no-odometry", "reference", "Chain nav")],
                 state, tmp_path, run_id="2026-09-12T10:00:00")
-    first = proposal.read_text()
+    first = proposal.read_text(encoding="utf-8")
 
     apply_pages([_page("chain-navigation-no-odometry", "reference", "Chain nav",
                        body="A materially different rule body entirely.")],
                 state, tmp_path, run_id="2026-09-12T11:30:00")
 
-    assert proposal.read_text() != first
-    assert "materially different" in proposal.read_text()
+    assert proposal.read_text(encoding="utf-8") != first
+    assert "materially different" in proposal.read_text(encoding="utf-8")
 
 
 def test_page_type_is_never_mutated(tmp_path):
@@ -339,12 +339,12 @@ def test_demoted_page_still_stages_as_reference_through_apply(tmp_path):
     state = ExtractionState(last_run=None)
     sacred = _seed(tmp_path, state, "chain-navigation-no-odometry", "feedback",
                    "Chain-based navigation, no odometry")
-    before = sacred.read_text()
+    before = sacred.read_text(encoding="utf-8")
     page = _page("chain-navigation-no-odometry", "reference", "Chain nav", unverified=True)
 
     apply_pages([page], state, tmp_path, run_id="r1")
 
-    assert sacred.read_text() == before
+    assert sacred.read_text(encoding="utf-8") == before
     assert (
         tmp_path / "shared" / "_inbox" / "reference" / "chain-navigation-no-odometry.md"
     ).exists()

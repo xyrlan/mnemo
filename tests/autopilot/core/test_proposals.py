@@ -33,7 +33,7 @@ def test_write_proposal_creates_file(tmp_path: Path):
 
     files = list((tmp_path / ".mnemo" / "proposals").iterdir())
     assert len(files) == 1
-    data = json.loads(files[0].read_text())
+    data = json.loads(files[0].read_text(encoding="utf-8"))
     assert data["schema_version"] == 1
     assert data["id"] == p.id
     assert data["payload"]["slug_hint"] == "foo-bar"
@@ -117,12 +117,12 @@ def test_expire_old_marks_pending_only(tmp_path: Path, monkeypatch):
     # backdate p1 by 40 days, leave p2 fresh
     from mnemo.autopilot.core._dirs import proposals_dir as _pd
     f1 = _pd(tmp_path) / f"{p1.id}.json"
-    data = json.loads(f1.read_text())
+    data = json.loads(f1.read_text(encoding="utf-8"))
     old_ts = (datetime.now(timezone.utc) - timedelta(days=40)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     data["created_at"] = old_ts
-    f1.write_text(json.dumps(data, indent=2, sort_keys=True))
+    f1.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
     # mark p2 as already applied — expire_old must not touch it
     update_status(vault_root=tmp_path, proposal_id=p2.id, status="applied")

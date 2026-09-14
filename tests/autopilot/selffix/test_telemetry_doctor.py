@@ -177,7 +177,7 @@ def test_open_telemetry_fix_pr_dry_run(tmp_path: Path) -> None:
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
+                    "last_changed_at": None, "last_changed_by": None}), encoding="utf-8"
     )
     with patch("mnemo.autopilot.selffix.telemetry_doctor._gh.open_pr") as mock_pr:
         result = open_telemetry_fix_pr(
@@ -203,7 +203,7 @@ def test_open_telemetry_fix_pr_opens_issue(tmp_path: Path) -> None:
     (tmp_path / ".mnemo").mkdir(exist_ok=True)
     (tmp_path / ".mnemo" / "autopilot.json").write_text(
         json.dumps({"schema_version": 1, "state": "on", "paused_until": None,
-                    "last_changed_at": None, "last_changed_by": None})
+                    "last_changed_at": None, "last_changed_by": None}), encoding="utf-8"
     )
     with patch("mnemo.autopilot.selffix.telemetry_doctor._gh.open_issue", return_value=77) as mock_issue, \
          patch("mnemo.autopilot.selffix.telemetry_doctor.pr_budget.record_opened") as mock_rec:

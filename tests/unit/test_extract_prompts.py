@@ -233,7 +233,7 @@ def test_builder_with_populated_vault_injects_existing_tags(tmp_path):
         "  - package-management\n"
         "  - workflow\n"
         "---\n"
-        "body\n"
+        "body\n", encoding="utf-8"
     )
     files = [_mk_file("a", "feedback", "x")]
     prompt = prompts.build_feedback_prompt(files, vault_root=tmp_path)
@@ -249,10 +249,10 @@ def test_builder_vault_scope_is_per_type(tmp_path):
     (tmp_path / "shared" / "feedback").mkdir(parents=True)
     (tmp_path / "shared" / "user").mkdir(parents=True)
     (tmp_path / "shared" / "feedback" / "a.md").write_text(
-        "---\nname: a\ntags:\n  - auto-promoted\n  - feedback-only-tag\n---\nbody\n"
+        "---\nname: a\ntags:\n  - auto-promoted\n  - feedback-only-tag\n---\nbody\n", encoding="utf-8"
     )
     (tmp_path / "shared" / "user" / "b.md").write_text(
-        "---\nname: b\ntags:\n  - auto-promoted\n  - user-only-tag\n---\nbody\n"
+        "---\nname: b\ntags:\n  - auto-promoted\n  - user-only-tag\n---\nbody\n", encoding="utf-8"
     )
     files_fb = [_mk_file("a", "feedback", "x")]
     files_usr = [_mk_file("a", "user", "y")]
@@ -275,10 +275,10 @@ def test_collect_existing_tags_ignores_inbox(tmp_path):
     (tmp_path / "shared" / "feedback").mkdir(parents=True)
     (tmp_path / "shared" / "_inbox" / "feedback").mkdir(parents=True)
     (tmp_path / "shared" / "feedback" / "visible.md").write_text(
-        "---\nname: v\ntags:\n  - auto-promoted\n  - real-topic\n---\nbody\n"
+        "---\nname: v\ntags:\n  - auto-promoted\n  - real-topic\n---\nbody\n", encoding="utf-8"
     )
     (tmp_path / "shared" / "_inbox" / "feedback" / "draft.md").write_text(
-        "---\nname: d\ntags:\n  - needs-review\n  - draft-only-topic\n---\nbody\n"
+        "---\nname: d\ntags:\n  - needs-review\n  - draft-only-topic\n---\nbody\n", encoding="utf-8"
     )
     tags = collect_existing_tags(tmp_path, "feedback")
     assert "real-topic" in tags

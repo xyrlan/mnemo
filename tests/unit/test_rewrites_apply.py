@@ -92,7 +92,7 @@ def test_undo_survives_a_truncated_manifest(tmp_vault: Path):
     report = A.apply(plan, tmp_vault)
 
     manifest = report.archive_dir / "manifest.json"
-    manifest.write_text(manifest.read_text()[: len(manifest.read_text()) // 2])
+    manifest.write_text(manifest.read_text(encoding="utf-8")[: len(manifest.read_text(encoding="utf-8")) // 2], encoding="utf-8")
 
     assert A.undo(tmp_vault, plan.run_id) == 0
 
@@ -159,14 +159,14 @@ def test_a_hard_failure_mid_batch_still_leaves_the_applied_work_recoverable(
         A.apply(plan, tmp_vault)
 
     arch = tmp_vault / "shared" / "_archive" / f"rewrites-{plan.run_id}"
-    manifest = json.loads((arch / "manifest.json").read_text())
+    manifest = json.loads((arch / "manifest.json").read_text(encoding="utf-8"))
 
     # Exactly one rewrite completed, and the manifest names it.
     assert len(manifest["moves"]) == 1
     done_key = manifest["moves"][0]["key"]
 
     # The ledger on disk agrees with the file on disk for that key.
-    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8"))
     done_slug = done_key.split("/", 1)[1]
     done_live = tmp_vault / "shared" / "project" / f"{done_slug}.md"
     assert state["entries"][done_key]["written_hash"] == content_hash(done_live)
@@ -204,7 +204,7 @@ def test_one_malformed_live_rule_does_not_abort_the_batch(tmp_vault: Path):
 
     # The good one landed and its ledger advanced.
     good_live = tmp_vault / "shared" / "project" / "a__good.md"
-    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8"))
     assert state["entries"]["project/a__good"]["written_hash"] == content_hash(good_live)
 
     # The skipped one kept both its files, so it can be fixed and retried.
@@ -223,7 +223,7 @@ def test_apply_reconciles_written_hash_so_the_rewrite_stops_regenerating(tmp_vau
 
     assert report.merged == 1
     live = tmp_vault / "shared" / "project" / "a__x.md"
-    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text())
+    state = json.loads((tmp_vault / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8"))
     entry = state["entries"]["project/a__x"]
     assert entry["written_hash"] == content_hash(live)
     # The proposal is gone, so a second classify finds nothing to re-propose.
@@ -240,7 +240,7 @@ def test_originals_hold_pristine_live_bytes_and_manifest_shape(tmp_vault: Path):
     original = report.archive_dir / "originals" / "a__x.md"
     assert original.read_bytes() == before
 
-    manifest = json.loads((report.archive_dir / "manifest.json").read_text())
+    manifest = json.loads((report.archive_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_id"] == plan.run_id
     assert manifest["state_backup"].endswith("extraction-state.json")
     move = manifest["moves"][0]

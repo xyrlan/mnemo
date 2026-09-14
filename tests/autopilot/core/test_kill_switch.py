@@ -21,7 +21,7 @@ def test_set_state_persists(tmp_path: Path):
     assert get_state(vault_root=tmp_path) == "on"
     assert is_active(vault_root=tmp_path) is True
 
-    data = json.loads((tmp_path / ".mnemo" / "autopilot.json").read_text())
+    data = json.loads((tmp_path / ".mnemo" / "autopilot.json").read_text(encoding="utf-8"))
     assert data["state"] == "on"
     assert data["schema_version"] == 1
     assert data["last_changed_by"] == "cli"

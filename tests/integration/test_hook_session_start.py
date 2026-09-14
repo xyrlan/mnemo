@@ -34,7 +34,7 @@ def test_session_start_writes_log_and_caches_session(hook_env: Path, tmp_path: P
     cached = session.load("S1")
     assert cached is not None
     assert cached["name"] == "myrepo"
-    log = (hook_env / "bots" / "myrepo" / "logs" / f"{date.today().isoformat()}.md").read_text()
+    log = (hook_env / "bots" / "myrepo" / "logs" / f"{date.today().isoformat()}.md").read_text(encoding="utf-8")
     assert "🟢 session started (startup)" in log
 
 
@@ -49,7 +49,7 @@ def test_session_start_respects_disabled_capture(hook_env: Path, tmp_path: Path,
     cfg_path.write_text(json.dumps({
         "vaultRoot": str(hook_env),
         "capture": {"sessionStartEnd": False},
-    }))
+    }), encoding="utf-8")
     repo = tmp_path / "r2"
     (repo / ".git").mkdir(parents=True)
     payload = json.dumps({"session_id": "S2", "cwd": str(repo), "source": "resume"})

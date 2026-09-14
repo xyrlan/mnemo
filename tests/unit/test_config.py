@@ -27,7 +27,7 @@ def test_user_overrides_defaults(tmp_path: Path):
     p.write_text(json.dumps({
         "vaultRoot": "~/somewhere",
         "capture": {"sessionStartEnd": False},
-    }))
+    }), encoding="utf-8")
     cfg = config.load_config(p)
     assert cfg["vaultRoot"] == "~/somewhere"
     assert cfg["capture"]["sessionStartEnd"] is False
@@ -35,14 +35,14 @@ def test_user_overrides_defaults(tmp_path: Path):
 
 def test_unknown_keys_preserved(tmp_path: Path):
     p = tmp_path / "mnemo.config.json"
-    p.write_text(json.dumps({"futureFeatureX": {"enabled": True}}))
+    p.write_text(json.dumps({"futureFeatureX": {"enabled": True}}), encoding="utf-8")
     cfg = config.load_config(p)
     assert cfg["futureFeatureX"] == {"enabled": True}
 
 
 def test_env_var_overrides_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     p = tmp_path / "elsewhere.json"
-    p.write_text(json.dumps({"vaultRoot": "/env/vault"}))
+    p.write_text(json.dumps({"vaultRoot": "/env/vault"}), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(p))
     cfg = config.load_config()
     assert cfg["vaultRoot"] == "/env/vault"
@@ -50,7 +50,7 @@ def test_env_var_overrides_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_corrupted_json_returns_defaults(tmp_path: Path):
     p = tmp_path / "mnemo.config.json"
-    p.write_text("{not valid json")
+    p.write_text("{not valid json", encoding="utf-8")
     cfg = config.load_config(p)
     # Falls back silently to defaults; never raises
     assert cfg["vaultRoot"]
@@ -75,7 +75,7 @@ def test_extraction_defaults_populated(tmp_path):
 def test_extraction_user_override_preserved(tmp_path):
     from mnemo.core import config
     p = tmp_path / "cfg.json"
-    p.write_text('{"extraction": {"model": "claude-sonnet-4-6", "chunkSize": 5}}')
+    p.write_text('{"extraction": {"model": "claude-sonnet-4-6", "chunkSize": 5}}', encoding="utf-8")
     cfg = config.load_config(p)
     assert cfg["extraction"]["model"] == "claude-sonnet-4-6"
     assert cfg["extraction"]["chunkSize"] == 5
@@ -97,7 +97,7 @@ def test_load_config_populates_auto_defaults(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
+    cfg_path.write_text('{"vaultRoot": "/tmp/test"}', encoding="utf-8")
     cfg = load_config(cfg_path)
 
     assert cfg["extraction"]["auto"]["enabled"] is True
@@ -110,7 +110,7 @@ def test_user_override_of_auto_enabled_preserved(tmp_path):
 
     cfg_path = tmp_path / "mnemo.config.json"
     cfg_path.write_text(
-        '{"extraction": {"auto": {"enabled": false, "minIntervalMinutes": 30}}}'
+        '{"extraction": {"auto": {"enabled": false, "minIntervalMinutes": 30}}}', encoding="utf-8"
     )
     cfg = load_config(cfg_path)
 
@@ -130,7 +130,7 @@ def test_load_config_populates_briefings_defaults(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
+    cfg_path.write_text('{"vaultRoot": "/tmp/test"}', encoding="utf-8")
     cfg = load_config(cfg_path)
 
     assert cfg["briefings"]["enabled"] is True
@@ -140,7 +140,7 @@ def test_user_override_of_briefings_enabled_preserved(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"briefings": {"enabled": false}}')
+    cfg_path.write_text('{"briefings": {"enabled": false}}', encoding="utf-8")
     cfg = load_config(cfg_path)
 
     assert cfg["briefings"]["enabled"] is False
@@ -157,7 +157,7 @@ def test_load_config_populates_injection_defaults(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"vaultRoot": "/tmp/test"}')
+    cfg_path.write_text('{"vaultRoot": "/tmp/test"}', encoding="utf-8")
     cfg = load_config(cfg_path)
 
     assert cfg["injection"]["enabled"] is True
@@ -167,7 +167,7 @@ def test_user_override_of_injection_enabled_preserved(tmp_path):
     from mnemo.core.config import load_config
 
     cfg_path = tmp_path / "mnemo.config.json"
-    cfg_path.write_text('{"injection": {"enabled": false}}')
+    cfg_path.write_text('{"injection": {"enabled": false}}', encoding="utf-8")
     cfg = load_config(cfg_path)
 
     assert cfg["injection"]["enabled"] is False

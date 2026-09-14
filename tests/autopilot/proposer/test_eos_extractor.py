@@ -104,8 +104,8 @@ def test_make_slug_hint_truncates():
 def test_load_vault_slugs_finds_slugs(tmp_path: Path):
     shared = tmp_path / "shared" / "rules"
     shared.mkdir(parents=True)
-    (shared / "rule1.md").write_text("---\nslug: fix-nan-price\ntitle: Fix NaN\n---\nbody")
-    (shared / "rule2.md").write_text("---\nslug: validate-input\n---\nbody")
+    (shared / "rule1.md").write_text("---\nslug: fix-nan-price\ntitle: Fix NaN\n---\nbody", encoding="utf-8")
+    (shared / "rule2.md").write_text("---\nslug: validate-input\n---\nbody", encoding="utf-8")
     slugs = _load_vault_slugs(tmp_path)
     assert "fix-nan-price" in slugs
     assert "validate-input" in slugs
@@ -210,7 +210,7 @@ def test_analyze_session_writes_proposal(tmp_path: Path):
     assert proposals_dir.exists()
     files = list(proposals_dir.iterdir())
     assert len(files) == 1
-    data = json.loads(files[0].read_text())
+    data = json.loads(files[0].read_text(encoding="utf-8"))
     assert data["kind"] == "rule_candidate"
     assert data["source"] == "tier3.eos_extractor"
 
@@ -219,7 +219,7 @@ def test_analyze_session_skips_duplicates(tmp_path: Path):
     # Pre-populate vault with existing rule
     shared = tmp_path / "shared" / "rules"
     shared.mkdir(parents=True)
-    (shared / "normalize-price.md").write_text("---\nslug: normalize-price\n---\nbody")
+    (shared / "normalize-price.md").write_text("---\nslug: normalize-price\n---\nbody", encoding="utf-8")
 
     messages = [
         "normalize price value",
@@ -245,7 +245,7 @@ def test_analyze_session_denial_increases_confidence(tmp_path: Path):
     denial_log = mnemo_dir / "denial-log.jsonl"
     denial_log.write_text(
         json.dumps({"session_id": "sess-denial", "rule": "some-rule", "ts": "2026-01-01"})
-        + "\n"
+        + "\n", encoding="utf-8"
     )
 
     messages = [

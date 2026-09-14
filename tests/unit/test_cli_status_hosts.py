@@ -41,7 +41,7 @@ def _seed_plugin_cache(tmp_home, version: str = "1.3.3"):
             ev: [{"hooks": [{"type": "command", "command": "x"}]}]
             for ev in ("SessionStart", "UserPromptSubmit", "PreToolUse", "SessionEnd")
         }
-    }))
+    }), encoding="utf-8")
     return root
 
 
@@ -57,7 +57,7 @@ def _seed_plugin_registry(tmp_home, root, version: str = "1.3.3"):
         "mnemo@mnemo-marketplace": [
             {"scope": "user", "installPath": str(root), "version": version}
         ]
-    }}))
+    }}), encoding="utf-8")
 
 
 def test_status_finds_plugin_hooks_without_claude_plugin_root(tmp_home, monkeypatch):
@@ -87,7 +87,7 @@ def test_status_ignores_cache_dir_left_behind_by_uninstall(tmp_home, monkeypatch
     # Registry cleaned by the uninstall; only the cache dir survives.
     reg = tmp_home / ".claude" / "plugins" / "installed_plugins.json"
     reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text(json.dumps({"version": 2, "plugins": {}}))
+    reg.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
 
     assert status_mod._installed_plugin_root() is None
     assert status_mod._count_plugin_hooks(

@@ -150,7 +150,7 @@ def test_extractor_owned_inbox_page_is_refused(vault, tree):
     (d,) = report.decisions
     assert d.action == "refused"
     assert "shared/_inbox/feedback/use-yarn.md" in d.reason
-    assert "auto-promoted" in (vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").read_text()
+    assert "auto-promoted" in (vault / "shared" / "_inbox" / "feedback" / "use-yarn.md").read_text(encoding="utf-8")
 
 
 def test_same_tree_from_a_second_path_is_unchanged(vault, tree, tmp_path):
