@@ -40,3 +40,6 @@ from mnemo.cli.commands.doctor_checks.rules import (  # noqa: F401
 from mnemo.cli.commands.doctor_checks.share import (  # noqa: F401
     _doctor_check_share_published,
 )
+from mnemo.cli.commands.doctor_checks.stale import (  # noqa: F401
+    _doctor_check_stale_citations,
+)

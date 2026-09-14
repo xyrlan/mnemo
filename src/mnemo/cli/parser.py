@@ -29,6 +29,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "list-enforced",
     "regen-graph-edges",
     "rewrites",
+    "stale",
 })
 
 # Internal subparsers that should never appear in user-facing help (wired
@@ -303,6 +304,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     replay.add_argument("--project", default=None, help="only prompts typed in this project (default: every project)")
+    stale = sub.add_parser(
+        "stale",
+        help="live rules that cite a file no longer in this repo at HEAD",
+    )
+    stale.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    stale.add_argument("--project", default=None, help="rules attributed to this project (default: this repo)")
+    stale.add_argument("--repo", default=None, help="check against this repo instead of the current one")
+    stale.add_argument("--ref", default=None, help="git ref to check against (default HEAD)")
+    stale.add_argument("--why", action="store_true", help="why cited symbols are counted, not checked")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")

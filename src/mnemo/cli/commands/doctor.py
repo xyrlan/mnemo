@@ -22,6 +22,7 @@ from mnemo.cli.commands.doctor_checks import (
     reflex,
     rules,
     share,
+    stale,
 )
 from mnemo.cli.parser import command
 
@@ -54,6 +55,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("install_backfill",      install_backfill._doctor_check_install_backfill),
     ("hosts",                 hosts._doctor_check_hosts),
     ("share_published",       share._doctor_check_share_published),
+    ("stale_citations",       stale._doctor_check_stale_citations),
     ("duplicate_install",     duplicate_install._doctor_check_duplicate_install),
 ]
 

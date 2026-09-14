@@ -236,6 +236,7 @@ mnemo sessions  the queue: blocked first, then what each running child is doing
 mnemo deliver   push a finished child's branch and open its PR
 mnemo land      a dispatched contract's pieces in landing order; --merge lands them
 mnemo replay    your transcripts against your vault: what would have come back, and from when
+mnemo stale     live rules citing a file this repo no longer has, and where it moved to
 ```
 
 Your rules are yours. `mnemo export` writes the ones for the repo you're in to
