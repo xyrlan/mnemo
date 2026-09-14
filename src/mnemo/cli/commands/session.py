@@ -94,6 +94,34 @@ def _follow(session, limit: int, interval: float) -> int:
         return 0
 
 
+def _exploration_line(session) -> str:
+    """What this session spent before its first edit, as one line (#269).
+
+    Counted from the head of the transcript, which is why it is here and not
+    in the recent-actions window below: that window is a tail and usually
+    starts long after the first edit.
+    """
+    from mnemo.core.activity import exploration_for
+    from mnemo.core.sessions.render import _thousands
+
+    try:
+        found = exploration_for(session.link_scan_path, session.cwd)
+    except Exception:
+        return ""
+    if found is None or found.baseline is None:
+        return ""
+
+    rules = found.injected or 0
+    injected = f"{rules} regra{'s' if rules != 1 else ''} do reflex no prompt de abertura"
+    base = f"base {_thousands(found.baseline)}"
+    if not found.reached:
+        return (f"  ainda sem edição: {found.uses} usos, +{_thousands(found.tokens)} tokens "
+                f"({base}) · {injected}")
+    first = f"{found.tool} {found.target}" if found.target else str(found.tool)
+    return (f"  antes da 1ª edição: {found.uses} usos, +{_thousands(found.tokens)} tokens "
+            f"({base}) · {injected} → {first}")
+
+
 @command("session")
 def cmd_session(args: argparse.Namespace) -> int:
     """Print the recent actions of one background session."""
@@ -126,6 +154,11 @@ def cmd_session(args: argparse.Namespace) -> int:
     if not session.link_scan_path:
         print("  esta sessão não registrou um transcript (linkScanPath ausente)")
         return 0
+
+    spent = _exploration_line(session)
+    if spent:
+        print(spent)
+        print("")
 
     if bool(getattr(args, "follow", False)):
         return _follow(session, limit, float(getattr(args, "interval", 2.0) or 2.0))

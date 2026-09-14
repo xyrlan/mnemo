@@ -91,6 +91,42 @@ def _append_watch(read, activities, interval: float) -> None:
         time.sleep(interval)
 
 
+def _explorations(found, cache: dict, *, only_done: bool = True) -> dict:
+    """What each session spent before its first edit, by ``short_id`` (#269).
+
+    *cache* is carried across watch ticks. A finished session's number cannot
+    change — its transcript is closed — so it is read once per process and not
+    once per redraw. A running session's is re-read each call, and never cached.
+
+    Never raises: a transcript that cannot be read costs its own cell, not the
+    queue.
+    """
+    from mnemo.core.activity import exploration_for
+
+    out = {}
+    for session in found:
+        short_id = getattr(session, "short_id", None)
+        if not short_id or not getattr(session, "link_scan_path", None):
+            continue
+        done = bool(getattr(session, "is_done", False))
+        if only_done and not done:
+            continue
+        key = (short_id, session.link_scan_path)
+        if key in cache:
+            out[short_id] = cache[key]
+            continue
+        try:
+            measured = exploration_for(session.link_scan_path, session.cwd)
+        except Exception:
+            measured = None
+        if measured is None:
+            continue
+        if done:
+            cache[key] = measured
+        out[short_id] = measured
+    return out
+
+
 def _clock(at) -> str:
     """``14:02:11`` from an ISO timestamp, or '' when it is unusable.
 
@@ -140,7 +176,15 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         # see a @property, so without this every consumer re-implements the
         # blocked/waiting rule and gets it wrong the way #222 did. Additive,
         # so a consumer reading state/tempo/live is untouched.
-        rows = [{**asdict(s), **s.derived()} for s in _read()]
+        found = _read()
+        # Every session, not only finished ones: a JSON consumer summing a
+        # dispatch reads `reached` to tell a final count from a running floor.
+        spent = _explorations(found, {}, only_done=False)
+        rows = [
+            {**asdict(s), **s.derived(),
+             "exploration": spent[s.short_id].as_dict() if s.short_id in spent else None}
+            for s in found
+        ]
         print(_json.dumps(rows, indent=2, ensure_ascii=False))
         return 0
 
@@ -160,6 +204,8 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         except Exception:
             previous[0] = {}
         return previous[0]
+
+    explored_cache = {}
 
     append = bool(getattr(args, "append", False))
     # --append is a watch mode, so it implies the loop. Requiring both flags
@@ -183,13 +229,13 @@ def cmd_sessions(args: argparse.Namespace) -> int:
                 found = _read()
                 acts = _activities(found)
                 print(clear, end="")
-                print(render_queue(found, acts))
+                print(render_queue(found, acts, explorations=_explorations(found, explored_cache)))
                 time.sleep(interval)
         except KeyboardInterrupt:
             return 0
 
     found = _read()
-    print(render_queue(found, _activities(found)))
+    print(render_queue(found, _activities(found), explorations=_explorations(found, explored_cache)))
     if not found and scope is not None:
         # An empty scoped queue and an empty machine render identically, and
         # the first one is a lie by omission: #281 sat on four waiting

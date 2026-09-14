@@ -230,7 +230,44 @@ def _models(sessions: list[Session]) -> str:
     return "  modelos: " + ", ".join(parts)
 
 
-def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> str:
+def _thousands(value: int) -> str:
+    return f"{value // 1000}k" if value >= 1000 else str(value)
+
+
+def _exploration(found) -> str:
+    """``22u/+61k``: tool uses and context growth before the first edit (#269).
+
+    ``≥`` when the transcript holds no edit at all, because then the count is
+    everything the session did, which is a floor on exploration and not the
+    measurement. '' when nothing was measured — no transcript, or not asked.
+    """
+    if found is None:
+        return ""
+    floor = "" if found.reached else "≥"
+    return f"{floor}{found.uses}u/+{_thousands(found.tokens)}"
+
+
+def _exploration_total(done: list[Session], explorations) -> str:
+    """One line summing the column, or '' when no finished row carries one.
+
+    A dispatch's exploration is the sum of its children's, and that sum is
+    what #269 asks to be able to see; the per-row figure alone makes the
+    reader add them up. Sessions without a measurement are left out of the
+    count rather than counted as zero, and the line says how many were summed.
+    """
+    from mnemo.core.activity.exploration import total
+
+    found = [explorations.get(s.short_id) for s in done]
+    count, uses, tokens = total(found)
+    if not count:
+        return ""
+    plural = "sessão" if count == 1 else "sessões"
+    return (f"  antes da 1ª edição (u/+tokens): {uses} usos, +{_thousands(tokens)} "
+            f"em {count} {plural} prontas")
+
+
+def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
+                 explorations=None) -> str:
     """Render the whole queue, blocked first.
 
     *pr_lookup* maps a :class:`Session` to the PR it produced, or ``None``.
@@ -250,11 +287,18 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> st
     Only the working bucket uses it. A blocked session's claim on the
     maintainer is ``needs``; burying that under a tool name would invert the
     ordering the whole queue exists to provide.
+
+    *explorations* maps ``short_id`` to
+    :class:`~mnemo.core.activity.exploration.Exploration` (#269) and adds one
+    column to the end of each PRONTAS row, plus a total under the table. Only
+    finished sessions get it: a working child's count is still moving, and the
+    activity column already says what it is doing. Omitted, nothing changes.
     """
     if not sessions:
         return EMPTY
 
     acts = activities or {}
+    explored = explorations or {}
 
     waiting = sorted((s for s in sessions if s.is_waiting), key=_freshest_first, reverse=True)
     abandoned = sorted((s for s in sessions if s.is_abandoned), key=_sort_key)
@@ -282,7 +326,9 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> st
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
-            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s, pr_lookup) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}")
+            row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s, pr_lookup) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}"
+            spent = _exploration(explored.get(s.short_id))
+            lines.append(f"{row}  {spent}" if spent else row)
         lines.append("")
 
     if abandoned:
@@ -297,6 +343,9 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None) -> st
     models = _models(sessions)
     if models:
         lines.append(models)
+    spent_total = _exploration_total(done, explored)
+    if spent_total:
+        lines.append(spent_total)
     if waiting:
         lines.append(f"  attach: claude attach {waiting[0].short_id}")
     if abandoned:
