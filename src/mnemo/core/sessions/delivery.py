@@ -635,3 +635,46 @@ def open_pr(
     if url and isinstance(target, int) and not isinstance(target, bool):
         _append_closing_trailer(url, issue=target, worktree=worktree)
     return url
+
+
+# --- after the PR: stop the finished child (#311) ---------------------------
+
+
+def sessions_in(worktree: Path | str) -> list:
+    """Every background session whose ``cwd`` is *worktree*. ``[]`` on any error.
+
+    Joined on ``cwd``, the one key Claude Code and dispatch both write
+    (``jobs-state-json``). More than one is possible: a branch name — and so
+    a tree path — gets reused (``fix/issue-158``), and the jobs of the earlier
+    life can still be on disk.
+    """
+    try:
+        from mnemo.core.sessions.jobs import normalize_cwd, read_sessions
+
+        wanted = normalize_cwd(str(worktree))
+        return [s for s in read_sessions() if normalize_cwd(s.cwd) == wanted]
+    except Exception:
+        return []
+
+
+def stop_session(short_id: str) -> str | None:
+    """``claude stop <short_id>``. ``None`` when it exited 0, else why not.
+
+    Never raises: the PR is already open when this runs, and a stop that
+    failed must not read as a delivery that failed. On a ``done`` child the
+    stop ends the process and leaves ``state=done`` (``stop-rm-noninteractive``,
+    ``daemon-spare-pool``), so the queue row does not move — and only a
+    stopped child fires ``SessionEnd`` (#247, ``stop-fires-session-end``),
+    which is where its briefing is written.
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "stop", short_id],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if result.returncode != 0:
+        return (result.stderr.strip() or result.stdout.strip()
+                or f"exit {result.returncode}")
+    return None

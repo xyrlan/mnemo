@@ -194,3 +194,35 @@ def test_reflex_load_index_silent_on_version_skew(tmp_vault):
     )
     assert load_index(tmp_vault) is None
     assert not errors_log.exists()
+
+
+def test_build_index_scopes_an_imported_promoted_rule_to_its_local_project(tmp_vault):
+    """#302: an imported page has ``sources: []`` and carries its project only
+    in ``projects:``. Without the frontmatter fallback it indexed with no
+    project, so ``candidates_for_project`` never offered it and the reflex
+    never injected it — while the MCP tools, which read the page, listed it.
+
+    The page is the real import output (``to_vault_page``), promoted the way a
+    human promotes a draft: moved from ``_inbox/`` into ``shared/feedback/``.
+    """
+    from mnemo.core.reflex.decide import candidates_for_project
+    from mnemo.core.share import from_portable, to_portable, to_vault_page
+    from tests.unit._export_fixtures import write_rule
+
+    native = write_rule(tmp_vault, slug="use-yarn", quote="always yarn",
+                        projects=("theirs",)).read_text(encoding="utf-8")
+    rule = from_portable(to_portable(native, vault="v-one", project="theirs",
+                                     today="2026-09-01"))
+    staged = to_vault_page(rule, project="mine", today="2026-09-13")
+    for stale in (tmp_vault / "shared").rglob("*.md"):
+        stale.unlink()
+    promoted = tmp_vault / "shared" / "feedback" / "use-yarn.md"
+    promoted.parent.mkdir(parents=True, exist_ok=True)
+    promoted.write_text(staged, encoding="utf-8")
+
+    idx = build_index(tmp_vault, universal_threshold=2)
+
+    assert idx["docs"]["use-yarn"]["projects"] == ["mine"]
+    assert idx["docs"]["use-yarn"]["universal"] is False
+    assert candidates_for_project(idx, "mine") == ["use-yarn"]
+    assert candidates_for_project(idx, "theirs") == []

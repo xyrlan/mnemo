@@ -542,6 +542,12 @@ Each issue gets one background `claude` session in a fresh git worktree at
   attach: claude attach a41c8e2f
 ```
 
+Run from inside a session (`/mnemo:dispatch`, or the model calling `mnemo
+dispatch` itself), the output ends with a note addressed to that session: the
+children are detached, nothing tells it when they block or finish, so it
+reports the ids and stops instead of promising to watch them. The queue is
+yours.
+
 The child's opening prompt is the issue body, the worktree, and three scope
 limits: no merge or push without asking, no files outside what the issue
 needs, the full suite before claiming done. It carries no preferred solution,
@@ -862,6 +868,24 @@ outside the repo has not. The Bash half reads command text, so it can be wrong;
 `tools/measure_exploration.py --list` prints the edit it picked for every
 dispatch transcript on disk, and splits the numbers by how many reflex rules
 each child got — correlation over what happened, not a controlled test.
+
+### What fills a child's context
+
+A working or finished row ends with `Bash 46%` when one tool's results fill at
+least 40% of that session's context. MCP tools count per server
+(`mcp:claude-in-chrome`). Every other row prints nothing extra. Dispatched
+children lean on Bash, with a median around 31%, so a lower bar would put a
+suffix on most rows. `mnemo sessions --json` carries the whole breakdown as
+`context_breakdown: {tool: tokens}`.
+
+These numbers will not match `/context`'s "Read results using …" line, which
+is not wrong in the same way. `/context` sizes each block at its JSON length / 4
+and shows it as a share of the whole window. That counts a screenshot's base64
+as text: one session read "Read 207%" while its whole context was 818k. mnemo
+counts result text at 2.25 characters per token, measured from how much the
+context really grew. An image counts at its pixels / 750, and each turn's total
+is capped at that turn's real growth. A tool's call (the content a `Write`
+sends) is output, not a result, and is not counted.
 
 ### Flags
 

@@ -443,7 +443,7 @@ SLASH_COMMAND_TAG = "<!-- mnemo:slash-command -->"
 # dispatch" line explains what it wanted.
 DISPATCH_COMMAND: dict[str, Any] = {
     "description": "spawn a background child per issue, or per piece of a contract "
-                   "(then `mnemo sessions` to watch them, `mnemo deliver` to ship)",
+                   "(the maintainer follows them with `mnemo sessions`, ships with `mnemo deliver`)",
     "args": ("dispatch",),
     "arguments": True,
     "argument_hint": "[issue ...] | --contract <path> [--dry-run]",

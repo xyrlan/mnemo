@@ -173,8 +173,26 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     # jobs.in_scope for why equality hid every child this tool exists for.
     scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
 
+    # path -> (offset, meter), carried across watch ticks so a running child
+    # costs the bytes it appended since and a finished one costs a stat.
+    contexts: dict = {}
+
     def _read():
         found = read_sessions(cwd=scope)
+        try:
+            from dataclasses import replace
+
+            from mnemo.core.activity.context import measure
+
+            # How full each session is (#307) and what filled it (#308), from
+            # one read of the transcript: state.json's `tokens` is not the
+            # size, and `/context`'s per-tool figures are not the breakdown.
+            measured = [measure(s.link_scan_path, contexts) for s in found]
+            found = [replace(s, context_tokens=size,
+                             context_breakdown=None if size is None else tools)
+                     for s, (size, tools) in zip(found, measured)]
+        except Exception:
+            pass
         try:
             from mnemo import cli  # late binding for monkeypatched _resolve_vault
 

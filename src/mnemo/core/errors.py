@@ -58,48 +58,71 @@ def _breaker_relevant(entry: dict, cutoff: datetime) -> bool:
     return datetime.fromisoformat(entry["timestamp"]) >= cutoff
 
 
-def should_run(vault_root: Path) -> bool:
-    """Return False if circuit breaker is open."""
-    try:
-        log_path = _log_path(vault_root)
-        if not log_path.exists():
-            return True
-        cutoff = datetime.now() - timedelta(hours=1)
-        recent = 0
-        with open(log_path, "rb") as fh:
-            for raw in fh:
-                try:
-                    if _breaker_relevant(json.loads(raw.decode("utf-8")), cutoff):
-                        recent += 1
-                except Exception:
+def _strike(entry: dict) -> tuple[str, str, str]:
+    """The breaker's unit: one ``(where, kind)`` per wall-clock minute.
+
+    A single command that loops and logs once per item writes a burst of
+    rows sharing a timestamp. That is one failure, not many: on 2026-09-15 one
+    ``mnemo sessions --consume-unblocks`` pass wrote 27 same-second
+    ``unblocks.consume`` rows and paused every hook for an hour (#314). A hook
+    failing on every call still trips it — every minute it keeps failing is a
+    fresh strike.
+    """
+    minute = entry["timestamp"][:16]  # "YYYY-MM-DDTHH:MM", as log_error writes it
+    return entry.get("where", ""), entry.get("kind", ""), minute
+
+
+def _recent_entries(vault_root: Path):
+    """Well-formed log entries the breaker counts, oldest first."""
+    log_path = _log_path(vault_root)
+    if not log_path.exists():
+        return
+    cutoff = datetime.now() - timedelta(hours=1)
+    with open(log_path, "rb") as fh:
+        for raw in fh:
+            try:
+                entry = json.loads(raw.decode("utf-8"))
+                if not _breaker_relevant(entry, cutoff):
                     continue
-                if recent > THRESHOLD_PER_HOUR:
-                    return False
-        return recent <= THRESHOLD_PER_HOUR
+                _strike(entry)
+            except Exception:
+                continue
+            yield entry
+
+
+def recent_strikes(vault_root: Path) -> int:
+    """Distinct ``(where, kind, minute)`` strikes in the last hour; fail-open to 0."""
+    try:
+        return len({_strike(e) for e in _recent_entries(vault_root)})
+    except Exception:
+        return 0
+
+
+def should_run(vault_root: Path) -> bool:
+    """Return False if circuit breaker is open: more than
+    :data:`THRESHOLD_PER_HOUR` strikes (see :func:`_strike`) in the last hour."""
+    try:
+        strikes: set = set()
+        for entry in _recent_entries(vault_root):
+            strikes.add(_strike(entry))
+            if len(strikes) > THRESHOLD_PER_HOUR:
+                return False
+        return True
     except Exception:
         return True  # fail-open: never block hooks because the breaker is broken
 
 
 def recent_summary(vault_root: Path) -> tuple[int, list[tuple[str, int]]]:
-    """(errors counted by the breaker in the last hour, ``where`` buckets by count desc).
+    """(error rows counted by the breaker in the last hour, ``where`` buckets by count desc).
 
-    Same exclusions as :func:`should_run`; fail-open to ``(0, [])``.
+    Same exclusions as :func:`should_run`, but counts rows, not strikes: the
+    rows are what a human finds in the log. Fail-open to ``(0, [])``.
     """
     try:
-        log_path = _log_path(vault_root)
-        if not log_path.exists():
-            return 0, []
-        cutoff = datetime.now() - timedelta(hours=1)
         buckets: dict[str, int] = {}
-        with open(log_path, "rb") as fh:
-            for raw in fh:
-                try:
-                    entry = json.loads(raw.decode("utf-8"))
-                    if _breaker_relevant(entry, cutoff):
-                        where = entry.get("where", "?")
-                        buckets[where] = buckets.get(where, 0) + 1
-                except Exception:
-                    continue
+        for entry in _recent_entries(vault_root):
+            where = entry.get("where", "?")
+            buckets[where] = buckets.get(where, 0) + 1
         ordered = sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0]))
         return sum(buckets.values()), ordered
     except Exception:

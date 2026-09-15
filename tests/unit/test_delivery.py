@@ -913,3 +913,60 @@ def test_pr_for_is_the_url_of_pr_info(monkeypatch) -> None:
     assert delivery.pr_for("feat/f/x", repo_root="/repo") == (
         delivery.pr_info("feat/f/x", repo_root="/repo").url
     )
+
+
+# --- stop_session / sessions_in (#311) --------------------------------------
+
+
+def test_stop_session_runs_claude_stop_on_the_id(monkeypatch) -> None:
+    calls: list = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(delivery.subprocess, "run", fake_run)
+
+    assert delivery.stop_session("4379bab0") is None
+    assert calls == [["claude", "stop", "4379bab0"]]
+
+
+def test_stop_session_reports_a_nonzero_exit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        delivery.subprocess, "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "no session 4379bab0\n"),
+    )
+    assert delivery.stop_session("4379bab0") == "no session 4379bab0"
+
+
+@pytest.mark.parametrize(
+    "exc", [FileNotFoundError("claude"), subprocess.TimeoutExpired(["claude"], 60)],
+)
+def test_stop_session_never_raises(monkeypatch, exc) -> None:
+    def boom(args, **kw):
+        raise exc
+
+    monkeypatch.setattr(delivery.subprocess, "run", boom)
+    assert delivery.stop_session("4379bab0")
+
+
+def test_sessions_in_joins_on_cwd(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    from mnemo.core.sessions import jobs, liveness
+
+    tree = tmp_path / "mnemo-wt-311"
+    tree.mkdir()
+    other = tmp_path / "mnemo-wt-312"
+    other.mkdir()
+    root = tmp_path / "jobs"
+    for short_id, cwd in (("4379bab0", tree), ("fee17ecd", other), ("fa2cc86d", f"{tree}/")):
+        (root / short_id).mkdir(parents=True)
+        (root / short_id / "state.json").write_text(
+            json.dumps({"state": "done", "tempo": "idle", "cwd": str(cwd)}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(jobs, "jobs_dir", lambda: root)
+    monkeypatch.setattr(liveness, "read_roster", lambda home=None: None)
+
+    assert sorted(s.short_id for s in delivery.sessions_in(tree)) == ["4379bab0", "fa2cc86d"]

@@ -124,12 +124,17 @@ def _build_injection_payload(
             'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
         )
 
-    # v0.10 NEW: append the most recent briefing for current_project, if any.
+    # v0.10 NEW: append a briefing for current_project, if any.
     briefing_block = ""
     if inject_briefing and current_project:
         try:
             from mnemo.core import briefing as briefing_mod
-            rec = briefing_mod.pick_latest_briefing(vault_root, current_project)
+            from mnemo.core import briefing_select
+            # query=None is newest-wins. The hook runs before the first prompt
+            # exists, and the one task signal it does have — the branch — picked
+            # the best-matching briefing no more often than newest-wins on the
+            # real vault (tools/measure_briefing_query.py).
+            rec = briefing_select.pick(vault_root, current_project, query=None)
             if rec is not None:
                 fm = rec.frontmatter
                 framing = (
@@ -144,6 +149,13 @@ def _build_injection_payload(
                     + rec.body.rstrip()
                     + "\n[/last-briefing]"
                 )
+                # The hook is this builder's only caller and emits whatever it
+                # returns, so building the block is handing it to the session.
+                # Its own try: telemetry must never cost the session its briefing.
+                try:
+                    briefing_mod.record_briefing_read(vault_root, rec)
+                except Exception:
+                    pass
         except Exception:
             briefing_block = ""
 

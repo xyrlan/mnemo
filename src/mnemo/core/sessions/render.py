@@ -87,9 +87,63 @@ def _freshest_first(s: Session) -> str:
 
 
 def _tokens(s: Session) -> str:
-    if s.tokens is None:
+    """The context column: how full the session is, as ``/context`` says (#307).
+
+    Never falls back to ``s.tokens``. That field is 3-65x below the context on
+    every job measured, so printing it when the transcript is unreadable would
+    put the old lie back in the one cell that looks like it is telling the
+    truth. Unknown renders blank, as it always did.
+    """
+    n = s.context_tokens
+    if n is None:
         return ""
-    return f"{s.tokens // 1000}k" if s.tokens >= 1000 else str(s.tokens)
+    return f"{n // 1000}k" if n >= 1000 else str(n)
+
+
+# One tool's results holding this share of the context is worth a row suffix
+# (#308). Measured over the 24 background jobs on disk on 2026-09-15: 23 are
+# Bash-led (auto mode steers there) and the 22 dispatch children sit at 12-46%
+# with a median of 31%, so a bar at 30% would print "Bash 3x%" on 14 rows and
+# say nothing. At 40% it spoke on 1 of 24 — the child heavier than its siblings.
+NOTABLE_SHARE = 0.40
+# `mcp:claude-in-chrome` fits; a longer server name is cut, not the percentage.
+TOOL_WIDTH = 20
+
+
+def _tool_group(name: str) -> str:
+    """``mcp__<server>__<tool>`` counts as its server; any other tool as itself.
+
+    A browser session spreads its screenshots over ``computer``,
+    ``browser_batch`` and ``find``; split by tool, no one of them crosses the
+    bar although the server as a whole fills the context.
+    """
+    if name.startswith("mcp__"):
+        server = name[len("mcp__"):].split("__", 1)[0]
+        if server:
+            return f"mcp:{server}"
+    return name
+
+
+def _filled(s: Session) -> str:
+    """``Bash 46%`` when one tool's results fill a notable share of the context (#308).
+
+    Silent otherwise, and silent when either number is unknown: the row is
+    already 87-135 columns, and a suffix on every row would teach the reader
+    to skip it. ``--json`` carries the whole breakdown for anyone who wants it.
+    """
+    if not s.context_tokens or not s.context_breakdown:
+        return ""
+    groups: dict[str, int] = {}
+    for name, tokens in s.context_breakdown.items():
+        key = _tool_group(name)
+        groups[key] = groups.get(key, 0) + tokens
+    name, tokens = max(groups.items(), key=lambda kv: (kv[1], kv[0]))
+    share = tokens / s.context_tokens
+    if share < NOTABLE_SHARE:
+        return ""
+    if len(name) > TOOL_WIDTH:
+        name = name[: TOOL_WIDTH - 1] + "…"
+    return f"{name} {share:.0%}"
 
 
 def _prs(s: Session, lookup=None) -> str:
@@ -323,6 +377,10 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     column to the end of each PRONTAS row, plus a total under the table. Only
     finished sessions get it: a working child's count is still moving, and the
     activity column already says what it is doing. Omitted, nothing changes.
+
+    Both TRABALHANDO and PRONTAS rows end with ``Bash 46%`` when one tool's
+    results fill at least :data:`NOTABLE_SHARE` of the context, read off
+    ``Session.context_breakdown`` (#308); every other row is unchanged.
     """
     if not sessions:
         return EMPTY
@@ -350,15 +408,17 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         lines.append(f"TRABALHANDO ({len(working)})")
         for s in working:
             detail = status_line(s, acts.get(s.short_id)) or "—"
-            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}")
+            row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}"
+            filled = _filled(s)
+            lines.append(f"{row}  {filled}" if filled else row)
         lines.append("")
 
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
             row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {status_line(s, pr_lookup=pr_lookup) or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}"
-            spent = _exploration(explored.get(s.short_id))
-            lines.append(f"{row}  {spent}" if spent else row)
+            suffix = "  ".join(x for x in (_exploration(explored.get(s.short_id)), _filled(s)) if x)
+            lines.append(f"{row}  {suffix}" if suffix else row)
         lines.append("")
 
     if abandoned:

@@ -71,6 +71,10 @@ read off ``--help``; the assumption is stated in
   installation so a venv or frozen build is reproduced exactly.
 - ``--settings <file>`` — hand mnemo's hooks back, filtered out of the user's
   settings by the same predicate the installer uses to recognise its own.
+  All of them, not a chosen few: SessionStart is where the child reads the
+  canonical project's briefing and SessionEnd is where its own is written, so
+  a hand-back missing either end cuts the child out of the briefing channel
+  in one direction (see :mod:`mnemo.core.dispatch`).
 
 Rejected: ``--safe-mode`` and ``--bare``. Both are blunter than the problem —
 ``--safe-mode`` disables *all* customisation including mnemo's, and ``--bare``

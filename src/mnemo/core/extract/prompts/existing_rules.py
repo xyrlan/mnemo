@@ -117,7 +117,7 @@ def _collect(vault_root: Path, kind: str) -> list[tuple[str, str, list[str], int
                 sources = [sources]
             sources = [s for s in sources if isinstance(s, str)]
             out.append((_slug_for(fm, md.stem), str(fm.get("name") or md.stem),
-                        projects_for_rule(sources), len(sources),
+                        projects_for_rule(sources, frontmatter=fm), len(sources),
                         str(fm.get("description") or ""), _body_of(text)))
     _CACHE[key] = out
     return out
