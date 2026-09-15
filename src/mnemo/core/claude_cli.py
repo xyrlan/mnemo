@@ -169,7 +169,8 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "`claude stop <id>` and `claude rm <id>` work on a pipe and exit 0; "
             "`rm` deletes `~/.claude/jobs/<id>/`."
         ),
-        used_by="the live test's own cleanup (dispatch never stops a child)",
+        used_by="delivery.stop_session (deliver stops a done child once its "
+                "PR is open, #311); the live test's own cleanup",
         verified=_V,
     ),
     Assumption(

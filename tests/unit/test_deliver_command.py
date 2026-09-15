@@ -45,6 +45,12 @@ def no_network(monkeypatch: pytest.MonkeyPatch):
     """Never reach GitHub, and never push. Each test opts in to what it needs."""
     monkeypatch.setattr(delivery, "pr_for", lambda branch, **kw: None)
     monkeypatch.setattr(delivery, "pr_info", lambda branch, **kw: None)
+    # Nor read the real job queue, nor stop a real child (#311).
+    monkeypatch.setattr(delivery, "sessions_in", lambda tree: [])
+    monkeypatch.setattr(
+        delivery, "stop_session",
+        lambda short_id: pytest.fail(f"stopped {short_id} with no session stubbed"),
+    )
 
 
 @pytest.fixture
@@ -268,6 +274,115 @@ def test_a_push_that_landed_is_reported_even_when_the_pr_fails(
     assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 1
     out = capsys.readouterr().out
     assert "pushed" in out and "gh pr create failed" in out
+
+
+# --- after the PR: stop the finished child (#311) ---------------------------
+
+
+def _session(short_id: str, tree: Path, **kw):
+    from mnemo.core.sessions.jobs import Session
+
+    return Session(short_id=short_id, cwd=str(tree), **kw)
+
+
+@pytest.fixture
+def stopped(monkeypatch: pytest.MonkeyPatch, pushed: list) -> list:
+    """Record each stop into the same call log as push and PR, so order shows."""
+    monkeypatch.setattr(
+        delivery, "stop_session",
+        lambda short_id: pushed.append(("stop", short_id)),
+    )
+    return pushed
+
+
+def test_a_done_child_is_stopped_after_its_pr_is_open(
+    in_repo: Path, stopped: list, monkeypatch, capsys
+) -> None:
+    """Only a stopped child fires SessionEnd (#247); a done one holds ~400 MB for 8 h."""
+    tree = _ready_tree(in_repo, "311", "fix/issue-311")
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("4379bab0", t, state="done", tempo="idle")]
+        if Path(t) == tree else [],
+    )
+
+    assert deliver.cmd_deliver(_args(ids=["311"])) == 0
+
+    assert stopped == [
+        ("push", "fix/issue-311"), ("pr", "fix/issue-311", 311), ("stop", "4379bab0"),
+    ]
+    out = capsys.readouterr().out
+    # The URL is printed before the stop is attempted.
+    assert out.index("https://x/pull/1") < out.index("stopped 4379bab0")
+    assert tree.is_dir()  # SessionEnd resolves this cwd; deliver removes nothing
+
+
+@pytest.mark.parametrize(("state", "tempo"), [("working", "active"), ("blocked", "blocked")])
+def test_a_child_that_has_not_finished_is_left_running(
+    in_repo: Path, stopped: list, monkeypatch, capsys, state: str, tempo: str
+) -> None:
+    _ready_tree(in_repo, "311", "fix/issue-311")
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("aaaa1111", t, state=state, tempo=tempo)],
+    )
+
+    assert deliver.cmd_deliver(_args(ids=["311"])) == 0
+
+    assert ("stop", "aaaa1111") not in stopped
+    assert f"aaaa1111 left running (state={state})" in capsys.readouterr().out
+
+
+def test_nothing_to_stop_when_the_process_is_already_gone(
+    in_repo: Path, stopped: list, monkeypatch, capsys
+) -> None:
+    """`stopped` already fired SessionEnd; a done child the roster proves dead has no process."""
+    _ready_tree(in_repo, "311", "fix/issue-311")
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [
+            _session("aaaa1111", t, state="stopped", tempo="idle"),
+            _session("bbbb2222", t, state="done", tempo="idle", live=False),
+            _session("cccc3333", t, state="done", tempo="idle", live=None),
+        ],
+    )
+
+    assert deliver.cmd_deliver(_args(ids=["311"])) == 0
+
+    assert [c for c in stopped if c[0] == "stop"] == [("stop", "cccc3333")]
+    out = capsys.readouterr().out
+    assert "aaaa1111" not in out and "bbbb2222" not in out
+
+
+def test_no_pr_means_no_stop(in_repo: Path, monkeypatch) -> None:
+    """A child whose work is not delivered is not finished from the maintainer's side."""
+    _ready_tree(in_repo, "311", "fix/issue-311")
+    monkeypatch.setattr(delivery, "push", lambda branch, *, worktree: None)
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("4379bab0", t, state="done", tempo="idle")],
+    )
+
+    def boom(branch, *, worktree, title, target=None):
+        raise delivery.DeliveryError("no default branch")
+
+    monkeypatch.setattr(delivery, "open_pr", boom)
+    # The autouse stub fails the test if stop_session is reached.
+    assert deliver.cmd_deliver(_args(ids=["311"])) == 1
+
+
+def test_a_failed_stop_is_reported_and_the_delivery_still_counts(
+    in_repo: Path, pushed: list, monkeypatch, capsys
+) -> None:
+    _ready_tree(in_repo, "311", "fix/issue-311")
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("4379bab0", t, state="done", tempo="idle")],
+    )
+    monkeypatch.setattr(delivery, "stop_session", lambda short_id: "no such session")
+
+    assert deliver.cmd_deliver(_args(ids=["311"])) == 0
+    assert "`claude stop 4379bab0` failed: no such session" in capsys.readouterr().out
 
 
 # --- the review ------------------------------------------------------------
