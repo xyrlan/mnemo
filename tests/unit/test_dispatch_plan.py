@@ -117,8 +117,9 @@ def test_prompt_never_prescribes_an_approach() -> None:
     params = set(inspect.signature(dispatch.build_prompt).parameters)
 
     # `repo_root` is context — where this repo keeps its changelog — not a
-    # way in for a preferred solution.
-    assert params == {"issue", "title", "body", "repo_root"}
+    # way in for a preferred solution. `may` is a permission (#317): which of
+    # three fixed words the maintainer granted, never free text.
+    assert params == {"issue", "title", "body", "repo_root", "may"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:

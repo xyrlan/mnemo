@@ -425,7 +425,7 @@ def test_the_flag_reaches_the_dispatch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True: (
+        lambda issues, *, repo_root, model=None, lean=True, may=(): (
             seen.update(model=model),
             [dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4")],
         )[1],
@@ -441,7 +441,7 @@ def test_the_report_says_which_model_was_chosen(monkeypatch, capsys, tmp_path: P
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True: [
+        lambda issues, *, repo_root, model=None, lean=True, may=(): [
             dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4",
                                 model=model)
         ],
@@ -458,7 +458,7 @@ def test_a_dispatch_with_no_model_claims_no_choice(monkeypatch, capsys, tmp_path
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True: [
+        lambda issues, *, repo_root, model=None, lean=True, may=(): [
             dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4")
         ],
     )

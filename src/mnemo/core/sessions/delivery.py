@@ -630,11 +630,23 @@ def open_pr(
     # guessed when nothing matches: the PR was created either way, and a
     # blank URL reads as missing where a wrong one reads as actionable.
 
+    if url:
+        close_on_merge(url, target=target, worktree=worktree)
+    return url
+
+
+def close_on_merge(url: str, *, target: object, worktree: Path | str) -> None:
+    """Make the PR at *url* close *target*'s issue when merged. Never raises.
+
+    The half of :func:`open_pr` that also applies to a PR this process did not
+    open: a child granted ``--may pr`` opens its own (#317), and the trailer is
+    still a fact the dispatcher owns rather than one to trust the child with
+    (#224). Idempotent — a body that already closes the issue is left alone.
+    """
     # `isinstance(True, int)` is True, and `target` crosses a dataclass field
     # typed `object`; a bool here would name issue #1.
     if url and isinstance(target, int) and not isinstance(target, bool):
         _append_closing_trailer(url, issue=target, worktree=worktree)
-    return url
 
 
 # --- after the PR: stop the finished child (#311) ---------------------------

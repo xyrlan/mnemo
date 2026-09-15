@@ -629,6 +629,31 @@ and `mnemo sessions` ends with one line naming the models in play across the
 whole queue — a footer rather than a column, because the same id repeated on
 every row would cost 20 characters of width to say nothing.
 
+### Saying up front what a child may publish
+
+A child that finishes stops to ask "may I push / open a PR?", and an answer
+sent later through `SendMessage` or mnemo-desktop cannot approve it: Claude
+Code frames every such message as another session's, never as yours. The one
+message a child reads as yours is the prompt `mnemo dispatch` wrote, so that
+is where the permission goes:
+
+```bash
+mnemo dispatch 255 --may push      # push its branch once the suite passes
+mnemo dispatch 246 --may pr        # push, and open the pull request itself
+```
+
+`pr` implies `push`. The child is told it may do exactly that once its full
+suite passes, on its own branch, never force-pushing — and not to ask again.
+`merge` is refused: merging stays with `mnemo land` and review. Without
+`--may` the prompt is the one it always was, and `mnemo deliver` publishes.
+
+A contract piece may carry its own `- **may:** pr`, which wins over the flag
+the way `model:` does; `- **may:** none` withholds from that piece what the
+flag gave the rest. `--dry-run` prints each child's grant, `mnemo sessions`
+ends with a `publicam sem perguntar:` line naming the running children that
+hold one, and `mnemo sessions --json` carries it on every row as `may`
+(`["push", "pr"]`, or `[]`).
+
 ### Watching, and answering
 
 `mnemo sessions` is the queue; the [next section](#watching-background-sessions)
@@ -683,7 +708,10 @@ NÃO PRONTAS (2)
 `Closes #N` for an issue child so the merge closes the issue. Its one
 invariant is that naming an id **is** the approval: there is no `--all`, and
 each refusal (not ahead of `master`, a dirty tree, a PR that already exists)
-is printed against the name you typed. A delivered child prints its PR:
+is printed against the name you typed. A PR that is already open — one a
+child granted `--may pr` opened itself — counts as delivered: it is printed,
+given the `Closes #N` trailer if it lacks one, and the finished child is
+stopped. A delivered child prints its PR:
 
 ```
 #205: https://github.com/you/app/pull/199

@@ -120,17 +120,25 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         return False
 
     if state.pr and state.pr_state == "OPEN":
-        # Not an error and not a push. Delivering twice would open a duplicate
-        # PR for the same branch, and the maintainer who wants the existing
-        # one updated can push it themselves — that is a different decision
-        # from the one this command takes, and it is already reviewed.
+        # Not a push. Delivering twice would open a duplicate PR for the same
+        # branch, and the maintainer who wants the existing one updated can
+        # push it themselves — that is a different decision from the one this
+        # command takes, and it is already reviewed.
+        #
+        # Not an error either, and since #317 the expected outcome: a child
+        # dispatched with `--may pr` opened this PR itself. So it counts as
+        # delivered — the closing trailer the child may have left off is
+        # added, and the finished child is stopped, exactly as after a PR this
+        # command opened.
         #
         # Only an OPEN one. A MERGED or CLOSED PR on this branch name is a
         # previous life of the name — `fix/issue-158` was dispatched twice,
         # two days apart — and the commits ahead of the base now are new work
         # that `gh pr create` will open a new PR for.
         print(f"{state.label}: PR já existe — {state.pr}")
-        return False
+        delivery.close_on_merge(state.pr, target=state.target, worktree=tree)
+        _stop_finished(tree, label=state.label)
+        return True
 
     try:
         delivery.push(state.branch, worktree=tree)

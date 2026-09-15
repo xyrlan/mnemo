@@ -25,6 +25,10 @@ attempt, so each is encoded here rather than left to be rediscovered:
   judgement, and a dispatcher that answers on its own re-creates the #187
   failure below, where a prescribed answer overrode a correct refusal.
   Relaying a human's answer is useful; inventing one is not.
+  What the maintainer *can* do is answer the publishing question before it is
+  asked: ``--may push,pr`` renders a standing permission into the opening
+  prompt, which is the maintainer's own message (#317,
+  :mod:`mnemo.core.sessions.grants`).
 - **``claude agents`` requires a TTY** and refuses on a pipe. Any scripted
   reader must use ``mnemo sessions --json``.
 - **``timeout`` is not on the macOS PATH.** Dispatches are never wrapped in it.
@@ -83,12 +87,13 @@ import json
 import re
 import shutil
 import subprocess
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
 from mnemo.core import child_profile, claude_cli, contracts
-from mnemo.core.sessions import parents
+from mnemo.core.sessions import grants, parents
 
 WORKTREE_SUFFIX = "-wt-"
 
@@ -153,6 +158,9 @@ class Dispatched:
     #: afterwards the truth is the child's own ``state.json``, which Claude
     #: Code fills in with the *resolved* id even when nothing was passed.
     model: str | None = None
+    #: What this child may publish without asking, as rendered into its
+    #: prompt (#317): ``()`` for nothing, the unchanged default.
+    may: tuple[str, ...] = ()
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -233,7 +241,7 @@ which often re-scope it. The body as it stands:
 You are in a git worktree of your own on branch `{branch}`. Work only here.
 
 Scope limits:
-- Do not merge or push without asking.
+{publish}
 - Do not touch files outside what this issue needs.
 - Run the full test suite before claiming the work is done.
 {changelog}
@@ -267,8 +275,56 @@ def _changelog_prompt(name: str, repo_root: Path | str | None) -> str:
     return _CHANGELOG_PROMPT.format(name=name)
 
 
+#: Said when nothing was granted — the words every child was given before #317,
+#: kept byte-identical so a dispatch without ``--may`` is the dispatch it was.
+NO_GRANT = "Do not merge or push without asking."
+
+
+def _publish_clause(
+    may: grants.Grant, *, branch: str, issue: int | None = None
+) -> str:
+    """What the child may publish, as one sentence run. Unwrapped.
+
+    Written as the maintainer's answer to the question the child would
+    otherwise stop to ask, because that is what it is: this prompt is the one
+    message every child receives as ``origin.kind == "human"``, typed, and the
+    maintainer wrote it by running ``mnemo dispatch`` (#317). A peer reply
+    arriving later cannot carry the same approval, so it has to be here.
+
+    Conditional on a green suite, bounded to the child's own branch, never a
+    force-push, never a merge. With ``pr`` on an issue the ``Closes #<n>``
+    trailer is stated too: the dispatcher knows the number, and ``deliver``
+    re-checks it on the PR it finds (#224) rather than trusting this line.
+    """
+    if not may:
+        return NO_GRANT
+    if "pr" in may:
+        what = (f"push `{branch}` to origin and open a pull request for it, "
+                "ready for review rather than a draft")
+        closes = f" End the pull request body with `Closes #{issue}`." if issue else ""
+        rest = ""
+    else:
+        what = f"push `{branch}` to origin"
+        closes = ""
+        rest = " Do not open a pull request: `mnemo deliver` does that."
+    return (
+        f"Do not merge. Once the full test suite passes, {what}, without asking "
+        "first: the maintainer granted this when they dispatched you, and this "
+        f"is their answer, so do not ask for it again.{closes}{rest} If the "
+        "suite does not pass, publish nothing and say what fails. Never "
+        "force-push, and publish nothing beyond this branch."
+    )
+
+
+def _wrap(text: str, **indent: str) -> str:
+    return textwrap.fill(
+        text, width=78, break_on_hyphens=False, break_long_words=False, **indent
+    )
+
+
 def build_prompt(
-    issue: int, *, title: str, body: str, repo_root: Path | str | None = None
+    issue: int, *, title: str, body: str, repo_root: Path | str | None = None,
+    may: grants.Grant = (),
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -284,14 +340,21 @@ def build_prompt(
     A well-written issue body carried more than the dispatching prompt did.
     Since a prompt that prescribes an approach can override a correct refusal,
     there is no way to pass one here. *repo_root* is context, not approach: it
-    only decides whether the repo's changelog convention is stated.
+    only decides whether the repo's changelog convention is stated. *may* is
+    a permission, not an approach either: what the maintainer already approved
+    publishing, never how to build the thing published (#317).
     """
+    branch = branch_name(issue)
     return _PROMPT.format(
         issue=issue,
         title=title or f"issue #{issue}",
         body=(body or "").strip() or "(empty — read it with gh)",
-        branch=branch_name(issue),
+        branch=branch,
         changelog=_changelog_prompt(str(issue), repo_root),
+        publish=_wrap(
+            _publish_clause(may, branch=branch, issue=issue),
+            initial_indent="- ", subsequent_indent="  ",
+        ),
     )
 
 
@@ -319,7 +382,7 @@ boundary turns out to be wrong — the work does not divide where it says, or a
 signature cannot be delivered as written — stop and say so rather than widening
 your boundary to make it fit.
 {changelog}
-Run the full test suite before you finish. Do not merge or push without asking.
+{publish}
 """
 
 _CONSUMES_PROMPT = """**What you may assume exists** — another piece is delivering
@@ -332,7 +395,8 @@ do not implement them yourself:
 
 
 def build_piece_prompt(
-    piece: contracts.Piece, *, feature: str, repo_root: Path | str | None = None
+    piece: contracts.Piece, *, feature: str, repo_root: Path | str | None = None,
+    may: grants.Grant = (),
 ) -> str:
     """A contract piece's opening prompt: its boundary and its interfaces.
 
@@ -342,7 +406,11 @@ def build_piece_prompt(
     **boundary** and belongs here, while *"use a regex to parse it"* is an
     **approach** and must not be expressible. Blurring the two reintroduces the
     #187 failure at N children instead of one.
+
+    *may* is what this child was granted, already resolved — the piece's own
+    ``may:`` over the dispatch's ``--may`` — by :func:`dispatch_piece`.
     """
+    branch = branch_name(piece.slug, feature=feature)
     consumes = ""
     if piece.consumes:
         items = "\n".join(
@@ -357,8 +425,15 @@ def build_piece_prompt(
         files="\n".join(f"- {path}" for path in piece.files),
         exposes="\n".join(f"- {item}" for item in piece.exposes) or "- (nothing)",
         consumes=consumes,
-        branch=branch_name(piece.slug, feature=feature),
+        branch=branch,
         changelog=_changelog_prompt(f"{feature}-{piece.slug}", repo_root),
+        # Unwrapped when nothing was granted: that line predates the grant and
+        # stays byte-identical, one 80-column line and all.
+        publish=(
+            f"Run the full test suite before you finish. {NO_GRANT}" if not may
+            else _wrap("Run the full test suite before you finish. "
+                       + _publish_clause(may, branch=branch))
+        ),
     )
 
 
@@ -613,6 +688,7 @@ def _spawn_into(
     target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str,
     model: str | None = None,
     lean: bool = True,
+    may: grants.Grant = (),
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -637,7 +713,8 @@ def _spawn_into(
         short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean)
     except claude_cli.ContractBroken as exc:
         return Dispatched(
-            issue=target, worktree=tree, short_id="", warning=str(exc), model=model
+            issue=target, worktree=tree, short_id="", warning=str(exc),
+            model=model, may=may,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -648,8 +725,11 @@ def _spawn_into(
     # child whose id was read back can be looked up by it, hence after the
     # ContractBroken branch above.
     parents.record(short_id)
+    # The prompt already granted it; this only lets the queue say so (#317).
+    grants.record(short_id, may)
     return Dispatched(
-        issue=target, worktree=tree, short_id=short_id, warning=warning, model=model
+        issue=target, worktree=tree, short_id=short_id, warning=warning,
+        model=model, may=may,
     )
 
 
@@ -657,6 +737,7 @@ def dispatch_issue(
     issue: int, *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
     model: str | None = None,
     lean: bool = True,
+    may: grants.Grant = (),
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -670,8 +751,10 @@ def dispatch_issue(
     tree = ensure_worktree(issue, repo_root=repo_root)
     return _spawn_into(
         issue, tree,
-        build_prompt(issue, title=details.title, body=details.body, repo_root=repo_root),
+        build_prompt(issue, title=details.title, body=details.body,
+                     repo_root=repo_root, may=may),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
+        may=may,
     )
 
 
@@ -679,6 +762,7 @@ def dispatch_all(
     issues: Sequence[int], *, repo_root: Path | str, fetch: Fetcher = fetch_issue,
     model: str | None = None,
     lean: bool = True,
+    may: grants.Grant = (),
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -698,7 +782,7 @@ def dispatch_all(
             out.append(
                 dispatch_issue(
                     issue, repo_root=repo_root, fetch=fetch,
-                    model=model, lean=lean,
+                    model=model, lean=lean, may=may,
                 )
             )
         except DispatchError as exc:
@@ -710,6 +794,7 @@ def dispatch_piece(
     piece: contracts.Piece, *, feature: str, repo_root: Path | str,
     model: str | None = None,
     lean: bool = True,
+    may: grants.Grant = (),
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -724,19 +809,31 @@ def dispatch_piece(
     knowing what each piece is, and the flag is a blanket applied at the
     command line. A blanket that overrode a considered per-piece choice would
     make the field unusable.
+
+    *may* resolves the same way, with one difference: a piece's ``may: none``
+    is ``()``, not absent, and still wins — so a contract can withhold from
+    one piece what the flag granted the rest (#317).
     """
     target = f"c-{piece.slug}"
+    granted = piece_grant(piece, may)
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
     return _spawn_into(
-        target, tree, build_piece_prompt(piece, feature=feature, repo_root=repo_root),
+        target, tree,
+        build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
-        model=piece.model or model, lean=lean,
+        model=piece.model or model, lean=lean, may=granted,
     )
+
+
+def piece_grant(piece: contracts.Piece, may: grants.Grant = ()) -> grants.Grant:
+    """The grant a piece's child gets: its own ``may:`` if written, else *may*."""
+    return may if piece.may is None else piece.may
 
 
 def dispatch_contract(
     contract: contracts.Contract, *, repo_root: Path | str,
     model: str | None = None, lean: bool = True,
+    may: grants.Grant = (),
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -765,7 +862,7 @@ def dispatch_contract(
             out.append(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
-                    model=model, lean=lean,
+                    model=model, lean=lean, may=may,
                 )
             )
         except DispatchError as exc:
