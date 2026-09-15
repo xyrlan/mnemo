@@ -360,3 +360,34 @@ def test_build_argv_falls_back_to_the_bare_name(monkeypatch):
     path that produces "claude CLI not found"."""
     monkeypatch.setattr(llm.shutil, "which", lambda name: None)
     assert llm._build_argv("claude-haiku-4-5", None)[0] == "claude"
+
+
+def test_working_dir_keeps_an_existing_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert llm._working_dir() is None
+
+
+def test_working_dir_falls_back_to_home_when_cwd_was_removed(tmp_path, monkeypatch):
+    # SessionEnd runs after the dispatcher removed the child's worktree: the hook's
+    # cwd is gone and `claude -p` would refuse to start there.
+    gone = tmp_path / "wt"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(llm.os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    assert llm._working_dir() == str(home)
+
+
+def test_invoke_passes_the_fallback_cwd_to_subprocess(monkeypatch):
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw)
+        return MockCompletedProcess(stdout=_envelope("ok"))
+
+    monkeypatch.setattr(llm, "_subprocess_run", fake_run)
+    monkeypatch.setattr(llm, "_working_dir", lambda: "/fallback")
+    llm.call("p", system=None, model="claude-haiku-4-5", timeout=5)
+    assert seen["cwd"] == "/fallback"

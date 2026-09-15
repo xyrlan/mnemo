@@ -1,0 +1,1 @@
+`mnemo briefing` (and every other `claude -p` call) no longer fails with `Can't access working directory` when the hook runs from a worktree the dispatcher has already removed: the subprocess falls back to the home directory.
