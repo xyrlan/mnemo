@@ -21,6 +21,9 @@ from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
 from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
 from mnemo.core.transcript import flatten_transcript_events, user_turns
+# Re-exported: the injector records a read through the briefing API it picks
+# with, while the row itself is written beside the rest of mnemo's telemetry.
+from mnemo.core.mcp.access_log import record_briefing_read  # noqa: F401
 
 
 MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
@@ -278,6 +281,10 @@ def pick_latest_briefing(vault_root: Path, agent_name: str) -> BriefingRecord | 
     Ordering: frontmatter ``date`` (ISO YYYY-MM-DD) descending, tie-break by
     ``session_id`` lexicographic descending. Files without a parseable date
     fall back to file mtime — they sort below any dated briefing.
+
+    Picking records nothing — ``autopilot/proposer/preempt.py`` picks too, and
+    that is not a session reading the briefing. The caller that injects the
+    body calls ``record_briefing_read`` with the same record.
     """
     sessions_dir = vault_root / "bots" / agent_name / "briefings" / "sessions"
     if not sessions_dir.is_dir():

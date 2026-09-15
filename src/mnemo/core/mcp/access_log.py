@@ -1,14 +1,20 @@
 """MCP access-log writer — JSONL telemetry for tool calls."""
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mnemo.core.llm import LLMResponse
 from mnemo.core.log_utils import rotate_if_needed
 
+if TYPE_CHECKING:
+    from mnemo.core.briefing import BriefingRecord
+
 _LOG_FILENAME = "mcp-access-log.jsonl"
+_BRIEFING_LOG_FILENAME = "briefing-log.jsonl"
 _TRUNCATE_AT = 1024
 
 
@@ -41,6 +47,11 @@ def _sanitize(entry: dict) -> dict:
 
 def record(vault_root: Path, entry: dict) -> None:
     """Append one JSON line to .mnemo/mcp-access-log.jsonl. Never raises."""
+    _append(vault_root, _LOG_FILENAME, entry)
+
+
+def _append(vault_root: Path, filename: str, entry: dict) -> None:
+    """Append one JSON line to ``.mnemo/<filename>``. Never raises."""
     try:
         enabled, max_bytes = _load_telemetry_config()
         if not enabled:
@@ -49,7 +60,7 @@ def record(vault_root: Path, entry: dict) -> None:
         log_dir = vault_root / ".mnemo"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        log_path = log_dir / _LOG_FILENAME
+        log_path = log_dir / filename
         rotate_if_needed(log_path, max_bytes)
 
         line = json.dumps(_sanitize(entry)) + "\n"
@@ -111,3 +122,55 @@ def record_session_start_inject(
         "result_count": 1,
     }
     record(vault_root, entry)
+
+
+def briefing_read_entry(vault_root: Path, record: "BriefingRecord") -> dict:
+    """The ``briefing-log.jsonl`` row for one injected briefing.
+
+    ``path`` is vault-relative so the row survives a vault move, and joins a
+    ``session_start.inject`` row on ``project`` plus a timestamp seconds away.
+    ``body_sha256`` covers exactly the text the session saw, so the read stays
+    attributable after ``mnemo learn`` rewrites that file or ``prune`` deletes
+    it — the path alone cannot tell two versions of one briefing apart.
+    """
+    path = Path(record.path)
+    try:
+        rel = path.relative_to(vault_root).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+    # bots/<project>/briefings/sessions/<id>.md — the directory the hook read
+    # from, which is the canonical project even when a migrated worktree
+    # briefing still says ``agent: mnemo-wt-225`` in its frontmatter.
+    parts = path.parts
+    project = parts[-4] if len(parts) >= 4 else ""
+    fm = record.frontmatter or {}
+    body = (record.body or "").rstrip().encode("utf-8")
+    return {
+        "timestamp": _utc_iso_z(),
+        "project": project,
+        "path": rel,
+        "session_id": str(fm.get("session_id") or path.stem),
+        "date": str(fm.get("date") or ""),
+        "body_bytes": len(body),
+        "body_sha256": "sha256:" + hashlib.sha256(body).hexdigest()[:16],
+    }
+
+
+def record_briefing_read(vault_root: Path, record: "BriefingRecord") -> None:
+    """Append one row to ``.mnemo/briefing-log.jsonl`` for an injected briefing.
+
+    Call it where a briefing is actually handed to a session, not where one is
+    picked: ``autopilot/proposer/preempt.py`` picks briefings too, and those
+    picks are not consumption.
+
+    A file of its own rather than a ``tool`` in ``mcp-access-log.jsonl``:
+    a briefing read is not an MCP call, and at ~80 briefed session starts a
+    day these rows would push the access log across its 1 MiB rotation often
+    enough to shorten the window ``mnemo recall`` reads its queried cases
+    from. Same telemetry switch and size cap as the access log. Never raises.
+    """
+    try:
+        entry = briefing_read_entry(Path(vault_root), record)
+    except Exception:
+        return
+    _append(Path(vault_root), _BRIEFING_LOG_FILENAME, entry)
