@@ -267,3 +267,76 @@ def test_a_sequential_contract_is_refused_without_spawning(
     args = argparse.Namespace(issues=[], contract=str(contract), dry_run=False)
     assert dispatch_cmd.cmd_dispatch(args) == 1
     assert "sequential" in capsys.readouterr().out.lower()
+
+
+def _one_child(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root, model=None, lean=True: [
+            core.Dispatched(issue=197, worktree=tmp_path / "p-wt-197", short_id="a1b2c3d4")
+        ],
+    )
+
+
+def test_inside_a_session_the_footer_tells_the_model_not_to_promise_to_watch(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """The model reads this output through its Bash tool and repeated the
+    ``queue:`` line as its own plan — "Acompanho com `mnemo sessions`… te
+    aviso quando terminarem" — with nothing that would wake it (#306)."""
+    _one_child(monkeypatch, tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "a1b2c3d4" in out                         # the ids are still reported
+    assert "nothing" in out and "tells this session" in out
+    assert "do not poll them or promise to watch" in out
+    assert out.rstrip().endswith("The queue and attach lines above are for the maintainer.")
+
+
+def test_from_a_plain_terminal_the_footer_is_unchanged(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """The maintainer at a terminal is the reader the footer was written for."""
+    _one_child(monkeypatch, tmp_path)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "  queue:  mnemo sessions" in out
+    assert "claude attach a1b2c3d4" in out
+    assert "tells this session" not in out
+
+
+def test_a_blank_session_variable_is_a_plain_terminal(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """Same predicate as the parent link (``parents.parent_from_env``): an
+    empty export is not a session, so the two can never disagree about who
+    ran dispatch."""
+    _one_child(monkeypatch, tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "  ")
+
+    dispatch_cmd.cmd_dispatch(_args())
+
+    assert "tells this session" not in capsys.readouterr().out
+
+
+def test_no_note_when_nothing_started(monkeypatch, capsys, tmp_path: Path) -> None:
+    """With no child running there is nothing to promise about."""
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        core, "dispatch_all",
+        lambda issues, *, repo_root, model=None, lean=True: [
+            core.Dispatched(issue=4242, error="issue #4242 not found"),
+        ],
+    )
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+
+    assert dispatch_cmd.cmd_dispatch(_args(issues=[4242])) == 1
+
+    assert "tells this session" not in capsys.readouterr().out

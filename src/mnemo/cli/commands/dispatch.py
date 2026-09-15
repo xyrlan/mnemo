@@ -22,6 +22,21 @@ from pathlib import Path
 
 from mnemo.cli.parser import command
 
+#: Printed last, only when dispatch runs inside a Claude Code session (#306).
+#: It states the fact first — nothing wakes the dispatching session — because
+#: the misreport it prevents is a promise with no mechanism behind it. The
+#: carve-out is deliberate: a maintainer who asks the session to watch the
+#: children can have it arm something that does wake it, and a flat "never
+#: poll" would contradict the one honest way to keep that promise. It does not
+#: repeat `mnemo sessions`: the queue line already names it, and a note that
+#: said it again would only give the model one more copy to hand back.
+AGENT_NOTE = (
+    "  note to the session that ran this: the children run detached, and nothing",
+    "  tells this session when they block or finish. Report the ids above and stop;",
+    "  do not poll them or promise to watch or report back unless the maintainer",
+    "  asked you to. The queue and attach lines above are for the maintainer.",
+)
+
 
 def _repo_root() -> Path | None:
     """The git toplevel of the cwd, or ``None`` when there is not one."""
@@ -256,5 +271,16 @@ def _report(results: list, *, lean: bool = True) -> int:
         if any(r.warning for r in started):
             print("  check:  pytest -m live_claude   # the claude CLI contract, "
                   "against the installed binary")
+        from mnemo.core.sessions import parents
+
+        # Inside a session this output is read by the model, not the
+        # maintainer, and the `queue:` line above reads as its own next step:
+        # in real transcripts it came back as "Acompanho com `mnemo sessions`…
+        # te aviso quando terminarem" with nothing armed to notice (#306). A
+        # plain terminal has no such reader, so it keeps the footer as it was.
+        if parents.parent_from_env() is not None:
+            print()
+            for line in AGENT_NOTE:
+                print(line)
 
     return 1 if failed else 0
