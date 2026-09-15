@@ -220,6 +220,36 @@ def _activity(act, budget: int = DETAIL_WIDTH) -> str:
     return f"{act.tool} {cut.rstrip()}…{tail}"
 
 
+def status_line(s: Session, act=None, *, pr_lookup=None, budget: int | None = DETAIL_WIDTH) -> str | None:
+    """The one line the queue says about *s*, or ``None`` when nothing is known.
+
+    One rule for the table and for ``--json`` (#293), for the reason #222 gave
+    for the derived booleans: a consumer that re-derives it gets it wrong.
+
+    - waiting or abandoned: ``needs``, the claim on the maintainer.
+    - finished: the PR it produced, else ``detail``.
+    - working: the last tool call from the transcript, else ``detail``.
+
+    ``detail`` is **Claude Code's** summary, not mnemo's, and on a working
+    session it is the fallback only — never preferred over a tool call, however
+    recently it was written. Measured on child ``0f6589d7`` (2026-09-15): for
+    ~20 minutes its ``detail`` read ``awaiting task clarification or file
+    boundaries`` / ``awaiting task specification; message truncated`` while the
+    transcript's last tool call, four seconds older than each of those lines,
+    was a ``Bash`` running the piece's own measurement. A freshness comparison
+    between the two would have kept the wrong line; the tool call is evidence
+    and the summary is an inference about it.
+
+    *budget* cuts the activity the way the table's column does; ``None`` leaves
+    it whole, which is what a JSON consumer with its own layout wants.
+    """
+    if s.is_blocked:
+        return s.needs or s.detail
+    if s.is_done:
+        return _prs(s, pr_lookup) or s.detail
+    return _activity(act, budget if budget is not None else 10**6) or s.detail
+
+
 def _label(s: Session, budget: int = LABEL_WIDTH) -> str:
     """The session's label, budgeted to *budget* columns.
 
@@ -369,7 +399,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         lines.append(f"TE ESPERANDO ({len(waiting)})")
         for s in waiting:
             age = _age(s.updated_at)
-            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {s.needs or s.detail or '—'}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {status_line(s) or '—'}")
             if s.suggested_reply:
                 lines.append(f"        ↳ sugerido: \"{s.suggested_reply}\"")
         lines.append("")
@@ -377,7 +407,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     if working:
         lines.append(f"TRABALHANDO ({len(working)})")
         for s in working:
-            detail = _activity(acts.get(s.short_id)) or s.detail or "—"
+            detail = status_line(s, acts.get(s.short_id)) or "—"
             row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}"
             filled = _filled(s)
             lines.append(f"{row}  {filled}" if filled else row)
@@ -386,7 +416,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     if done:
         lines.append(f"PRONTAS ({len(done)})")
         for s in done:
-            row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {_prs(s, pr_lookup) or s.detail or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}"
+            row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {status_line(s, pr_lookup=pr_lookup) or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}"
             suffix = "  ".join(x for x in (_exploration(explored.get(s.short_id)), _filled(s)) if x)
             lines.append(f"{row}  {suffix}" if suffix else row)
         lines.append("")
@@ -397,7 +427,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         lines.append(f"ABANDONADAS ({len(abandoned)})")
         for s in abandoned:
             age = _age(s.updated_at)
-            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {s.needs or s.detail or '—'}")
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {status_line(s) or '—'}")
         lines.append("")
 
     models = _models(sessions)

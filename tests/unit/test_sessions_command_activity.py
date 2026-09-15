@@ -56,13 +56,21 @@ def test_single_invocation_shows_activity(one_session, capsys):
     assert "Edit dispatch.py" in out
 
 
-def test_json_output_is_unchanged_by_activity(one_session, capsys):
-    """--json is a Session dump; activity is a render concern, not a field."""
+def test_json_carries_the_activity_the_table_shows(one_session, capsys):
+    """--json has a consumer now, and it needs the column, not only ``detail``.
+
+    #210 kept activity out of the dump as a render concern, when nothing read
+    the dump. mnemo-desktop does, and with only ``detail`` to show it printed
+    Claude Code's "awaiting task specification" over a child that was editing
+    and committing (#293).
+    """
     assert cmd_sessions(_args(json=True)) == 0
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["short_id"] == "abc"
-    assert "activity" not in payload[0]
+    (row,) = json.loads(capsys.readouterr().out)
+    assert row["short_id"] == "abc"
+    assert row["activity"]["tool"] == "Edit"
+    assert row["activity"]["target"] == "dispatch.py"
+    assert row["status_line"] == "Edit dispatch.py"
 
 
 def test_watch_does_not_reread_from_zero(one_session, transcript, monkeypatch, capsys):

@@ -127,6 +127,19 @@ def _explorations(found, cache: dict, *, only_done: bool = True) -> dict:
     return out
 
 
+def _activities_once(found) -> dict:
+    """Activity per ``short_id`` from a cold read of each transcript's tail.
+
+    For a single ``--json`` pass: no offsets survive the process, so none are
+    kept. Never raises — a transcript that cannot be read costs its own
+    ``activity``, and the row falls back to ``detail``, never the whole dump.
+    """
+    try:
+        return activities_for(found, {})
+    except Exception:
+        return {}
+
+
 def _clock(at) -> str:
     """``14:02:11`` from an ISO timestamp, or '' when it is unusable.
 
@@ -149,7 +162,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     from dataclasses import asdict
 
     from mnemo.core.sessions.jobs import normalize_cwd, read_sessions
-    from mnemo.core.sessions.render import render_queue
+    from mnemo.core.sessions.render import render_queue, status_line
 
     if bool(getattr(args, "consume_unblocks", False)):
         return _consume_unblocks()
@@ -211,9 +224,18 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         # Every session, not only finished ones: a JSON consumer summing a
         # dispatch reads `reached` to tell a final count from a running floor.
         spent = _explorations(found, {}, only_done=False)
+        # What the table's activity column shows, and the line the table
+        # prints (#293). Without these a JSON consumer had only `detail` —
+        # Claude Code's own summary, which read "awaiting task specification"
+        # for twenty minutes on a child that was editing and committing. A
+        # finished session's transcript says nothing its `detail` does not, so
+        # only the unfinished ones pay for the tail read.
+        acts = _activities_once([s for s in found if not s.is_done])
         rows = [
             {**asdict(s), **s.derived(),
-             "exploration": spent[s.short_id].as_dict() if s.short_id in spent else None}
+             "exploration": spent[s.short_id].as_dict() if s.short_id in spent else None,
+             "activity": asdict(acts[s.short_id]) if s.short_id in acts else None,
+             "status_line": status_line(s, acts.get(s.short_id), budget=None)}
             for s in found
         ]
         print(_json.dumps(rows, indent=2, ensure_ascii=False))
