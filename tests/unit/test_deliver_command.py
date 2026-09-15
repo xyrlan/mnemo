@@ -286,6 +286,21 @@ def test_review_buckets_ready_from_not_ready(in_repo: Path, capsys) -> None:
     assert "nothing to deliver" in out
 
 
+def test_review_names_the_base_it_measured_against(
+    in_repo: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """#287: the count was "ahead of master" even where there was no master."""
+    _run(["git", "branch", "-m", "master", "main"], cwd=in_repo)
+    _ready_tree(in_repo, "c-panes", "feat/f/panes")
+    monkeypatch.setattr(delivery, "base_branch", lambda **kw: "main")
+
+    deliver.cmd_deliver(_args(review=True))
+    out = capsys.readouterr().out
+
+    assert "1 commit ahead of main" in out
+    assert "master" not in out
+
+
 def test_review_shows_the_diffstat_of_what_would_be_delivered(
     in_repo: Path, capsys
 ) -> None:

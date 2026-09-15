@@ -369,6 +369,53 @@ def test_rehearse_merges_each_piece_in_order_and_runs_the_suite_each_time(
     assert not (repo / "src" / "storage.py").exists()
 
 
+def test_rehearse_starts_from_the_repos_default_branch_not_master(
+    tmp_path: Path, gh_prs: dict,
+) -> None:
+    """#287: on a ``main`` repo there was no ``master`` to rehearse from."""
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _run(["git", "init", "-b", "main"], cwd=upstream)
+    _run(["git", "config", "user.email", "t@example.com"], cwd=upstream)
+    _run(["git", "config", "user.name", "t"], cwd=upstream)
+    (upstream / "src").mkdir()
+    (upstream / "src" / "base.py").write_text("BASE = 1\n", encoding="utf-8")
+    _run(["git", "add", "src/base.py"], cwd=upstream)
+    _run(["git", "commit", "-m", "base"], cwd=upstream)
+    clone = tmp_path / "desk" / "desktop"
+    clone.parent.mkdir()
+    _run(["git", "clone", str(upstream), str(clone)], cwd=tmp_path)
+    _run(["git", "config", "user.email", "t@example.com"], cwd=clone)
+    _run(["git", "config", "user.name", "t"], cwd=clone)
+    _run(["git", "branch", "master", "main"], cwd=clone)  # a decoy, not the base
+    for branch, name in (("feat/f/storage", "storage"), ("feat/f/api", "api")):
+        tree = tmp_path / f"tree-{name}"
+        _run(["git", "worktree", "add", "-b", branch, str(tree), "main"], cwd=clone)
+        (tree / "src" / f"{name}.py").write_text(
+            "def load(key):\n    pass\n" if name == "storage"
+            else "def handler(req):\n    pass\n", encoding="utf-8")
+        _run(["git", "add", f"src/{name}.py"], cwd=tree)
+        _run(["git", "commit", "-m", name], cwd=tree)
+        _run(["git", "worktree", "remove", "--force", str(tree)], cwd=clone)
+    # main moves on upstream after the decoy was cut: a rehearsal from
+    # `master` would not carry this file, one from `origin/main` does.
+    (upstream / "src" / "later.py").write_text("LATER = 1\n", encoding="utf-8")
+    _run(["git", "add", "src/later.py"], cwd=upstream)
+    _run(["git", "commit", "-m", "later"], cwd=upstream)
+    _run(["git", "fetch", "origin"], cwd=clone)
+    gh_prs["feat/f/storage"] = (1, "OPEN")
+    gh_prs["feat/f/api"] = (2, "OPEN")
+
+    assert landing.base_ref(repo_root=clone) == "origin/main"
+
+    states = landing.inspect(_contract(API, STORAGE), repo_root=clone)
+    suite = [sys.executable, "-c",
+             "import pathlib, sys; sys.exit(0 if pathlib.Path('src/later.py').exists() else 1)"]
+    result = landing.rehearse(states, repo_root=clone, suite=suite)
+
+    assert result.ok, result.steps
+
+
 def test_rehearse_stops_at_the_first_conflict(repo: Path, gh_prs, tmp_path) -> None:
     gh_prs["feat/f/a"] = (1, "OPEN")
     gh_prs["feat/f/b"] = (2, "OPEN")

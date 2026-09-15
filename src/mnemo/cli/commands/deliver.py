@@ -3,7 +3,7 @@
 Two commands, not a prompt:
 
 - ``mnemo deliver --review`` is read-only. Every dispatch worktree, whether it
-  is clean, how far ahead of ``master``, a diffstat, and any PR that already
+  is clean, how far ahead of the base branch, a diffstat, and any PR that already
   exists. Prints and exits, touching nothing.
 - ``mnemo deliver <id> [<id>...]`` pushes and opens a PR for **exactly** the
   ids named, and nothing else.
@@ -59,7 +59,10 @@ def _review(*, repo_root: Path) -> int:
         print("no dispatch worktrees — nothing to deliver")
         return 0
 
-    states = [delivery.ready(tree, repo_root=repo_root) for tree in trees]
+    # Resolved once: every tree shares the repo's refs, and the resolution can
+    # cost a `gh` call on a repo with no `origin/HEAD`.
+    base = delivery.base_branch(repo_root=repo_root)
+    states = [delivery.ready(tree, repo_root=repo_root, base=base) for tree in trees]
     ready = [r for r in states if r.ready]
     blocked = [r for r in states if not r.ready]
 
@@ -68,7 +71,7 @@ def _review(*, repo_root: Path) -> int:
         for r in ready:
             ahead = f"{r.ahead} commit" + ("s" if r.ahead != 1 else "")
             print(f"  {r.label}  {r.branch}")
-            print(f"      {ahead} ahead of {delivery.BASE}"
+            print(f"      {ahead} ahead of {r.base}"
                   + (f", {r.diffstat}" if r.diffstat else ""))
             if r.pr:
                 # Named, not filtered out. An existing PR usually means this
@@ -123,7 +126,7 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         #
         # Only an OPEN one. A MERGED or CLOSED PR on this branch name is a
         # previous life of the name — `fix/issue-158` was dispatched twice,
-        # two days apart — and the commits ahead of master now are new work
+        # two days apart — and the commits ahead of the base now are new work
         # that `gh pr create` will open a new PR for.
         print(f"{state.label}: PR já existe — {state.pr}")
         return False

@@ -95,6 +95,140 @@ def no_gh(monkeypatch: pytest.MonkeyPatch, request):
 # --- readiness: from git, never from session state (#217) ------------------
 
 
+# --- the base branch: asked of the repo, never assumed (#287) --------------
+
+
+def _clone_of_main(tmp_path: Path) -> Path:
+    """A clone of a repo whose default branch is ``main``, as mnemo-desktop's is.
+
+    Cloned, not ``git init -b main``: ``git clone`` is what writes
+    ``refs/remotes/origin/HEAD``, the ref the resolver reads first, and a
+    fixture that set it by hand would be asserting the fixture.
+    """
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _run(["git", "init", "-b", "main"], cwd=upstream)
+    _run(["git", "config", "user.email", "t@example.com"], cwd=upstream)
+    _run(["git", "config", "user.name", "t"], cwd=upstream)
+    (upstream / "README.md").write_text("base\n", encoding="utf-8")
+    _run(["git", "add", "README.md"], cwd=upstream)
+    _run(["git", "commit", "-m", "base"], cwd=upstream)
+
+    clone = tmp_path / "desk" / "mnemo"
+    clone.parent.mkdir()
+    _run(["git", "clone", str(upstream), str(clone)], cwd=tmp_path)
+    _run(["git", "config", "user.email", "t@example.com"], cwd=clone)
+    _run(["git", "config", "user.name", "t"], cwd=clone)
+    return clone
+
+
+def _gh_answers(monkeypatch: pytest.MonkeyPatch, stdout: str, code: int = 0) -> list:
+    """Stub ``gh`` with one answer, recording every call made to it."""
+    calls: list = []
+    real = subprocess.run
+
+    def fake_run(args, **kw):
+        if args and args[0] == "gh":
+            calls.append(list(args))
+            return subprocess.CompletedProcess(args, code, stdout, "")
+        return real(args, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def test_a_child_of_a_main_repo_is_measured_against_main(tmp_path: Path) -> None:
+    """#287 as it was seen: a committed piece read as "no commits ahead of master"."""
+    clone = _clone_of_main(tmp_path)
+    tree = _worktree(clone, "c-panes", "feat/f/panes")
+    _commit(tree)
+
+    state = delivery.ready(tree, repo_root=clone)
+
+    assert state.ready, state.reason
+    assert state.base == "main"
+    assert state.ahead == 1
+    assert "1 file changed" in state.diffstat
+
+
+def test_a_tree_still_on_main_is_refused_as_the_base(tmp_path: Path) -> None:
+    clone = _clone_of_main(tmp_path)
+
+    state = delivery.ready(clone, repo_root=clone)
+
+    assert not state.ready
+    assert state.reason.startswith("on main")
+
+
+def test_base_branch_reads_origin_head_without_asking_gh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clone = _clone_of_main(tmp_path)
+    calls = _gh_answers(monkeypatch, "trunk\n")
+
+    assert delivery.base_branch(repo_root=clone) == "main"
+    assert calls == []
+
+
+def test_base_branch_asks_gh_when_the_remote_was_added_by_hand(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``git remote add`` never writes ``origin/HEAD``; GitHub still knows."""
+    _run(["git", "remote", "add", "origin", "https://github.com/x/y.git"], cwd=repo)
+    calls = _gh_answers(monkeypatch, "trunk\n")
+
+    assert delivery.base_branch(repo_root=repo) == "trunk"
+    assert calls and calls[0][:3] == ["gh", "repo", "view"]
+
+
+def test_base_branch_falls_back_to_master_when_gh_cannot_answer(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run(["git", "remote", "add", "origin", "https://github.com/x/y.git"], cwd=repo)
+    _gh_answers(monkeypatch, "", code=1)
+
+    assert delivery.base_branch(repo_root=repo) == "master"
+
+
+def test_base_branch_does_not_ask_gh_without_a_remote(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ``origin`` means ``gh`` has no repository to resolve: don't spawn it."""
+    calls = _gh_answers(monkeypatch, "trunk\n")
+
+    assert delivery.base_branch(repo_root=repo) == "master"
+    assert calls == []
+
+
+def test_a_missing_base_is_named_not_read_as_nothing_ahead(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old failure was silent: a ``rev-list`` against no ref counted 0."""
+    tree = _worktree(repo, "c-delivery", "feat/f/delivery")
+    _commit(tree)
+
+    state = delivery.ready(tree, repo_root=repo, base="main")
+
+    assert not state.ready
+    assert "base branch main not found" in state.reason
+    assert "nothing to deliver" not in state.reason
+
+
+def test_a_base_only_on_origin_is_measured_there(tmp_path: Path) -> None:
+    """A clone whose local default branch was deleted still has ``origin/main``."""
+    clone = _clone_of_main(tmp_path)
+    tree = _worktree(clone, "c-panes", "feat/f/panes")
+    _commit(tree)
+    _run(["git", "checkout", "--detach"], cwd=clone)
+    _run(["git", "branch", "-D", "main"], cwd=clone)
+
+    state = delivery.ready(tree, repo_root=clone)
+
+    assert state.ready, state.reason
+    assert state.ahead == 1
+
+
+
 def test_a_clean_branch_ahead_of_master_is_ready(repo: Path) -> None:
     tree = _worktree(repo, "c-delivery", "feat/f/delivery")
     _commit(tree)

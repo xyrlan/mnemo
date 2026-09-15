@@ -14,7 +14,7 @@ at the diff. A command that pushes unreviewed work is the same failure as a
 child that routes around its classifier, from the other side.
 
 **Readiness comes from git, not from session state (#217).** A worktree whose
-tree is clean and whose branch is ahead of ``master`` is ready. That fact is
+tree is clean and whose branch is ahead of the base branch is ready. That fact is
 authoritative, survives the child dying, and needs nothing volunteered by
 Claude Code. Contrast ``render._prs``, which read PR numbers out of
 ``Session.children`` — a list Claude Code writes when it happens to notice a
@@ -39,9 +39,11 @@ from typing import Sequence
 
 from mnemo.core.dispatch import issue_for_cwd
 
-# What a dispatched branch is measured against. The base of every dispatch
-# worktree, and what `ahead` counts commits from.
-BASE = "master"
+# What a dispatched branch is measured against when the repo cannot say. Only
+# the fallback: xyrlan/mnemo-desktop's default branch is `main`, and measuring
+# its children against a `master` that does not exist reported every one of
+# them as "no commits ahead" (#287). The real base comes from `base_branch`.
+FALLBACK_BASE = "master"
 
 # `git worktree list --porcelain` emits stanzas of `<key> <value>` lines
 # separated by blank lines, the path first. Parsed rather than the plain
@@ -50,6 +52,67 @@ BASE = "master"
 # versions. The porcelain form is the documented stable one.
 _WT_LINE = re.compile(r"^worktree (.+)$")
 _BRANCH_LINE = re.compile(r"^branch refs/heads/(.+)$")
+
+
+def base_branch(*, repo_root: Path | str) -> str:
+    """The branch dispatched work is measured against and lands onto.
+
+    Asked of the repo, in order of cost:
+
+    1. ``git symbolic-ref refs/remotes/origin/HEAD`` — local, no network, and
+       set by every ``git clone``. Both repos this was seen in answer here
+       (``origin/master`` for mnemo, ``origin/main`` for mnemo-desktop).
+    2. ``gh repo view --json defaultBranchRef`` — for a repo whose remote was
+       added by hand, which never gets ``origin/HEAD``. Asked only when there
+       is an ``origin`` to ask about: without one ``gh`` has no repository to
+       resolve and the call could only fail.
+    3. :data:`FALLBACK_BASE`, when neither answers.
+
+    Never raises. Resolved per call, never cached on disk: git is the record,
+    and a copy of its answer could only disagree with it.
+    """
+    ref = _git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+               cwd=repo_root)
+    if ref.returncode == 0:
+        name = ref.stdout.strip()
+        if name.startswith("origin/") and len(name) > len("origin/"):
+            return name[len("origin/"):]
+
+    if _git(["remote", "get-url", "origin"], cwd=repo_root).returncode == 0:
+        try:
+            result = subprocess.run(
+                ["gh", "repo", "view", "--json", "defaultBranchRef",
+                 "--jq", ".defaultBranchRef.name"],
+                cwd=str(repo_root), capture_output=True, text=True,
+            )
+        except (FileNotFoundError, OSError):
+            result = None
+        if result is not None and result.returncode == 0:
+            name = result.stdout.strip()
+            # `--jq` prints a bare name. Anything that is not one — an empty
+            # answer, or a stub's JSON — is not an answer.
+            if name and not any(c in name for c in " \t\n[]{}\"'"):
+                return name
+
+    return FALLBACK_BASE
+
+
+def _base_ref(base: str, *, worktree: Path) -> str | None:
+    """The ref that carries *base* here: local first, then ``origin/``.
+
+    Local first because the dispatch branched from it. ``origin/`` second for
+    a clone that never checked the default branch out locally. ``None`` when
+    neither exists — which :func:`ready` reports as such, instead of the
+    "no commits ahead" a failing ``rev-list`` used to read as (#287).
+    """
+    for candidate, name in (
+        (f"refs/heads/{base}", base),
+        (f"refs/remotes/origin/{base}", f"origin/{base}"),
+    ):
+        if _git(["rev-parse", "--verify", "--quiet", candidate],
+                cwd=worktree).returncode == 0:
+            return name
+    return None
 
 
 class DeliveryError(RuntimeError):
@@ -73,6 +136,8 @@ class Readiness:
 
     worktree: Path
     branch: str | None = None
+    #: The base branch ``ahead`` and ``diffstat`` were measured against.
+    base: str = FALLBACK_BASE
     target: object | None = None
     clean: bool = False
     ahead: int = 0
@@ -145,14 +210,14 @@ def _is_clean(worktree: Path) -> bool:
     return not result.stdout.strip()
 
 
-def _ahead(branch: str, *, worktree: Path) -> int:
-    """How many commits *branch* has that ``master`` does not.
+def _ahead(branch: str, *, base: str, worktree: Path) -> int:
+    """How many commits *branch* has that *base* (a ref) does not.
 
     Counted against the local base. The dispatch just branched from it, so a
     stale local base would have to be stale by the length of the dispatch —
     and fetching here would make a read-only report touch the network.
     """
-    result = _git(["rev-list", "--count", f"{BASE}..{branch}"], cwd=worktree)
+    result = _git(["rev-list", "--count", f"{base}..{branch}"], cwd=worktree)
     if result.returncode != 0:
         return 0
     try:
@@ -161,15 +226,15 @@ def _ahead(branch: str, *, worktree: Path) -> int:
         return 0
 
 
-def _diffstat(branch: str, *, worktree: Path) -> str:
+def _diffstat(branch: str, *, base: str, worktree: Path) -> str:
     """One line of what this branch changed, or ''.
 
-    ``master...branch`` — three dots, the symmetric difference from the merge
-    base. Two dots would count anything that landed on ``master`` after the
+    ``base...branch`` — three dots, the symmetric difference from the merge
+    base. Two dots would count anything that landed on the base after the
     child branched as a deletion in the child's diff, so a long-running child
     would report a diff full of work it never touched.
     """
-    result = _git(["diff", "--shortstat", f"{BASE}...{branch}"], cwd=worktree)
+    result = _git(["diff", "--shortstat", f"{base}...{branch}"], cwd=worktree)
     if result.returncode != 0:
         return ""
     return result.stdout.strip()
@@ -298,7 +363,9 @@ def pr_lookup(*, repo_root: Path | str):
     return _lookup
 
 
-def ready(worktree: Path | str, *, repo_root: Path | str) -> Readiness:
+def ready(
+    worktree: Path | str, *, repo_root: Path | str, base: str | None = None,
+) -> Readiness:
     """Whether *worktree*'s work can be pushed, and what it is.
 
     Every fact comes from git run inside *worktree*. Nothing is asked of the
@@ -308,33 +375,49 @@ def ready(worktree: Path | str, *, repo_root: Path | str) -> Readiness:
 
     The PR lookup is the one call that leaves git, and its failure is not a
     failure of readiness (see :func:`pr_for`).
+
+    *base* is the branch to measure against; ``None`` resolves it with
+    :func:`base_branch`. A caller checking many trees resolves it once.
     """
     tree = Path(worktree)
     target = issue_for_cwd(tree)
+    if base is None:
+        base = base_branch(repo_root=repo_root)
 
     if not tree.exists():
         return Readiness(
-            worktree=tree, target=target,
+            worktree=tree, target=target, base=base,
             reason="worktree is gone — nothing left to deliver",
         )
 
     branch = _branch_of(tree)
     if branch is None:
         return Readiness(
-            worktree=tree, target=target,
+            worktree=tree, target=target, base=base,
             reason="detached HEAD — no branch to push",
         )
-    if branch == BASE:
+    if branch == base:
         # Not a dispatch tree, or one whose branch was already swapped back.
-        # Pushing `master` from here is exactly the accident worth refusing.
+        # Pushing the base from here is exactly the accident worth refusing.
         return Readiness(
-            worktree=tree, branch=branch, target=target,
-            reason=f"on {BASE} — a dispatch child works on its own branch",
+            worktree=tree, branch=branch, target=target, base=base,
+            reason=f"on {base} — a dispatch child works on its own branch",
+        )
+
+    measured = _base_ref(base, worktree=tree)
+    if measured is None:
+        # Not "nothing to deliver": nothing was measured. Saying so names the
+        # branch that is missing, which is the fact a maintainer can act on.
+        return Readiness(
+            worktree=tree, branch=branch, target=target, base=base,
+            clean=_is_clean(tree),
+            reason=f"base branch {base} not found locally or on origin — "
+                   f"cannot count commits ahead of it",
         )
 
     clean = _is_clean(tree)
-    ahead = _ahead(branch, worktree=tree)
-    stat = _diffstat(branch, worktree=tree) if ahead else ""
+    ahead = _ahead(branch, base=measured, worktree=tree)
+    stat = _diffstat(branch, base=measured, worktree=tree) if ahead else ""
     info = pr_info(branch, repo_root=repo_root)
     pr = info.url if info else None
     pr_state = info.state if info else ""
@@ -347,10 +430,10 @@ def ready(worktree: Path | str, *, repo_root: Path | str) -> Readiness:
         # a partial piece and the rest looks like a follow-up that never came.
         reason = "uncommitted changes — commit them or discard them first"
     elif ahead == 0:
-        reason = f"no commits ahead of {BASE} — nothing to deliver"
+        reason = f"no commits ahead of {base} — nothing to deliver"
 
     return Readiness(
-        worktree=tree, branch=branch, target=target, clean=clean,
+        worktree=tree, branch=branch, target=target, base=base, clean=clean,
         ahead=ahead, diffstat=stat, pr=pr, pr_state=pr_state, reason=reason,
     )
 
