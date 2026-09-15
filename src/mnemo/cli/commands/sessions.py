@@ -160,8 +160,23 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     # jobs.in_scope for why equality hid every child this tool exists for.
     scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
 
+    # path -> (offset, context), carried across watch ticks so a running child
+    # costs the bytes it appended since and a finished one costs a stat.
+    contexts: dict = {}
+
     def _read():
         found = read_sessions(cwd=scope)
+        try:
+            from dataclasses import replace
+
+            from mnemo.core.activity.context import context_for
+
+            # How full each session is (#307): from the transcript, because
+            # state.json's `tokens` is not that number.
+            found = [replace(s, context_tokens=context_for(s.link_scan_path, contexts))
+                     for s in found]
+        except Exception:
+            pass
         try:
             from mnemo import cli  # late binding for monkeypatched _resolve_vault
 

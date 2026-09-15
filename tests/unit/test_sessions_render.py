@@ -272,8 +272,8 @@ def test_a_tool_name_that_fills_the_column_keeps_its_signals():
 def test_the_table_stays_aligned_when_activity_is_long():
     """The whole point of the budget: the token column must not move."""
     sessions = [
-        _working(short_id="s1", tokens=4200),
-        _working(short_id="s2", tokens=1500),
+        _working(short_id="s1", context_tokens=4200),
+        _working(short_id="s2", context_tokens=1500),
     ]
     acts = {
         "s1": Activity(tool="Bash", target="Relocate comment file and verify clean", since=23),
@@ -316,7 +316,7 @@ def _labelled(short_id: str, label: str, **kw) -> Session:
 def test_a_long_label_does_not_shove_the_column_after_it():
     """The reproduction: real labels, every row the same width."""
     sessions = [
-        _labelled(f"s{i}", label, tokens=1500)
+        _labelled(f"s{i}", label, context_tokens=1500)
         for i, label in enumerate(REAL_LABELS)
     ]
 
@@ -334,14 +334,14 @@ def test_the_label_budget_holds_in_every_bucket():
     label = "#193 recall harness hit_slugs migration"
     buckets = {
         "waiting": _labelled("w1", label, tempo="blocked", needs="q?"),
-        "working": _labelled("k1", label, tokens=1500),
+        "working": _labelled("k1", label, context_tokens=1500),
         "done": _labelled("d1", label, state="done", tempo="idle",
                           children=({"id": "307", "kind": "pr"},)),
         "abandoned": _labelled("a1", label, tempo="blocked", needs="q?", live=False),
     }
     short = {
         "waiting": _labelled("w2", "x", tempo="blocked", needs="q?"),
-        "working": _labelled("k2", "x", tokens=1500),
+        "working": _labelled("k2", "x", context_tokens=1500),
         "done": _labelled("d2", "x", state="done", tempo="idle",
                           children=({"id": "307", "kind": "pr"},)),
         "abandoned": _labelled("a2", "x", tempo="blocked", needs="q?", live=False),

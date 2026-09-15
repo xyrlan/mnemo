@@ -255,6 +255,27 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         how="hand measurement (#288); not exercised by the live test",
     ),
     Assumption(
+        key="context-from-transcript-usage",
+        claim=(
+            "The context size `/context` prints is the last non-synthetic "
+            "`assistant` event's `message.usage` in the session transcript "
+            "(`linkScanPath`), summed as `input_tokens + "
+            "cache_creation_input_tokens + cache_read_input_tokens` "
+            "(measured: 92.6k / 160.2k / 98k printed against 92,566 / "
+            "160,181 / 98,024 read). An API error or refusal is an assistant "
+            "event with `model: \"<synthetic>\"` and zero usage, and "
+            "`/context` skips it (32.1k printed after one). `state.json`'s "
+            "`tokens` is not this number: 3-65x below it on all 18 jobs on "
+            "disk, and matching no transcript quantity."
+        ),
+        used_by="activity.context.context_for; `mnemo sessions` token column "
+                "and `--json` context_tokens",
+        verified="2.1.272 on 2026-09-15",
+        how=("hand measurement (#307): `claude -p /context --resume <id> "
+             "--fork-session --no-session-persistence` on finished sessions; "
+             "not exercised by the live test"),
+    ),
+    Assumption(
         key="resume-bifurcates",
         claim=(
             "`claude --resume <id>` on a *running* background session starts "
