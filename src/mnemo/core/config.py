@@ -160,3 +160,37 @@ def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:
     cfg_path = path or default_config_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def set_vault_root(vault_root: Path, path: Path | None = None) -> None:
+    """Point the config at *vault_root*, keeping every other key the file holds.
+
+    ``mnemo init`` used to ``save_config({"vaultRoot": ...})``, which replaced
+    the whole file: re-running it to repair a hook reset
+    ``extraction.subprocessTimeout`` and ``doctor.skipStatuslineDrift`` to their
+    defaults with no warning (#303). Only the raw file is merged — never
+    ``load_config``'s defaults, which would freeze today's defaults into it.
+
+    A file that is not a JSON object cannot be merged; its bytes are kept in a
+    ``.bak.<stamp>`` sibling before it is replaced.
+    """
+    from datetime import datetime
+
+    cfg_path = path or default_config_path()
+    raw: dict[str, Any] = {}
+    try:
+        data = cfg_path.read_bytes()
+    except FileNotFoundError:
+        data = None
+    if data is not None and data.strip():
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            raw = parsed
+        else:
+            stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+            cfg_path.with_name(f"{cfg_path.name}.bak.{stamp}").write_bytes(data)
+    raw["vaultRoot"] = str(vault_root)
+    save_config(raw, path=cfg_path)

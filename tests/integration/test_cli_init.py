@@ -269,3 +269,155 @@ def test_uninstall_strips_slash_commands(tmp_home: Path):
     files = {p.stem for p in commands_dir.glob("*.md")} if commands_dir.exists() else set()
     assert "init-project" not in files
     assert "init" not in files
+
+
+# --- #303: re-running init must not reset unrelated config -------------------
+
+def _config_path(tmp_home: Path) -> Path:
+    return tmp_home / "mnemo" / "mnemo.config.json"
+
+
+def test_reinit_keeps_non_default_config(tmp_home: Path):
+    vault = tmp_home / "mnemo"
+    cfg = _config_path(tmp_home)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({
+        "vaultRoot": str(vault),
+        "extraction": {"subprocessTimeout": 180},
+        "doctor": {"skipStatuslineDrift": True},
+    }), encoding="utf-8")
+
+    assert cli.main(["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"]) == 0
+
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {
+        "vaultRoot": str(vault),
+        "extraction": {"subprocessTimeout": 180},
+        "doctor": {"skipStatuslineDrift": True},
+    }
+
+
+def test_reinit_with_new_vault_root_updates_only_that_key(tmp_home: Path):
+    cfg = _config_path(tmp_home)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({"vaultRoot": "/old", "extraction": {"subprocessTimeout": 180}}), encoding="utf-8")
+
+    new_vault = tmp_home / "elsewhere"
+    assert cli.main(["init", "--yes", "--vault-root", str(new_vault), "--no-mirror", "--quiet"]) == 0
+
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data == {"vaultRoot": str(new_vault), "extraction": {"subprocessTimeout": 180}}
+
+
+def test_first_init_writes_the_scaffold_template_not_the_defaults(tmp_home: Path):
+    # The merge reads the raw file, so load_config's defaults never get frozen
+    # into it; what a fresh vault holds is scaffold's template plus vaultRoot.
+    from mnemo.install.scaffold import _read_template
+
+    vault = tmp_home / "mnemo"
+    assert cli.main(["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"]) == 0
+    expected = json.loads(_read_template("mnemo.config.json"))
+    expected["vaultRoot"] = str(vault)
+    assert json.loads(_config_path(tmp_home).read_text(encoding="utf-8")) == expected
+
+
+def test_init_backs_up_a_config_it_cannot_merge(tmp_home: Path):
+    cfg = _config_path(tmp_home)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('{"vaultRoot": "/x", oops', encoding="utf-8")
+
+    vault = tmp_home / "mnemo"
+    assert cli.main(["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"]) == 0
+
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"vaultRoot": str(vault)}
+    backups = list(cfg.parent.glob("mnemo.config.json.bak.*"))
+    assert [b.read_text(encoding="utf-8") for b in backups] == ['{"vaultRoot": "/x", oops']
+
+
+def test_init_project_keeps_non_default_config(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = tmp_home / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    cfg = proj / ".mnemo" / "mnemo.config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"vaultRoot": str(proj / ".mnemo"), "enrichment": {"enabled": False}}), encoding="utf-8")
+
+    assert cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"]) == 0
+
+    assert json.loads(cfg.read_text(encoding="utf-8"))["enrichment"] == {"enabled": False}
+
+
+# --- #303: `init --hooks-only` rewrites the hooks and nothing else ------------
+
+_PRE_271 = "Bash|Edit|Write|MultiEdit"
+
+
+def _age_the_matcher(settings_path: Path) -> dict:
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    for entry in data["hooks"]["PreToolUse"]:
+        entry["matcher"] = _PRE_271
+    data["statusLine"] = {"type": "command", "command": "/home/user/my-prompt.sh"}
+    data["hooks"]["PreToolUse"].append(
+        {"matcher": "", "hooks": [{"type": "command", "command": "/opt/other-tool hook"}]}
+    )
+    settings_path.write_text(json.dumps(data), encoding="utf-8")
+    return data
+
+
+def test_hooks_only_widens_the_matcher_and_touches_nothing_else(tmp_home: Path):
+    vault = tmp_home / "mnemo"
+    assert cli.main(["init", "--yes", "--vault-root", str(vault), "--no-mirror", "--quiet"]) == 0
+    settings_path = tmp_home / ".claude" / "settings.json"
+    before = _age_the_matcher(settings_path)
+    cfg = _config_path(tmp_home)
+    cfg.write_text(json.dumps({"vaultRoot": str(vault), "extraction": {"subprocessTimeout": 180}}), encoding="utf-8")
+    mcp_before = (tmp_home / ".claude.json").read_bytes()
+    statusline_state = vault / ".mnemo" / "statusline-original.json"
+    state_before = statusline_state.read_bytes()
+
+    assert cli.main(["init", "--hooks-only", "--quiet"]) == 0
+
+    after = json.loads(settings_path.read_text(encoding="utf-8"))
+    mnemo_matchers = [
+        e.get("matcher") for e in after["hooks"]["PreToolUse"]
+        if "mnemo" in json.dumps(e["hooks"])
+    ]
+    assert mnemo_matchers == ["Bash|Read|Edit|Write|MultiEdit"]
+    assert {"matcher": "", "hooks": [{"type": "command", "command": "/opt/other-tool hook"}]} in after["hooks"]["PreToolUse"]
+    # A user's reverted statusLine stays reverted; a full init would re-wrap it.
+    assert after["statusLine"] == before["statusLine"]
+    assert statusline_state.read_bytes() == state_before
+    assert (tmp_home / ".claude.json").read_bytes() == mcp_before
+    assert json.loads(cfg.read_text(encoding="utf-8"))["extraction"] == {"subprocessTimeout": 180}
+    assert list(settings_path.parent.glob("settings.json.bak.*"))
+
+
+def test_hooks_only_refuses_where_nothing_is_installed(tmp_home: Path, capsys: pytest.CaptureFixture):
+    settings_path = tmp_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"statusLine": {"command": "x"}}), encoding="utf-8")
+
+    assert cli.main(["init", "--hooks-only"]) == 1
+
+    assert "run `mnemo init` to install" in capsys.readouterr().err
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {"statusLine": {"command": "x"}}
+    assert not (tmp_home / "mnemo").exists()
+
+
+def test_hooks_only_project_scope(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    proj = tmp_home / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    assert cli.main(["init", "--project", "--yes", "--no-mirror", "--quiet"]) == 0
+    local = proj / ".claude" / "settings.json"
+    _age_the_matcher(local)
+
+    assert cli.main(["init", "--project", "--hooks-only", "--quiet"]) == 0
+
+    data = json.loads(local.read_text(encoding="utf-8"))
+    assert any(e.get("matcher") == "Bash|Read|Edit|Write|MultiEdit" for e in data["hooks"]["PreToolUse"])
+    assert not (tmp_home / ".claude" / "settings.json").exists()
+
+
+def test_hooks_only_rejects_other_hosts(tmp_home: Path, capsys: pytest.CaptureFixture):
+    assert cli.main(["init", "--host", "cursor", "--hooks-only"]) == 2
+    assert "--hooks-only" in capsys.readouterr().err

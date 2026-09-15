@@ -67,6 +67,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="install only in the current project (writes <cwd>/.claude/settings.json + <cwd>/.mcp.json + <cwd>/.mnemo/ instead of $HOME)",
     )
     init.add_argument(
+        "--hooks-only", action="store_true",
+        help="only rewrite mnemo's hooks in settings.json to this version's shape (leaves config, statusLine, MCP, commands alone)",
+    )
+    init.add_argument(
         "--host", choices=["claude", "cursor", "codex"], default="claude",
         help="which tool to wire: claude (default: hooks + MCP), cursor or codex (MCP + rules file only)",
     )

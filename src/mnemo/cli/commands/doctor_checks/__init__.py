@@ -17,6 +17,9 @@ from mnemo.cli.commands.doctor_checks.duplicate_install import (  # noqa: F401
 from mnemo.cli.commands.doctor_checks.fidelity import (  # noqa: F401
     _doctor_check_zero_hit,
 )
+from mnemo.cli.commands.doctor_checks.hook_matcher import (  # noqa: F401
+    _doctor_check_hook_matcher,
+)
 from mnemo.cli.commands.doctor_checks.install_backfill import (  # noqa: F401
     _doctor_check_install_backfill,
 )
