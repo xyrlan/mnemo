@@ -32,6 +32,7 @@ with them.
 """
 from __future__ import annotations
 
+import ast
 import fnmatch
 import os
 import re
@@ -87,16 +88,38 @@ def order(contract: contracts.Contract) -> list[contracts.Piece]:
 # --- signatures ------------------------------------------------------------
 
 # The leading identifier of a signature, after an optional `class`/`def`
-# keyword and any dotted owner (`Readiness.ready` is looked up as `ready`).
+# keyword and any dotted owner (`Readiness.ready` is looked up as `ready`,
+# inside `Readiness` when that is a class — see `_class_members`).
 # What follows must be a call, an annotation, a subscript, a return arrow
 # or nothing — a second bare word (`mnemo dispatch --contract`) is a CLI
 # shape, not a Python name, and is reported as unverifiable rather than
 # looked up as `mnemo` and found missing.
 _NAME_RE = re.compile(
     r"^(?:(?:async\s+)?def\s+|class\s+)?"
-    r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_][A-Za-z0-9_]*)"
+    r"((?:[A-Za-z_][A-Za-z0-9_]*\.)*)([A-Za-z_][A-Za-z0-9_]*)"
     r"\s*(?:$|[(:\[]|->)"
 )
+
+
+def _signature_parts(signature: str) -> tuple[str | None, str] | None:
+    """``(owner, name)`` of a signature: ``Outer.Inner.depth`` -> ``("Inner", "depth")``.
+
+    ``owner`` is the segment immediately before the name, or ``None`` when
+    the signature was not dotted; the whole answer is ``None`` when the
+    signature names no Python identifier (see :func:`signature_name`).
+    """
+    if "`" not in signature:
+        # A contract signature is backticked by rule (`contracts._validate`
+        # refuses one that is not); a bare word here is `nothing`, or prose.
+        return None
+    text = signature.strip().strip("`").strip()
+    if not text:
+        return None
+    match = _NAME_RE.match(text)
+    if not match:
+        return None
+    qualifier = match.group(1).rstrip(".")
+    return (qualifier.rsplit(".", 1)[-1] or None), match.group(2)
 
 
 def signature_name(signature: str) -> str | None:
@@ -107,28 +130,77 @@ def signature_name(signature: str) -> str | None:
     a landing over a contract that was right; treating it as present would
     make the check vacuous. The caller prints it as unverifiable.
     """
-    if "`" not in signature:
-        # A contract signature is backticked by rule (`contracts._validate`
-        # refuses one that is not); a bare word here is `nothing`, or prose.
-        return None
-    text = signature.strip().strip("`").strip()
-    if not text:
-        return None
-    match = _NAME_RE.match(text)
-    return match.group(1) if match else None
+    parts = _signature_parts(signature)
+    return parts[1] if parts else None
 
 
 def _definition_re(name: str) -> re.Pattern:
     # A def, a class, or a module-level assignment/annotation. Indented
     # defs count: `Readiness.ready` is a method, and a method is what the
     # consumer calls. Assignments are top-level only, because an indented
-    # `name = ...` is a local, not a boundary anyone can import.
+    # `name = ...` is a local, not a boundary anyone can import. A class
+    # attribute is indented too, and is a boundary — that case is answered
+    # by `_class_members`, which can tell the two apart; this regex cannot.
     return re.compile(
         rf"^(?:\s*(?:async\s+)?def\s+{re.escape(name)}\s*\("
         rf"|\s*class\s+{re.escape(name)}\b"
         rf"|{re.escape(name)}\s*(?::|=(?!=)))",
         re.MULTILINE,
     )
+
+
+def _class_members(source: str, owner: str) -> set[str] | None:
+    """Every name a class called *owner* defines in *source*, or ``None``.
+
+    ``None`` when *source* has no such class — the qualifier may be a module
+    (`briefing_select.pick`) — or does not parse, so the caller falls back to
+    the bare-name lookup. A member is what the class body binds directly: a
+    def, a nested class, an assignment or annotation (a dataclass field, a
+    constant, an enum member), and ``self.<name> = ...`` in one of its
+    methods. A method's own locals are not members, which is the distinction
+    an indentation-anchored regex cannot draw (#305).
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    classes = [node for node in ast.walk(tree)
+               if isinstance(node, ast.ClassDef) and node.name == owner]
+    if not classes:
+        return None
+
+    def bound(target: ast.AST, self_name: str | None) -> list[str]:
+        if isinstance(target, ast.Name) and self_name is None:
+            return [target.id]
+        if (isinstance(target, ast.Attribute) and self_name is not None
+                and isinstance(target.value, ast.Name)
+                and target.value.id == self_name):
+            return [target.attr]
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return [n for elt in target.elts for n in bound(elt, self_name)]
+        return []
+
+    members: set[str] = set()
+    for cls in classes:
+        for stmt in cls.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                members.add(stmt.name)
+            elif isinstance(stmt, ast.Assign):
+                members.update(n for t in stmt.targets for n in bound(t, None))
+            elif isinstance(stmt, ast.AnnAssign):
+                members.update(bound(stmt.target, None))
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            params = stmt.args.posonlyargs + stmt.args.args
+            if not params:
+                continue
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Assign):
+                    members.update(n for t in node.targets
+                                   for n in bound(t, params[0].arg))
+                elif isinstance(node, ast.AnnAssign):
+                    members.update(bound(node.target, params[0].arg))
+    return members
 
 
 def _git(args: Sequence[str], *, cwd: Path | str):
@@ -180,16 +252,29 @@ def present(
     own ``files`` boundary: the contract's promise is that *this* piece
     delivers it *there*, and a same-named function elsewhere is someone
     else's.
+
+    A dotted signature whose owner is a class in the boundary is looked up
+    among that class's members only: `ConsumeReport.retired` is found as a
+    dataclass field, and is not satisfied by a `retired` bound anywhere else
+    (#305). An owner that is no class there — a module qualifier — falls
+    back to the bare-name lookup.
     """
-    name = signature_name(signature)
-    if name is None:
+    parts = _signature_parts(signature)
+    if parts is None:
         return None
-    pattern = _definition_re(name)
+    owner, name = parts
+    sources = []
     for path in _boundary_files(piece, ref=ref, repo_root=repo_root):
         shown = _git(["show", f"{ref}:{path}"], cwd=repo_root)
-        if shown.returncode == 0 and pattern.search(shown.stdout):
-            return True
-    return False
+        if shown.returncode == 0:
+            sources.append(shown.stdout)
+    if owner is not None:
+        found = [m for m in (_class_members(src, owner) for src in sources)
+                 if m is not None]
+        if found:
+            return any(name in members for members in found)
+    pattern = _definition_re(name)
+    return any(pattern.search(src) for src in sources)
 
 
 # --- inspect: the read-only view --------------------------------------------

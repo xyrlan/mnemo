@@ -173,6 +173,66 @@ def test_a_method_counts_when_defined_indented(repo: Path) -> None:
                            repo_root=repo) is True
 
 
+def _present_in(repo: Path, signature: str, source: str) -> bool | None:
+    branch = "feat/f/attr"
+    _branch(repo, branch, {"src/m.py": source})
+    piece = Piece("attr", files=["src/m.py"], exposes=[signature])
+    return landing.present(signature, piece=piece, ref=branch, repo_root=repo)
+
+
+@pytest.mark.parametrize(
+    "signature, source",
+    [
+        # #305: the field `mnemo land` refused on PR #294, as it was written.
+        ("`ConsumeReport.retired`",
+         "from dataclasses import dataclass\n\n@dataclass\nclass ConsumeReport:\n"
+         "    consumed: int = 0\n    #: Markers retired.\n    retired: int = 0\n"),
+        ("`Limits.MAX`", "class Limits:\n    MAX = 3\n"),
+        ("`Color.RED`", "import enum\n\nclass Color(enum.Enum):\n    RED = enum.auto()\n"),
+        ("`Point.x -> int`", "from typing import NamedTuple\n\nclass Point(NamedTuple):\n    x: int\n"),
+        ("`Store.path`", "class Store:\n    def __init__(self, root):\n        self.path = root\n"),
+        ("`Outer.Inner.depth`", "class Outer:\n    class Inner:\n        depth = 1\n"),
+    ],
+)
+def test_a_class_attribute_counts(repo: Path, signature: str, source: str) -> None:
+    assert _present_in(repo, signature, source) is True
+
+
+def test_a_local_of_the_same_name_is_not_the_attribute(repo: Path) -> None:
+    """An indented ``name = ...`` in a function body is still not a boundary."""
+    source = ("class ConsumeReport:\n    consumed: int = 0\n\n"
+              "def consume():\n    retired = 0\n    return retired\n")
+
+    assert _present_in(repo, "`ConsumeReport.retired`", source) is False
+
+
+def test_a_method_on_another_class_is_not_the_owners(repo: Path) -> None:
+    source = ("class Readiness:\n    ok = True\n\n"
+              "class Other:\n    def ready(self):\n        return True\n")
+
+    assert _present_in(repo, "`Readiness.ready`", source) is False
+
+
+def test_a_method_local_is_not_a_class_attribute(repo: Path) -> None:
+    source = "class Store:\n    def load(self):\n        path = 1\n        return path\n"
+
+    assert _present_in(repo, "`Store.path`", source) is False
+
+
+def test_a_module_qualifier_still_finds_the_top_level_def(repo: Path) -> None:
+    """`briefing_select.pick(...)` — the channels contract's own dotted shape."""
+    source = "def pick(vault_root, agent_name, *, query):\n    return None\n"
+
+    assert _present_in(repo, "`briefing_select.pick(vault_root) -> R`", source) is True
+
+
+def test_an_unparseable_file_falls_back_to_the_name_lookup(repo: Path) -> None:
+    """No class can be read out of it, so the bare-name rule answers as before."""
+    source = "class Store:\n    def path(self):\n        return 1\n    def broken(:\n"
+
+    assert _present_in(repo, "`Store.path`", source) is True
+
+
 def test_a_signature_without_an_identifier_is_unverifiable(repo: Path) -> None:
     piece = Piece("cli", files=["src/base.py"], exposes=["`mnemo land <path>`"])
 
