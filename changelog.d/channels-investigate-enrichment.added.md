@@ -4,10 +4,7 @@
   logged notes exactly. The window was 21 hours, spent mostly in repos whose
   rules name no files. But `mnemo init` wrote the `PreToolUse` matcher without
   `Read`, and nothing rewrites it or reports the gap: over a full week, `Read`
-  doubles the notes delivered (40 against 23). Re-running `mnemo init` to fix
-  it resets `mnemo.config.json` to `vaultRoot` alone. Instead, re-inject only
-  the hooks:
-  `python3 -c "from pathlib import Path; from mnemo.install.settings import inject_hooks; inject_hooks(Path.home()/'.claude/settings.json')"`.
-  Findings and recommendation are in
+  doubles the notes delivered (40 against 23). `mnemo doctor` now reports
+  the gap and `mnemo init --hooks-only` closes it (#303). Findings and recommendation are in
   `docs/superpowers/specs/2026-09-15-enrichment-status.md`.
   (channels/investigate-enrichment)

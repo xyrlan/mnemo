@@ -72,6 +72,38 @@ def _ensure_gitignore(cwd: Path, entries: tuple[str, ...] = GITIGNORE_ENTRIES) -
         pass
 
 
+def _refresh_hooks(target_settings: Path, *, project: bool, say) -> int:
+    """``mnemo init --hooks-only``: rewrite mnemo's hook entries and nothing else.
+
+    A hook shape that changes between versions (#271 added ``Read`` to the
+    ``PreToolUse`` matcher) reaches an existing install only through
+    ``inject_hooks``, and a full ``mnemo init`` also re-wires the statusLine,
+    the MCP server, the commands and the skills — undoing a statusLine the user
+    reverted on purpose (#303). This touches ``settings.json``'s mnemo hooks
+    alone, after the same backup ``inject_hooks`` always takes.
+
+    Refused where no mnemo hook is installed: adding one there would be a new
+    install (a second one, under the plugin), which is ``mnemo init``'s job.
+    """
+    from mnemo.install import settings as inj
+
+    if not _has_global_mnemo_install(target_settings):
+        init_cmd = "mnemo init --project" if project else "mnemo init"
+        print(
+            f"error: no mnemo hooks in {target_settings} to refresh — run `{init_cmd}` to install",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        inj.inject_hooks(target_settings)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    say(f"Hooks refreshed in {target_settings} (previous file backed up alongside it).")
+    say("New sessions pick them up; running ones keep the hooks they started with.")
+    return 0
+
+
 def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
     """``mnemo init --host cursor|codex``: vault + MCP registration + rules file.
 
@@ -121,9 +153,9 @@ def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
     say(f"Scaffolding vault at {vault_root}…")
     scaffold.scaffold_vault(vault_root)
     if project:
-        cfg_mod.save_config({"vaultRoot": str(vault_root)}, path=vault_root / "mnemo.config.json")
+        cfg_mod.set_vault_root(vault_root, path=vault_root / "mnemo.config.json")
     else:
-        cfg_mod.save_config({"vaultRoot": str(vault_root)})
+        cfg_mod.set_vault_root(vault_root)
 
     # 4. Register the MCP server in the host's own config.
     try:
@@ -180,6 +212,10 @@ def cmd_init(args: argparse.Namespace) -> int:
     say = (lambda *a, **k: None) if quiet else print
     project = bool(getattr(args, "project", False))
     host_name = getattr(args, "host", "claude") or "claude"
+    hooks_only = bool(getattr(args, "hooks_only", False))
+    if hooks_only and host_name != "claude":
+        print("error: --hooks-only rewrites Claude Code hooks; other hosts have none", file=sys.stderr)
+        return 2
     if host_name != "claude":
         return _init_other_host(args, host_name)
     cwd = Path.cwd()
@@ -191,6 +227,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     else:
         target_settings = Path(os.path.expanduser("~/.claude/settings.json"))
         target_mcp = Path(os.path.expanduser("~/.claude.json"))
+
+    if hooks_only:
+        return _refresh_hooks(target_settings, project=project, say=say)
 
     # Coexistence warn — project install but global is already wired
     if project and _has_global_mnemo_install(Path(os.path.expanduser("~/.claude/settings.json"))):
@@ -252,9 +291,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     # which `default_config_path()` auto-detects via `_find_local_config()`. Global
     # installs keep using the singleton `default_config_path()`.
     if project:
-        cfg_mod.save_config({"vaultRoot": str(vault_root)}, path=vault_root / "mnemo.config.json")
+        cfg_mod.set_vault_root(vault_root, path=vault_root / "mnemo.config.json")
     else:
-        cfg_mod.save_config({"vaultRoot": str(vault_root)})
+        cfg_mod.set_vault_root(vault_root)
 
     # 5. Inject hooks
     say(f"Injecting hooks into {target_settings}…")
