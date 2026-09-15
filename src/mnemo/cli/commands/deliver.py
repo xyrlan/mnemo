@@ -6,7 +6,8 @@ Two commands, not a prompt:
   is clean, how far ahead of the base branch, a diffstat, and any PR that already
   exists. Prints and exits, touching nothing.
 - ``mnemo deliver <id> [<id>...]`` pushes and opens a PR for **exactly** the
-  ids named, and nothing else.
+  ids named, and nothing else. Once a PR is open it stops the child that did
+  the work, if that child is ``done`` (#311) — never one still working.
 
 **Naming an id is the approval.** There is deliberately no ``--all`` and no
 "deliver everything that is ready": one flag approving N children is precisely
@@ -149,7 +150,41 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         return False
 
     print(f"{state.label}: {url or state.branch + ' pushed, PR created'}")
+    _stop_finished(tree, label=state.label)
     return True
+
+
+def _stop_finished(tree: Path, *, label: str) -> None:
+    """Stop the child that did this work, now that its PR is open (#311).
+
+    Nothing else stops it. The daemon retires a finished child after 8 h idle,
+    and until then it holds ~300-400 MB (three measured 2026-09-15); worse,
+    only a *stopped* child fires ``SessionEnd`` (#247), so a child left to the
+    daemon never writes its briefing. The worktree is untouched — SessionEnd
+    resolves its cwd, so the stop has to come before any removal, and this
+    command removes nothing.
+
+    Only ``state == "done"``. A child still working, or blocked on a question,
+    has not finished and is not this command's to end: it gets one line saying
+    so. ``stopped`` is already stopped. A ``done`` session the roster proves is
+    gone (``live is False``) has no process left to end.
+    """
+    from mnemo.core.sessions import delivery
+
+    for session in delivery.sessions_in(tree):
+        if session.state == "stopped" or (
+            session.state == "done" and session.live is False
+        ):
+            continue
+        if session.state != "done":
+            print(f"{label}: {session.short_id} left running "
+                  f"(state={session.state or '?'})")
+            continue
+        why = delivery.stop_session(session.short_id)
+        if why is None:
+            print(f"{label}: stopped {session.short_id}")
+        else:
+            print(f"{label}: `claude stop {session.short_id}` failed: {why}")
 
 
 @command("deliver")
