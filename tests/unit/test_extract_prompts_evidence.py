@@ -51,6 +51,24 @@ def test_existing_rules_fragment_lists_same_project_rules_by_source_count(tmp_pa
     assert not any("other-proj" in l or l.startswith("- ref ") for l in lines)
 
 
+def test_existing_rules_fragment_scopes_an_imported_rule_to_its_local_project(tmp_path):
+    """#302: an imported page has ``sources: []`` and names its project only in
+    ``projects:``. Read without that fallback it looked project-less, and a
+    project-less rule is advertised to every project's chunk."""
+    from mnemo.core.share import from_portable, to_portable, to_vault_page
+    from tests.unit._export_fixtures import write_rule
+
+    native = write_rule(tmp_path / "publisher", slug="use-yarn", quote="always yarn",
+                        projects=("theirs",)).read_text(encoding="utf-8")
+    rule = from_portable(to_portable(native, vault="v-one", project="theirs", today="2026-09-01"))
+    staged = tmp_path / "shared" / "_inbox" / "feedback" / "use-yarn.md"
+    staged.parent.mkdir(parents=True)
+    staged.write_text(to_vault_page(rule, project="mine", today="2026-09-13"), encoding="utf-8")
+
+    assert "- use-yarn" in existing_rules_fragment(tmp_path, "feedback", agents={"mine"})
+    assert existing_rules_fragment(tmp_path, "feedback", agents={"other"}) == ""
+
+
 def test_existing_rules_fragment_caps_at_80(tmp_path):
     for i in range(90):
         _rule(tmp_path, "feedback", f"r{i:03d}", f"R{i}", ["bots/a/memory/f.md"])
