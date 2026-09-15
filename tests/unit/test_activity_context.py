@@ -62,18 +62,21 @@ def test_a_synthetic_last_turn_is_skipped_as_context_skips_it():
 
 
 def test_a_turn_outside_the_tail_window_is_still_found(tmp_path):
-    """One 847KB transcript on disk had its last real turn before the 256KB window."""
+    """One 847KB transcript on disk had its last real turn before the 256KB window.
+
+    The window is gone since #308 — the breakdown needs the file from its first
+    turn — so this now pins that a cold read still finds that turn.
+    """
     padded = tmp_path / "long.jsonl"
     tail = [e for e in _events(FEE17ECD) if e.get("type") != "assistant"]
     body = FEE17ECD.read_bytes() + b"".join(
         json.dumps(e).encode("utf-8") + b"\n" for e in tail * 20
     )
     padded.write_bytes(body)
-    window = len(body) // 4
-    events, _ = read_tail(str(padded), 0, window)
-    assert events and last_context(events) is None  # the window alone misses it
+    events, _ = read_tail(str(padded), 0, len(body) // 4)
+    assert events and last_context(events) is None  # a tail window would miss it
 
-    assert context_for(str(padded), window=window) == 92566
+    assert context_for(str(padded)) == 92566
 
 
 def test_no_transcript_no_number(tmp_path):

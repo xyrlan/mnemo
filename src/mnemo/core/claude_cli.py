@@ -289,11 +289,35 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "`tokens` is not this number: 3-65x below it on all 18 jobs on "
             "disk, and matching no transcript quantity."
         ),
-        used_by="activity.context.context_for; `mnemo sessions` token column "
+        used_by="activity.context.measure; `mnemo sessions` token column "
                 "and `--json` context_tokens",
         verified="2.1.272 on 2026-09-15",
         how=("hand measurement (#307): `claude -p /context --resume <id> "
              "--fork-session --no-session-persistence` on finished sessions; "
+             "not exercised by the live test"),
+    ),
+    Assumption(
+        key="tool-result-cost-from-growth",
+        claim=(
+            "A tool's result is a `tool_result` block in a `user` event's "
+            "`message.content`, naming its call by `tool_use_id`; its content "
+            "is a string or a list of `text` / `image` (base64 `source.data`) "
+            "blocks. The context a turn adds is the next real turn's input "
+            "minus this turn's input and `output_tokens`, and one response is "
+            "written as several `assistant` events sharing `message.id` and "
+            "`usage`, with parallel results between them (2,767 of 29,770 "
+            "messages). Tool-result text costs 2.22-2.30 chars/token on the "
+            "5-family models (2,612 turns, p10-p90 per result 1.87-2.67); an "
+            "image costs its pixels / 750 (1,891 / 705 / 565 measured). "
+            "`/context`'s own per-tool figures are `len(JSON.stringify(block))"
+            " / 4` over calls and results, as a share of the window: 207% "
+            "for Read on a session whose context was 818k, 99.9% of it base64."
+        ),
+        used_by="activity.context.measure; `mnemo sessions` row suffix "
+                "and `--json` context_breakdown",
+        verified="2.1.272 on 2026-09-15",
+        how=("hand measurement (#308) over the 404 transcripts in "
+             "~/.claude/projects and the 2.1.272 binary's /context code; "
              "not exercised by the live test"),
     ),
     Assumption(
