@@ -50,6 +50,23 @@ inferred from the transcript.
 The one thing a path cannot encode is *who* dispatched the child. That is
 recorded per child in the vault, outside the tree, because the tree is removed
 long before the job is (#288, :mod:`mnemo.core.sessions.parents`).
+
+**A child's briefing is the canonical project's, both ways — deliberately.**
+Dispatch writes no handoff document of its own. The child's SessionStart
+injects the canonical project's newest briefing, and its SessionEnd files the
+child's briefing under the canonical project (#225, #247). Nothing is ever
+stored under ``bots/<repo>-wt-*/``: a namespace named after the tree would be
+orphaned the moment the tree is removed, which is why the parent link above
+lives in the vault too.
+
+That reads from outside like "children get no briefing": no ``-wt-`` namespace
+holds one, and no inject event names a ``-wt-`` project. Measured from the
+children's own transcripts on 2026-09-15, 92 children across three repos:
+71 started on a briefing; the other 21 were 16 whose project had no briefing
+on disk yet, and 5 that hit the circuit breaker. 26 wrote a briefing, all 26
+under the canonical namespace, 0 lost with a tree. ``tests/unit/
+test_child_briefing.py`` pins the round trip. Giving children a namespace of
+their own is the regression, not the fix.
 """
 from __future__ import annotations
 
