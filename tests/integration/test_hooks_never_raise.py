@@ -101,7 +101,7 @@ def test_circuit_breaker_short_circuits_all_hooks(
         try:
             raise ValueError(f"e{i}")
         except ValueError as e:
-            errors.log_error(tmp_vault, "test", e)
+            errors.log_error(tmp_vault, f"test{i}", e)  # distinct strikes (#314)
     assert not errors.should_run(tmp_vault)
     valid_payload = json.dumps({"session_id": "x", "cwd": "/tmp", "prompt": "hello"})
     for hook in ALL_HOOKS:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,11 +24,12 @@ def test_status_clean(tmp_home: Path, capsys: pytest.CaptureFixture):
 def test_status_reports_open_breaker(tmp_home: Path, capsys: pytest.CaptureFixture):
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
     vault = tmp_home / "v"
-    for i in range(15):
-        try:
-            raise ValueError(f"e{i}")
-        except ValueError as e:
-            errors.log_error(vault, "test", e)
+    # One failure a minute for fifteen minutes: fifteen strikes (#314).
+    with open(vault / ".errors.log", "a", encoding="utf-8") as fh:
+        for i in range(15):
+            ts = (datetime.now() - timedelta(minutes=i)).isoformat(timespec="seconds")
+            fh.write(json.dumps({"timestamp": ts, "where": "test", "kind": "ValueError",
+                                 "message": f"e{i}"}) + "\n")
     cli.main(["status"])
     out = capsys.readouterr().out
     assert "Circuit breaker: OPEN — 15 errors in the last hour (top: test ×15). Run `mnemo fix` to reset." in out
@@ -92,7 +94,7 @@ def test_fix_resets_breaker(tmp_home: Path, capsys: pytest.CaptureFixture):
         try:
             raise ValueError("e")
         except ValueError as e:
-            errors.log_error(vault, "test", e)
+            errors.log_error(vault, f"test{i}", e)  # distinct strikes (#314)
     assert not errors.should_run(vault)
     cli.main(["fix"])
     assert errors.should_run(vault) is True

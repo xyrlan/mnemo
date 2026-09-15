@@ -332,13 +332,14 @@ def test_hook_respects_circuit_breaker(tmp_vault: Path, monkeypatch):
     project = "mnemo"
     project_dir = _make_git_project(tmp_vault, project)
 
-    # Saturate the error budget (>10 errors in the last hour)
+    # Saturate the error budget (>10 strikes in the last hour; a strike is a
+    # distinct (where, kind) per minute, #314)
     from mnemo.core import errors as err_mod
     for i in range(11):
         try:
             raise ValueError(f"err{i}")
         except ValueError as e:
-            err_mod.log_error(tmp_vault, "test", e)
+            err_mod.log_error(tmp_vault, f"test{i}", e)
 
     load_index_called = []
 
