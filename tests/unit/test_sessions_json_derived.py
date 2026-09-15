@@ -20,7 +20,7 @@ import pytest
 from mnemo.cli.commands import sessions as sessions_cmd
 from mnemo.core.sessions.jobs import Session
 
-DERIVED = ("is_waiting", "is_blocked", "is_done", "is_abandoned")
+DERIVED = ("is_waiting", "is_blocked", "is_done", "is_abandoned", "is_stale")
 
 
 def _emit(monkeypatch, found: list[Session], capsys) -> list[dict]:

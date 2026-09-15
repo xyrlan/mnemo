@@ -172,4 +172,29 @@ def _doctor_check_background_sessions(
     glyph = "⚠" if unreadable else "✓"
     suffix = f", {unreadable} unreadable" if unreadable else ""
     print(f"  {glyph} {len(dirs)} background {word} ({blocked} waiting{suffix})")
+
+    # Finished children whose worktree was removed after merge (#292). Claude
+    # Code keeps each job record until `claude rm`, so they pile up: 48 on
+    # 2026-09-15. `mnemo sessions` already hides them; this names the command
+    # that actually lets them go. Every id is printed — a one-liner that
+    # clears five of sixteen is not the one-liner.
+    stale = [s.short_id for s in sessions if s.is_stale]
+    if stale:
+        noun = "session" if len(stale) == 1 else "sessions"
+        print(f"  ℹ {len(stale)} finished {noun} whose worktree is gone "
+              f"(hidden from `mnemo sessions`; the branch is kept):")
+        print(f"       → {_claude_rm_each(stale)}")
     return True
+
+
+def _claude_rm_each(ids: list[str], *, windows: bool | None = None) -> str:
+    """One pasteable line running ``claude rm`` on every id, for this shell."""
+    import os
+
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        # PowerShell, the shell a native Windows install opens.
+        quoted = ",".join(f"'{i}'" for i in ids)
+        return f"foreach ($id in {quoted}) {{ claude rm $id }}"
+    return f"for id in {' '.join(ids)}; do claude rm \"$id\"; done"

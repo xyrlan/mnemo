@@ -125,8 +125,28 @@ class Session:
         """Finished, by process phase. Says nothing about whether it succeeded."""
         return self.state in self.FINISHED
 
+    @property
+    def is_stale(self) -> bool:
+        """Finished, and the directory it ran in is gone (#292).
+
+        A dispatch child's tree is removed once its PR merges, but Claude Code
+        keeps the job record until someone runs ``claude rm``. On 2026-09-15
+        that was 48 records, 14 of them rendering as PRONTAS for days — work
+        already merged, reading as work ready to look at.
+
+        A blocked session is never stale, whatever its tree: a question the
+        maintainer never saw is the one row the queue must not hide. A session
+        with no recorded ``cwd`` is never stale either — nothing proves it gone.
+
+        Unlike the other answers this one asks the filesystem, so it costs a
+        ``stat`` per call.
+        """
+        if not self.is_done or self.is_blocked or not self.cwd:
+            return False
+        return not os.path.isdir(self.cwd)
+
     def derived(self) -> dict[str, bool]:
-        """The four answers consumers actually ask, as plain data.
+        """The answers consumers actually ask, as plain data.
 
         ``asdict()`` cannot see a ``@property``, so ``--json`` shipped only the
         raw fields and every consumer re-implemented the rule — the failure
@@ -138,6 +158,7 @@ class Session:
             "is_waiting": self.is_waiting,
             "is_abandoned": self.is_abandoned,
             "is_done": self.is_done,
+            "is_stale": self.is_stale,
         }
 
     @property

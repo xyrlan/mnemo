@@ -152,6 +152,26 @@ def _clock(at) -> str:
     return at.split("T", 1)[1].split(".")[0].replace("Z", "")[:8]
 
 
+def _without_stale(found) -> list:
+    """*found* minus the finished sessions whose tree is gone (#292).
+
+    ``getattr``, not the attribute: the command's tests hand it bare objects,
+    and a row that cannot say it is stale is shown.
+    """
+    return [s for s in found if not getattr(s, "is_stale", False)]
+
+
+def _stale_footer(hidden: int) -> str:
+    """The count of what ``--stale`` would add back, or '' when nothing was hidden.
+
+    Printed rather than dropped silently for the reason #281 gave the empty
+    queue: an omission nobody is told about reads as the whole truth.
+    """
+    if not hidden:
+        return ""
+    return f"  {hidden} prontas com a árvore já removida (mnemo sessions --stale)"
+
+
 @command("sessions")
 def cmd_sessions(args: argparse.Namespace) -> int:
     """Print background sessions, blocked first."""
@@ -172,13 +192,19 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     # The scope is a repo and its dispatch worktrees, not one directory — see
     # jobs.in_scope for why equality hid every child this tool exists for.
     scope = None if getattr(args, "all", False) else normalize_cwd(os.getcwd())
+    show_stale = bool(getattr(args, "stale", False))
+    # How many rows the last read hid, for the footer. A one-element list for
+    # the same reason as `previous` below: `_read` replaces it on every tick.
+    hidden = [0]
 
     # path -> (offset, meter), carried across watch ticks so a running child
     # costs the bytes it appended since and a finished one costs a stat.
     contexts: dict = {}
 
     def _read():
-        found = read_sessions(cwd=scope)
+        everything = read_sessions(cwd=scope)
+        found = everything if show_stale else _without_stale(everything)
+        hidden[0] = len(everything) - len(found)
         try:
             from dataclasses import replace
 
@@ -202,7 +228,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         try:
             from mnemo.core.sessions import detector
 
-            detector.sweep(found, vault_root=vault)
+            # Every session, stale ones included: a child's last answer can
+            # still be sitting unswept in its transcript after its tree is gone.
+            detector.sweep(everything, vault_root=vault)
         except Exception:
             pass
         try:
@@ -283,12 +311,16 @@ def cmd_sessions(args: argparse.Namespace) -> int:
                 acts = _activities(found)
                 print(clear, end="")
                 print(render_queue(found, acts, explorations=_explorations(found, explored_cache)))
+                if hidden[0]:
+                    print(_stale_footer(hidden[0]))
                 time.sleep(interval)
         except KeyboardInterrupt:
             return 0
 
     found = _read()
     print(render_queue(found, _activities(found), explorations=_explorations(found, explored_cache)))
+    if hidden[0]:
+        print(_stale_footer(hidden[0]))
     if not found and scope is not None:
         # An empty scoped queue and an empty machine render identically, and
         # the first one is a lie by omission: #281 sat on four waiting
@@ -299,7 +331,8 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         # The second read costs one pass over the jobs dir, and only on the
         # path where there is nothing else to show.
         try:
-            elsewhere = len(read_sessions())
+            others = read_sessions()
+            elsewhere = len(others if show_stale else _without_stale(others))
         except Exception:
             elsewhere = 0
         if elsewhere:
