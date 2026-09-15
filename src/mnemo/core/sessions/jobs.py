@@ -81,9 +81,16 @@ class Session:
     parent_session: str | None = None
     #: How full this session's context is — the number ``/context`` prints,
     #: read off the transcript's last real model turn (#307). Not in
-    #: ``state.json``: :func:`mnemo.core.activity.context.context_for` fills
+    #: ``state.json``: :func:`mnemo.core.activity.context.measure` fills
     #: it in. ``None`` when there is no transcript or no turn in it yet.
     context_tokens: int | None = None
+    #: ``{tool name: tokens}`` its results put in that context, largest first
+    #: (#308). Estimated from the transcript and capped per turn by how much
+    #: the context actually grew — not ``/context``'s chars/4, which counts a
+    #: screenshot's base64 as text. Filled in with ``context_tokens`` by
+    #: :func:`mnemo.core.activity.context.measure`; ``None`` whenever
+    #: ``context_tokens`` is, ``{}`` when no tool result has reached the model.
+    context_breakdown: dict[str, int] | None = None
 
     @property
     def is_blocked(self) -> bool:
