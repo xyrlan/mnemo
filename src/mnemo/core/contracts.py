@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mnemo.core.filters import parse_frontmatter
+from mnemo.core.sessions import grants
 
 # A slug must survive being a directory name and a branch segment, so it is
 # constrained to what `-wt-c-<slug>` can express. Enforced at parse time so a
@@ -53,7 +54,7 @@ PATH_RE = re.compile(r"^[A-Za-z0-9._*?\[\]!-]+(?:/[A-Za-z0-9._*?\[\]!-]+)*/?$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]+(?:\[[A-Za-z0-9]+\])?$")
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
-_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model)\:\*\*\s*(.*)$")
+_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model|may)\:\*\*\s*(.*)$")
 # "`sig` from owner" — the signature keeps its backticks (it is quoted
 # verbatim so a later diff of the contract is meaningful, and Task 5 quotes it
 # into a child's prompt as literal text). The owner is a lookup key rather
@@ -118,6 +119,11 @@ verdict: parallel
               the piece takes `mnemo dispatch --model`, or the machine's
               default when that is absent too. A budget, not an approach:
               say what to spend here, never how to build it.
+    may:      optional. What this piece's child may publish once its suite
+              is green, without asking: `push`, or `pr` (push and open the
+              pull request). `none` withholds it. Omit it and the piece takes
+              `mnemo dispatch --may`, or nothing. `merge` is refused: a child
+              never merges.
 
   Prose is free-form anywhere except a `##` heading, which is read as a
   piece slug. Write the boundary, never the approach: "only these files",
@@ -133,6 +139,7 @@ verdict: parallel
 - **exposes:** `load(key) -> Record | None`, `save(key, record) -> None`
 - **consumes:** nothing
 - **model:** haiku
+- **may:** pr
 
 Prose under a piece is free: say what the piece must deliver and why the cut
 falls here. This piece is a leaf — it consumes nothing, so it can be written
@@ -143,6 +150,10 @@ It also names a `model`, which the piece below does not: the boundary here is
 two files and two signatures, so the judgement was spent writing the contract
 rather than reading the repo. The piece below has to fit itself around an
 interface it does not own, and takes whatever the dispatch was given.
+
+`may: pr` lets this piece's child push its branch and open its pull request
+once its suite passes, instead of stopping to ask. The piece below names no
+`may`, so it takes whatever `mnemo dispatch --may` was given, or nothing.
 
 ## api
 
@@ -200,6 +211,14 @@ class Piece:
     # and three that are mechanical, and the contract is the artifact where
     # that difference was already written down and reviewed.
     model: str | None = None
+    # What this piece's child may publish without asking (#317), parsed by
+    # `grants.parse` — `("push", "pr")`. `None` means the line is absent and
+    # the piece takes `mnemo dispatch --may`; `()` is an explicit `none`,
+    # which withholds what the flag gave the other pieces. Like `model`, not
+    # an approach: it says what the maintainer already approved, never how to
+    # build. It is a permission, so it is only as good as the review of the
+    # contract that carries it.
+    may: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -403,6 +422,7 @@ def parse_contract(path: Path | str) -> Contract:
     exposes: list[str] = []
     consumes: list[tuple[str, str]] = []
     model: str | None = None
+    may: tuple[str, ...] | None = None
 
     def flush() -> None:
         # Bind the current accumulator values now, not the names — a
@@ -417,7 +437,7 @@ def parse_contract(path: Path | str) -> Contract:
             pieces.append(
                 Piece(
                     slug=slug, files=files, exposes=exposes, consumes=consumes,
-                    model=model,
+                    model=model, may=may,
                 )
             )
 
@@ -426,7 +446,7 @@ def parse_contract(path: Path | str) -> Contract:
         if heading:
             flush()
             slug = heading.group(1).strip()
-            files, exposes, consumes, model = [], [], [], None
+            files, exposes, consumes, model, may = [], [], [], None, None
             continue
         matched = _FIELD_RE.match(line)
         if not matched or slug is None:
@@ -440,6 +460,13 @@ def parse_contract(path: Path | str) -> Contract:
             # line, so it falls back to the dispatch-wide default.
             cleaned = value.strip()
             model = None if _is_empty_list(cleaned) else cleaned
+        elif key == "may":
+            # Refused here, not at spawn: a contract that grants `merge` is a
+            # contract to fix, and no tree may exist when that is said.
+            try:
+                may = grants.parse(value)
+            except grants.GrantError as exc:
+                raise ContractError(f"piece {slug!r}: may: {exc}") from exc
         elif key == "exposes":
             exposes = _split_signatures(value)
         else:

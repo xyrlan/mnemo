@@ -208,16 +208,54 @@ def test_one_refusal_does_not_strand_the_others(
 def test_an_existing_pr_stops_a_second_delivery(
     in_repo: Path, pushed: list, monkeypatch, capsys
 ) -> None:
-    """Delivering twice would open a duplicate PR for the same branch."""
+    """Delivering twice would open a duplicate PR for the same branch.
+
+    Not a failure, though (#317): an open PR is what a child dispatched with
+    `--may pr` leaves behind, so finding one is the delivery already done.
+    """
     _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
     monkeypatch.setattr(
         delivery, "pr_info",
         lambda b, **kw: delivery.PR(url="https://x/pull/7", state="OPEN"),
     )
 
-    assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 1
+    assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 0
     assert pushed == []
     assert "https://x/pull/7" in capsys.readouterr().out
+
+
+def test_a_pr_the_child_opened_itself_is_delivered(
+    in_repo: Path, stopped: list, monkeypatch, capsys
+) -> None:
+    """The `--may pr` path end to end, from deliver's side (#317).
+
+    The child pushed and opened its own PR. deliver pushes nothing and opens
+    nothing, still owns the `Closes #N` trailer (#224) — the child may have
+    left it off — and stops the finished child as after any delivery (#311).
+    """
+    tree = _ready_tree(in_repo, "317", "fix/issue-317")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/320", state="OPEN"),
+    )
+    trailers: list = []
+    monkeypatch.setattr(
+        delivery, "_append_closing_trailer",
+        lambda url, *, issue, worktree: trailers.append((url, issue)),
+    )
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("5eed0317", t, state="done", tempo="idle")]
+        if Path(t) == tree else [],
+    )
+
+    assert deliver.cmd_deliver(_args(ids=["317"])) == 0
+
+    assert stopped == [("stop", "5eed0317")]  # no push, no second PR
+    assert trailers == [("https://x/pull/320", 317)]
+    out = capsys.readouterr().out
+    assert "PR já existe — https://x/pull/320" in out
+    assert "stopped 5eed0317" in out
 
 
 @pytest.mark.parametrize("state", ["MERGED", "CLOSED"])

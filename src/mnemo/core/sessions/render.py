@@ -284,6 +284,26 @@ def _models(sessions: list[Session]) -> str:
     return "  modelos: " + ", ".join(parts)
 
 
+def _grants(sessions: list[Session]) -> str:
+    """One line naming the children that may publish unasked, or '' (#317).
+
+    A footer for the same reason as :func:`_models`: most rows would read the
+    same (nothing granted), and the question is about the set — *which of my
+    children will push on their own?* Unlike the models line it is omitted
+    when the answer is "none", because none is the default the maintainer
+    already expects; a line appears only when a dispatch changed it.
+
+    Only children still able to act on it. A finished child's grant is spent,
+    and listing it would read as a push still to come.
+    """
+    held = [s for s in sessions if s.may and not s.is_done]
+    if not held:
+        return ""
+    return "  publicam sem perguntar: " + ", ".join(
+        f"{s.short_id} ({'+'.join(s.may)})" for s in held
+    )
+
+
 def _thousands(value: int) -> str:
     return f"{value // 1000}k" if value >= 1000 else str(value)
 
@@ -403,6 +423,9 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     models = _models(sessions)
     if models:
         lines.append(models)
+    granted = _grants(sessions)
+    if granted:
+        lines.append(granted)
     spent_total = _exploration_total(done, explored)
     if spent_total:
         lines.append(spent_total)

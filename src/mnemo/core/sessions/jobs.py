@@ -91,6 +91,11 @@ class Session:
     #: :func:`mnemo.core.activity.context.measure`; ``None`` whenever
     #: ``context_tokens`` is, ``{}`` when no tool result has reached the model.
     context_breakdown: dict[str, int] | None = None
+    #: What this child may publish without asking — ``("push", "pr")`` — as
+    #: granted at dispatch (#317). ``()`` for a child granted nothing, and for
+    #: every session nobody dispatched. Not in ``state.json``:
+    #: :func:`mnemo.core.sessions.grants.stamp` fills it in.
+    may: tuple[str, ...] = ()
 
     @property
     def is_blocked(self) -> bool:

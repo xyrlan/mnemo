@@ -200,6 +200,13 @@ def cmd_sessions(args: argparse.Namespace) -> int:
             found = parents.stamp(found, vault_root=vault)
         except Exception:
             pass
+        try:
+            from mnemo.core.sessions import grants
+
+            # What each child may publish unasked (#317). Its own try, as above.
+            found = grants.stamp(found, vault_root=vault)
+        except Exception:
+            pass
         return found
 
     if bool(getattr(args, "json", False)):

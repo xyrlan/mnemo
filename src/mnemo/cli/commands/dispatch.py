@@ -64,6 +64,16 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     contract_path = getattr(args, "contract", None)
     model = getattr(args, "model", None) or None
 
+    from mnemo.core.sessions import grants
+
+    try:
+        may = grants.parse(getattr(args, "may", None))
+    except grants.GrantError as exc:
+        # Before anything else that could spawn: a grant that cannot be given
+        # is refused while there is still nothing to roll back.
+        print(f"--may: {exc}")
+        return 1
+
     # Before the git check, not after: printing the format spawns nothing, and
     # it is the one thing someone runs *before* they have a repo to dispatch
     # from. Refusing it for want of a git root would be refusing documentation.
@@ -93,18 +103,21 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     lean = not getattr(args, "full_profile", False)
 
     if contract_path:
-        return _dispatch_contract(contract_path, root=root, args=args, lean=lean)
+        return _dispatch_contract(
+            contract_path, root=root, args=args, lean=lean, may=may
+        )
 
     if getattr(args, "dry_run", False):
         # Printable without side effects: the paths and branches are pure
         # functions of the issue numbers, so the plan can be checked first.
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
-            print(f"#{issue}  {core.branch_name(issue)}  {tree}{_model_suffix(model)}")
+            print(f"#{issue}  {core.branch_name(issue)}  {tree}"
+                  f"{_model_suffix(model)}{_may_suffix(may)}")
         return 0
 
     return _report(
-        core.dispatch_all(issues, repo_root=root, model=model, lean=lean),
+        core.dispatch_all(issues, repo_root=root, model=model, lean=lean, may=may),
         lean=lean,
     )
 
@@ -156,8 +169,19 @@ def _model_suffix(model: str | None) -> str:
     return f"  [{model}]" if model else ""
 
 
+def _may_suffix(may: tuple[str, ...]) -> str:
+    """``"  may: push+pr"``, or nothing when nothing was granted (#317).
+
+    Nothing rather than ``may: none`` for the reason :func:`_model_suffix`
+    gives: the default is the unchanged case, and a word on every row would
+    make each one read as a decision.
+    """
+    return f"  may: {'+'.join(may)}" if may else ""
+
+
 def _dispatch_contract(
-    path: str, *, root: Path, args: argparse.Namespace, lean: bool = True
+    path: str, *, root: Path, args: argparse.Namespace, lean: bool = True,
+    may: tuple[str, ...] = (),
 ) -> int:
     """Read, validate, then dispatch — refusing before any tree is created."""
     from mnemo.core import contracts
@@ -184,12 +208,13 @@ def _dispatch_contract(
             # dry run shows what would actually be spent per child, which is
             # the one question the flag creates.
             print(f"{piece.slug}  {branch}  {tree}"
-                  f"{_model_suffix(piece.model or model)}")
+                  f"{_model_suffix(piece.model or model)}"
+                  f"{_may_suffix(core.piece_grant(piece, may))}")
         return 0
 
     try:
         results = core.dispatch_contract(
-            contract, repo_root=root, model=model, lean=lean
+            contract, repo_root=root, model=model, lean=lean, may=may
         )
     except core.DispatchError as exc:
         print(str(exc))
@@ -219,7 +244,8 @@ def _report(results: list, *, lean: bool = True) -> int:
 
     for r in started:
         print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}"
-              f"{_model_suffix(getattr(r, 'model', None))}")
+              f"{_model_suffix(getattr(r, 'model', None))}"
+              f"{_may_suffix(getattr(r, 'may', ()))}")
         if r.warning:
             # The child is running — the tree was kept for it — but something
             # about the `claude` CLI did not look as expected (#235). Printed

@@ -84,6 +84,8 @@ worktree is created:
   they wait, so a prose description cannot be delivered against.
 - `model` is optional and takes one `--model` value — an alias (`haiku`,
   `sonnet`, `opus`) or a full id. A sentence there is refused.
+- `may` is optional and takes `push`, `pr` (push and open the PR) or `none`.
+  `merge` is refused.
 
 Signatures go in backticks; commas inside them are safe. `files` is a plain
 comma-separated list.
@@ -96,6 +98,13 @@ where the piece has to fit itself around an interface it does not own, and it
 will take whatever `mnemo dispatch --model` was given, or the machine's
 default. A piece that names one wins over the flag, so a contract's per-piece
 judgement survives a blanket typed at the command line.
+
+`may` is a **permission**, not a budget: what the piece's child may publish
+once its suite passes, without stopping to ask. Write it only where the
+maintainer said so — never add one on your own judgement. The contract's
+review is the approval it carries, and a grant nobody asked for is a push
+nobody approved. Leave it off and the piece takes `mnemo dispatch --may`, or
+nothing.
 
 Prose is free-form anywhere except a `##` heading, which the parser reads as a
 piece slug — a section like `## Notes` is refused as an unaddressable slug.
