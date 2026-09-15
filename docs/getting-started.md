@@ -901,6 +901,17 @@ orthogonal and a filter written against `state` can look right and be wrong.
 `is_waiting` in particular is not a one-liner — it is an interaction between
 `tempo` and liveness — so read it rather than rebuilding it.
 
+`parent_session` is the full session id of whoever ran `mnemo dispatch` for
+this child, or `null` when it was run from a plain terminal or the child was
+not dispatched at all. It still answers after the child's worktree has been
+removed, so summing children's `tokens` onto their parent works for finished
+children too:
+
+```bash
+mnemo sessions --all --json | jq 'map(select(.parent_session)) | group_by(.parent_session)
+  | map({parent: .[0].parent_session, tokens: (map(.tokens // 0) | add)})'
+```
+
 `--consume-unblocks` is the one that is not about looking. When you answer a
 blocked session, that moment is a correction worth learning from, and mnemo
 records a marker for it; this redeems the markers and prints what it learned.

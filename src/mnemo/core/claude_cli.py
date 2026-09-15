@@ -237,6 +237,24 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         ),
     ),
     Assumption(
+        key="parent-session-env",
+        claim=(
+            "Claude Code exports `CLAUDE_CODE_SESSION_ID` into the environment "
+            "of commands its Bash tool runs, holding the running session's "
+            "full id — the same uuid as that session's `sessionId` in "
+            "`state.json`, whose first eight characters name its job "
+            "directory (measured from inside a `--bg` child: all three "
+            "agreed). A plain terminal does not have it. Nothing Claude Code "
+            "writes carries the dispatching session: the roster's `dispatch` "
+            "record reads `source: \"shell\"` with an empty `env`, and "
+            "`state.json` has no parent key."
+        ),
+        used_by="dispatch._spawn_into via sessions.parents.record; "
+                "`mnemo sessions --json` parent_session",
+        verified="2.1.272 on 2026-09-15",
+        how="hand measurement (#288); not exercised by the live test",
+    ),
+    Assumption(
         key="resume-bifurcates",
         claim=(
             "`claude --resume <id>` on a *running* background session starts "

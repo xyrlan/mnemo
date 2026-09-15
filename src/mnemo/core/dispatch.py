@@ -46,6 +46,10 @@ describes) and reconciled whenever a job is pruned; a path that the dispatcher
 controls has neither problem. :func:`issue_for_cwd` reads it back, and
 ``Session.label`` uses it to label a child by its issue instead of by a title
 inferred from the transcript.
+
+The one thing a path cannot encode is *who* dispatched the child. That is
+recorded per child in the vault, outside the tree, because the tree is removed
+long before the job is (#288, :mod:`mnemo.core.sessions.parents`).
 """
 from __future__ import annotations
 
@@ -58,6 +62,7 @@ from pathlib import Path
 from typing import Callable, Sequence, Union
 
 from mnemo.core import child_profile, claude_cli, contracts
+from mnemo.core.sessions import parents
 
 WORKTREE_SUFFIX = "-wt-"
 
@@ -612,6 +617,11 @@ def _spawn_into(
         remove_worktree(tree, repo_root=repo_root, branch=branch)
         raise
     warning = claude_cli.verify_registered(short_id, cwd=tree)
+    # Here, per child, rather than once the whole list is back: a Ctrl-C on
+    # the third issue must not cost the first two their link (#288). Only a
+    # child whose id was read back can be looked up by it, hence after the
+    # ContractBroken branch above.
+    parents.record(short_id)
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning, model=model
     )

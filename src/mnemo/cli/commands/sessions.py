@@ -164,11 +164,24 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         found = read_sessions(cwd=scope)
         try:
             from mnemo import cli  # late binding for monkeypatched _resolve_vault
+
+            vault = cli._resolve_vault()
+        except Exception:
+            return found  # the queue must print even when the vault is unavailable
+        try:
             from mnemo.core.sessions import detector
 
-            detector.sweep(found, vault_root=cli._resolve_vault())
+            detector.sweep(found, vault_root=vault)
         except Exception:
-            pass  # the queue must print even when the vault is unavailable
+            pass
+        try:
+            from mnemo.core.sessions import parents
+
+            # Who dispatched each child (#288). Separate from the sweep so a
+            # failure in one never costs the other.
+            found = parents.stamp(found, vault_root=vault)
+        except Exception:
+            pass
         return found
 
     if bool(getattr(args, "json", False)):
