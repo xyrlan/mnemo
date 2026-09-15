@@ -71,6 +71,11 @@ class Session:
     #: measured on 2.1.270 did, including those spawned with no ``--model``
     #: at all, because Claude Code resolves the machine default into them.
     model: str | None = None
+    #: The full id of the session that dispatched this one (#288), or ``None``
+    #: for a session nobody dispatched from inside Claude Code. Not in
+    #: ``state.json``: mnemo records it at dispatch, and
+    #: :func:`mnemo.core.sessions.parents.stamp` fills it in.
+    parent_session: str | None = None
 
     @property
     def is_blocked(self) -> bool:
