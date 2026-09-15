@@ -259,3 +259,75 @@ def test_errors_log_gets_one_line_per_distinct_error_not_per_pass(
 
     assert len(_error_lines(vault)) == 2
     assert "another extraction" in _error_lines(vault)[1]["message"]
+
+
+def test_one_pass_over_many_failing_markers_writes_one_errors_log_row(
+    monkeypatch, tmp_path, projects
+) -> None:
+    """#314: 27 stuck markers failing in one pass wrote 27 same-second rows and
+    tripped the circuit breaker. A pass is one action: one row, with the count
+    and every id, and the breaker stays closed."""
+    from mnemo.core import errors
+
+    vault = tmp_path / "vault"
+    (projects / "-p").mkdir()
+    sids = [f"4dfb38a9-0000-4000-8000-{i:012d}" for i in range(27)]
+    seen = {}
+    for sid in sids:
+        (projects / "-p" / f"{sid}.jsonl").write_text("{}\n", encoding="utf-8")
+        seen[sid[:8] + sid[-4:]] = {"last_tempo": "active", "unblocks": [{
+            "at": "2026-09-12T22:49:08+00:00", "session_id": sid,
+            "link_scan_path": str(projects / "-p" / f"{sid}.jsonl"),
+            "cwd": "/Users/x/github/mnemo-wt-gone", "extracted": False,
+        }]}
+    path = vault / ".mnemo" / detector.STATE_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"seen": seen}), encoding="utf-8")
+    _fail_learn(monkeypatch, "")
+
+    report = unblocks.consume({}, vault_root=vault)
+
+    assert report.failed == 27
+    rows = _error_lines(vault)
+    assert [r["where"] for r in rows] == [unblocks.ERROR_WHERE]
+    message = rows[0]["message"]
+    assert message.startswith(
+        "27 unblock markers deferred — 27 × no transcript with session id <id> for this directory: "
+    )
+    assert all(sid in message for sid in sids)
+    assert errors.should_run(vault) is True
+
+    unblocks.consume({}, vault_root=vault)
+    assert len(_error_lines(vault)) == 1, "an unchanged error is not logged again"
+
+
+def test_a_pass_groups_different_errors_in_its_one_row(monkeypatch, tmp_path, projects) -> None:
+    vault = tmp_path / "vault"
+    (projects / "-p").mkdir()
+    seen = {}
+    for sid in ("aaa", "bbb", "ccc"):
+        (projects / "-p" / f"{sid}.jsonl").write_text("{}\n", encoding="utf-8")
+        marker = {"session_id": sid, "cwd": "/x", "extracted": False,
+                  "link_scan_path": str(projects / "-p" / f"{sid}.jsonl")}
+        # "aaa" was answered twice: two markers, one session (real vault: 4074e62b held six).
+        seen[sid] = {"unblocks": [dict(marker), dict(marker)] if sid == "aaa" else [marker]}
+    path = vault / ".mnemo" / detector.STATE_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"seen": seen}), encoding="utf-8")
+
+    def _learn(cfg, *, cwd, session_id, **k):
+        if session_id == "ccc":
+            return _Report(error="another extraction is in progress")
+        return _Report(error=NOT_FOUND.format(sid=session_id))
+
+    monkeypatch.setattr("mnemo.core.learn.learn", _learn)
+
+    unblocks.consume({}, vault_root=vault)
+
+    rows = _error_lines(vault)
+    assert len(rows) == 1
+    assert rows[0]["message"] == (
+        "4 unblock markers deferred — "
+        "3 × no transcript with session id <id> for this directory: aaa, bbb | "
+        "1 × another extraction is in progress: ccc"
+    )

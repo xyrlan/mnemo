@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,11 +18,12 @@ from mnemo.hooks import session_start
 
 
 def _trip(vault: Path) -> None:
+    """Twelve failures, one per minute: twelve strikes (#314)."""
     vault.mkdir(parents=True, exist_ok=True)
-    now = datetime.now().isoformat(timespec="seconds")
     with open(vault / ".errors.log", "w", encoding="utf-8") as fh:
-        for _ in range(12):
-            fh.write(json.dumps({"timestamp": now, "where": "session_start.injection",
+        for minutes in range(12):
+            ts = (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+            fh.write(json.dumps({"timestamp": ts, "where": "session_start.injection",
                                  "kind": "BrokenPipeError", "message": "x"}) + "\n")
 
 
@@ -93,3 +94,51 @@ def test_status_closed_line_unchanged(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
     assert cli.main(["status"]) == 0
     assert "Circuit breaker: closed (ok)" in capsys.readouterr().out
+
+
+def _burst(vault: Path, n: int = 27) -> None:
+    """The real 2026-09-15 log: one consume pass, 27 same-second rows (#314)."""
+    vault.mkdir(parents=True, exist_ok=True)
+    now = datetime.now().isoformat(timespec="seconds")
+    with open(vault / ".errors.log", "w", encoding="utf-8") as fh:
+        for i in range(n):
+            fh.write(json.dumps({"timestamp": now, "where": "unblocks.consume", "kind": "RuntimeError",
+                                 "message": f"sid-{i}: no transcript"}) + "\n")
+
+
+def test_doctor_closed_row_names_what_it_counted(tmp_path, capsys):
+    _burst(tmp_path)
+    assert doctor_misc._doctor_check_circuit_breaker(tmp_path) is True
+    out = capsys.readouterr().out
+    assert ("✓ circuit breaker closed (27 errors in the last hour, most from unblocks.consume; "
+            "1 of 10 strikes)") in out
+
+
+def test_doctor_closed_row_is_bare_with_an_empty_log(tmp_path, capsys):
+    assert doctor_misc._doctor_check_circuit_breaker(tmp_path) is True
+    assert capsys.readouterr().out == "  ✓ circuit breaker closed\n"
+
+
+def test_doctor_row_shows_on_a_pipe(tmp_path):
+    """A paused vault must be visible outside a session's context (#314):
+    run the real CLI with stdout a pipe, not a tty."""
+    import os
+    import subprocess
+    import sys
+
+    vault = tmp_path / "vault"
+    _trip(vault)
+    cfg = tmp_path / "mnemo.config.json"
+    cfg.write_text(json.dumps({"vaultRoot": str(vault)}), encoding="utf-8")
+    import mnemo
+
+    # The child must import the mnemo under test, not whichever checkout is installed.
+    src = str(Path(mnemo.__file__).resolve().parent.parent)
+    env = dict(os.environ, MNEMO_CONFIG_PATH=str(cfg), HOME=str(tmp_path), USERPROFILE=str(tmp_path),
+               PYTHONPATH=os.pathsep.join(filter(None, [src, os.environ.get("PYTHONPATH")])))
+    proc = subprocess.run(
+        [sys.executable, "-m", "mnemo", "doctor"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=120,
+    )
+    out = proc.stdout.decode("utf-8", "replace")
+    assert "circuit breaker open (12 errors in the last hour, most from session_start.injection)" in out

@@ -11,11 +11,25 @@ from pathlib import Path
 
 
 def _doctor_check_circuit_breaker(vault: Path) -> bool:
-    """A tripped breaker silences every hook; that is a fault, not advice."""
+    """A tripped breaker silences every hook; that is a fault, not advice.
+
+    Stateless, and printed on every run: a paused vault must show on a pipe,
+    not only in the one line SessionStart injects into a model's context
+    (#314). A closed breaker still names what it has counted, so the hour
+    before it opens is visible too.
+    """
     from mnemo.core import errors
 
     if errors.should_run(vault):
-        print("  ✓ circuit breaker closed")
+        count, buckets = errors.recent_summary(vault)
+        if not count:
+            print("  ✓ circuit breaker closed")
+        else:
+            top = f", most from {buckets[0][0]}" if buckets else ""
+            print(
+                f"  ✓ circuit breaker closed ({count} errors in the last hour{top}; "
+                f"{errors.recent_strikes(vault)} of {errors.THRESHOLD_PER_HOUR} strikes)"
+            )
         return True
     print(f"  ✗ {errors.remedy_line(vault)}")
     return False

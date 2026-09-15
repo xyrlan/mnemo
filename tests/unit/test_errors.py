@@ -46,12 +46,63 @@ def test_should_run_true_under_threshold(tmp_vault: Path):
     assert errors.should_run(tmp_vault) is True
 
 
+def _write_log(vault: Path, rows: list[dict]) -> None:
+    with open(vault / ".errors.log", "a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+def _minutes_ago(minutes: int) -> str:
+    return (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+
 def test_should_run_false_at_threshold(tmp_vault: Path):
-    for i in range(11):
-        try:
-            raise ValueError(f"err{i}")
-        except ValueError as e:
-            errors.log_error(tmp_vault, "test", e)
+    _write_log(tmp_vault, [
+        {"timestamp": _minutes_ago(m), "where": "test", "kind": "ValueError", "message": f"err{m}"}
+        for m in range(11)
+    ])
+    assert errors.should_run(tmp_vault) is False
+
+
+def test_one_sweeps_burst_is_one_strike(tmp_vault: Path):
+    """#314, the real log: one ``mnemo sessions --consume-unblocks`` pass wrote
+    27 ``unblocks.consume`` rows in the same second and paused every hook."""
+    now = datetime.now().isoformat(timespec="seconds")
+    _write_log(tmp_vault, [
+        {"timestamp": now, "where": "unblocks.consume", "kind": "RuntimeError",
+         "message": f"sid-{i}: no transcript with session id sid-{i} for this directory"}
+        for i in range(27)
+    ])
+    assert errors.recent_strikes(tmp_vault) == 1
+    assert errors.should_run(tmp_vault) is True
+    assert errors.recent_summary(tmp_vault) == (27, [("unblocks.consume", 27)])
+
+
+def test_a_failure_that_persists_across_minutes_still_trips(tmp_vault: Path):
+    """The breaker's own job: a hook failing on every call keeps striking."""
+    _write_log(tmp_vault, [
+        {"timestamp": _minutes_ago(m), "where": "pre_tool_use.x", "kind": "OSError", "message": "m"}
+        for m in range(11) for _ in range(5)
+    ])
+    assert errors.recent_strikes(tmp_vault) == 11
+    assert errors.should_run(tmp_vault) is False
+
+
+def test_distinct_failures_in_one_minute_still_trip(tmp_vault: Path):
+    now = datetime.now().isoformat(timespec="seconds")
+    _write_log(tmp_vault, [
+        {"timestamp": now, "where": f"session_start.site{i}", "kind": "OSError", "message": "m"}
+        for i in range(11)
+    ])
+    assert errors.should_run(tmp_vault) is False
+
+
+def test_same_where_different_kind_is_a_separate_strike(tmp_vault: Path):
+    now = datetime.now().isoformat(timespec="seconds")
+    _write_log(tmp_vault, [
+        {"timestamp": now, "where": "session_end.outer", "kind": f"Error{i}", "message": "m"}
+        for i in range(11)
+    ])
     assert errors.should_run(tmp_vault) is False
 
 
@@ -112,11 +163,11 @@ def test_circuit_breaker_excludes_session_end_schedule(tmp_vault):
 def test_circuit_breaker_still_trips_on_hook_errors(tmp_vault):
     from mnemo.core import errors as err_mod
 
-    for _ in range(15):
+    for i in range(15):
         try:
             raise RuntimeError("boom")
         except RuntimeError as e:
-            err_mod.log_error(tmp_vault, "session_end.outer", e)
+            err_mod.log_error(tmp_vault, f"session_end.outer{i}", e)
 
     assert err_mod.should_run(tmp_vault) is False, \
         "genuine hook errors should still trip the breaker"

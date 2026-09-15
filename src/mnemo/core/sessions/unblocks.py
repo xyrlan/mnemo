@@ -215,12 +215,16 @@ def _record(
 
     A failure lands in two places a human looks: ``attempts`` and
     ``last_error`` on the marker in ``session-queue.json``, and ``.errors.log``.
-    The log gets a line only when the error *changes*: this pass runs on every
-    session end, and a marker waiting on a lookup fix would otherwise write
-    the same line dozens of times a day and bury everything else in the log.
+    The log hears about a marker only when its error *changes*: this pass runs
+    on every session end, and a marker waiting on a lookup fix would otherwise
+    write the same line dozens of times a day and bury everything else in the
+    log. And it hears once per pass, not once per marker: a pass is one
+    action, and 27 rows from one pass tripped the circuit breaker that pauses
+    every hook (#314).
     """
     data = detector._load(vault_root)
     changed = False
+    fresh: list[tuple[str, str]] = []
     for short_id, entry in data.get("seen", {}).items():
         unblocks_list = entry.get("unblocks", []) or []
         for index, unblock in enumerate(unblocks_list):
@@ -233,13 +237,33 @@ def _record(
             elif key in failures:
                 error = failures[key]
                 if unblock.get("last_error") != error:
-                    errors_mod.log_error(
-                        vault_root,
-                        ERROR_WHERE,
-                        RuntimeError(f"{unblock.get('session_id')}: {error}"),
-                    )
+                    fresh.append((str(unblock.get("session_id")), error))
                 unblock["last_error"] = error
                 unblock["attempts"] = int(unblock.get("attempts") or 0) + 1
                 changed = True
     if changed:
         detector._save(vault_root, data)
+    if fresh:
+        errors_mod.log_error(vault_root, ERROR_WHERE, RuntimeError(_failure_summary(fresh)))
+
+
+def _failure_summary(failures: list[tuple[str, str]]) -> str:
+    """One ``.errors.log`` message for every marker a pass newly failed.
+
+    A lone failure keeps the ``<session_id>: <error>`` shape. Several are
+    grouped by error, with each session id lifted out of its own message so
+    that 27 "no transcript with session id …" failures read as one class, a
+    count and the ids to grep for. The count is markers; each id is listed
+    once, since one session answered six times holds six markers.
+    """
+    if len(failures) == 1:
+        session_id, error = failures[0]
+        return f"{session_id}: {error}"
+    groups: dict[str, list[str]] = {}
+    for session_id, error in failures:
+        shape = error.replace(session_id, "<id>") if session_id else error
+        groups.setdefault(shape, []).append(session_id)
+    parts = [
+        f"{len(ids)} × {shape}: {', '.join(dict.fromkeys(ids))}" for shape, ids in groups.items()
+    ]
+    return f"{len(failures)} unblock markers deferred — " + " | ".join(parts)

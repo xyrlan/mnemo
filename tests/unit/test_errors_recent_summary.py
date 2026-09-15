@@ -50,9 +50,9 @@ def test_remedy_line_without_buckets(tmp_path: Path):
 
 
 def test_should_run_still_agrees_with_recent_summary(tmp_path: Path):
-    _log(tmp_path, [("x", 1)] * errors.THRESHOLD_PER_HOUR)
+    _log(tmp_path, [("x", minutes) for minutes in range(errors.THRESHOLD_PER_HOUR)])
     assert errors.should_run(tmp_path) is True
     assert errors.recent_summary(tmp_path)[0] == errors.THRESHOLD_PER_HOUR
-    _log(tmp_path, [("x", 1)])
+    _log(tmp_path, [("x", errors.THRESHOLD_PER_HOUR)])
     assert errors.should_run(tmp_path) is False
     assert errors.recent_summary(tmp_path)[0] == errors.THRESHOLD_PER_HOUR + 1
