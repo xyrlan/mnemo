@@ -194,9 +194,6 @@ def present(
 
 # --- inspect: the read-only view --------------------------------------------
 
-# What a contract lands onto. The same base `delivery` measures against.
-BASE = "master"
-
 
 @dataclass(frozen=True)
 class PieceState:
@@ -247,16 +244,23 @@ def _ref_for(branch: str, *, repo_root: Path | str) -> str | None:
 
 
 def base_ref(*, repo_root: Path | str) -> str:
-    """``origin/master`` when the repo has one, else local ``master``.
+    """``origin/<base>`` when the repo has one, else local ``<base>``.
+
+    *base* is :func:`delivery.base_branch` — what a contract lands onto is
+    the same branch ``delivery`` measures against, and on a ``main`` repo a
+    hardcoded ``master`` had no tree to rehearse in (#287).
 
     The remote-tracking ref when there is one, because that is what the PRs
-    will be merged onto; local ``master`` is what ``delivery`` measures
-    against and is the only choice in a repo with no remote.
+    will be merged onto; the local branch is the only choice in a repo with
+    no remote.
     """
-    remote = f"refs/remotes/origin/{BASE}"
+    from mnemo.core.sessions import delivery
+
+    base = delivery.base_branch(repo_root=repo_root)
+    remote = f"refs/remotes/origin/{base}"
     if _git(["rev-parse", "--verify", "--quiet", remote], cwd=repo_root).returncode == 0:
-        return f"origin/{BASE}"
-    return BASE
+        return f"origin/{base}"
+    return base
 
 
 def inspect(
