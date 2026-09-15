@@ -87,9 +87,17 @@ def _freshest_first(s: Session) -> str:
 
 
 def _tokens(s: Session) -> str:
-    if s.tokens is None:
+    """The context column: how full the session is, as ``/context`` says (#307).
+
+    Never falls back to ``s.tokens``. That field is 3-65x below the context on
+    every job measured, so printing it when the transcript is unreadable would
+    put the old lie back in the one cell that looks like it is telling the
+    truth. Unknown renders blank, as it always did.
+    """
+    n = s.context_tokens
+    if n is None:
         return ""
-    return f"{s.tokens // 1000}k" if s.tokens >= 1000 else str(s.tokens)
+    return f"{n // 1000}k" if n >= 1000 else str(n)
 
 
 def _prs(s: Session, lookup=None) -> str:

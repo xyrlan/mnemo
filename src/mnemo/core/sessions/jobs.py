@@ -60,6 +60,9 @@ class Session:
     name: str | None = None
     intent: str | None = None
     cwd: str | None = None
+    #: Claude Code's own ``tokens`` from ``state.json``, copied as-is. **Not**
+    #: the context size — it sat 3-65x below it on every job measured (#307).
+    #: Kept for consumers already reading it; render ``context_tokens``.
     tokens: int | None = None
     session_id: str | None = None
     link_scan_path: str | None = None
@@ -76,6 +79,11 @@ class Session:
     #: ``state.json``: mnemo records it at dispatch, and
     #: :func:`mnemo.core.sessions.parents.stamp` fills it in.
     parent_session: str | None = None
+    #: How full this session's context is — the number ``/context`` prints,
+    #: read off the transcript's last real model turn (#307). Not in
+    #: ``state.json``: :func:`mnemo.core.activity.context.context_for` fills
+    #: it in. ``None`` when there is no transcript or no turn in it yet.
+    context_tokens: int | None = None
 
     @property
     def is_blocked(self) -> bool:

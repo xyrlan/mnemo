@@ -33,7 +33,7 @@ def test_omitting_explorations_leaves_the_queue_byte_identical() -> None:
 
 
 def test_a_finished_row_ends_with_uses_and_growth() -> None:
-    out = render_queue([_done("a1", tokens=64_000)],
+    out = render_queue([_done("a1", context_tokens=64_000)],
                        explorations={"a1": Exploration(uses=32, tokens=107_400, baseline=70_000, reached=True)})
 
     row = next(line for line in out.splitlines() if "a1" in line and "PRONTAS" not in line)
