@@ -238,6 +238,26 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         ),
     ),
     Assumption(
+        key="stop-fires-session-end",
+        claim=(
+            "`claude stop <id>` on a `done` child runs its `SessionEnd` hook "
+            "(payload `hook_event_name: SessionEnd`, `reason: \"other\"`, the "
+            "child's `session_id` and spawn `cwd`) before the process ends; "
+            "`daemon.log` then records `bg settled <id> (killed)` and "
+            "`state.json` still reads `done`. Measured on a `--bg` haiku child "
+            "whose only hooks, passed with `--settings`, wrote marker files: "
+            "SessionEnd fired at 18:51:14Z, `settled (killed)` was logged at "
+            "18:51:15.6Z, both pids gone. \"(killed)\" is how the daemon "
+            "names the settle, not a sign the hook was skipped. A child that "
+            "is left `done` never fires it (#247). mnemo's own SessionEnd "
+            "still writes nothing while its circuit breaker is open "
+            "(`session_end.main` returns first)."
+        ),
+        used_by="deliver._stop_finished via delivery.stop_session (#311)",
+        verified="2.1.272 on 2026-09-15",
+        how="hand measurement (#311); not exercised by the live test",
+    ),
+    Assumption(
         key="parent-session-env",
         claim=(
             "Claude Code exports `CLAUDE_CODE_SESSION_ID` into the environment "

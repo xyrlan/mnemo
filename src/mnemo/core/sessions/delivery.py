@@ -664,8 +664,8 @@ def stop_session(short_id: str) -> str | None:
     failed must not read as a delivery that failed. On a ``done`` child the
     stop ends the process and leaves ``state=done`` (``stop-rm-noninteractive``,
     ``daemon-spare-pool``), so the queue row does not move — and only a
-    stopped child fires ``SessionEnd`` (#247), which is where its briefing is
-    written.
+    stopped child fires ``SessionEnd`` (#247, ``stop-fires-session-end``),
+    which is where its briefing is written.
     """
     try:
         result = subprocess.run(
