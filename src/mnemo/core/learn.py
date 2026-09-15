@@ -29,7 +29,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from mnemo.core import agent as agent_mod
 from mnemo.core import learned as learned_mod
 from mnemo.core import paths
 from mnemo.core.backfill import discover
@@ -95,8 +94,13 @@ def newest_transcript(cwd: str, *, session_id: Optional[str] = None) -> Optional
     regardless of age, so a user can re-learn an earlier session by id.
     ``None`` when this directory's project has no transcripts, or when no
     stem matches the requested id.
+
+    ``cwd`` is named with :func:`discover.agent_for_cwd`, the resolution
+    ``find_transcripts`` applies to every project directory: a lookup only
+    matches when both sides name the project the same way, and the cwd an
+    unblock marker recorded is usually a dispatch tree that is gone (#301).
     """
-    project = agent_mod.resolve_canonical_agent(cwd).name
+    project = discover.agent_for_cwd(cwd)
     found = discover.find_transcripts(project=project)
     if not found:
         return None
@@ -124,7 +128,7 @@ def learn(
     """Brief and extract this directory's newest session. Never raises."""
     report = LearnReport()
 
-    project = agent_mod.resolve_canonical_agent(cwd).name
+    project = discover.agent_for_cwd(cwd)
     path = newest_transcript(cwd, session_id=session_id)
     if path is None:
         report.error = (
