@@ -1,7 +1,9 @@
 """Discovery: decode project dirs, rank by mtime, filter by project."""
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -130,3 +132,99 @@ def test_non_jsonl_files_are_ignored(projects_root):
 
     found = discover.find_transcripts()
     assert [t.path.stem for t in found] == ["real"]
+
+
+# --- the cwd a transcript records (#301) -----------------------------------
+#
+# Claude Code's directory name cannot be decoded: `repo-wt-200` and
+# `repo/wt/200` encode identically. Every dispatch child works in a dashed
+# `<repo>-wt-<n>` tree, so on the real vault the decode found 49 of 121
+# `mnemo` transcripts under agents like `200`, and `learn` — which names the
+# project from the cwd an unblock marker recorded — matched none of the 27
+# pending markers. These tests stage the dashes the old ones avoided.
+
+
+def _recorded(project_dir: Path, name: str, cwd: str, mtime: float = 1000.0) -> Path:
+    """A transcript shaped like Claude Code's: the cwd rides a later event."""
+    project_dir.mkdir(parents=True, exist_ok=True)
+    p = project_dir / f"{name}.jsonl"
+    events = [
+        {"type": "queue-operation", "operation": "enqueue"},
+        {"type": "user", "cwd": cwd, "sessionId": name,
+         "message": {"role": "user", "content": "hi"}},
+    ]
+    p.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def _encode_like_claude(cwd: str) -> str:
+    """Claude Code's real encoder: every non-alphanumeric becomes a dash."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def _worktree(repo: Path, tree: Path) -> None:
+    """A git worktree on disk: `.git` file -> gitdir -> commondir -> repo."""
+    gitdir = repo / ".git" / "worktrees" / tree.name
+    gitdir.mkdir(parents=True)
+    (gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    tree.mkdir(parents=True)
+    (tree / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+
+
+def test_a_dashed_worktree_resolves_to_its_repo(projects_root, tmp_path):
+    repo = tmp_path / "gh" / "repo"
+    (repo / ".git").mkdir(parents=True)
+    tree = tmp_path / "gh" / "repo-wt-c-briefing-query"
+    _worktree(repo, tree)
+    _recorded(projects_root / _encode_like_claude(str(tree)), "s1", str(tree))
+
+    # The decode on its own still tears the name apart — that is the bug.
+    assert not Path(discover.decode_project_dir(
+        encoding=_encode_like_claude(str(tree)))).exists()
+
+    [t] = discover.find_transcripts()
+    assert t.cwd == str(tree)
+    assert Path(t.cwd).is_dir()
+    assert t.agent == "repo"
+    assert [x.path.stem for x in discover.find_transcripts(project="repo")] == ["s1"]
+
+
+def test_a_deleted_dispatch_worktree_still_files_under_its_repo(projects_root, tmp_path):
+    repo = tmp_path / "gh" / "repo"
+    (repo / ".git").mkdir(parents=True)
+    gone = tmp_path / "gh" / "repo-wt-200"
+    _recorded(projects_root / _encode_like_claude(str(gone)), "s1", str(gone))
+
+    [t] = discover.find_transcripts()
+    assert t.agent == "repo"
+    assert discover.agent_for_cwd(str(gone)) == "repo"
+
+
+def test_a_gone_directory_dispatch_did_not_name_is_not_folded(projects_root, tmp_path):
+    """`repo-old` and a hand-made `repo-wt-feature` are their own scopes: only
+    the two shapes dispatch writes carry the repo in their name."""
+    repo = tmp_path / "gh" / "repo"
+    (repo / ".git").mkdir(parents=True)
+    for name in ("repo-old", "repo-wt-feature"):
+        gone = tmp_path / "gh" / name
+        _recorded(projects_root / _encode_like_claude(str(gone)), name, str(gone))
+
+    agents = {t.path.stem: t.agent for t in discover.find_transcripts()}
+    assert agents == {"repo-old": "repo-old", "repo-wt-feature": "repo-wt-feature"}
+
+
+def test_a_dispatch_worktree_whose_repo_is_gone_too_keeps_its_own_name(projects_root, tmp_path):
+    gone = tmp_path / "gh" / "repo-wt-200"
+    _recorded(projects_root / _encode_like_claude(str(gone)), "s1", str(gone))
+
+    [t] = discover.find_transcripts()
+    assert t.agent == "repo-wt-200"
+
+
+def test_a_transcript_recording_no_cwd_falls_back_to_the_decode(projects_root):
+    _session(projects_root / "-tmp-repo-alpha", "s1", 1000.0)
+
+    [t] = discover.find_transcripts()
+    assert t.cwd == "/tmp/repo/alpha"
+    assert t.agent == "alpha"
