@@ -180,3 +180,12 @@ def test_every_frontmatter_parses_as_strict_yaml(as_package):
         assert data["description"] == spec["description"], name
     hint = block(settings.render_plugin_command(settings.PLUGIN_COMMANDS["dispatch"]))
     assert hint["argument-hint"] == "[issue ...] | --contract <path> [--dry-run]"
+
+
+def test_dispatch_description_does_not_hand_the_model_the_queue():
+    """The description is read by the model too; "then `mnemo sessions` to
+    watch them" came back as the session's own promise to watch (#306)."""
+    for table in (settings.SLASH_COMMANDS, settings.PLUGIN_COMMANDS):
+        description = table["dispatch"]["description"]
+        assert "watch" not in description
+        assert "the maintainer follows them with `mnemo sessions`" in description

@@ -1,5 +1,5 @@
 ---
-description: "spawn a background child per issue, or per piece of a contract (then `mnemo sessions` to watch them, `mnemo deliver` to ship)"
+description: "spawn a background child per issue, or per piece of a contract (the maintainer follows them with `mnemo sessions`, ships with `mnemo deliver`)"
 argument-hint: "[issue ...] | --contract <path> [--dry-run]"
 allowed-tools: Bash
 disable-model-invocation: true

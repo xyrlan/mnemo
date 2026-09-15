@@ -542,6 +542,12 @@ Each issue gets one background `claude` session in a fresh git worktree at
   attach: claude attach a41c8e2f
 ```
 
+Run from inside a session (`/mnemo:dispatch`, or the model calling `mnemo
+dispatch` itself), the output ends with a note addressed to that session: the
+children are detached, nothing tells it when they block or finish, so it
+reports the ids and stops instead of promising to watch them. The queue is
+yours.
+
 The child's opening prompt is the issue body, the worktree, and three scope
 limits: no merge or push without asking, no files outside what the issue
 needs, the full suite before claiming done. It carries no preferred solution,
