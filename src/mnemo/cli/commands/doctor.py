@@ -24,6 +24,7 @@ from mnemo.cli.commands.doctor_checks import (
     reflex,
     rules,
     share,
+    skills,
     stale,
 )
 from mnemo.cli.parser import command
@@ -60,6 +61,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("stale_citations",       stale._doctor_check_stale_citations),
     ("duplicate_install",     duplicate_install._doctor_check_duplicate_install),
     ("hook_matcher",          hook_matcher._doctor_check_hook_matcher),
+    ("skills",                skills._doctor_check_skills),
     ("background_processes",  background_processes._doctor_check_background_processes),
 ]
 
