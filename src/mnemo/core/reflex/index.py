@@ -98,7 +98,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             if isinstance(sources_raw, str):
                 sources_raw = [sources_raw]
             source_files = [s for s in sources_raw if isinstance(s, str)]
-            projects = projects_for_rule(source_files)
+            projects = projects_for_rule(source_files, frontmatter=fm)
             universal = is_universal(projects, universal_threshold)
 
             # Tokenize what retrieval sees, not the page (text_utils.retrieval_body).
