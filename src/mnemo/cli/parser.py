@@ -81,6 +81,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sessions.add_argument("--watch", action="store_true", help="redraw until Ctrl-C (ignored with --json; see --interval, --append)")
     sessions.add_argument("--all", action="store_true", help="every repo, not just this one")
     sessions.add_argument(
+        "--stale", action="store_true",
+        help="also list finished sessions whose worktree is gone (hidden by default)",
+    )
+    sessions.add_argument(
         "--append", action="store_true",
         help="watch by appending only the rows that changed, instead of clearing the screen",
     )

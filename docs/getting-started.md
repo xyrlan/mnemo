@@ -891,6 +891,7 @@ sends) is output, not a result, and is not counted.
 
 ```bash
 mnemo sessions --all               # every repo, not just the one you're in
+mnemo sessions --stale             # also list finished children whose worktree is gone
 mnemo sessions --watch             # redraw every 2s until Ctrl-C
 mnemo sessions --json              # machine-readable; --watch is ignored
 mnemo sessions --consume-unblocks  # learn from sessions answered while blocked
@@ -898,6 +899,13 @@ mnemo sessions --consume-unblocks  # learn from sessions answered while blocked
 
 `--watch` clears the screen only on a terminal; redirected to a file it appends
 each redraw instead of writing escape codes into your log.
+
+A finished child whose worktree was removed (its PR merged, the dispatcher
+cleaned up) is hidden from the queue and from `--json`: Claude Code keeps its
+job record until `claude rm`, so without this they pile up under PRONTAS for
+days. A footer counts what was hidden; `--stale` lists them again, and
+`mnemo doctor` prints the `claude rm` line that clears them. A blocked session
+is never hidden, whatever happened to its tree.
 
 #### Writing a script against `--json`
 
@@ -913,6 +921,7 @@ mnemo sessions --all --json | jq -r '.[] | select(.is_waiting) | .short_id'
 | `is_blocked` | Blocked on disk, alive or not. |
 | `is_abandoned` | Blocked, but the process is provably gone. Nothing to answer. |
 | `is_done` | Finished, by process phase (`done` *or* `stopped`). |
+| `is_stale` | Finished, and its `cwd` no longer exists. Only ever `true` under `--stale`. |
 
 The raw fields are still there, and the two enumerations are worth stating
 because guessing at them is what breaks scripts:
