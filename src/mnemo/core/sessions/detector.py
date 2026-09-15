@@ -109,6 +109,12 @@ _CROSS_SESSION = re.compile(
     r"<cross-session-message\b[^>]*>(.*?)</cross-session-message>", re.DOTALL
 )
 
+#: Claude Code's framing around a peer turn. Measured over the 64 peer turns
+#: on this machine (2026-09-15): every one opens with this header, and every
+#: socket delivery closes with this trailer paragraph.
+_PEER_HEADER = "Another Claude session sent a message:"
+_PEER_TRAILER = "\n\nThis came from another Claude session — "
+
 
 def turn_text(record: dict[str, Any]) -> str | None:
     """The human-visible text of a ``type: user`` record; ``None`` for a
@@ -154,9 +160,23 @@ def _excerpt(text: str) -> str:
 
 def _answer_text(text: str) -> str:
     """The answer itself. A ``SendMessage`` arrives inside a wrapper that
-    explains to the child where it came from; the wrapper is not the answer."""
+    explains to the child where it came from; the wrapper is not the answer.
+
+    A raw write to the inbox socket has no wrapper, and Claude Code frames the
+    body itself: a header line before it and a trailer paragraph after (#304).
+    Both are stripped by their text, and only where Claude Code puts them —
+    the header must open the turn, and the trailer is its last paragraph, so a
+    body with blank lines of its own keeps them."""
     match = _CROSS_SESSION.search(text)
-    return _excerpt(match.group(1) if match else text)
+    if match:
+        return _excerpt(match.group(1))
+    body = text.lstrip()
+    if body.startswith(_PEER_HEADER):
+        body = body[len(_PEER_HEADER):]
+        cut = body.rfind(_PEER_TRAILER)
+        if cut != -1:
+            body = body[:cut]
+    return _excerpt(body)
 
 
 def _has_assistant_turn(path: str) -> bool:
