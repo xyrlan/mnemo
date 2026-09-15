@@ -360,3 +360,44 @@ def test_build_argv_falls_back_to_the_bare_name(monkeypatch):
     path that produces "claude CLI not found"."""
     monkeypatch.setattr(llm.shutil, "which", lambda name: None)
     assert llm._build_argv("claude-haiku-4-5", None)[0] == "claude"
+
+
+def test_working_dir_keeps_an_existing_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert llm._working_dir() is None
+
+
+def test_working_dir_falls_back_to_home_when_cwd_was_removed(tmp_path, monkeypatch):
+    # SessionEnd runs after the dispatcher removed the child's worktree: the hook's
+    # cwd is gone, `os.getcwd()` raises, and `claude -p` would refuse to start there.
+    # Simulated rather than rmdir'ing the real cwd, which Windows refuses while in use.
+    def gone():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(llm.os, "getcwd", gone)
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(llm.os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    assert llm._working_dir() == str(home)
+
+
+def test_working_dir_falls_back_when_cwd_path_no_longer_exists(tmp_path, monkeypatch):
+    # Some platforms still return the stale path instead of raising.
+    monkeypatch.setattr(llm.os, "getcwd", lambda: str(tmp_path / "vanished"))
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(llm.os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    assert llm._working_dir() == str(home)
+
+
+def test_invoke_passes_the_fallback_cwd_to_subprocess(monkeypatch):
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw)
+        return MockCompletedProcess(stdout=_envelope("ok"))
+
+    monkeypatch.setattr(llm, "_subprocess_run", fake_run)
+    monkeypatch.setattr(llm, "_working_dir", lambda: "/fallback")
+    llm.call("p", system=None, model="claude-haiku-4-5", timeout=5)
+    assert seen["cwd"] == "/fallback"

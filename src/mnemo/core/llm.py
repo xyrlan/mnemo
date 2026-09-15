@@ -138,6 +138,24 @@ def _build_env() -> dict[str, str]:
     return env
 
 
+def _working_dir() -> str | None:
+    """A directory the subprocess can start in.
+
+    SessionEnd fires after the dispatcher has removed a child's worktree, so the
+    hook's own cwd may no longer exist; ``claude -p`` then refuses to start
+    (``Can't access working directory``). Keep the current directory while it
+    exists, otherwise fall back to the user's home. ``None`` keeps the default.
+    """
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = ""
+    if cwd and os.path.isdir(cwd):
+        return None
+    home = os.path.expanduser("~")
+    return home if os.path.isdir(home) else None
+
+
 def _invoke_once(argv: list[str], prompt: str, timeout: int):
     return _subprocess_run(
         argv,
@@ -146,6 +164,7 @@ def _invoke_once(argv: list[str], prompt: str, timeout: int):
         text=True,
         timeout=timeout,
         env=_build_env(),
+        cwd=_working_dir(),
     )
 
 
