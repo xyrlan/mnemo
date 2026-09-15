@@ -164,7 +164,9 @@ It's idempotent; running it twice is safe. On first run it will:
    already had.
 6. Write the slash commands to `~/.claude/commands/` and the skills to
    `~/.claude/skills/` — the same `/mnemo:*` menu and the same
-   `decomposing-for-dispatch` skill the plugin ships by convention.
+   `decomposing-for-dispatch` and `mnemo-loop` skills the plugin ships by
+   convention. `mnemo doctor` reports a skill that is missing or that Claude
+   Code would not index.
 7. Mirror existing Claude Code memories from `~/.claude/projects/*/memory/`
    into `bots/<repo>/memory/`.
 
@@ -547,6 +549,13 @@ dispatch` itself), the output ends with a note addressed to that session: the
 children are detached, nothing tells it when they block or finish, so it
 reports the ids and stops instead of promising to watch them. The queue is
 yours.
+
+That note corrects one seam. The rest of the loop — which verbs a session may
+run itself, which are yours, what a socket message from another session is
+worth, and that the SessionStart briefing is the last session and not a task —
+is in the `mnemo-loop` skill, which any session loads on demand ("how does
+mnemo's loop work for me?"). It is a skill and not injected context precisely
+so it costs nothing on the sessions that never dispatch anything.
 
 The child's opening prompt is the issue body, the worktree, and three scope
 limits: no merge or push without asking, no files outside what the issue

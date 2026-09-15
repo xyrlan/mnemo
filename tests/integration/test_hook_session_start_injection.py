@@ -200,3 +200,36 @@ def test_session_start_with_injection_still_runs_session_save(
     cached = session.load("S5")
     assert cached is not None
     assert cached["name"] == "myrepo"
+
+
+def test_session_start_context_carries_no_skill_text(
+    hook_env: Path, tmp_path: Path, monkeypatch, capsys,
+):
+    """Skills load on demand; none of their text rides on every session (#327).
+
+    The whole case for `mnemo-loop` being a skill is that it costs nothing
+    until a session needs it. Asserted on the hook's real stdout, which is the
+    only place the cost could appear.
+    """
+    from mnemo.install.settings import SKILLS, read_skill
+
+    _write_page(
+        hook_env, "feedback", "f1",
+        tags=["auto-promoted", "package-management"],
+        sources=["bots/a/m.md", "bots/b/m.md"],
+    )
+    _set_config(hook_env, injection={"enabled": True})
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+
+    out = _run_hook(
+        {"session_id": "S9", "cwd": str(repo), "source": "startup"},
+        monkeypatch, capsys,
+    )
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    for name in SKILLS:
+        assert name not in ctx
+        for line in read_skill(name).splitlines():
+            stripped = line.strip("#- *`").strip()
+            if len(stripped) > 30:
+                assert stripped not in ctx, f"{name}: {stripped[:40]!r}"

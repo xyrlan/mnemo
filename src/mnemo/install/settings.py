@@ -609,7 +609,7 @@ def uninject_slash_commands(commands_dir: Path) -> None:
 SKILL_TAG = "<!-- mnemo:skill -->"
 
 #: Every skill the package ships, by directory name.
-SKILLS: tuple[str, ...] = ("decomposing-for-dispatch",)
+SKILLS: tuple[str, ...] = ("decomposing-for-dispatch", "mnemo-loop")
 
 
 def read_skill(name: str) -> str:
