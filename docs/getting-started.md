@@ -642,21 +642,27 @@ every row would cost 20 characters of width to say nothing.
 
 ### Saying up front what a child may publish
 
-A child that finishes stops to ask "may I push / open a PR?", and an answer
-sent later through `SendMessage` or mnemo-desktop cannot approve it: Claude
-Code frames every such message as another session's, never as yours. The one
-message a child reads as yours is the prompt `mnemo dispatch` wrote, so that
-is where the permission goes:
+Ungranted, a child that finishes stops to ask "may I push / open a PR?", and
+an answer sent later through `SendMessage` or mnemo-desktop cannot approve it:
+Claude Code frames every such message as another session's, never as yours.
+The one message a child reads as yours is the prompt `mnemo dispatch` wrote,
+so that is where the permission goes:
 
 ```bash
 mnemo dispatch 255 --may push      # push its branch once the suite passes
 mnemo dispatch 246 --may pr        # push, and open the pull request itself
+mnemo dispatch 244 --may none      # publish nothing; `mnemo deliver` does it
 ```
 
 `pr` implies `push`. The child is told it may do exactly that once its full
 suite passes, on its own branch, never force-pushing — and not to ask again.
-`merge` is refused: merging stays with `mnemo land` and review. Without
-`--may` the prompt is the one it always was, and `mnemo deliver` publishes.
+`merge` is refused: merging stays with `mnemo land` and review.
+
+`--may` defaults to `pr`. Use `--may none` for work that should not become a
+branch at all — an exploratory spike, or anything you want to read before it
+is published. That restores the prompt dispatch always sent, word for word,
+and `mnemo deliver` publishes instead. The default is the command line's
+alone: every library entry point still grants nothing when it is told nothing.
 
 A contract piece may carry its own `- **may:** pr`, which wins over the flag
 the way `model:` does; `- **may:** none` withholds from that piece what the
@@ -664,6 +670,36 @@ flag gave the rest. `--dry-run` prints each child's grant, `mnemo sessions`
 ends with a `publicam sem perguntar:` line naming the running children that
 hold one, and `mnemo sessions --json` carries it on every row as `may`
 (`["push", "pr"]`, or `[]`).
+
+### How a child ends
+
+A child ends itself: it writes its closing report, asks `git` whether there
+is anything to publish — a clean tree on its own branch, at least one commit
+ahead of the base — publishes it when there is, and then stops. The order is
+the point. The report reaches the transcript before the stop, and the stop
+matters beyond tidiness: only a stopped session fires `SessionEnd`, and that
+is where the child's briefing is written. A child left running holds a few
+hundred megabytes and leaves no memory behind.
+
+The grant decides only how it publishes. With `--may pr` it pushes and opens
+the pull request; with `--may push` it pushes and leaves the PR to you; with
+`--may none` it says in its report that there is something to deliver and
+leaves it for `mnemo deliver`. The report and the stop do not depend on the
+grant — a child that refused the task has nothing to publish and its
+reasoning is the most valuable briefing in the system, because no diff
+carries it.
+
+If a child finishes without stopping itself, `mnemo deliver --stop-done`
+stops every finished child in this repo's dispatch worktrees, whether or not
+it delivered anything:
+
+```bash
+mnemo deliver --stop-done
+```
+
+It publishes nothing and approves nothing, so it is not an `--all` in
+disguise; naming ids or `--review` alongside it is refused, because each of
+those is a different command.
 
 ### Watching, and answering
 
@@ -698,6 +734,7 @@ retried on the next pass.
 mnemo deliver --review        # every dispatch worktree, and whether it is deliverable
 mnemo deliver 7c1e            # by short id, issue number or piece slug
 mnemo deliver 205 206         # several — each approved by being named
+mnemo deliver --stop-done     # stop every finished child, delivered or not
 ```
 
 ```
@@ -711,8 +748,17 @@ NÃO PRONTAS (2)
   #207  fix/issue-207
       no commits ahead of master — nothing to deliver
 
+TERMINADAS, NÃO PARADAS (1)
+  #207  9f2ab410
+      sem briefing até parar: mnemo deliver --stop-done
+
   entregar: mnemo deliver 205
 ```
+
+The third group is the one children usually land in when they finish with
+nothing to publish: finished, still running, and — until they are stopped —
+with no briefing written. It is printed across both of the groups above it,
+because the child with nothing to deliver is the one most worth stopping.
 
 `deliver` pushes the child's branch and opens its pull request with
 `gh pr create --fill` — the commits are the description — and appends
@@ -761,6 +807,15 @@ hand-written and differ cosmetically, and a name survives a renamed argument
 while still catching a function that was never written. A merged piece whose
 branch is gone is checked on `master`. A cycle has no landing order and is
 refused by name.
+
+A piece that would otherwise land is checked against its pull request's CI,
+and a failing check refuses it — `✗ CI red on <check>` against that piece,
+and the piece named under `NÃO POUSA`. The verdict is read check by check
+(`gh pr checks --json name,bucket`), not from the run's conclusion or the
+PR's rollup: a repository may mark a job non-blocking, and such a job fails
+while both aggregates still report success. Pending is not failure, and an
+unreadable answer — no `gh`, no checks on the PR — refuses nothing: the gate
+stands on evidence, never on its absence.
 
 ```bash
 mnemo land <contract> --merge                       # rehearse, then gh pr merge in order
