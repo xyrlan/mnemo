@@ -222,9 +222,10 @@ def _run_gh(args, **kwargs):
 
 
 def failing_checks(pr: str) -> list[str]:
-    """The names of *pr*'s failing checks, read one by one.
+    """The names of *pr*'s failing checks, judged check by check.
 
-    Reads ``gh pr checks --json name,bucket`` rather than the run's conclusion
+    One ``gh`` call; the per-check verdict is what it is read for. Reads
+    ``gh pr checks --json name,bucket`` rather than the run's conclusion
     or the PR's rollup. A repository may mark a job non-blocking, and such a
     job fails while both aggregates report success — so a gate that trusted
     the aggregate would be reading a proxy of the thing it is gating on,
@@ -237,10 +238,15 @@ def failing_checks(pr: str) -> list[str]:
     landing on evidence, never on the absence of it.
     """
     import json
+    import subprocess
 
     try:
         result = _run_gh(["gh", "pr", "checks", pr, "--json", "name,bucket"])
-    except Exception:  # noqa: BLE001 — an unreadable gate must not raise
+    # `gh` absent or unrunnable is an OSError; `timeout=60` expiring is a
+    # SubprocessError, which is not one. Both mean "no answer", not "green".
+    # Deliberately not `except Exception`: a bug in here would then read as an
+    # empty verdict and silently disarm the gate.
+    except (OSError, subprocess.SubprocessError):
         return []
     if result.returncode not in (0, 8):  # 8 == checks pending
         return []
@@ -426,6 +432,11 @@ def inspect(
             for sig, owner in piece.consumes
         ]
 
+        # Every `reason` built here is English: it is data, carried by
+        # `PieceState` and spliced into `LandingError` for callers, not a line
+        # written for a reader. The `land` command's own presentation layer
+        # (`cli/commands/land.py`) prints Portuguese around it, and that
+        # boundary is deliberate — do not match its language here.
         reason = ""
         if merged:
             pass  # already landed; its signatures are checked on the base

@@ -429,15 +429,22 @@ def test_inspect_asks_for_checks_only_on_an_open_pr_with_no_other_reason(
 def test_inspect_does_not_ask_for_checks_on_a_merged_piece(
     repo: Path, gh_prs: dict, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The merged piece is otherwise landable — reason-free, signatures present
+    — so only the OPEN guard keeps it from costing a `gh` call. Its open
+    sibling in the same run is asked, which is what makes the empty answer for
+    storage mean something.
+    """
     gh_prs["feat/f/storage"] = (1, "MERGED")
+    gh_prs["feat/f/api"] = (2, "OPEN")
     asked: list[str] = []
     monkeypatch.setattr(landing, "failing_checks",
                         lambda pr: asked.append(pr) or [])
 
-    (state,) = landing.inspect(_contract(STORAGE), repo_root=repo)
+    storage, api = landing.inspect(_two_pieces(repo), repo_root=repo)
 
-    assert asked == []
-    assert state.merged
+    assert storage.merged and storage.reason == "" and storage.landable
+    assert asked == ["https://x/pull/2"]  # api's, never storage's
+    assert api.landable
 
 
 # --- rehearse: merge in order, check, run the suite, touch nothing ----------

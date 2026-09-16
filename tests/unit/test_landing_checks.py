@@ -1,5 +1,6 @@
 """The merge gate reads individual checks, never the rollup (2026-09-16)."""
 import json
+import subprocess
 
 from mnemo.core import landing
 
@@ -94,6 +95,18 @@ def test_gh_missing_is_not_a_failure(monkeypatch):
 
     def run(args, **kwargs):
         raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(landing, "_run_gh", run)
+
+    assert landing.failing_checks("https://github.com/o/r/pull/1") == []
+
+
+def test_a_timed_out_gh_is_not_a_failure(monkeypatch):
+    """`TimeoutExpired` is not an `OSError`, so it has to be caught by name —
+    a slow network must read as "no answer", never as a red check."""
+
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, 60)
 
     monkeypatch.setattr(landing, "_run_gh", run)
 
