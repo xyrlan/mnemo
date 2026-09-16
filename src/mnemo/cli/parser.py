@@ -52,6 +52,10 @@ def command(name: str) -> Callable:
 
 def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
+    # ``friction`` registers itself here rather than in ``cli/commands/__init__``:
+    # the friction-loop contract left that file outside the piece that owns the
+    # command. Every entry point builds the parser before it looks a handler up.
+    from mnemo.cli.commands import friction as _friction  # noqa: F401
     _v = resolve_version()
     p = argparse.ArgumentParser(prog="mnemo", description="The Obsidian that populates itself.")
     p.add_argument("--version", "-V", action="version", version=f"mnemo {_v}")
@@ -402,6 +406,20 @@ def _build_parser() -> argparse.ArgumentParser:
     reverify.add_argument("--fresh", action="store_true",
                           help="re-brief every session again instead of reusing the scratch briefings of the last dry run")
     reverify.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    friction_p = sub.add_parser(
+        "friction",
+        help="report the friction ledger: what contradicted which rule (--backfill to recover history, --apply to write it)",
+    )
+    friction_p.add_argument("--backfill", action="store_true",
+                            help="dry run: re-brief every session on disk and link its corrections (one LLM call per session)")
+    friction_p.add_argument("--apply", action="store_true",
+                            help="write the saved --backfill plan to the ledger (no LLM calls)")
+    friction_p.add_argument("--fresh", action="store_true",
+                            help="with --backfill: re-brief instead of reusing the last dry run")
+    friction_p.add_argument("--since", metavar="YYYY-MM-DD", default=None,
+                            help="only sessions (or ledger rows) on or after this date")
+    friction_p.add_argument("--project", default=None, help="only this project")
+    friction_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     reclass = sub.add_parser(
         "reclassify",
         help="grade legacy feedback rules with an LLM (plan by default; --apply to execute)",
