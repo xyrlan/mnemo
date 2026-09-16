@@ -124,6 +124,60 @@ def is_consumer_visible(
     return True
 
 
+#: Frontmatter keys a retirement writes (``core/friction/retire.py``). The
+#: contradicted page carries the first three; its replacement carries the last.
+SUPERSEDED_BY = "superseded_by"
+SUPERSEDED_AT = "superseded_at"
+SUPERSEDED_BY_FRICTION = "superseded_by_friction"
+SUPERSEDES = "supersedes"
+
+
+def is_retired(
+    fm: dict[str, Any],
+    *,
+    vault_root: Path | None = None,
+) -> bool:
+    """True if a user correction has retired this page.
+
+    The single predicate. Every surface that reads rule pages directly calls
+    it; everything that ranks inherits it from the reflex index, which calls it
+    once per page at build time (``docs[slug]["retired"]``).
+
+    A retirement is honoured only when the friction ledger backs it: the
+    page's ``superseded_by_friction`` id must be a record in
+    ``<vault_root>/.mnemo/friction-ledger.jsonl``, and when the page names
+    itself (``slug`` or ``name``) that record must list it in
+    ``contradicts``. A hand-edited, copied or corrupted ``superseded_by`` key
+    therefore retires nothing — the key alone is not evidence.
+
+    **Without** ``vault_root`` **this returns False.** The ledger cannot be
+    consulted, and a retirement that cannot be traced to the quote that caused
+    it is exactly the one the gate refuses to honour. A caller holding only
+    frontmatter sees every page as live; failing that way shows a rule too
+    many, never hides one the user did not contradict. Pass the vault.
+
+    Never raises: an unreadable ledger means no retirement is honoured.
+    """
+    target = fm.get(SUPERSEDED_BY)
+    friction_id = fm.get(SUPERSEDED_BY_FRICTION)
+    if not (isinstance(target, str) and target.strip()):
+        return False
+    if not (isinstance(friction_id, str) and friction_id.strip()):
+        return False
+    if vault_root is None:
+        return False
+    try:
+        from mnemo.core.friction.retire import ledger_contradictions
+
+        contradicts = ledger_contradictions(Path(vault_root)).get(friction_id.strip())
+    except Exception:
+        return False
+    if contradicts is None:
+        return False
+    own = derive_rule_slug(fm, "")
+    return not own or own in contradicts
+
+
 def topic_tags(frontmatter: dict[str, Any]) -> list[str]:
     """Return just the user-facing topic tags, stripping managed markers."""
     return [t for t in (frontmatter.get("tags") or []) if t not in MANAGED_TAGS]
@@ -193,12 +247,24 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
     double quotes are stripped so downstream consumers receive bare values
     (e.g. ``'git commit.*'`` → ``git commit.*``).
     """
-    if not text.startswith("---\n"):
+    # CRLF as well as LF: most callers hand over `read_text`, whose universal
+    # newlines have already folded a CRLF page to LF, but a caller that reads
+    # bytes to preserve a page's line endings (`friction.retire`) hands the
+    # CRLF straight through, and returning {} for it reads as "no frontmatter".
+    if text.startswith("---\n"):
+        start = 4
+    elif text.startswith("---\r\n"):
+        start = 5
+    else:
         return {}
-    end = text.find("\n---\n", 4)
+    end = -1
+    for term in ("\n---\n", "\n---\r\n"):
+        end = text.find(term, start)
+        if end != -1:
+            break
     if end == -1:
         return {}
-    body = text[4:end]
+    body = text[start:end]
 
     out: dict[str, Any] = {}
     current_list_key: str | None = None   # top-level block-list key

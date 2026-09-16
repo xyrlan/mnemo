@@ -16,13 +16,23 @@ So the fragment now shows the *body* of the few rules the current chunk looks
 likely to touch, with an explicit edit contract. Bodies are the expensive part
 (median 216 tokens; all ``MAX_ENTRIES`` of them would be ~17k per chunk), which
 is why relevance gates them: everything else stays a one-line ``slug — name``.
+
+**Retired rules stay in the list, marked.** Every automatic surface hides a
+rule a user correction retired (``core/friction/retire.py``) — this one
+deliberately does not. The extractor reads fresh transcripts that may still
+state the old rule; if the hint hid it, the model would see no such slug and
+mint the contradicted rule again, and the vault would re-learn what it just
+unlearned (#184's failure, in reverse). So a retired rule is listed with what
+superseded it and an instruction not to restate it, and its body is never
+quoted as text to edit.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 from mnemo.core.extract.scanner import _normalize_slug
-from mnemo.core.filters import parse_frontmatter
+from mnemo.core.filters import SUPERSEDED_BY, is_retired, parse_frontmatter
 from mnemo.core.rule_activation import is_universal, projects_for_rule
 
 MAX_ENTRIES = 80
@@ -49,8 +59,10 @@ BODY_RELEVANCE_THRESHOLD = 0.12
 # which is ~1s of parsing per pass at 1.4k pages. The vault only changes when
 # apply_pages writes, so the run clears this between kinds rather than paying
 # the scan again for every chunk.
-#: slug -> (name, projects, source_count, description, body)
-_CACHE: dict[tuple[str, str], list[tuple[str, str, list[str], int, str, str]]] = {}
+#: (slug, name, projects, source_count, description, body, superseded_by) —
+#: the last is the replacement's slug for a retired rule, ``""`` otherwise.
+_Row = Tuple[str, str, List[str], int, str, str, str]
+_CACHE: Dict[Tuple[str, str], List[_Row]] = {}
 
 
 def clear_cache() -> None:
@@ -95,7 +107,7 @@ def _body_of(text: str) -> str:
     return body.strip()
 
 
-def _collect(vault_root: Path, kind: str) -> list[tuple[str, str, list[str], int, str, str]]:
+def _collect(vault_root: Path, kind: str) -> list[_Row]:
     key = (str(vault_root), kind)
     cached = _CACHE.get(key)
     if cached is not None:
@@ -116,9 +128,14 @@ def _collect(vault_root: Path, kind: str) -> list[tuple[str, str, list[str], int
             if isinstance(sources, str):
                 sources = [sources]
             sources = [s for s in sources if isinstance(s, str)]
+            retired_into = (
+                str(fm.get(SUPERSEDED_BY)).strip()
+                if is_retired(fm, vault_root=vault_root) else ""
+            )
             out.append((_slug_for(fm, md.stem), str(fm.get("name") or md.stem),
                         projects_for_rule(sources, frontmatter=fm), len(sources),
-                        str(fm.get("description") or ""), _body_of(text)))
+                        str(fm.get("description") or ""), _body_of(text),
+                        retired_into))
     _CACHE[key] = out
     return out
 
@@ -185,12 +202,18 @@ def existing_rules_fragment(
     if vault_root is None:
         return ""
     rows = []
-    for slug, name, projects, count, description, body in _collect(vault_root, kind):
+    retired: dict[str, str] = {}
+    for slug, name, projects, count, description, body, into in _collect(vault_root, kind):
         # An empty `projects` means no bots/ source could be attributed, so the
         # rule belongs to no project in particular — listed for every chunk.
         if agents and projects and not (set(projects) & agents) \
                 and not is_universal(projects, _UNIVERSAL_THRESHOLD):
             continue
+        if into:
+            retired[slug] = into
+            # Listed, never quoted: a quoted body is offered as text to edit,
+            # and a retired rule is not one to reinforce.
+            body = ""
         rows.append((count, slug, name, description, body))
     if not rows:
         return ""
@@ -210,8 +233,15 @@ def existing_rules_fragment(
         for _c, slug, name, _d, _b in rows
         if slug in quoted_slugs
     ]
-    lines = [f"- {slug} — {name}" for _, slug, name, _d, _b in listed]
-    lines += [f"- {slug} — {name}" for slug, name in extra]
+    def line(slug: str, name: str) -> str:
+        into = retired.get(slug)
+        if into:
+            return (f"- {slug} — {name} [RETIRED: a user correction contradicted "
+                    f"it; superseded by {into}. Do not restate it or reuse this slug]")
+        return f"- {slug} — {name}"
+
+    lines = [line(slug, name) for _, slug, name, _d, _b in listed]
+    lines += [line(slug, name) for slug, name in extra]
     out = (
         f"Existing rules for {kind} (REUSE the slug when your page states the same "
         f"rule — only mint a new slug for a genuinely new rule):\n"

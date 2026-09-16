@@ -20,6 +20,7 @@ Schema v1:
           "stability": "stable" | "evolving",
           "projects": list[str],
           "universal": bool,
+          "retired": bool,
         },
       },
     }
@@ -27,6 +28,14 @@ Schema v1:
 The evidence quote is the user's own words from a feedback correction — it is
 the best lexical bridge to how they phrase the same complaint again, so it is
 indexed and scored as its own field.
+
+``retired`` is :func:`filters.is_retired` against the ledger, read here once
+per page the way ``stability`` is. A retired rule stays indexed — its postings
+and length still count toward the corpus statistics, so retiring one rule does
+not re-score every other — and ``decide.candidates_for_project`` drops it.
+That filter is the one place injection, ``replay`` and ``mnemo why`` learn a
+rule was retired. An index written before the key existed reads as not
+retired.
 """
 from __future__ import annotations
 
@@ -35,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mnemo.core.errors import load_validated_json
-from mnemo.core.filters import derive_rule_slug, is_consumer_visible
+from mnemo.core.filters import derive_rule_slug, is_consumer_visible, is_retired
 from mnemo.core.reclassify_types import split_frontmatter
 from mnemo.core.reflex.tokenizer import tokenize
 from mnemo.core.rule_activation import is_universal, projects_for_rule
@@ -133,6 +142,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
                 "stability": fm.get("stability") or "stable",
                 "projects": projects,
                 "universal": universal,
+                "retired": is_retired(fm, vault_root=vault_root),
             }
 
     doc_count = len(docs)

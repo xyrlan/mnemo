@@ -10,6 +10,13 @@ These are the only mnemo entry points Claude Code reaches when fulfilling an
    already in Claude's auto-memory).
 3. They return plain dicts/lists serializable by ``json.dumps`` so the server
    layer doesn't need any encoder glue.
+
+Retirement (``core/friction/retire.py``) splits the two tools on purpose.
+``list_rules_by_topic`` is an automatic surface — Claude calls it before
+writing code — so it withholds retired rules unless asked, and says how many
+it withheld. ``read_mnemo_rule`` is a deliberate one: whoever names a slug
+always gets the page, with its retirement stated first, because a wrong
+retirement must be discoverable by the person who goes looking.
 """
 from __future__ import annotations
 
@@ -17,8 +24,12 @@ from pathlib import Path
 from typing import TypedDict
 
 from mnemo.core.filters import (
+    SUPERSEDED_AT,
+    SUPERSEDED_BY,
+    SUPERSEDED_BY_FRICTION,
     derive_rule_slug,
     is_consumer_visible,
+    is_retired,
     parse_frontmatter,
     topic_tags,
 )
@@ -35,13 +46,95 @@ class RuleRef(TypedDict):
     source_count: int
 
 
-class RuleBody(TypedDict):
+class _RuleBodyBase(TypedDict):
     slug: str
     type: str
     name: str
     tags: list[str]
     sources: list[str]
     body: str
+
+
+class RuleBody(_RuleBodyBase, total=False):
+    #: Present only on a retired rule.
+    retired: bool
+    superseded_by: str
+
+
+class RuleRefs(list):
+    """``list_rules_by_topic``'s result: a plain list, plus what it withheld.
+
+    Serialises as the bare list it always was, so every existing caller —
+    the MCP server, ``mnemo recall`` — reads it unchanged. The count rides on
+    the attribute; :attr:`note` is the sentence a surface shows for it.
+    """
+
+    retired_withheld: int = 0
+
+    @property
+    def note(self) -> str | None:
+        n = self.retired_withheld
+        if not n:
+            return None
+        word = "rule" if n == 1 else "rules"
+        return f"{n} retired {word} not shown (include_retired=True returns them)"
+
+
+def _retired_among(vault_root: Path, pages: list[tuple[str, Path]]) -> set[str]:
+    """The slugs in ``pages`` whose page :func:`is_retired` honours.
+
+    Only a slug some ledger record contradicts can be retired, so the ledger
+    (cached) is asked first and a vault with no linked corrections reads no
+    page at all.
+    """
+    from mnemo.core.friction.retire import ledger_contradictions
+
+    try:
+        named = set().union(*ledger_contradictions(vault_root).values())
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for slug, path in pages:
+        if slug not in named:
+            continue
+        try:
+            fm = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if is_retired(fm, vault_root=vault_root):
+            out.add(slug)
+    return out
+
+
+def _retirement_header(vault_root: Path, fm: dict) -> str:
+    """The lines a retired rule's body opens with: what replaced it, and why."""
+    from mnemo.core.friction.ledger import iter_records, record_id
+
+    fid = str(fm.get(SUPERSEDED_BY_FRICTION) or "")
+    quote = ""
+    try:
+        for rec in iter_records(vault_root):
+            if (rec.id or record_id(rec)) == fid:
+                quote = rec.quote
+    except Exception:
+        quote = ""
+    lines = [
+        f"> **RETIRED** — superseded by `{fm.get(SUPERSEDED_BY)}` on "
+        f"{fm.get(SUPERSEDED_AT) or 'an unrecorded date'} (friction `{fid}`). "
+        "Do not follow this rule; read its replacement.",
+    ]
+    if quote:
+        lines.append(f"> The correction that retired it: \"{quote}\"")
+    return "\n".join(lines) + "\n\n"
+
+
+def _with_retirement(vault_root: Path, out: RuleBody, fm: dict) -> RuleBody:
+    if not is_retired(fm, vault_root=vault_root):
+        return out
+    out["body"] = _retirement_header(vault_root, fm) + out["body"]
+    out["retired"] = True
+    out["superseded_by"] = str(fm.get(SUPERSEDED_BY))
+    return out
 
 
 def _extract_body(text: str) -> str:
@@ -181,7 +274,8 @@ def list_rules_by_topic(
     scope: str = "project",
     project: str | None = None,
     query: str | None = None,
-) -> list[RuleRef]:
+    include_retired: bool = False,
+) -> RuleRefs:
     """Return slugs whose topic tags include ``topic``, filtered by scope.
 
     Reads from the unified rule-activation-index.json when available;
@@ -194,6 +288,9 @@ def list_rules_by_topic(
     then slug asc. When ``query`` is given, rules whose BM25F score against it
     clears :data:`_RERANK_MIN_SCORE` rise to the top; the rest keep the order
     above.
+
+    Retired rules are withheld unless ``include_retired``; the result's
+    ``retired_withheld`` says how many were (see :class:`RuleRefs`).
     """
     from mnemo.core import rule_activation
     from mnemo.core.mcp.popularity import load_recent_read_counts
@@ -202,27 +299,30 @@ def list_rules_by_topic(
     if idx is not None and "rules" in idx:
         pop = load_recent_read_counts(vault_root)
         matches: list[RuleRef] = []
+        paths: list[tuple[str, Path]] = []
         for slug, rule in idx["rules"].items():
             if topic not in rule.get("topic_tags", []):
                 continue
             if not _rule_in_scope(rule, project, scope):
                 continue
+            page_type = rule.get("type", "feedback")
             matches.append({
                 "slug": slug,
-                "type": rule.get("type", "feedback"),
+                "type": page_type,
                 "source_count": rule.get("source_count", 0),
             })
+            stem = rule.get("file_stem") or slug
+            paths.append((slug, vault_root / "shared" / page_type / f"{stem}.md"))
         matches.sort(
             key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
         )
-        if query:
-            matches = _rerank_by_query(vault_root, matches, query)
-        return matches
+        return _finish(vault_root, matches, paths, query, include_retired)
 
     # Fallback: legacy glob+parse. Universality unavailable; treat all as local.
     filter_project = scope in ("project", "local-only") and project is not None
     pop = load_recent_read_counts(vault_root)
     legacy: list[RuleRef] = []
+    legacy_paths: list[tuple[str, Path]] = []
     for page_type in _RETRIEVAL_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
@@ -246,12 +346,32 @@ def list_rules_by_topic(
                 "type": page_type,
                 "source_count": len(sources),
             })
+            legacy_paths.append((slug, md))
     legacy.sort(
         key=lambda r: (-r["source_count"], -pop.get(r["slug"], 0), r["slug"])
     )
+    return _finish(vault_root, legacy, legacy_paths, query, include_retired)
+
+
+def _finish(
+    vault_root: Path,
+    matches: list[RuleRef],
+    paths: list[tuple[str, Path]],
+    query: str | None,
+    include_retired: bool,
+) -> RuleRefs:
+    """Withhold retired rules (counting them), then apply the query rerank."""
+    retired = _retired_among(vault_root, paths)
+    withheld = 0
+    if retired and not include_retired:
+        kept = [m for m in matches if m["slug"] not in retired]
+        withheld = len(matches) - len(kept)
+        matches = kept
     if query:
-        legacy = _rerank_by_query(vault_root, legacy, query)
-    return legacy
+        matches = _rerank_by_query(vault_root, matches, query)
+    out = RuleRefs(matches)
+    out.retired_withheld = withheld
+    return out
 
 
 def read_mnemo_rule(
@@ -261,7 +381,12 @@ def read_mnemo_rule(
     scope: str = "project",
     project: str | None = None,
 ) -> RuleBody | None:
-    """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs."""
+    """Read a single rule by slug. Returns ``None`` for unknown / filtered slugs.
+
+    A retired rule is **always** returned — retirement is not a filter here —
+    with ``retired: True``, ``superseded_by``, and a header opening the body
+    that names the replacement and quotes the correction that retired it.
+    """
     from mnemo.core import rule_activation
 
     idx = rule_activation.load_index(vault_root)
@@ -288,14 +413,14 @@ def read_mnemo_rule(
                 _, _, text = hit
         if text is None:
             return None
-        return {
+        return _with_retirement(vault_root, {
             "slug": slug,
             "type": page_type,
             "name": rule.get("name", slug),
             "tags": rule.get("topic_tags", []),
             "sources": rule.get("source_files", []),
             "body": _extract_body(text),
-        }
+        }, parse_frontmatter(text))
 
     # Fallback: legacy glob. All rules treated as local (no universality).
     filter_project = scope in ("project", "local-only") and project is not None
@@ -308,14 +433,14 @@ def read_mnemo_rule(
             return None
         if filter_project and not _rule_belongs_to_project(fm, project):
             return None
-        return {
+        return _with_retirement(vault_root, {
             "slug": slug,
             "type": page_type,
             "name": fm.get("name", slug),
             "tags": topic_tags(fm),
             "sources": fm.get("sources") or [],
             "body": _extract_body(text),
-        }
+        }, fm)
     return None
 
 

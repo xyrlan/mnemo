@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mnemo.core.filters import (
     MANAGED_TAGS,
     derive_rule_slug,
@@ -478,3 +480,32 @@ def test_iter_shared_pages_skips_proposed_siblings(tmp_path: Path) -> None:
 
     found = {p.name for p in iter_shared_pages(tmp_path)}
     assert found == {"a.md"}
+
+
+# --- line endings ------------------------------------------------------------
+#
+# Most callers reach this parser through `read_text`, whose universal newlines
+# have already folded a CRLF page to LF — which is why a literal "---\n" match
+# survived 87 call sites. `friction.retire` reads bytes on purpose, to preserve
+# the line endings of the page it rewrites, and handed CRLF straight through:
+# the parser returned {} and the caller read that as "this page has no
+# frontmatter", so on Windows nothing could be retired at all.
+
+@pytest.mark.parametrize("nl", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_parse_frontmatter_reads_both_line_endings(nl):
+    page = nl.join([
+        "---",
+        "name: a-rule",
+        "superseded_by_friction: f-20260916-abc",
+        "tags:",
+        "  - one",
+        "  - two",
+        "---",
+        "body",
+        "",
+    ])
+    fm = parse_frontmatter(page)
+
+    assert fm.get("name") == "a-rule"
+    assert fm.get("superseded_by_friction") == "f-20260916-abc"
+    assert fm.get("tags") == ["one", "two"]
