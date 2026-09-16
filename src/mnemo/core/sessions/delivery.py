@@ -690,3 +690,26 @@ def stop_session(short_id: str) -> str | None:
         return (result.stderr.strip() or result.stdout.strip()
                 or f"exit {result.returncode}")
     return None
+
+
+def stop_done_in(worktree: Path | str) -> list[tuple[str, str | None]]:
+    """Stop every ``done`` session in *worktree*. Returns ``(short_id, why)``.
+
+    ``why`` is ``None`` when the stop succeeded. Separate from delivering on
+    purpose: a briefing is made from the session, not from the PR, so a child
+    that refused its task — and therefore has nothing to publish — still has
+    to be stopped for its reasoning to survive (2026-09-16 design).
+
+    The same guards as ``deliver``'s own stop: only ``done``. A ``blocked``
+    child is waiting for an answer and is not finished; a ``stopped`` one
+    already fired ``SessionEnd``; a ``done`` one the roster proves is gone
+    (``live is False``) has no process left to end.
+    """
+    out: list[tuple[str, str | None]] = []
+    for session in sessions_in(worktree):
+        if session.state != "done":
+            continue
+        if session.live is False:
+            continue
+        out.append((session.short_id, stop_session(session.short_id)))
+    return out

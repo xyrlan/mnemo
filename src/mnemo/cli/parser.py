@@ -172,6 +172,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="session short id, issue number or piece slug to deliver")
     deliver_p.add_argument("--review", action="store_true",
                            help="read-only: every dispatch worktree, its branch, and whether it is deliverable")
+    # Not an --all in disguise: it pushes nothing and approves nothing. The
+    # briefing comes from SessionEnd, which only a stopped child fires, so a
+    # child that had nothing to deliver still has to be stopped to be
+    # remembered — the one case delivering could never reach.
+    deliver_p.add_argument("--stop-done", dest="stop_done", action="store_true",
+                           help="stop every finished child in this repo's dispatch "
+                                "worktrees, delivered or not — a stopped child is "
+                                "the one that writes its briefing")
     land_p = sub.add_parser(
         "land",
         help="a delivered contract's pieces in landing order with their PRs and "
