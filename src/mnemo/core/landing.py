@@ -453,7 +453,7 @@ def inspect(
             # between a red PR and the merge. One `gh` call per open piece.
             red = failing_checks(pr_url)
             if red:
-                reason = (f"CI vermelho em {', '.join(red[:3])}"
+                reason = (f"CI red on {', '.join(red[:3])}"
                           + (f" (+{len(red) - 3})" if len(red) > 3 else ""))
         # For a merged piece, ref reads as the base it was checked on.
         out.append(PieceState(
