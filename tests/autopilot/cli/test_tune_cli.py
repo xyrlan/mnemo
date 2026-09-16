@@ -84,3 +84,50 @@ class TestTuneCLI:
             capsys=capsys,
         )
         assert rc != 0 or "usage" in out.lower() or "bm25" in out.lower()
+
+
+class TestTuneReflexReportsCarried:
+    """#333 — the tuner reports the measured carried peak, and a monotone
+    curve leaves the per-project file alone instead of tightening it."""
+
+    def _curves(self):
+        from mnemo.autopilot.tuner.reflex_calibrator import (
+            FLOOR_CANDIDATES, GAP_CANDIDATES, CurvePoint,
+        )
+
+        def pts(values, start):
+            # Strictly falling: the shape measured on the real vault.
+            return [
+                CurvePoint(value=v, prompts=500, fired=start - i * 10,
+                           injections=start - i * 10, carried=start - i * 10, hindsight=0)
+                for i, v in enumerate(values)
+            ]
+
+        return {"alpha": {
+            "relative_gap": pts(GAP_CANDIDATES, 200),
+            "absolute_floor": pts(FLOOR_CANDIDATES, 200),
+        }}
+
+    def test_prints_the_carried_peak_and_writes_nothing(self, monkeypatch, tmp_path, capsys):
+        import json
+
+        from mnemo.autopilot.tuner import reflex_calibrator as rc
+        monkeypatch.setattr(rc, "carried_curves", lambda **_kw: self._curves())
+
+        d = tmp_path / ".mnemo"
+        d.mkdir(parents=True, exist_ok=True)
+        existing = d / "reflex-config.alpha.json"
+        existing.write_text(json.dumps({
+            "project": "alpha", "relative_gap": 1.15, "absolute_floor": 2.0, "min_tokens": 2,
+        }), encoding="utf-8")
+        before = existing.read_text(encoding="utf-8")
+
+        rc_code, out = _run(
+            monkeypatch, tmp_path, "autopilot", "tune", "reflex", capsys=capsys,
+        )
+
+        assert rc_code == 0
+        assert "carried peaks at" in out
+        assert "monotone" in out
+        # The hand-set 1.15 survives — the revert #333 was opened to stop.
+        assert existing.read_text(encoding="utf-8") == before
