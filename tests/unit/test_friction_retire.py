@@ -406,3 +406,27 @@ def test_auto_retire_runs_when_switched_on(vault):
     rec = fx.record(vault)
     run = R.auto_retire(vault, [rec], cfg={"friction": {"autoRetire": True}})
     assert [r.slugs for r in run.retired] == [[fx.OLD]]
+
+
+# --- line endings ------------------------------------------------------------
+#
+# `_read` keeps a page's bytes on purpose, so on Windows every line of a real
+# page ends in CRLF. The first cut of `_split` matched "---\n" literally and
+# refused every CRLF page, which is why 19 tests here were red on Windows and
+# green everywhere else: the fixtures wrote LF through `write_text`, which the
+# platform then translated, so the suite disagreed with itself by platform.
+
+@pytest.mark.parametrize("nl", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_frontmatter_surgery_keeps_the_page_line_endings(nl):
+    page = nl.join(["---", "name: x", "type: reference", "---", "body line", ""])
+    out = R._with_keys(page, {"superseded_by": "y"}, {})
+
+    assert "superseded_by: y" in out
+    assert R._split(out) is not None, "the rewritten page must still parse"
+
+    crlf = out.count("\r\n")
+    bare_lf = out.count("\n") - crlf
+    if nl == "\r\n":
+        assert bare_lf == 0, "a CRLF page must not come back with LF lines"
+    else:
+        assert crlf == 0, "an LF page must not gain CRLF lines"

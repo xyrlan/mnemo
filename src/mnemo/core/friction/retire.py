@@ -251,12 +251,30 @@ _KEY_RE = re.compile(r"^([^\s:#][^:]*):")
 
 
 def _split(text: str) -> tuple[list[str], str] | None:
-    if not text.startswith("---\n"):
+    """The frontmatter lines and the rest, for an LF **or** CRLF page.
+
+    ``_read`` keeps a CRLF page's bytes on purpose, so every line here can end
+    in ``\r``. The terminator is matched both ways and the ``\r`` is stripped
+    from the returned lines, which is what the key helpers below expect; the
+    remainder is handed back untouched, so a rewritten page keeps the line
+    endings it arrived with.
+    """
+    if text.startswith("---\n"):
+        start = 4
+    elif text.startswith("---\r\n"):
+        start = 5
+    else:
         return None
-    end = text.find("\n---\n", 4)
+    for term in ("\n---\n", "\n---\r\n"):
+        end = text.find(term, start)
+        if end != -1:
+            break
     if end == -1:
         return None
-    return text[4:end].split("\n"), text[end:]
+    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in text[start:end].split("\n")]
+    # ``end`` points at the newline before the closing ``---``. Hand the tail
+    # back without it so the caller re-joins with the page's own terminator.
+    return lines, text[end + 1:]
 
 
 def _key_spans(lines: list[str]) -> dict[str, tuple[int, int]]:
@@ -310,7 +328,10 @@ def _with_keys(text: str, scalars: dict[str, str], lists: dict[str, list[str]],
     for key, items in lists.items():
         block = [f"{key}:"] + [f"  - {_yaml_scalar(i)}" for i in items] if items else []
         lines = _set_block(lines, key, block)
-    return "---\n" + "\n".join(lines) + tail
+    # Re-join with the page's own terminator: ``tail`` still carries it, so a
+    # CRLF page stays CRLF rather than getting an LF frontmatter on a CRLF body.
+    nl = "\r\n" if tail.startswith("---\r\n") else "\n"
+    return "---" + nl + nl.join(lines) + nl + tail
 
 
 def _supersedes(fm: dict) -> list[str]:
