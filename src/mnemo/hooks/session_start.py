@@ -69,6 +69,40 @@ def _maybe_repair_hook_matchers(vault: Path, cfg: dict, cwd: str | None = None) 
         print(notice, file=sys.stderr)
 
 
+# Sources whose context already holds this session's briefing, or should not
+# have it pushed back in. Claude Code records the source in each hook record's
+# ``hookName`` (``SessionStart:resume``), which is how #352 counted re-fires:
+# over 1259 SessionStart records on the maintainer's machine, every repeated
+# briefing came from ``resume`` (44) or ``fork`` (1).
+#
+# - ``resume``: the reloaded history already carries the first injection.
+# - ``fork``: a forked session starts from a copy of that same history.
+# - ``compact``: fires because the context is full; the compaction summary
+#   already covers what the session kept, and a ~7 KB briefing would take
+#   the space compaction just freed.
+#
+# ``clear`` is deliberately NOT here. ``/clear`` empties the context, so
+# nothing is left to duplicate, and it is how people start a new task in the
+# same terminal: 397 of those 1259 records were ``clear``, and 110 transcripts
+# got their only briefing that way. Treat it as a cold start.
+#
+# A source not listed here, including one Claude Code adds later, keeps
+# the briefing, which is how the hook behaved before this list existed.
+_BRIEFING_ALREADY_IN_CONTEXT = frozenset({"resume", "fork", "compact"})
+
+
+def _briefing_wanted(cfg: dict, source: str) -> bool:
+    """Whether this SessionStart should carry the ``[last-briefing]`` block.
+
+    Only the briefing is gated. The topic envelope is a few hundred bytes and
+    carries the instruction to call ``list_rules_by_topic`` at all, so it
+    still goes out on a resume.
+    """
+    if not cfg.get("briefings", {}).get("injectLastOnSessionStart", True):
+        return False
+    return source not in _BRIEFING_ALREADY_IN_CONTEXT
+
+
 def _build_injection_payload(
     vault_root: Path,
     current_project: str | None = None,
@@ -752,8 +786,8 @@ def main() -> int:
         # lock and ledger writes create `.mnemo/` themselves.
         _maybe_schedule_install_backfill(cfg, vault, cwd)
 
+        source = str(payload.get("source") or "startup")
         if cfg.get("capture", {}).get("sessionStartEnd", True):
-            source = payload.get("source", "startup")
             try:
                 log_writer.append_line(ainfo.name, f"🟢 session started ({source})", cfg)
             except Exception as e:
@@ -773,7 +807,7 @@ def main() -> int:
         if cfg.get("injection", {}).get("enabled", False):
             try:
                 canonical_name = agent.resolve_canonical_agent(cwd).name
-                inject_briefing = bool(cfg.get("briefings", {}).get("injectLastOnSessionStart", True))
+                inject_briefing = _briefing_wanted(cfg, source)
                 payload_text = _build_injection_payload(
                     vault,
                     current_project=canonical_name,
@@ -823,6 +857,7 @@ def main() -> int:
                             included_briefing=("[last-briefing" in payload_text),
                             project=canonical_name,
                             agent=canonical_name,
+                            source=source,
                         )
                     except Exception as exc:
                         errors.log_error(vault, "session_start.inject_telemetry", exc)
