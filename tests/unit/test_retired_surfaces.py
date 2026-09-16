@@ -50,20 +50,9 @@ SURFACES = {
     "core/activity/summarize.py": NO_PAGES,
 }
 
-#: Surfaces that do not take their path yet. Both are outside the file
-#: boundary of the friction-loop-wave2 ``retire`` piece that introduced the
-#: predicate, so they are recorded here instead of being fixed there.
-#: ``strict``: the day one is fixed this test fails, and the entry must go.
-PENDING = {
-    "core/dashboard.py": (
-        "HOME lists live rules from its own frontmatter walk and never asks "
-        "is_retired — a retired rule stays on the dashboard"
-    ),
-    "core/mcp/recall_sessions.py": (
-        "run_case copies candidates_for_project's comprehension instead of "
-        "calling it, so the recall harness still ranks retired rules"
-    ),
-}
+#: Surfaces that do not take their path yet. ``strict``: the day one is
+#: fixed this test fails, and the entry must go.
+PENDING: dict[str, str] = {}
 
 _PAGE_READERS = {"parse_frontmatter", "split_frontmatter"}
 
@@ -293,6 +282,62 @@ def test_existing_rules_never_quotes_a_retired_body_for_editing(retired):
 
     assert f"### {fx.OLD}\n" not in fragment
     assert f"- {fx.OLD} " in fragment
+
+
+# --- dashboard ------------------------------------------------------------------
+
+
+def test_dashboard_drops_a_retired_rule_and_keeps_its_replacement(vault, monkeypatch):
+    from mnemo.core import dashboard
+
+    before = {e.slug for e in dashboard._scan_shared(vault)}
+    assert fx.OLD in before
+
+    rec = fx.record(vault)
+    assert R.retire(vault, rec, replacement=fx.NEW).ok
+    after = {e.slug for e in dashboard._scan_shared(vault)}
+
+    assert fx.OLD not in after and fx.NEW in after
+    assert after == before - {fx.OLD}
+
+    monkeypatch.setattr(dashboard.paths, "vault_root", lambda cfg: vault)
+    home = dashboard.update_home_md({}).read_text(encoding="utf-8")
+    assert f"/{fx.OLD}]]" not in home
+
+
+# --- recall harness ----------------------------------------------------------------
+
+
+def _session_case(vault: Path, tmp_path: Path):
+    from mnemo.core.mcp import recall_sessions as rs
+
+    projects = tmp_path / "projects" / "-Users-me-mnemo"
+    projects.mkdir(parents=True)
+    (projects / f"{fx.SID}.jsonl").write_text(
+        '{"type": "user", "message": {"content": "%s"}}\n' % PROMPT, encoding="utf-8")
+    cases = rs.bootstrap_cases(vault, projects_root=projects.parent)
+    assert len(cases) == 1
+    return rs, cases[0]
+
+
+def test_recall_harness_ranks_what_the_reflex_ranks(vault, tmp_path):
+    rs, case = _session_case(vault, tmp_path)
+    assert case["expect_slugs"] == sorted([fx.OLD, fx.NEW])
+
+    rec = fx.record(vault)
+    assert R.retire(vault, rec, replacement=fx.NEW).ok
+    index = build_index(vault)
+    result = rs.run_case(vault, case, index=index)
+
+    assert result["candidate_count"] == len(candidates_for_project(index, fx.PROJECT))
+    assert result["ranks"][fx.OLD] is None
+    assert result["ranks"][fx.NEW] is not None
+
+
+def test_recall_harness_stops_expecting_a_retired_rule(retired, tmp_path):
+    """A slug the reflex can never rank is not a miss retrieval caused."""
+    _rs, case = _session_case(retired, tmp_path)
+    assert case["expect_slugs"] == [fx.NEW]
 
 
 # --- replay ---------------------------------------------------------------------

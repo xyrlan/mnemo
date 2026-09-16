@@ -36,7 +36,12 @@ from pathlib import Path
 from typing import Any
 
 from mnemo.core import paths
-from mnemo.core.filters import is_consumer_visible, parse_frontmatter, topic_tags
+from mnemo.core.filters import (
+    is_consumer_visible,
+    is_retired,
+    parse_frontmatter,
+    topic_tags,
+)
 
 BLOCK_BEGIN = "<!-- mnemo:dashboard:begin -->"
 BLOCK_END = "<!-- mnemo:dashboard:end -->"
@@ -77,6 +82,10 @@ def _scan_shared(vault_root: Path) -> list[_Entry]:
                 continue
             fm = parse_frontmatter(text)
             if not is_consumer_visible(md, fm, vault_root):
+                continue
+            # A rule a user correction retired is not live guidance; its
+            # replacement is listed in its place.
+            if is_retired(fm, vault_root=vault_root):
                 continue
             sources = fm.get("sources") or []
             if not isinstance(sources, list):
