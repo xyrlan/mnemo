@@ -145,6 +145,33 @@ def test_default_project_falls_back_to_the_briefing_when_the_tree_is_gone(env):
     assert resolve("/definitely/not/here", "unknown-session") == "here"
 
 
+def test_default_project_folds_a_gone_dispatch_tree_into_its_repo(env, tmp_path):
+    """#334: a delivered child replays against its repo's rules, as the hook
+    saw them while the tree existed — not against its basename, which no rule
+    is filed under, and not against a pre-#301 briefing filed under it."""
+    vault, _projects = env
+    repo = tmp_path / "src" / "clubinho"
+    (repo / ".git").mkdir(parents=True)
+    _briefing(vault, "clubinho-wt-192", SID_B)
+    resolve = R.default_project_for(vault)
+
+    assert resolve(str(repo.parent / "clubinho-wt-192"), SID_B) == "clubinho"
+    assert resolve(str(repo.parent / "clubinho-wt-c-parser"), "s") == "clubinho"
+
+
+def test_default_project_keeps_a_gone_tree_it_cannot_fold(env, tmp_path):
+    """Only dispatch's own shapes fold, and only onto a repo that is there:
+    a hand-made tree, or a child of a hand-made tree that is itself gone,
+    keeps its briefing's project or its own name (#301)."""
+    vault, _projects = env
+    (tmp_path / "desk" / ".git").mkdir(parents=True)
+    resolve = R.default_project_for(vault)
+
+    assert resolve(str(tmp_path / "desk-old"), SID_A) == "alpha"
+    assert resolve(str(tmp_path / "desk-old"), "s") == "desk-old"
+    assert resolve(str(tmp_path / "desk-wt-round6-wt-40"), "s") == "desk-wt-round6-wt-40"
+
+
 # --- reading the vault ---------------------------------------------------------
 
 def test_rule_facts_reads_sessions_dates_and_evidence(env):

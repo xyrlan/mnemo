@@ -127,14 +127,24 @@ def agent_for_cwd(cwd: str) -> str:
     resolve, so a hand-made ``clubinho-old`` is never filed under
     ``clubinho``.
     """
+    return _agent_for_cwd(fold_gone_dispatch_tree(cwd))
+
+
+def fold_gone_dispatch_tree(cwd: str) -> str:
+    """The sibling repo of a removed dispatch tree, else *cwd* unchanged.
+
+    Split out of :func:`agent_for_cwd` so a caller that has its own answer for
+    an unresolvable tree (``replay`` falls back to the briefing) can ask
+    whether the fold applies before settling for it (#334).
+    """
     if not Path(cwd).exists():
         from mnemo.core.dispatch import WORKTREE_SUFFIX, issue_for_cwd
 
         if issue_for_cwd(cwd) is not None:
             repo = str(cwd).rstrip("/\\").rsplit(WORKTREE_SUFFIX, 1)[0]
             if Path(repo).is_dir():
-                cwd = repo
-    return _agent_for_cwd(cwd)
+                return repo
+    return cwd
 
 
 def _fallback_agent(encoding: str) -> str:
