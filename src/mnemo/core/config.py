@@ -67,6 +67,15 @@ DEFAULTS: dict[str, Any] = {
     "scoping": {
         "universalThreshold": 2,
     },
+    "install": {
+        # #337: a matcher this version widened reaches an install that already
+        # exists only through `inject_hooks` — `mnemo init` writes each one
+        # once. Session start repairs the drift it finds, once per distinct
+        # drift, so a shipped fix lands without the user having thought to run
+        # `mnemo doctor`. Set false to keep a matcher you narrowed by hand;
+        # `doctor` still reports the drift either way.
+        "autoRepairHooks": True,
+    },
     "doctor": {
         # Set ``skipStatuslineDrift`` to true to silence the statusLine
         # drift warning when you've intentionally reverted to the default

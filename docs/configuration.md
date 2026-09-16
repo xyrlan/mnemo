@@ -180,12 +180,13 @@ inbox.
 | `enrichment.maxEmissionsPerSession` | `15` | Cap per session; each rule is surfaced at most once per session |
 | `enrichment.log.maxBytes` | `1048576` | Log rotation threshold |
 
-### `scoping` and `doctor`
+### `scoping`, `install` and `doctor`
 
 | Key | Default | Meaning |
 |---|---|---|
 | `scoping.universalThreshold` | `2` | Projects a rule must appear in before it's promoted to universal |
 | `doctor.skipStatuslineDrift` | `false` | Silence the statusLine drift check — useful if you manage `settings.json` by hand |
+| `install.autoRepairHooks` | `true` | Rewrite mnemo's hook entries at session start when an installed matcher is narrower than the one this version ships (#337). Once per distinct drift, `settings.json` hooks only, previous file backed up. `false` keeps a matcher you narrowed by hand — `mnemo status` and `mnemo doctor` still report it. |
 
 ### `autopilot` — what may leave the machine
 

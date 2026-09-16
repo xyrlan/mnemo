@@ -44,6 +44,36 @@ mnemo migrate-plugin
 That removes the older one, leaving a timestamped backup of each settings file.
 Your vault is untouched.
 
+## A hook is installed but only half works
+
+`mnemo init` writes each hook's tool matcher once. When a release widens one —
+v1.4 added `Read` to the `PreToolUse` matcher so rules surface when you *open*
+a file, not only when you edit it — an install that already exists keeps the
+old one. Everything still reports healthy, because the hook is there; it just
+reaches fewer tools than the code expects. Measured on one install, that cost
+roughly half of what path-scoped enrichment would have delivered.
+
+mnemo repairs this by itself now: the next session start rewrites mnemo's hook
+entries in `settings.json` and tells you on stderr what it changed. The write
+is the same narrow one `mnemo init --hooks-only` performs — your config,
+statusLine, MCP servers and other tools' hooks are left exactly as they are,
+and the previous file is backed up alongside it. The session that repairs it
+keeps the hooks it started with; the next one picks up the new matcher.
+
+If you narrowed a matcher on purpose, re-narrow it: the repair runs once per
+distinct drift and will not fight you. To turn it off entirely, set
+`install.autoRepairHooks` to `false` in `mnemo.config.json`. Either way
+`mnemo status` and `/mnemo:doctor` keep reporting the drift, with the command
+that fixes it:
+
+```bash
+mnemo init --hooks-only            # global install
+mnemo init --project --hooks-only  # project-scoped install
+```
+
+Plugin installs are never affected: their hooks ship inside the plugin, so
+they move with the version.
+
 ## Circuit breaker is OPEN
 
 mnemo opens it after more than 10 errors in an hour, to stop a broken
