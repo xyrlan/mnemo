@@ -67,7 +67,8 @@ fires inside its own worktree and its briefing is written.
 Non-goals:
 
 - **No merge autonomy.** `may: merge` stays refused at parse time
-  (`grants.parse`); `land` keeps the merge gate and its rehearsal.
+  (`grants.parse`); `land` keeps the merge gate and its rehearsal, and gains
+  the CI check described below.
 - **No parent-side supervisor.** No new sweeping command, no polling, no
   scheduler.
 - **No worktree removal by the child.** `SessionEnd` resolves the child's
@@ -212,6 +213,51 @@ Two adjustments, both inside `deliver`:
 The reason this is safe is the same one that makes the whole design work — the
 briefing is made from the session, not from the delivery.
 
+## CI runs after the child is gone
+
+The child publishes a PR and stops within seconds. CI takes minutes. So the
+child is never alive to see its own result, and this design does not pretend
+otherwise.
+
+Measured on this repository 2026-09-16 (`gh run list`): median CI **6.4 min**,
+p90 around 12 min; of 200 runs since 2026-09-12, **17 red (8%)**. So roughly
+one PR in twelve lands red, which is often enough to design for and rare
+enough not to reshape the whole flow around.
+
+The child's prompt already requires a green suite before publishing (*"Once
+the full test suite passes"*), which is why the number is 8% and not higher.
+What it cannot cover is the gap between the child's machine and the CI matrix
+— another interpreter version, another operating system. Those failures are
+invisible to a local run by construction.
+
+**The red PR is caught at `land`, not by the child.** Two alternatives were
+rejected:
+
+- **The child waits for CI** (`gh pr checks --watch`, fix, then stop). It
+  closes the loop, but holds the session idle for 6–12 minutes burning the
+  300–400 MB this design exists to release, and a watch can outlast the turn.
+  It trades the memory problem for the same memory problem.
+- **The red PR is simply the maintainer's to notice.** Cheap and honest, but
+  it hands 8% of deliveries back as unannounced manual work, discovered at
+  merge time.
+
+`land` is the right owner because it already is: it rehearses every piece in a
+throwaway worktree, re-checks signatures in the merged tree, and runs the
+suite before merging anything. The gate that catches this exists. What it adds
+is reading the PR's CI state alongside the rehearsal it already performs.
+
+A stopped child holding a red PR does no damage — the damage would be merging
+it, and merging is exactly where `land` stands.
+
+### Read the checks, not the rollup
+
+When `land` reads CI state it must read the individual checks rather than the
+aggregate conclusion. A repository may mark a job non-blocking, and such a job
+fails while the run's conclusion and the PR's rollup both report success. A
+gate that reads the aggregate would be reading a proxy of the thing it is
+gating on — the failure mode `grep-is-a-proxy-run-the-function` records, here
+in front of an irreversible step.
+
 ## Risks
 
 **The rule lives in the prompt.** It is markdown a model obeys, not code that
@@ -240,6 +286,8 @@ questions.
 - `deliver --review` shows a `done`-but-not-`stopped` session
 - `deliver` stops a `done` child that has nothing to deliver
 - `deliver` against an already-delivered, already-stopped child is a no-op
+- `land` refuses a piece whose PR has a failing check, including when the
+  rollup conclusion reads success
 
 ## Open questions
 
