@@ -117,10 +117,19 @@ def _piece(**kw) -> contracts.Piece:
 
 
 def test_a_piece_with_no_grant_ends_as_it_always_did() -> None:
+    """The no-grant line is still byte-identical; only the closing clause follows.
+
+    It stopped being the *last* line in 2026-09-16: every child, granted or
+    not, is now told how to end itself, and that clause is rendered after the
+    publish one. The permission wording it guards is unchanged.
+    """
     prompt = dispatch.build_piece_prompt(_piece(), feature="f")
-    assert prompt.endswith(
-        "Run the full test suite before you finish. Do not merge or push without asking.\n"
+    publish = (
+        "Run the full test suite before you finish. "
+        "Do not merge or push without asking.\n"
     )
+    assert publish in prompt
+    assert prompt.endswith(publish + dispatch._closing_clause())
 
 
 @pytest.mark.parametrize("value", ["push", "pr"])

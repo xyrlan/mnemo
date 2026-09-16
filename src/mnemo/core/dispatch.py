@@ -250,7 +250,7 @@ evidence in the repo. If the issue proposes a fix that the code shows to be
 wrong, say so and refuse it — a measured refusal is a better outcome than a
 faithful implementation of a bad plan, and reporting that is finishing the
 job, not failing it.
-"""
+{closing}"""
 
 
 _CHANGELOG_PROMPT = """
@@ -278,6 +278,50 @@ def _changelog_prompt(name: str, repo_root: Path | str | None) -> str:
 #: Said when nothing was granted — the words every child was given before #317,
 #: kept byte-identical so a dispatch without ``--may`` is the dispatch it was.
 NO_GRANT = "Do not merge or push without asking."
+
+
+#: How every child ends, whatever it decided (2026-09-16 design). Stated in the
+#: opening prompt for the same reason the publish grant is: this is the one
+#: message the child reads as the maintainer's own, and nothing that arrives
+#: later carries the same authority.
+#:
+#: The order is load-bearing. The report reaches the transcript before the
+#: stop, and ``SessionEnd`` — which only a *stopped* child fires (#247) — is
+#: what turns that transcript into a briefing. Stopping first would end the
+#: session with nothing to write down; not stopping at all is the state this
+#: replaces, where the report is written and never becomes memory.
+_CLOSING_PROMPT = """
+How to finish, whatever you decided:
+
+1. Write your closing report in this session — what you did, what you
+   decided and why, what you refused. This is the only copy: it becomes the
+   session's briefing.
+2. Ask git whether there is work to publish: a clean tree on your own branch
+   with at least one commit ahead of the base. If there is{publish_hint}. If
+   there is not — you refused the task, or it needed no change — publish
+   nothing. Do not decide this from memory; run git and read it.
+3. Stop yourself, last: `claude stop ${{CLAUDE_CODE_SESSION_ID:0:8}}`. Your
+   conversation is kept. Nothing else stops you, and a session left running
+   writes no briefing at all.
+"""
+
+
+def _closing_clause(may: grants.Grant = ()) -> str:
+    """The end-of-life instructions every child gets, grant or no grant.
+
+    *may* only decides how step 2 is phrased — whether publishing is something
+    this child may do unasked. The report and the stop do not depend on it:
+    a child that refused the task has no commits and publishes nothing, but
+    its reasoning is the most valuable briefing in the system, because no diff
+    carries it.
+    """
+    if "pr" in may:
+        hint = ", push it and open the pull request you were granted"
+    elif "push" in may:
+        hint = ", push it (do not open a pull request)"
+    else:
+        hint = ", say so in your report and leave it for `mnemo deliver`"
+    return _CLOSING_PROMPT.format(publish_hint=hint)
 
 
 def _publish_clause(
@@ -355,6 +399,7 @@ def build_prompt(
             _publish_clause(may, branch=branch, issue=issue),
             initial_indent="- ", subsequent_indent="  ",
         ),
+        closing=_closing_clause(may),
     )
 
 
@@ -383,7 +428,7 @@ signature cannot be delivered as written — stop and say so rather than widenin
 your boundary to make it fit.
 {changelog}
 {publish}
-"""
+{closing}"""
 
 _CONSUMES_PROMPT = """**What you may assume exists** — another piece is delivering
 these. They may not exist in your worktree yet: write against the signature,
@@ -434,6 +479,7 @@ def build_piece_prompt(
             else _wrap("Run the full test suite before you finish. "
                        + _publish_clause(may, branch=branch))
         ),
+        closing=_closing_clause(may),
     )
 
 
