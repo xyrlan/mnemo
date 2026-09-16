@@ -24,12 +24,20 @@ def _consume_unblocks() -> int:
 
     Unscoped, like the sweep that records the markers: an unblocked session is
     worth learning from wherever it ran.
+
+    A pass is bounded (``unblocks.MAX_PER_PASS``) and holds a lock, so running
+    this by hand while a SessionEnd sweep is in flight reports that and exits
+    instead of duplicating its LLM calls (#329).
     """
     from mnemo import cli  # late binding, as the queue path does
     from mnemo.core import config as cfg_mod
     from mnemo.core.sessions import unblocks
 
     report = unblocks.consume(cfg_mod.load_config(), vault_root=cli._resolve_vault())
+
+    if report.locked:
+        print("another --consume-unblocks pass is already running; leaving the markers to it")
+        return 0
 
     if not (report.consumed or report.failed or report.skipped):
         print("no unblocked session waiting to be learned from")
@@ -43,6 +51,8 @@ def _consume_unblocks() -> int:
     for line in report.errors:
         # Left pending on purpose: these are retried on the next pass.
         print(f"deferred: {line}")
+    if report.remaining:
+        print(f"remaining: {report.remaining} marker(s) left for the next pass")
     return 0
 
 

@@ -127,15 +127,26 @@ def _build_argv(model: str, system: str | None) -> list[str]:
 
 
 def _build_env() -> dict[str, str]:
-    """Parent env + CLAUDE_CODE_DISABLE_THINKING=1 to suppress extended thinking.
+    """Parent env + the two variables every mnemo helper needs.
 
-    Haiku 4.5 does extended thinking by default in `claude --print`, which
-    costs ~200-400 output tokens and several seconds of wall-time on trivial
-    prompts. This env var is the canonical switch. See issue #7.
+    ``CLAUDE_CODE_DISABLE_THINKING=1`` suppresses extended thinking: Haiku 4.5
+    does it by default in `claude --print`, which costs ~200-400 output tokens
+    and several seconds of wall-time on trivial prompts. This env var is the
+    canonical switch. See issue #7.
+
+    ``MNEMO_HOOKS_OFF=1`` (``hook_guard.disable_hooks``) stops the helper from
+    firing mnemo's own hooks. The helper runs under the user's full settings on
+    purpose — that is how it reaches their subscription — and those settings
+    carry mnemo's SessionStart/SessionEnd, so without this every briefing and
+    extraction was a session that scheduled another briefing and extraction
+    (#329). The variable is inherited by the hook processes `claude` spawns,
+    two levels down; verified against the real CLI, see :mod:`hook_guard`.
     """
+    from mnemo.core import hook_guard
+
     env = os.environ.copy()
     env["CLAUDE_CODE_DISABLE_THINKING"] = "1"
-    return env
+    return hook_guard.disable_hooks(env)
 
 
 def _working_dir() -> str | None:

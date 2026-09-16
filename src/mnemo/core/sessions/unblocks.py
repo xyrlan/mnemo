@@ -48,15 +48,40 @@ The bound on the list is Claude Code's own transcript retention.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mnemo.core import errors as errors_mod
+from mnemo.core import locks
 from mnemo.core.sessions import detector
 
 #: Where a failed redemption is logged in ``.errors.log``.
 ERROR_WHERE = "unblocks.consume"
+
+#: Markers one pass redeems, oldest first. The rest wait for the next
+#: SessionEnd, which is minutes away, not days.
+#:
+#: Each marker is a ``learn``: one briefing call plus a scoped extraction, so
+#: the cost of a pass is linear in this number and every one of those calls is
+#: an LLM round-trip. The 40 markers pending on 2026-09-15 were a backlog
+#: accumulated while the cwd lookup was broken (#324) — draining them in one
+#: process meant a sweep still running after 180 s, holding a slot in the
+#: storm #329 describes. Five is the size at which a pass ends inside the
+#: interval between two session ends, so the queue drains over a working
+#: afternoon without any single pass being something a user notices.
+MAX_PER_PASS = 5
+
+#: Lock directory under ``<vault>/.mnemo``; one sweep at a time, machine-wide.
+LOCK_NAME = "unblocks-consume.lock"
+
+#: When a held lock is assumed to belong to a killed process and reclaimed.
+#: Sized against :data:`MAX_PER_PASS` learns rather than against impatience —
+#: a pass that is merely slow must not have its lock stolen, because the
+#: second pass would then re-run the same LLM calls. A pass that ends, or
+#: raises, releases the lock on the way out; only a hard kill waits this out.
+LOCK_STALE_SECONDS = 30 * 60
 
 
 @dataclass
@@ -80,6 +105,12 @@ class ConsumeReport:
     learned: list = field(default_factory=list)
     #: One line per marker that failed, for the caller to print.
     errors: list = field(default_factory=list)
+    #: Markers this pass did not attempt because it hit its bound. They are
+    #: still pending; the next SessionEnd picks them up.
+    remaining: int = 0
+    #: True when another sweep held the lock, so this pass did nothing at all.
+    #: Distinct from an empty report, which means there was nothing to do.
+    locked: bool = False
 
 
 def _pending_with_position(vault_root: Path) -> list[tuple[str, int, dict[str, Any]]]:
@@ -103,27 +134,88 @@ def _pending_with_position(vault_root: Path) -> list[tuple[str, int, dict[str, A
     return out
 
 
-def consume(cfg: dict, *, vault_root: Path) -> ConsumeReport:
-    """Learn from every session whose unblock has not been consumed yet.
+def lock_path(vault_root: Path) -> Path:
+    """The sweep lock for *vault_root*. One directory, created by the winner."""
+    return Path(vault_root) / ".mnemo" / LOCK_NAME
+
+
+def sweep_in_flight(vault_root: Path) -> bool:
+    """True when a sweep is believed to be running right now.
+
+    A cheap ``stat`` that lets a caller skip *spawning* a pass that would only
+    take the lock, find it held and exit — the SessionEnd hook uses it the way
+    it already uses the extraction lock. Never authoritative: the lock below is
+    what actually keeps a second pass out, and this races it harmlessly.
+    """
+    path = lock_path(vault_root)
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    return age < LOCK_STALE_SECONDS
+
+
+def _oldest_first(
+    pending: list[tuple[str, int, dict[str, Any]]],
+) -> list[tuple[str, int, dict[str, Any]]]:
+    """Pending markers in the order they were recorded.
+
+    ``at`` is an ISO-8601 UTC string written by the detector, so string order
+    is time order. A marker from before the field existed sorts first — it is
+    by construction the oldest thing in the file, and it is what a bounded pass
+    should reach before anything recorded today.
+    """
+    return sorted(pending, key=lambda item: (str(item[2].get("at") or ""), item[0], item[1]))
+
+
+def consume(
+    cfg: dict, *, vault_root: Path, limit: int = MAX_PER_PASS
+) -> ConsumeReport:
+    """Learn from the oldest pending unblocks, at most *limit* of them.
 
     Marks each one ``extracted`` on success, or when its transcript is gone
     for good (:func:`transcript_gone`); any other failure is retried on the
     next pass instead of silently dropping the highest-signal correction mnemo
     can observe. Never raises: this rides hooks and CLI
     commands whose own work must not fail because a transcript went missing.
-    """
-    from mnemo.core import learn as learn_mod
 
+    **One pass at a time, and a bounded one.** Every mnemo SessionEnd spawns
+    this detached, and on 2026-09-15 that meant 42 concurrent sweeps against a
+    40-marker backlog — each one taking every marker through a briefing and an
+    extraction, all of them `claude` subprocesses, on a machine at load 118
+    (#329). The lock makes the second sweep a no-op instead of a duplicate of
+    the first; *limit* keeps even the winner's pass short enough to finish.
+    ``limit <= 0`` means unbounded, for a maintainer draining a backlog by hand.
+    """
     report = ConsumeReport()
     # The cheap check first, and the one #195 asks to keep wired: it reads the
-    # same file and answers "is there anything to do at all".
+    # same file and answers "is there anything to do at all". Before the lock,
+    # so the overwhelmingly common "nothing pending" pass never touches it.
     if not detector.pending_unblocks(vault_root=vault_root):
         return report
+
+    with locks.try_lock(lock_path(vault_root), stale_after=LOCK_STALE_SECONDS) as held:
+        if not held:
+            report.locked = True
+            return report
+        return _consume_locked(cfg, vault_root, limit, report)
+
+
+def _consume_locked(
+    cfg: dict, vault_root: Path, limit: int, report: ConsumeReport
+) -> ConsumeReport:
+    """The pass itself, with the sweep lock held. See :func:`consume`."""
+    from mnemo.core import learn as learn_mod
 
     done: set[tuple[str, int]] = set()
     failures: dict[tuple[str, int], str] = {}
 
-    for short_id, index, entry in _pending_with_position(vault_root):
+    pending = _oldest_first(_pending_with_position(vault_root))
+    if limit > 0 and len(pending) > limit:
+        report.remaining = len(pending) - limit
+        pending = pending[:limit]
+
+    for short_id, index, entry in pending:
         session_id = entry.get("session_id")
         cwd = entry.get("cwd")
         if not session_id or not cwd:

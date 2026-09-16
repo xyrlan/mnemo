@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -312,3 +313,149 @@ def test_the_consumer_is_reachable_from_a_real_entry_point() -> None:
         "unblocks.consume() is defined but never invoked — wire it to a CLI "
         "command or a hook (#195)"
     )
+
+
+# --- one pass at a time, and a bounded one (#329) -------------------------
+
+
+def _record_many(vault: Path, count: int) -> None:
+    """*count* markers, each on its own session, recorded oldest first."""
+    for n in range(count):
+        _record_one(vault, short_id=f"s{n:02d}", session_id=f"sid-{n:02d}")
+
+
+def test_a_pass_stops_at_the_bound(monkeypatch, tmp_path: Path) -> None:
+    """40 markers is a backlog, not a burst to clear in one process.
+
+    Every marker is a briefing plus an extraction — two or more `claude`
+    subprocesses — so an unbounded pass runs for minutes while every session
+    that ends meanwhile spawns another one (#329). The rest are not lost: they
+    stay pending and the next SessionEnd takes the next five.
+    """
+    _record_many(tmp_path, 12)
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        "mnemo.core.learn.learn",
+        lambda cfg, *, cwd, session_id, **kw: seen.append(session_id) or _Report(),
+    )
+
+    report = unblocks.consume({}, vault_root=tmp_path)
+
+    assert len(seen) == unblocks.MAX_PER_PASS
+    assert report.consumed == unblocks.MAX_PER_PASS
+    assert report.remaining == 12 - unblocks.MAX_PER_PASS
+    # The untouched markers are still pending, not dropped.
+    assert len(detector.pending_unblocks(vault_root=tmp_path)) == 12 - unblocks.MAX_PER_PASS
+
+
+def test_the_bound_takes_the_oldest_markers_first(monkeypatch, tmp_path: Path) -> None:
+    """A backlog drains in the order it accumulated. The newest marker is the
+    one the next pass will reach in minutes; the oldest has already waited."""
+    _record_many(tmp_path, 4)
+    state = _state(tmp_path)
+    stamps = ["2026-09-15T20:0{}:00+00:00".format(n) for n in (3, 1, 4, 2)]
+    for (short_id, entry), at in zip(sorted(state["seen"].items()), stamps):
+        entry["unblocks"][0]["at"] = at
+    (tmp_path / ".mnemo" / "session-queue.json").write_text(json.dumps(state), encoding="utf-8")
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        "mnemo.core.learn.learn",
+        lambda cfg, *, cwd, session_id, **kw: seen.append(session_id) or _Report(),
+    )
+
+    unblocks.consume({}, vault_root=tmp_path, limit=2)
+
+    assert seen == ["sid-01", "sid-03"]
+
+
+def test_a_second_pass_exits_instead_of_duplicating_the_first(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The shape of #329: N sessions ending together spawned N sweeps, each
+    one running the same LLM calls over the same markers.
+
+    The inner pass here stands in for the concurrent sweep — it is started
+    while the outer one holds the lock, which is exactly the race, and it must
+    learn nothing and say so rather than reporting an empty success.
+    """
+    _record_many(tmp_path, 2)
+    inner: list = []
+    outer_calls: list[str] = []
+
+    def _learn(cfg, *, cwd, session_id, **kw):
+        outer_calls.append(session_id)
+        if not inner:
+            inner.append(unblocks.consume({}, vault_root=tmp_path))
+        return _Report()
+
+    monkeypatch.setattr("mnemo.core.learn.learn", _learn)
+
+    report = unblocks.consume({}, vault_root=tmp_path)
+
+    assert report.consumed == 2
+    assert inner[0].locked is True
+    assert inner[0].consumed == 0
+    # Two markers, two learns: the nested pass added none of its own.
+    assert len(outer_calls) == 2
+
+
+def test_the_lock_is_released_when_a_pass_ends(monkeypatch, tmp_path: Path) -> None:
+    """A lock left behind would wedge the feature until it went stale."""
+    _record_one(tmp_path)
+    monkeypatch.setattr(
+        "mnemo.core.learn.learn", lambda cfg, *, cwd, session_id, **kw: _Report()
+    )
+
+    unblocks.consume({}, vault_root=tmp_path)
+
+    assert not unblocks.lock_path(tmp_path).exists()
+    assert unblocks.sweep_in_flight(tmp_path) is False
+
+
+def test_nothing_pending_never_touches_the_lock(tmp_path: Path) -> None:
+    """The overwhelmingly common pass. A mkdir per session end to discover an
+    empty list is the cost the cheap check exists to avoid."""
+    report = unblocks.consume({}, vault_root=tmp_path)
+
+    assert report.locked is False
+    assert not (tmp_path / ".mnemo").exists()
+
+
+def test_session_end_does_not_spawn_into_a_running_sweep(tmp_path, monkeypatch) -> None:
+    """The hook's own half: a stat instead of a process that could only find
+    the lock held and exit. The lock is still what enforces it."""
+    from mnemo.hooks import session_end
+
+    monkeypatch.setattr(
+        "mnemo.core.sessions.detector.pending_unblocks",
+        lambda *, vault_root: [{"session_id": "sid-1", "cwd": "/repo"}],
+    )
+    monkeypatch.setattr(
+        session_end,
+        "_spawn_detached_unblock_consumption",
+        lambda: pytest.fail("must not spawn while a sweep holds the lock"),
+    )
+    unblocks.lock_path(tmp_path).mkdir(parents=True)
+
+    session_end._maybe_consume_unblocks({"briefings": {"enabled": True}}, tmp_path)
+
+
+def test_a_stale_lock_does_not_wedge_the_sweep(monkeypatch, tmp_path: Path) -> None:
+    """A hard-killed sweep leaves its lock behind; past the TTL the next pass
+    takes it rather than waiting forever."""
+    import os
+
+    _record_one(tmp_path)
+    lock = unblocks.lock_path(tmp_path)
+    lock.mkdir(parents=True)
+    old = time.time() - unblocks.LOCK_STALE_SECONDS - 60
+    os.utime(lock, (old, old))
+
+    monkeypatch.setattr(
+        "mnemo.core.learn.learn", lambda cfg, *, cwd, session_id, **kw: _Report()
+    )
+
+    assert unblocks.sweep_in_flight(tmp_path) is False
+    assert unblocks.consume({}, vault_root=tmp_path).consumed == 1

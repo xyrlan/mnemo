@@ -357,11 +357,18 @@ def _maybe_consume_unblocks(cfg: dict, vault_root) -> None:
 
         if not bool((cfg.get("briefings") or {}).get("enabled", False)):
             return
-        from mnemo.core.sessions import detector
+        from mnemo.core.sessions import detector, unblocks
 
         # Checked here rather than in the child so the common case — no
         # unblock to redeem — costs a file read instead of a process spawn.
         if not detector.pending_unblocks(vault_root=vault_root):
+            return
+        # A sweep already running will redeem these markers, and the child we
+        # would spawn could only take its lock, find it held and exit. Skipping
+        # the spawn is the same stat-then-don't-bother the extraction branch
+        # above does; the lock inside the sweep is what actually enforces it
+        # (#329), so a race here costs one wasted process, not a second pass.
+        if unblocks.sweep_in_flight(vault_root):
             return
         try:
             _spawn_detached_unblock_consumption()
@@ -432,6 +439,15 @@ def _maybe_schedule_propose(
 
 
 def main() -> int:
+    # Nothing at all inside a session mnemo launched for itself (#329): the
+    # `claude --print` helpers that brief and extract run under the user's own
+    # settings, mnemo's hooks included, so an unguarded hook here schedules the
+    # work whose helper is running it. See :mod:`mnemo.core.hook_guard`.
+    from mnemo.core.hook_guard import hooks_off
+
+    if hooks_off():
+        return 0
+
     try:
         payload = json.load(sys.stdin)
     except Exception:

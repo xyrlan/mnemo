@@ -16,6 +16,7 @@ from mnemo.cli.commands.doctor_checks import (
     background_processes,
     duplicate_install,
     fidelity,
+    helper_processes,
     hook_matcher,
     hosts,
     install_backfill,
@@ -63,6 +64,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("hook_matcher",          hook_matcher._doctor_check_hook_matcher),
     ("skills",                skills._doctor_check_skills),
     ("background_processes",  background_processes._doctor_check_background_processes),
+    ("helper_processes",      helper_processes._doctor_check_helper_processes),
 ]
 
 
