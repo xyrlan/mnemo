@@ -209,7 +209,12 @@ def record(vault_root: Path, rec: FrictionRecord) -> str | None:
         # ledger is meant to be read by eye, as ``learned.py`` writes its own
         # JSONL. Both forms parse identically.
         line = json.dumps(_to_row(resolved), ensure_ascii=False) + "\n"
-        with open(log_path, "a", encoding="utf-8") as fh:
+        # newline="": no CRLF translation on Windows. The rotation cap is a
+        # byte budget, and a row that costs one more byte per line there
+        # would make the same ledger rotate at a different record on a
+        # different platform. It also keeps the file byte-identical wherever
+        # it was written, which a ledger meant to be greppable wants.
+        with open(log_path, "a", encoding="utf-8", newline="") as fh:
             fh.write(line)
             fh.flush()
         return resolved.id

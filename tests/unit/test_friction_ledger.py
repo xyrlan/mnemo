@@ -43,7 +43,9 @@ def telemetry_on(monkeypatch):
 
 #: One row built by :func:`_rec` is exactly this many bytes on disk, with the
 #: session id held to three characters. The rotation tests count rows rather
-#: than guess at sizes.
+#: than guess at sizes. The number is the same on every platform because the
+#: ledger writes with ``newline=""`` — Windows CI is what proved that matters,
+#: by rotating one record earlier on 441-byte CRLF rows.
 ROW_BYTES = 440
 #: Three rows fit under this; the fourth trips the rotation.
 ROTATE_AFTER = 3
@@ -350,6 +352,17 @@ def test_a_second_rotation_drops_the_oldest_generation(tmp_path, tiny_ledger):
 
     ids = [r.session_id for r in ledger.iter_records(tmp_path)]
     assert ids == ["s{:02d}".format(n) for n in range(ROTATE_AFTER, ROTATE_AFTER * 3)]
+
+
+def test_a_row_is_lf_terminated_on_every_platform(tmp_path, telemetry_on):
+    # The rotation cap is a byte budget; a CRLF row would spend it at a
+    # different rate on Windows and rotate at a different record.
+    ledger.record(tmp_path, _rec(session_id="s00"))  # the ROW_BYTES shape
+
+    raw = ledger.ledger_path(tmp_path).read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.endswith(b"\n")
+    assert len(raw) == ROW_BYTES
 
 
 def test_rotation_only_fires_past_the_cap(tmp_path, telemetry_on):
