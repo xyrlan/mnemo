@@ -145,11 +145,15 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "a contract piece's own `model:` wins over it")
     # The maintainer's standing answer to "may I push / open a PR?" (#317),
     # given once here because this command is the one message a child reads
-    # as the maintainer's own. Omitted, the prompt is byte-identical to before
-    # and `mnemo deliver` publishes. `merge` is refused by the command.
+    # as the maintainer's own. Omitted, it is `pr` since 2026-09-16: every
+    # grant ever recorded was push or push,pr, and the empty default left
+    # children finished, unpublished and running. `--may none` restores the
+    # withheld prompt, byte-identical to before, and `mnemo deliver`
+    # publishes. `merge` is refused by the command.
     dispatch_p.add_argument("--may", metavar="WHAT",
                             help="what every child may publish once its suite passes, "
                                  "without asking: push, or pr (push + open the PR); "
+                                 "defaults to pr, `none` withholds; "
                                  "a contract piece's own `may:` wins over it")
     # Opt back *in* to the maintainer's profile. The default is lean (#270)
     # because a child needs the vault and the repo, not nine plugins; this is

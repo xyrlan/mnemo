@@ -64,3 +64,40 @@ def test_the_closing_steps_stay_wrapped_under_their_numbers(may) -> None:
     for line in lines:
         if line and line not in steps and not line.endswith(":"):
             assert line.startswith("   "), line
+
+
+# --- the default grant (2026-09-16) -------------------------------------------
+
+
+def test_absent_may_flag_defaults_to_pr():
+    """Nothing said means the child publishes (2026-09-16 design)."""
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant(None) == ("push", "pr")
+
+
+def test_explicit_none_still_withholds():
+    """`--may none` is how a maintainer opts out; it must survive the default."""
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant("none") == ()
+
+
+def test_explicit_push_is_not_upgraded():
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant("push") == ("push",)
+
+
+def test_a_contract_piece_can_still_withhold_against_the_default():
+    """`piece_grant` already resolves precedence; the new default flows
+    through it as the flag's value, so `may: none` on a piece must still win."""
+    from mnemo.core import contracts, dispatch
+    from mnemo.cli.commands import dispatch as cmd
+
+    default = cmd._default_grant(None)
+    spike = contracts.Piece(slug="spike", files=["x.py"], may=())
+    normal = contracts.Piece(slug="normal", files=["y.py"])
+
+    assert dispatch.piece_grant(spike, default) == ()
+    assert dispatch.piece_grant(normal, default) == ("push", "pr")

@@ -368,12 +368,26 @@ def test_a_merge_grant_is_refused_before_anything_runs(monkeypatch, capsys) -> N
     assert "never merges" in capsys.readouterr().out
 
 
-def test_no_flag_claims_no_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+def test_explicit_none_claims_no_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+    """The withheld run prints no `may:`; since 2026-09-16 that is `--may none`.
+
+    It used to be the absent flag. The default inverted to `pr`, so the path
+    that produces the empty grant moved — the behaviour it pins did not.
+    """
+    from mnemo.cli.commands import dispatch as dispatch_cmd
+
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    assert dispatch_cmd.cmd_dispatch(_args(dry_run=True, may="none")) == 0
+    assert "may" not in capsys.readouterr().out
+
+
+def test_no_flag_now_claims_the_pr_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+    """Nothing said means the child publishes: the dry run says so out loud."""
     from mnemo.cli.commands import dispatch as dispatch_cmd
 
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     assert dispatch_cmd.cmd_dispatch(_args(dry_run=True)) == 0
-    assert "may" not in capsys.readouterr().out
+    assert "may: push+pr" in capsys.readouterr().out
 
 
 def test_a_dry_run_shows_the_grant_each_piece_would_get(
