@@ -15,11 +15,17 @@ verbs are whose.
   task>")`, then `read_mnemo_rule(slug)`. The SessionStart header lists the
   topics that exist.
 - **`mnemo dispatch <issue>…`** — one detached child per issue, each in its own
-  worktree. Pass `--may push` or `--may pr` only when the maintainer said so: the
-  grant is theirs to give, and one nobody asked for is a push nobody approved.
-- **`mnemo deliver <id>…`** — push and open the PR for exactly the ids named.
-  The approval is the id and it comes from the maintainer, after they read the
-  diff; typing the command is yours. Do not hand the command back to them.
+  worktree. `--may` defaults to `pr`: each child publishes its own pull request.
+  Pass `--may none` when the maintainer said the work should not become a
+  branch; do not withhold on your own judgement either way.
+- **`mnemo deliver <id>…`** — push and open the PR for exactly the ids named,
+  for a child that published nothing. The approval is the id and it comes from
+  the maintainer, after they read the diff; typing the command is yours. Do not
+  hand the command back to them.
+- **`mnemo deliver --stop-done`** — stop finished children that are still
+  running. It publishes nothing and approves nothing; a child only writes its
+  briefing once it is stopped. Children normally stop themselves, so this is
+  the sweep for the ones that did not.
 - **Report the ids and stop.** The children are detached and nothing wakes you
   when they block or finish.
 

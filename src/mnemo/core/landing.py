@@ -214,6 +214,55 @@ def _git(args: Sequence[str], *, cwd: Path | str):
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
+def _run_gh(args, **kwargs):
+    """Indirection so the check reader can be faked in tests."""
+    import subprocess
+
+    return subprocess.run(args, capture_output=True, text=True, timeout=60, **kwargs)
+
+
+def failing_checks(pr: str) -> list[str]:
+    """The names of *pr*'s failing checks, judged check by check.
+
+    One ``gh`` call; the per-check verdict is what it is read for. Reads
+    ``gh pr checks --json name,bucket`` rather than the run's conclusion
+    or the PR's rollup. A repository may mark a job non-blocking, and such a
+    job fails while both aggregates report success — so a gate that trusted
+    the aggregate would be reading a proxy of the thing it is gating on,
+    immediately before the one irreversible step.
+
+    Only ``bucket == "fail"`` counts. Pending is not failure (the landing is
+    simply not ready yet, which the rehearsal will say), and skipped or
+    cancelled checks are not results. An unreadable answer — ``gh`` missing, a
+    PR with no checks, malformed output — returns ``[]``: this refuses a
+    landing on evidence, never on the absence of it.
+    """
+    import json
+    import subprocess
+
+    try:
+        result = _run_gh(["gh", "pr", "checks", pr, "--json", "name,bucket"])
+    # `gh` absent or unrunnable is an OSError; `timeout=60` expiring is a
+    # SubprocessError, which is not one. Both mean "no answer", not "green".
+    # Deliberately not `except Exception`: a bug in here would then read as an
+    # empty verdict and silently disarm the gate.
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode not in (0, 8):  # 8 == checks pending
+        return []
+    try:
+        rows = json.loads(result.stdout or "[]")
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [
+        str(row.get("name") or "?")
+        for row in rows
+        if isinstance(row, dict) and row.get("bucket") == "fail"
+    ]
+
+
 def _boundary_files(piece: contracts.Piece, *, ref: str, repo_root: Path | str) -> list[str]:
     """The piece's ``files`` as they exist at *ref*, globs expanded.
 
@@ -383,6 +432,11 @@ def inspect(
             for sig, owner in piece.consumes
         ]
 
+        # Every `reason` built here is English: it is data, carried by
+        # `PieceState` and spliced into `LandingError` for callers, not a line
+        # written for a reader. The `land` command's own presentation layer
+        # (`cli/commands/land.py`) prints Portuguese around it, and that
+        # boundary is deliberate — do not match its language here.
         reason = ""
         if merged:
             pass  # already landed; its signatures are checked on the base
@@ -404,6 +458,14 @@ def inspect(
                 sig, owner = unowned[0]
                 reason = (f"consumes {sig} from {owner}, but {owner} exposes "
                           "no signature by that name")
+        if not reason and pr_url and pr_state == "OPEN":
+            # Last, and only for a piece that would otherwise land: the child
+            # stops in seconds and CI takes minutes, so nothing else stands
+            # between a red PR and the merge. One `gh` call per open piece.
+            red = failing_checks(pr_url)
+            if red:
+                reason = (f"CI red on {', '.join(red[:3])}"
+                          + (f" (+{len(red) - 3})" if len(red) > 3 else ""))
         # For a merged piece, ref reads as the base it was checked on.
         out.append(PieceState(
             piece=piece, branch=branch, ref=checked_at if merged else ref,

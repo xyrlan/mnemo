@@ -22,8 +22,14 @@ message that *is* the maintainer's, on every child, is the opening prompt —
 could say so would move the one decision that has to stay per-diff into a flag
 typed before any diff existed.
 
-**The default is unchanged.** No grant means the prompt says what it always
-said — "Do not merge or push without asking" — and ``mnemo deliver`` publishes.
+**The library default is empty.** No grant means the prompt says what it
+always said — "Do not merge or push without asking" — and ``mnemo deliver``
+publishes. The *command line* stopped defaulting to that on 2026-09-16: an
+omitted ``--may`` is now ``pr``, and ``--may none`` is how a maintainer asks
+for the withheld prompt (see ``mnemo.cli.commands.dispatch._default_grant``).
+The default lives there and nowhere else, so every programmatic caller of
+:func:`parse`, :func:`~mnemo.core.dispatch.build_prompt` and the dispatch
+entry points still gets ``()`` when it says nothing.
 
 **Where the choice is recorded.** Beside the parent link, and for the same
 reason (:mod:`mnemo.core.sessions.parents`): the worktree is removed long

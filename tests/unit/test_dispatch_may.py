@@ -117,10 +117,19 @@ def _piece(**kw) -> contracts.Piece:
 
 
 def test_a_piece_with_no_grant_ends_as_it_always_did() -> None:
+    """The no-grant line is still byte-identical; only the closing clause follows.
+
+    It stopped being the *last* line in 2026-09-16: every child, granted or
+    not, is now told how to end itself, and that clause is rendered after the
+    publish one. The permission wording it guards is unchanged.
+    """
     prompt = dispatch.build_piece_prompt(_piece(), feature="f")
-    assert prompt.endswith(
-        "Run the full test suite before you finish. Do not merge or push without asking.\n"
+    publish = (
+        "Run the full test suite before you finish. "
+        "Do not merge or push without asking.\n"
     )
+    assert publish in prompt
+    assert prompt.endswith(publish + dispatch._closing_clause())
 
 
 @pytest.mark.parametrize("value", ["push", "pr"])
@@ -359,12 +368,26 @@ def test_a_merge_grant_is_refused_before_anything_runs(monkeypatch, capsys) -> N
     assert "never merges" in capsys.readouterr().out
 
 
-def test_no_flag_claims_no_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+def test_explicit_none_claims_no_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+    """The withheld run prints no `may:`; since 2026-09-16 that is `--may none`.
+
+    It used to be the absent flag. The default inverted to `pr`, so the path
+    that produces the empty grant moved — the behaviour it pins did not.
+    """
+    from mnemo.cli.commands import dispatch as dispatch_cmd
+
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
+    assert dispatch_cmd.cmd_dispatch(_args(dry_run=True, may="none")) == 0
+    assert "may" not in capsys.readouterr().out
+
+
+def test_no_flag_now_claims_the_pr_grant(monkeypatch, capsys, tmp_path: Path) -> None:
+    """Nothing said means the child publishes: the dry run says so out loud."""
     from mnemo.cli.commands import dispatch as dispatch_cmd
 
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     assert dispatch_cmd.cmd_dispatch(_args(dry_run=True)) == 0
-    assert "may" not in capsys.readouterr().out
+    assert "may: push+pr" in capsys.readouterr().out
 
 
 def test_a_dry_run_shows_the_grant_each_piece_would_get(
@@ -392,3 +415,39 @@ def test_a_dry_run_shows_the_grant_each_piece_would_get(
     lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
     assert "may:" not in lines[0], lines[0]
     assert lines[1].endswith("may: push+pr"), lines[1]
+
+
+# --- the default grant (2026-09-16) -------------------------------------------
+
+
+def test_absent_may_flag_defaults_to_pr():
+    """Nothing said means the child publishes (2026-09-16 design)."""
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant(None) == ("push", "pr")
+
+
+def test_explicit_none_still_withholds():
+    """`--may none` is how a maintainer opts out; it must survive the default."""
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant("none") == ()
+
+
+def test_explicit_push_is_not_upgraded():
+    from mnemo.cli.commands import dispatch as cmd
+
+    assert cmd._default_grant("push") == ("push",)
+
+
+def test_a_contract_piece_can_still_withhold_against_the_default():
+    """`piece_grant` already resolves precedence; the new default flows
+    through it as the flag's value, so `may: none` on a piece must still win."""
+    from mnemo.cli.commands import dispatch as cmd
+
+    default = cmd._default_grant(None)
+    spike = contracts.Piece(slug="spike", files=["x.py"], may=())
+    normal = contracts.Piece(slug="normal", files=["y.py"])
+
+    assert dispatch.piece_grant(spike, default) == ()
+    assert dispatch.piece_grant(normal, default) == ("push", "pr")

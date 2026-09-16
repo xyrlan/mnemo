@@ -497,7 +497,10 @@ def test_a_dry_run_shows_the_model_each_piece_would_get(
         _args(issues=[], contract=str(path), dry_run=True, model="opus")
     ) == 0
 
-    lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
+    # The grant suffix trails the model tag since `--may` began defaulting to
+    # `pr` (2026-09-16); stripping it keeps this about the model column.
+    lines = [l.split("  may: ")[0]
+             for l in capsys.readouterr().out.splitlines() if l.strip()]
     assert lines[0].endswith("[haiku]"), lines[0]
     assert lines[1].endswith("[opus]"), lines[1]
 

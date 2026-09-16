@@ -388,6 +388,65 @@ def test_inspect_raises_on_a_cycle(repo: Path, gh_prs) -> None:
         landing.inspect(_contract(a, b), repo_root=repo)
 
 
+# --- inspect: the CI gate on an open PR ------------------------------------
+
+
+def test_inspect_refuses_a_piece_whose_pr_has_a_failing_check(
+    repo: Path, gh_prs: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The child stops in seconds and CI takes minutes, so `land` is the only
+    thing left between a red PR and the merge."""
+    gh_prs["feat/f/storage"] = (1, "OPEN")
+    gh_prs["feat/f/api"] = (2, "OPEN")
+    monkeypatch.setattr(
+        landing, "failing_checks",
+        lambda pr: ["windows / py3.11"] if pr.endswith("/2") else [],
+    )
+
+    storage, api = landing.inspect(_two_pieces(repo), repo_root=repo)
+
+    assert storage.landable is True
+    assert api.landable is False
+    assert "windows / py3.11" in api.reason
+
+
+def test_inspect_asks_for_checks_only_on_an_open_pr_with_no_other_reason(
+    repo: Path, gh_prs: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One `gh` call per landable piece: not for the piece with no PR at all,
+    and not for a piece already refused for another reason."""
+    gh_prs["feat/f/storage"] = (1, "OPEN")  # api gets no PR
+    asked: list[str] = []
+    monkeypatch.setattr(landing, "failing_checks",
+                        lambda pr: asked.append(pr) or [])
+
+    storage, api = landing.inspect(_two_pieces(repo), repo_root=repo)
+
+    assert asked == ["https://x/pull/1"]
+    assert storage.landable and not api.landable
+
+
+def test_inspect_does_not_ask_for_checks_on_a_merged_piece(
+    repo: Path, gh_prs: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The merged piece is otherwise landable — reason-free, signatures present
+    — so only the OPEN guard keeps it from costing a `gh` call. Its open
+    sibling in the same run is asked, which is what makes the empty answer for
+    storage mean something.
+    """
+    gh_prs["feat/f/storage"] = (1, "MERGED")
+    gh_prs["feat/f/api"] = (2, "OPEN")
+    asked: list[str] = []
+    monkeypatch.setattr(landing, "failing_checks",
+                        lambda pr: asked.append(pr) or [])
+
+    storage, api = landing.inspect(_two_pieces(repo), repo_root=repo)
+
+    assert storage.merged and storage.reason == "" and storage.landable
+    assert asked == ["https://x/pull/2"]  # api's, never storage's
+    assert api.landable
+
+
 # --- rehearse: merge in order, check, run the suite, touch nothing ----------
 
 # A "suite" that is green unless the merged tree contains `src/red`, and

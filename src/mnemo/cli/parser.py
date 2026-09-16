@@ -145,11 +145,15 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "a contract piece's own `model:` wins over it")
     # The maintainer's standing answer to "may I push / open a PR?" (#317),
     # given once here because this command is the one message a child reads
-    # as the maintainer's own. Omitted, the prompt is byte-identical to before
-    # and `mnemo deliver` publishes. `merge` is refused by the command.
+    # as the maintainer's own. Omitted, it is `pr` since 2026-09-16: every
+    # grant ever recorded was push or push,pr, and the empty default left
+    # children finished, unpublished and running. `--may none` restores the
+    # withheld prompt, byte-identical to before, and `mnemo deliver`
+    # publishes. `merge` is refused by the command.
     dispatch_p.add_argument("--may", metavar="WHAT",
                             help="what every child may publish once its suite passes, "
                                  "without asking: push, or pr (push + open the PR); "
+                                 "defaults to pr, `none` withholds; "
                                  "a contract piece's own `may:` wins over it")
     # Opt back *in* to the maintainer's profile. The default is lean (#270)
     # because a child needs the vault and the repo, not nine plugins; this is
@@ -168,6 +172,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="session short id, issue number or piece slug to deliver")
     deliver_p.add_argument("--review", action="store_true",
                            help="read-only: every dispatch worktree, its branch, and whether it is deliverable")
+    # Not an --all in disguise: it pushes nothing and approves nothing. The
+    # briefing comes from SessionEnd, which only a stopped child fires, so a
+    # child that had nothing to deliver still has to be stopped to be
+    # remembered — the one case delivering could never reach.
+    deliver_p.add_argument("--stop-done", dest="stop_done", action="store_true",
+                           help="stop every finished child in this repo's dispatch "
+                                "worktrees, delivered or not — a stopped child is "
+                                "the one that writes its briefing")
     land_p = sub.add_parser(
         "land",
         help="a delivered contract's pieces in landing order with their PRs and "

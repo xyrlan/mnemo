@@ -55,6 +55,30 @@ def _repo_root() -> Path | None:
     return Path(top) if top else None
 
 
+def _default_grant(value: str | None) -> grants.Grant:
+    """What a child may publish, defaulting to ``pr`` when nothing was said.
+
+    The default inverted on 2026-09-16. It used to be ``()`` — "Do not merge
+    or push without asking" — which left the child finished, unpublished and
+    running, and a child that never stops never writes a briefing. Every grant
+    ever recorded in the vault was ``push`` or ``push,pr``, so this matches
+    what dispatch was already used for rather than changing it.
+
+    ``--may none`` is untouched and still withholds: the opt-out has to
+    survive the default, or a spike that should not become a branch has
+    nowhere to go.
+
+    This is the command line's decision, not the library's: every core entry
+    point keeps ``may: Grant = ()``, so a caller that says nothing still gets
+    nothing.
+    """
+    from mnemo.core.sessions import grants
+
+    if value is None:
+        return grants.parse("pr")
+    return grants.parse(value)
+
+
 @command("dispatch")
 def cmd_dispatch(args: argparse.Namespace) -> int:
     """Spawn a child per issue. Returns 1 if any of them failed to start."""
@@ -67,7 +91,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     from mnemo.core.sessions import grants
 
     try:
-        may = grants.parse(getattr(args, "may", None))
+        may = _default_grant(getattr(args, "may", None))
     except grants.GrantError as exc:
         # Before anything else that could spawn: a grant that cannot be given
         # is refused while there is still nothing to roll back.

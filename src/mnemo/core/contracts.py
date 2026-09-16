@@ -122,8 +122,8 @@ verdict: parallel
     may:      optional. What this piece's child may publish once its suite
               is green, without asking: `push`, or `pr` (push and open the
               pull request). `none` withholds it. Omit it and the piece takes
-              `mnemo dispatch --may`, or nothing. `merge` is refused: a child
-              never merges.
+              `mnemo dispatch --may`, which is `pr` by default. `merge` is
+              refused: a child never merges.
 
   Prose is free-form anywhere except a `##` heading, which is read as a
   piece slug. Write the boundary, never the approach: "only these files",
@@ -153,7 +153,9 @@ interface it does not own, and takes whatever the dispatch was given.
 
 `may: pr` lets this piece's child push its branch and open its pull request
 once its suite passes, instead of stopping to ask. The piece below names no
-`may`, so it takes whatever `mnemo dispatch --may` was given, or nothing.
+`may`, so it takes whatever `mnemo dispatch --may` was given — `pr` unless
+the dispatch said otherwise. Write `may: none` for a piece that should not
+become a branch at all.
 
 ## api
 

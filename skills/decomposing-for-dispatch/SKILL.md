@@ -85,6 +85,7 @@ worktree is created:
 - `model` is optional and takes one `--model` value — an alias (`haiku`,
   `sonnet`, `opus`) or a full id. A sentence there is refused.
 - `may` is optional and takes `push`, `pr` (push and open the PR) or `none`.
+  Omitted, the piece takes `mnemo dispatch --may`, which is `pr` by default.
   `merge` is refused.
 
 Signatures go in backticks; commas inside them are safe. `files` is a plain
@@ -99,12 +100,15 @@ will take whatever `mnemo dispatch --model` was given, or the machine's
 default. A piece that names one wins over the flag, so a contract's per-piece
 judgement survives a blanket typed at the command line.
 
-`may` is a **permission**, not a budget: what the piece's child may publish
-once its suite passes, without stopping to ask. Write it only where the
-maintainer said so — never add one on your own judgement. The contract's
-review is the approval it carries, and a grant nobody asked for is a push
-nobody approved. Leave it off and the piece takes `mnemo dispatch --may`, or
-nothing.
+`may:` is optional and defaults to `pr` — the piece's child publishes its own
+pull request. Write `may: none` for a piece that should not become a branch
+at all, such as an exploratory spike. `may: merge` is refused: landing belongs
+to `mnemo land`.
+
+It is a **permission**, not a budget: what the piece's child may publish once
+its suite passes, without stopping to ask. Leave it off and the piece takes
+whatever `mnemo dispatch --may` gave the rest, which is `pr` unless the
+maintainer said otherwise.
 
 Prose is free-form anywhere except a `##` heading, which the parser reads as a
 piece slug — a section like `## Notes` is refused as an unaddressable slug.

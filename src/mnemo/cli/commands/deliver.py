@@ -1,6 +1,6 @@
 """``mnemo deliver`` — the last metre of a dispatch, from the parent's side.
 
-Two commands, not a prompt:
+Three commands, not a prompt:
 
 - ``mnemo deliver --review`` is read-only. Every dispatch worktree, whether it
   is clean, how far ahead of the base branch, a diffstat, and any PR that already
@@ -8,6 +8,8 @@ Two commands, not a prompt:
 - ``mnemo deliver <id> [<id>...]`` pushes and opens a PR for **exactly** the
   ids named, and nothing else. Once a PR is open it stops the child that did
   the work, if that child is ``done`` (#311) — never one still working.
+- ``mnemo deliver --stop-done`` stops every finished child in the repo's
+  dispatch worktrees and delivers nothing at all.
 
 **Naming an id is the approval.** There is deliberately no ``--all`` and no
 "deliver everything that is ready": one flag approving N children is precisely
@@ -16,7 +18,14 @@ diff — the expensive part, and the part that must stay per-child — and then
 spends one command instead of three on the mechanics, which are not worth
 repeating N times.
 
-Both halves work on a pipe. ``mnemo sessions`` and ``mnemo session`` are
+``--stop-done`` is not that flag wearing a different name. It approves
+nothing, because it publishes nothing: a stop is what makes ``SessionEnd``
+fire, and what it produces is the child's briefing, not a PR. The decision it
+takes for N children is the one the maintainer would otherwise take N times
+with no diff to read — which is why it is refused outright when combined with
+ids or ``--review``.
+
+All three work on a pipe. ``mnemo sessions`` and ``mnemo session`` are
 pipe-safe by design and this joins them; an interactive y/n confirmation would
 break that, and was rejected for it. The approval is in the argv, where it is
 visible in shell history, not in a keystroke nobody can audit.
@@ -87,6 +96,23 @@ def _review(*, repo_root: Path) -> int:
         for r in blocked:
             print(f"  {r.label}  {r.branch or '—'}")
             print(f"      {r.reason}")
+        print()
+
+    # A finished child still running holds a few hundred MB and has written no
+    # briefing, whether or not it had anything to deliver. Said once, across
+    # both groups: the child with nothing to deliver is the one most worth
+    # stopping, because no diff carries what it decided.
+    holding = [
+        (r.label, s.short_id)
+        for r in states
+        for s in delivery.sessions_in(r.worktree)
+        if s.state == "done" and s.live is not False
+    ]
+    if holding:
+        print(f"TERMINADAS, NÃO PARADAS ({len(holding)})")
+        for label, short_id in holding:
+            print(f"  {label}  {short_id}")
+        print("      sem briefing até parar: mnemo deliver --stop-done")
         print()
 
     if ready:
@@ -195,6 +221,40 @@ def _stop_finished(tree: Path, *, label: str) -> None:
             print(f"{label}: `claude stop {session.short_id}` failed: {why}")
 
 
+def _stop_done(*, repo_root: Path) -> int:
+    """Stop every finished child in every dispatch worktree of this repo.
+
+    The wider net around :func:`_stop_finished`, which only ever runs after a
+    *successful* delivery. A child that judged the task wrong and declined has
+    no commits, so it delivers nothing — and is therefore exactly the child
+    that delivery-shaped stopping can never reach. Its briefing is the only
+    copy of the reasoning, because there is no diff to read it off.
+
+    Pushes nothing, opens nothing, removes nothing: the whole command is the
+    ``claude stop`` that makes ``SessionEnd`` fire (#247). Returns 0 even when
+    nothing was stopped — a sweep that found nothing is a successful report,
+    the same way ``--review`` finding nothing ready is, and a stop that failed
+    has already said so on its own line.
+    """
+    from mnemo.core.sessions import delivery
+
+    found = 0
+    for tree in delivery.dispatch_worktrees(repo_root=repo_root):
+        for short_id, why in delivery.stop_done_in(tree):
+            found += 1
+            if why is None:
+                print(f"{tree.name}: stopped {short_id}")
+            else:
+                print(f"{tree.name}: `claude stop {short_id}` failed: {why}")
+    if not found:
+        # Counted on finding one, not on stopping it. A sweep where every stop
+        # failed has already printed why, and following that with "nothing
+        # finished and still running" would contradict it: something did
+        # finish, and it is still running precisely because the stop failed.
+        print("nothing finished and still running")
+    return 0
+
+
 @command("deliver")
 def cmd_deliver(args: argparse.Namespace) -> int:
     """Review what is deliverable, or deliver exactly the ids named."""
@@ -205,6 +265,18 @@ def cmd_deliver(args: argparse.Namespace) -> int:
 
     ids = list(getattr(args, "ids", []) or [])
     review = bool(getattr(args, "review", False))
+
+    if getattr(args, "stop_done", False):
+        # Before the id handling, and instead of it: this delivers nothing,
+        # so the "nothing named" refusal below must not catch it. Named ids
+        # and --review are refused rather than ignored — each means a
+        # different command, and silently dropping one would report on a
+        # sweep the maintainer did not ask for.
+        if ids or review:
+            print("--stop-done stops finished children and delivers nothing — "
+                  "run it on its own")
+            return 1
+        return _stop_done(repo_root=root)
 
     if review and ids:
         # --review is read-only and delivering is not. Running both would make
