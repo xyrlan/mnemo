@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mnemo.core.claude_cli import EFFORT_LEVELS
 from mnemo.core.filters import parse_frontmatter
 from mnemo.core.sessions import grants
 
@@ -54,7 +55,7 @@ PATH_RE = re.compile(r"^[A-Za-z0-9._*?\[\]!-]+(?:/[A-Za-z0-9._*?\[\]!-]+)*/?$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]+(?:\[[A-Za-z0-9]+\])?$")
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
-_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model|may)\:\*\*\s*(.*)$")
+_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model|effort|may)\:\*\*\s*(.*)$")
 # "`sig` from owner" — the signature keeps its backticks (it is quoted
 # verbatim so a later diff of the contract is meaningful, and Task 5 quotes it
 # into a child's prompt as literal text). The owner is a lookup key rather
@@ -119,6 +120,10 @@ verdict: parallel
               the piece takes `mnemo dispatch --model`, or the machine's
               default when that is absent too. A budget, not an approach:
               say what to spend here, never how to build it.
+    effort:   optional. The `--effort` this piece's child runs at: one of
+              low, medium, high, xhigh, max. Omit it and the piece takes
+              `mnemo dispatch --effort`, or the child's default. A budget,
+              like `model`.
     may:      optional. What this piece's child may publish once its suite
               is green, without asking: `push`, or `pr` (push and open the
               pull request). `none` withholds it. Omit it and the piece takes
@@ -139,6 +144,7 @@ verdict: parallel
 - **exposes:** `load(key) -> Record | None`, `save(key, record) -> None`
 - **consumes:** nothing
 - **model:** haiku
+- **effort:** medium
 - **may:** pr
 
 Prose under a piece is free: say what the piece must deliver and why the cut
@@ -146,10 +152,11 @@ falls here. This piece is a leaf — it consumes nothing, so it can be written
 and tested without reading the interior of any other piece. That question is
 the test for whether two pieces are really two.
 
-It also names a `model`, which the piece below does not: the boundary here is
-two files and two signatures, so the judgement was spent writing the contract
-rather than reading the repo. The piece below has to fit itself around an
-interface it does not own, and takes whatever the dispatch was given.
+It also names a `model` and an `effort`, which the piece below does not: the
+boundary here is two files and two signatures, so the judgement was spent
+writing the contract rather than reading the repo. The piece below has to fit
+itself around an interface it does not own, and takes whatever the dispatch
+was given.
 
 `may: pr` lets this piece's child push its branch and open its pull request
 once its suite passes, instead of stopping to ask. The piece below names no
@@ -182,7 +189,8 @@ verdict: parallel
 - **files:** path/one.py, path/two.py
 - **exposes:** `literal_signature(arg) -> Type`
 - **consumes:** `other_signature(x) -> T` from other-piece
-- **model:** haiku            # optional; omit to take `mnemo dispatch --model`"""
+- **model:** haiku            # optional; omit to take `mnemo dispatch --model`
+- **effort:** medium          # optional; omit to take `mnemo dispatch --effort`"""
 
 
 class ContractError(ValueError):
@@ -213,6 +221,10 @@ class Piece:
     # and three that are mechanical, and the contract is the artifact where
     # that difference was already written down and reviewed.
     model: str | None = None
+    # The `--effort` this piece's child runs at (#351), one of
+    # `EFFORT_LEVELS`. Same shape and same precedence as `model`: `None`
+    # takes the dispatch-wide flag, else the child's default.
+    effort: str | None = None
     # What this piece's child may publish without asking (#317), parsed by
     # `grants.parse` — `("push", "pr")`. `None` means the line is absent and
     # the piece takes `mnemo dispatch --may`; `()` is an explicit `none`,
@@ -374,6 +386,13 @@ def _validate(contract: Contract) -> None:
                 "a model id: model takes one `--model` value (an alias like "
                 "`haiku`, or a full id), not a sentence"
             )
+        if piece.effort is not None and piece.effort not in EFFORT_LEVELS:
+            # Refused here rather than passed through: the CLI ignores an
+            # unknown level with a warning and runs the default (#351).
+            raise ContractError(
+                f"piece {piece.slug!r} names effort {piece.effort!r}: "
+                f"effort takes one of {', '.join(EFFORT_LEVELS)}"
+            )
         for item in piece.exposes:
             if "`" not in item:
                 raise ContractError(
@@ -424,6 +443,7 @@ def parse_contract(path: Path | str) -> Contract:
     exposes: list[str] = []
     consumes: list[tuple[str, str]] = []
     model: str | None = None
+    effort: str | None = None
     may: tuple[str, ...] | None = None
 
     def flush() -> None:
@@ -439,7 +459,7 @@ def parse_contract(path: Path | str) -> Contract:
             pieces.append(
                 Piece(
                     slug=slug, files=files, exposes=exposes, consumes=consumes,
-                    model=model, may=may,
+                    model=model, effort=effort, may=may,
                 )
             )
 
@@ -448,7 +468,7 @@ def parse_contract(path: Path | str) -> Contract:
         if heading:
             flush()
             slug = heading.group(1).strip()
-            files, exposes, consumes, model, may = [], [], [], None, None
+            files, exposes, consumes, model, effort, may = [], [], [], None, None, None
             continue
         matched = _FIELD_RE.match(line)
         if not matched or slug is None:
@@ -462,6 +482,10 @@ def parse_contract(path: Path | str) -> Contract:
             # line, so it falls back to the dispatch-wide default.
             cleaned = value.strip()
             model = None if _is_empty_list(cleaned) else cleaned
+        elif key == "effort":
+            # Read like `model`; checked against the levels in validation.
+            cleaned = value.strip()
+            effort = None if _is_empty_list(cleaned) else cleaned
         elif key == "may":
             # Refused here, not at spawn: a contract that grants `merge` is a
             # contract to fix, and no tree may exist when that is said.

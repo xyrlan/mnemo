@@ -314,6 +314,28 @@ def _models(sessions: list[Session]) -> str:
     return "  modelos: " + ", ".join(parts)
 
 
+def _efforts(sessions: list[Session]) -> str:
+    """One line naming the efforts in play, or '' when nobody chose one (#351).
+
+    A footer for the reasons :func:`_models` gives. Unlike the models line it
+    is omitted when every session is on the default: no default is ever
+    recorded (``bg-effort-flag``), so "all default" is the unchanged case and
+    a line saying so on every queue would be noise. Once any session names a
+    level, the rest are counted as ``padrão`` — the default, not unknown.
+    """
+    counts: dict[str, int] = {}
+    for s in sessions:
+        key = s.effort or "padrão"
+        counts[key] = counts.get(key, 0) + 1
+    if set(counts) <= {"padrão"}:
+        return ""
+    parts = [
+        f"{effort} ×{count}" if count > 1 else effort
+        for effort, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    return "  esforço: " + ", ".join(parts)
+
+
 def _grants(sessions: list[Session]) -> str:
     """One line naming the children that may publish unasked, or '' (#317).
 
@@ -453,6 +475,9 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     models = _models(sessions)
     if models:
         lines.append(models)
+    efforts = _efforts(sessions)
+    if efforts:
+        lines.append(efforts)
     granted = _grants(sessions)
     if granted:
         lines.append(granted)

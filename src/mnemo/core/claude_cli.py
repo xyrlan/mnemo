@@ -64,6 +64,13 @@ class Assumption:
 
 _V = f"{VERIFIED_AGAINST} on {VERIFIED_ON}"
 
+#: The ``--effort`` levels Claude Code accepts, in its own order (#351).
+#: A closed list, unlike model ids: the CLI prints it verbatim for an unknown
+#: level and then *ignores* the level rather than failing, so a typo passed
+#: through would run a child on the default with only a warning nobody reads.
+#: Checked against the installed binary by the ``bg-effort-flag`` live test.
+EFFORT_LEVELS: Tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
 #: The contract. Ordered as dispatch meets them: spawn, read back, watch, avoid.
 ASSUMPTIONS: Tuple[Assumption, ...] = (
     Assumption(
@@ -112,6 +119,31 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         ),
         used_by="dispatch.spawn_child (--model), sessions.jobs.Session.model",
         verified=f"{VERIFIED_AGAINST} on 2026-09-14",
+    ),
+    Assumption(
+        key="bg-effort-flag",
+        claim=(
+            "`claude --bg --effort <level> '<prompt>'` is accepted, and "
+            "`state.json` records it under `respawnFlags` the way it records "
+            "`--model`: `--effort` followed by its value, on a full-profile "
+            "child (`['--effort', 'high', '--model', 'opus[1m]']`) and on a "
+            "lean one (`['--effort', 'low', '--setting-sources', ...]`) alike. "
+            "Unlike the model, no default is ever resolved into the flags: "
+            "children spawned without `--effort` carry none on either "
+            "profile, so `Session.effort` is None for them — the default, not "
+            "a failure to read. The levels are exactly `EFFORT_LEVELS`, the "
+            "list `claude --effort <unknown> --version` prints after "
+            "`Valid values:`; an unknown level is a warning, not an error, "
+            "and the child silently runs on the default — which is why "
+            "dispatch refuses one before spawning. Measured by the flags "
+            "recorded, not by the child's reasoning: no observable says how "
+            "hard a child actually thought."
+        ),
+        used_by=(
+            "dispatch.spawn_child (--effort), contracts (effort:), "
+            "cli dispatch --effort, sessions.jobs.Session.effort"
+        ),
+        verified="2.1.273 on 2026-09-16",
     ),
     Assumption(
         key="jobs-state-json",

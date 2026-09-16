@@ -158,6 +158,9 @@ class Dispatched:
     #: afterwards the truth is the child's own ``state.json``, which Claude
     #: Code fills in with the *resolved* id even when nothing was passed.
     model: str | None = None
+    #: The ``--effort`` this child was spawned with, or ``None`` for the
+    #: child's default (#351). Same reason as ``model`` for being recorded.
+    effort: str | None = None
     #: What this child may publish without asking, as rendered into its
     #: prompt (#317): ``()`` for nothing, the unchanged default.
     may: tuple[str, ...] = ()
@@ -646,7 +649,8 @@ _short_id_from = claude_cli.short_id_from
 
 
 def spawn_child(
-    prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True
+    prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
+    effort: str | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -718,10 +722,25 @@ def spawn_child(
     provider-prefixed names, and the set changes without mnemo; a local
     allowlist would refuse a model that works. An unknown id fails in the
     child's own startup, where the error names the real vocabulary.
+
+    **The effort (#351).** *effort* is passed as ``--effort <level>`` and
+    omitted when ``None``, exactly like the model (``bg-effort-flag``). It
+    *is* checked against :data:`claude_cli.EFFORT_LEVELS`, and refused before
+    anything runs: the CLI's vocabulary is closed, and an unknown level does
+    not fail in the child — it is ignored with a warning and the child runs on
+    the default, which is the one outcome a caller who asked for ``max``
+    cannot notice.
     """
+    if effort and effort not in claude_cli.EFFORT_LEVELS:
+        raise DispatchError(
+            f"unknown effort {effort!r}: "
+            f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}"
+        )
     args = ["claude", "--bg"]
     if model:
         args += ["--model", model]
+    if effort:
+        args += ["--effort", effort]
     if child_profile.is_lean(lean):
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.
@@ -751,6 +770,7 @@ def _spawn_into(
     model: str | None = None,
     lean: bool = True,
     may: grants.Grant = (),
+    effort: str | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -772,11 +792,11 @@ def _spawn_into(
     child is running either way.
     """
     try:
-        short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean)
+        short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean, effort=effort)
     except claude_cli.ContractBroken as exc:
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc),
-            model=model, may=may,
+            model=model, effort=effort, may=may,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -791,7 +811,7 @@ def _spawn_into(
     grants.record(short_id, may)
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
-        model=model, may=may,
+        model=model, effort=effort, may=may,
     )
 
 
@@ -800,6 +820,7 @@ def dispatch_issue(
     model: str | None = None,
     lean: bool = True,
     may: grants.Grant = (),
+    effort: str | None = None,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -816,7 +837,7 @@ def dispatch_issue(
         build_prompt(issue, title=details.title, body=details.body,
                      repo_root=repo_root, may=may),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
-        may=may,
+        may=may, effort=effort,
     )
 
 
@@ -825,6 +846,7 @@ def dispatch_all(
     model: str | None = None,
     lean: bool = True,
     may: grants.Grant = (),
+    effort: str | None = None,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -836,7 +858,8 @@ def dispatch_all(
     model here on purpose: an issue is a unit of work, not a unit of budget,
     and nothing on an issue says how hard it is (#268). A contract piece is
     the one place a per-child model exists, because a contract is written and
-    reviewed before dispatch and can say so per piece.
+    reviewed before dispatch and can say so per piece. *effort* is the same
+    (#351).
     """
     out: list[Dispatched] = []
     for issue in issues:
@@ -844,7 +867,7 @@ def dispatch_all(
             out.append(
                 dispatch_issue(
                     issue, repo_root=repo_root, fetch=fetch,
-                    model=model, lean=lean, may=may,
+                    model=model, lean=lean, may=may, effort=effort,
                 )
             )
         except DispatchError as exc:
@@ -857,6 +880,7 @@ def dispatch_piece(
     model: str | None = None,
     lean: bool = True,
     may: grants.Grant = (),
+    effort: str | None = None,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -870,7 +894,8 @@ def dispatch_piece(
     it. That direction is the point: the contract was written and reviewed
     knowing what each piece is, and the flag is a blanket applied at the
     command line. A blanket that overrode a considered per-piece choice would
-    make the field unusable.
+    make the field unusable. *effort* resolves the same way, for the same
+    reason (#351).
 
     *may* resolves the same way, with one difference: a piece's ``may: none``
     is ``()``, not absent, and still wins — so a contract can withhold from
@@ -884,6 +909,7 @@ def dispatch_piece(
         build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
         model=piece.model or model, lean=lean, may=granted,
+        effort=piece.effort or effort,
     )
 
 
@@ -896,6 +922,7 @@ def dispatch_contract(
     contract: contracts.Contract, *, repo_root: Path | str,
     model: str | None = None, lean: bool = True,
     may: grants.Grant = (),
+    effort: str | None = None,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -909,8 +936,8 @@ def dispatch_contract(
     construction (separate trees, separate branches), exactly as in
     :func:`dispatch_all`.
 
-    *model* is the default for every piece that does not name its own; see
-    :func:`dispatch_piece` for why the piece wins.
+    *model* and *effort* are the defaults for every piece that does not name
+    its own; see :func:`dispatch_piece` for why the piece wins.
     """
     if not contract.is_dispatchable:
         raise DispatchError(
@@ -924,7 +951,7 @@ def dispatch_contract(
             out.append(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
-                    model=model, lean=lean, may=may,
+                    model=model, lean=lean, may=may, effort=effort,
                 )
             )
         except DispatchError as exc:

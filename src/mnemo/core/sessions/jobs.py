@@ -74,6 +74,10 @@ class Session:
     #: measured on 2.1.270 did, including those spawned with no ``--model``
     #: at all, because Claude Code resolves the machine default into them.
     model: str | None = None
+    #: The ``--effort`` this session was spawned with, read from
+    #: ``respawnFlags`` (#351). ``None`` means the default — Claude Code never
+    #: resolves one into the flags, on either profile — never a failed read.
+    effort: str | None = None
     #: The full id of the session that dispatched this one (#288), or ``None``
     #: for a session nobody dispatched from inside Claude Code. Not in
     #: ``state.json``: mnemo records it at dispatch, and
@@ -233,11 +237,32 @@ def model_from(data: dict[str, Any]) -> str | None:
     running on. One source, named in ``claude_cli``'s ``bg-model-flag``
     assumption, which the live test checks.
     """
+    return _flag_value(data, "--model")
+
+
+def effort_from(data: dict[str, Any]) -> str | None:
+    """The ``--effort`` a session was spawned with, out of ``state.json`` (#351).
+
+    The same source as :func:`model_from`, for the same reasons, with one
+    difference measured on 2.1.273 (``bg-effort-flag``): Claude Code never
+    resolves a default effort into ``respawnFlags``, on a full profile or a
+    lean one. ``None`` is therefore the answer for every session spawned
+    without the flag, and means "the default", not "unreadable".
+
+    The value is returned as recorded, not checked against the known levels:
+    this reads what the session *was given*, and a level mnemo does not know
+    yet is still the truth about that session.
+    """
+    return _flag_value(data, "--effort")
+
+
+def _flag_value(data: dict[str, Any], name: str) -> str | None:
+    """The element after *name* in ``respawnFlags``, or ``None``."""
     flags = data.get("respawnFlags")
     if not isinstance(flags, list):
         return None
     for index, flag in enumerate(flags):
-        if flag == "--model" and index + 1 < len(flags):
+        if flag == name and index + 1 < len(flags):
             return _str_or_none(flags[index + 1])
     return None
 
@@ -259,6 +284,7 @@ def _parse(short_id: str, data: dict[str, Any]) -> Session:
         link_scan_path=_str_or_none(data.get("linkScanPath")),
         updated_at=_str_or_none(data.get("updatedAt")),
         model=model_from(data),
+        effort=effort_from(data),
         children=tuple(c for c in children if isinstance(c, dict)) if isinstance(children, list) else (),
     )
 

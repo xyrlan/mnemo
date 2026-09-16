@@ -52,6 +52,7 @@ def command(name: str) -> Callable:
 
 def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
+    from mnemo.core.claude_cli import EFFORT_LEVELS
     # ``friction`` registers itself here rather than in ``cli/commands/__init__``:
     # the friction-loop contract left that file outside the piece that owns the
     # command. Every entry point builds the parser before it looks a handler up.
@@ -143,6 +144,14 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="model every child of this dispatch runs on "
                                  "(alias like haiku/sonnet/opus, or a full id); "
                                  "a contract piece's own `model:` wins over it")
+    # Unlike --model, a closed list: Claude Code's own (`bg-effort-flag`). It
+    # ignores an unknown level with a warning, so argparse refuses the typo
+    # here, before a child silently runs on the default (#351). No default:
+    # omitted, no `--effort` is sent at all.
+    dispatch_p.add_argument("--effort", metavar="LEVEL", choices=EFFORT_LEVELS,
+                            help="reasoning effort every child of this dispatch runs at: "
+                                 f"{', '.join(EFFORT_LEVELS)}; "
+                                 "a contract piece's own `effort:` wins over it")
     # The maintainer's standing answer to "may I push / open a PR?" (#317),
     # given once here because this command is the one message a child reads
     # as the maintainer's own. Omitted, it is `pr` since 2026-09-16: every

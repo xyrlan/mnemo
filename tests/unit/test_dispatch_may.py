@@ -230,7 +230,7 @@ def test_each_piece_is_spawned_with_its_resolved_grant(
 ) -> None:
     prompts: dict = {}
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
         prompts[Path(cwd).name] = prompt
         return {"proj-wt-c-one": "0000aaaa", "proj-wt-c-two": "0000bbbb"}[Path(cwd).name]
 
@@ -346,7 +346,7 @@ def test_the_flag_reaches_the_dispatch_parsed(monkeypatch, capsys, tmp_path: Pat
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True, may=(): (
+        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None: (
             seen.update(may=may),
             [dispatch.Dispatched(issue=317, worktree=tmp_path, short_id="a1b2c3d4",
                                  may=may)],

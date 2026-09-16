@@ -640,6 +640,34 @@ and `mnemo sessions` ends with one line naming the models in play across the
 whole queue — a footer rather than a column, because the same id repeated on
 every row would cost 20 characters of width to say nothing.
 
+### Choosing the effort
+
+`--effort` sets how hard every child reasons, independently of the model:
+
+```bash
+mnemo dispatch 255 --effort low             # mechanical sweep
+mnemo dispatch 244 --model opus --effort max
+```
+
+Unlike models, the levels are a closed list — `low`, `medium`, `high`,
+`xhigh`, `max` — and mnemo checks it before anything is spawned. That is on
+purpose: Claude Code does not fail on an unknown level, it warns and runs the
+default, so a typo would quietly give you a child on the effort you did not
+ask for. Omit the flag and no `--effort` is sent at all; the child runs at its
+default.
+
+A contract piece may name its own with `- **effort:** high`, which wins over
+the flag exactly as `model:` does. `mnemo session <short_id>` shows
+`esforço <level>` for a child that was given one, `mnemo sessions` adds an
+`esforço:` footer once any child in the queue has one, and
+`mnemo sessions --json` carries an `effort` field. `null` there means the
+child runs at the default, not that the value could not be read: Claude Code
+records an effort only when one was passed.
+
+mnemo does not choose the effort for you. Whether effort changes what a child
+delivers has not been measured yet, and a wrong heuristic here costs money on
+every child.
+
 ### Saying up front what a child may publish
 
 Ungranted, a child that finishes stops to ask "may I push / open a PR?", and

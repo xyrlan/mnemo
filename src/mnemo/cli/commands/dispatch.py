@@ -87,8 +87,17 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     issues = list(getattr(args, "issues", []) or [])
     contract_path = getattr(args, "contract", None)
     model = getattr(args, "model", None) or None
+    effort = getattr(args, "effort", None) or None
 
+    from mnemo.core import claude_cli
     from mnemo.core.sessions import grants
+
+    if effort is not None and effort not in claude_cli.EFFORT_LEVELS:
+        # argparse's `choices` already refuses this on the command line; this
+        # is for a namespace built by hand. Before anything could spawn (#351).
+        print(f"--effort: unknown level {effort!r}: "
+              f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}")
+        return 1
 
     try:
         may = _default_grant(getattr(args, "may", None))
@@ -137,11 +146,13 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
             print(f"#{issue}  {core.branch_name(issue)}  {tree}"
-                  f"{_model_suffix(model)}{_may_suffix(may)}")
+                  f"{_model_suffix(model, effort)}{_may_suffix(may)}")
         return 0
 
     return _report(
-        core.dispatch_all(issues, repo_root=root, model=model, lean=lean, may=may),
+        core.dispatch_all(
+            issues, repo_root=root, model=model, lean=lean, may=may, effort=effort
+        ),
         lean=lean,
     )
 
@@ -177,8 +188,11 @@ def _print_example(contract_path: str | None) -> int:
     return 0
 
 
-def _model_suffix(model: str | None) -> str:
+def _model_suffix(model: str | None, effort: str | None = None) -> str:
     """``"  [haiku]"``, or nothing when no model was chosen (#268).
+
+    An effort, when one was chosen, joins the same tag (#351):
+    ``"  [haiku, effort high]"``, or ``"  [effort high]"`` without a model.
 
     Nothing rather than ``[default]``: a dispatch that names no model is the
     unchanged case, and a word in the column would make every line claim a
@@ -190,7 +204,8 @@ def _model_suffix(model: str | None) -> str:
     one child, so it is reported once in the footer (#270) rather than
     repeated per row.
     """
-    return f"  [{model}]" if model else ""
+    parts = [p for p in (model, effort and f"effort {effort}") if p]
+    return f"  [{', '.join(parts)}]" if parts else ""
 
 
 def _may_suffix(may: tuple[str, ...]) -> str:
@@ -222,6 +237,7 @@ def _dispatch_contract(
         return 1
 
     model = getattr(args, "model", None) or None
+    effort = getattr(args, "effort", None) or None
 
     if getattr(args, "dry_run", False):
         for piece in contract.pieces:
@@ -232,13 +248,14 @@ def _dispatch_contract(
             # dry run shows what would actually be spent per child, which is
             # the one question the flag creates.
             print(f"{piece.slug}  {branch}  {tree}"
-                  f"{_model_suffix(piece.model or model)}"
+                  f"{_model_suffix(piece.model or model, piece.effort or effort)}"
                   f"{_may_suffix(core.piece_grant(piece, may))}")
         return 0
 
     try:
         results = core.dispatch_contract(
-            contract, repo_root=root, model=model, lean=lean, may=may
+            contract, repo_root=root, model=model, lean=lean, may=may,
+            effort=effort,
         )
     except core.DispatchError as exc:
         print(str(exc))
@@ -268,7 +285,7 @@ def _report(results: list, *, lean: bool = True) -> int:
 
     for r in started:
         print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}"
-              f"{_model_suffix(getattr(r, 'model', None))}"
+              f"{_model_suffix(getattr(r, 'model', None), getattr(r, 'effort', None))}"
               f"{_may_suffix(getattr(r, 'may', ()))}")
         if r.warning:
             # The child is running — the tree was kept for it — but something
