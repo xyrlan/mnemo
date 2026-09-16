@@ -214,6 +214,49 @@ def _git(args: Sequence[str], *, cwd: Path | str):
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
+def _run_gh(args, **kwargs):
+    """Indirection so the check reader can be faked in tests."""
+    import subprocess
+
+    return subprocess.run(args, capture_output=True, text=True, timeout=60, **kwargs)
+
+
+def failing_checks(pr: str) -> list[str]:
+    """The names of *pr*'s failing checks, read one by one.
+
+    Reads ``gh pr checks --json name,bucket`` rather than the run's conclusion
+    or the PR's rollup. A repository may mark a job non-blocking, and such a
+    job fails while both aggregates report success — so a gate that trusted
+    the aggregate would be reading a proxy of the thing it is gating on,
+    immediately before the one irreversible step.
+
+    Only ``bucket == "fail"`` counts. Pending is not failure (the landing is
+    simply not ready yet, which the rehearsal will say), and skipped or
+    cancelled checks are not results. An unreadable answer — ``gh`` missing, a
+    PR with no checks, malformed output — returns ``[]``: this refuses a
+    landing on evidence, never on the absence of it.
+    """
+    import json
+
+    try:
+        result = _run_gh(["gh", "pr", "checks", pr, "--json", "name,bucket"])
+    except Exception:  # noqa: BLE001 — an unreadable gate must not raise
+        return []
+    if result.returncode not in (0, 8):  # 8 == checks pending
+        return []
+    try:
+        rows = json.loads(result.stdout or "[]")
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [
+        str(row.get("name") or "?")
+        for row in rows
+        if isinstance(row, dict) and row.get("bucket") == "fail"
+    ]
+
+
 def _boundary_files(piece: contracts.Piece, *, ref: str, repo_root: Path | str) -> list[str]:
     """The piece's ``files`` as they exist at *ref*, globs expanded.
 
@@ -404,6 +447,14 @@ def inspect(
                 sig, owner = unowned[0]
                 reason = (f"consumes {sig} from {owner}, but {owner} exposes "
                           "no signature by that name")
+        if not reason and pr_url and pr_state == "OPEN":
+            # Last, and only for a piece that would otherwise land: the child
+            # stops in seconds and CI takes minutes, so nothing else stands
+            # between a red PR and the merge. One `gh` call per open piece.
+            red = failing_checks(pr_url)
+            if red:
+                reason = (f"CI vermelho em {', '.join(red[:3])}"
+                          + (f" (+{len(red) - 3})" if len(red) > 3 else ""))
         # For a merged piece, ref reads as the base it was checked on.
         out.append(PieceState(
             piece=piece, branch=branch, ref=checked_at if merged else ref,
