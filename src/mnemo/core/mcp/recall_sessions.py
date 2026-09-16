@@ -107,8 +107,12 @@ def _rules_by_session(vault_root: Path) -> dict[tuple[str, str], set[str]]:
     Keyed off ``sources:`` entries whose file is still in the vault. A source
     that points nowhere is not evidence of anything, and the doctor already
     reports those as their own fault.
+
+    A retired rule is not expected either. ``run_case`` ranks only what
+    ``candidates_for_project`` admits, so a retired slug could never be found
+    and would count as a miss that retrieval did not cause.
     """
-    from mnemo.core.filters import derive_rule_slug, parse_frontmatter
+    from mnemo.core.filters import derive_rule_slug, is_retired, parse_frontmatter
 
     out: dict[tuple[str, str], set[str]] = {}
     for md in sorted(vault_root.glob("shared/*/*.md")):
@@ -117,6 +121,8 @@ def _rules_by_session(vault_root: Path) -> dict[tuple[str, str], set[str]]:
         try:
             fm = parse_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
         except Exception:
+            continue
+        if is_retired(fm, vault_root=vault_root):
             continue
         slug = derive_rule_slug(fm, md.stem)
         for src in fm.get("sources") or []:
@@ -182,22 +188,20 @@ def run_case(vault_root: Path, case: Case, index: Optional[dict] = None) -> Case
     query is free prompt text with no topic attached, which is the path a real
     prompt takes, and BM25F ranking is the thing ranking work will change. The
     triple-gate is not applied — this measures the ordering, not whether the
-    gates chose to speak.
+    gates chose to speak. The candidate pool is the reflex's own
+    (``candidates_for_project``), so a retired rule is out of it here too.
     """
     import time
 
     from mnemo.core.reflex import bm25
+    from mnemo.core.reflex.decide import candidates_for_project
     from mnemo.core.reflex.index import load_index
     from mnemo.core.reflex.tokenizer import tokenize_query
 
     if index is None:
         index = load_index(vault_root) or {"docs": {}, "postings": {}}
 
-    docs = index.get("docs") or {}
-    candidates = [
-        slug for slug, doc in docs.items()
-        if case["project"] in (doc.get("projects") or []) or doc.get("universal")
-    ]
+    candidates = candidates_for_project(index, case["project"])
 
     t0 = time.perf_counter()
     scored = bm25.score_docs(
