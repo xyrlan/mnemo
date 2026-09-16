@@ -110,8 +110,14 @@ def record_session_start_inject(
     included_briefing: bool,
     project: str | None,
     agent: str,
+    source: str | None = None,
 ) -> None:
-    """Append a `session_start.inject` entry. Never raises."""
+    """Append a `session_start.inject` entry. Never raises.
+
+    ``source`` is Claude Code's SessionStart source (startup, resume, clear,
+    compact, fork), so a before/after on resume injections is a log query
+    rather than a transcript reconstruction (#352).
+    """
     entry = {
         "timestamp": _utc_iso_z(),
         "tool": "session_start.inject",
@@ -119,6 +125,7 @@ def record_session_start_inject(
         "included_briefing": bool(included_briefing),
         "project": project,
         "agent": agent,
+        "source": source,
         "result_count": 1,
     }
     record(vault_root, entry)
