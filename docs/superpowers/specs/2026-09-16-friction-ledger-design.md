@@ -92,15 +92,27 @@ candidate pool immediately and records who superseded it. Alternatives rejected:
 The trail replaces the queue: the system acts, and the maintainer audits later.
 This is the pattern `reclassify` already uses successfully (`_archive` + `--undo`).
 
-**Linking a correction to a rule: extractor judgement, confirmed by injection.**
-Contradiction is semantic, not lexical. `merge-requires-admin` ("needs `--admin`"
-→ "run it directly") is a pure contradiction in near-identical vocabulary; lexical
-similarity cannot see it, and this vault has already recorded that Jaccard scores
-a true cross-type duplicate at 0.136, below the p90 of unrelated noise (0.131).
+**Linking a correction to a rule: a dedicated contradiction pass, corroborated by
+injection.** Contradiction is semantic, not lexical. `merge-requires-admin`
+("needs `--admin`" → "run it directly") is a pure contradiction in near-identical
+vocabulary; lexical similarity cannot see it, and this vault has already recorded
+that Jaccard scores a true cross-type duplicate at 0.136, below the p90 of
+unrelated noise (0.131). So the judgement is an LLM's.
 
-The extractor already reads the briefing and already receives live rules as the
-`existing_rules` hint. It gains one question: *does this correction contradict any
-of these?* No new LLM call.
+The first design asked the question inside the existing consolidation prompt,
+against the `existing_rules` hint, on the grounds that it added no LLM call.
+Measurement killed that: see *The candidate pool is the real constraint* below.
+The hint shows at most `MAX_ENTRIES = 80` rules **ordered by `source_count`**, which
+covers 23.5–37.9% of the eligible `reference` pool — and since 97.9% of rules have
+`source_count = 1`, which 80 appear is settled by slug order inside a massive tie.
+Asking about contradiction against an arbitrary quarter of the vault would produce
+a ledger whose silence means nothing.
+
+So contradiction gets its own pass, and it only runs when there is a correction to
+resolve — 42 of 398 briefings, ~10%. In that pass the candidates are ranked against
+the correction's own text with the BM25F the reflex already uses, not by
+popularity, and the top `CONTRADICTION_CANDIDATES` (default 40, bodies included)
+are put to the model.
 
 When the reflex also injected that rule into the session the correction came from,
 the link is corroborated and recorded as such.
@@ -151,12 +163,18 @@ eligibility as a reflex candidate changes, and only in subsystem 2.
 **`core/friction/ledger.py`** — append, read, rotate. One public `record()` and one
 `iter_records()`. Knows nothing about rules or extraction.
 
-**`core/friction/link.py`** — given a `Correction` and the candidate rules the
-extractor saw, produce `contradicts` and `link_basis`. Pure; no I/O; the unit that
-the backfill and the live path share.
+**`core/friction/candidates.py`** — given a `Correction` and a vault, rank the whole
+eligible pool against the correction text with `core.reflex.bm25` and return the
+top `CONTRADICTION_CANDIDATES` with bodies. Reuses the reflex index; adds no new
+ranking code.
 
-**`core/extract/prompts/templates/`** — the consolidation prompt gains the
-contradiction question and a schema field for the answer.
+**`core/friction/link.py`** — given a `Correction` and those candidates, run the
+contradiction pass and produce `contradicts` and `link_basis`. One LLM call, and
+only when a correction exists. The unit the backfill and the live path share.
+
+**`core/extract/prompts/templates/contradiction.py`** — the pass's own prompt and
+response schema. The consolidation prompt is untouched, so #184's edit contract and
+the existing `existing_rules` behaviour carry no risk from this change.
 
 **`core/friction/backfill.py`** — the retroactive pass (below).
 
@@ -164,18 +182,46 @@ contradiction question and a schema field for the answer.
 project and origin, what contradicts what, and what the backfill recovered.
 Read-only.
 
-### Known constraint: the extractor's field of view
+### The candidate pool is the real constraint
 
-`existing_rules` quotes at most `MAX_BODIES = 3` rule bodies per chunk, gated at
-`BODY_RELEVANCE_THRESHOLD = 0.12`; everything else is a one-line `slug — name`.
-So the contradiction question is asked against 3 full bodies and up to
-`MAX_ENTRIES = 80` titles.
+Measured on this vault, 2026-09-16 — what `existing_rules` can actually show,
+per kind and agent:
 
-This is a deliberate ceiling, not an oversight: raising it costs ~17k tokens per
-chunk. The consequence is that contradictions against a rule outside the relevant
-3 will be missed, and the ledger will under-report rather than over-report. The
-backfill's measurement below is what says whether that ceiling needs raising, and
-that decision is deferred until there is a number.
+| kind | agent | eligible | shown (80) | coverage |
+|---|---|---|---|---|
+| feedback | mnemo | 9 | 9 | 100% |
+| project | mnemo | 122 | 80 | 65.6% |
+| **reference** | **mnemo** | **211** | **80** | **37.9%** |
+| **reference** | **clubinho** | **340** | **80** | **23.5%** |
+
+Two compounding problems:
+
+1. **`MAX_ENTRIES = 80` truncates the pool** exactly where the vault is biggest.
+   `reference` holds 1682 of 1946 live rules.
+2. **The ordering is `source_count` descending, which is noise here.** 97.9% of
+   rules have exactly one source, so the top-80 cut lands inside a tie of 122
+   (mnemo) or 84 (clubinho) rules and is resolved by slug order — alphabetical, in
+   effect.
+
+`existing_rules_fragment` already records this failure for its own purpose: all
+four of #184's re-summarized rules "fell outside the top 80", which is why body
+relevance scores every eligible rule rather than the listed slice. The title list
+that a contradiction question would be asked against was never fixed the same way.
+
+`MAX_BODIES = 3` is *not* the binding constraint. It is a deliberate cost ceiling
+(3 × ~216 median tokens vs ~17k for all 80) and it is already relevance-ranked
+over the whole pool.
+
+**Resolution.** Raising `MAX_ENTRIES` globally would pay the cost on all
+extractions to fix an ordering flaw. Instead the contradiction pass (above) is
+separate and rare, and inside it the candidates are BM25F-ranked against the
+correction text over the **whole** eligible pool, with `CONTRADICTION_CANDIDATES`
+(default 40) bodies quoted. Nothing about the consolidation prompt changes.
+
+The ledger may still under-report — a contradiction against a rule ranked 41st
+will be missed — and it never over-reports, because a link is only recorded when
+the model names a slug that exists. `mnemo friction` reports the rank distribution
+of confirmed links so the 40 can be revisited against evidence.
 
 ## Backfill
 
@@ -186,20 +232,26 @@ The ledger is worth little until it has history, and the history is recoverable:
 - **33 of 37** sessions that received a reflex injection still have transcripts on
   disk
 
-`mnemo friction --backfill` re-reads those briefings' source transcripts through
-the ordinary correction path — the same prompt in use today, into a scratch root,
-one Haiku call per session — and appends what it finds with `backfilled: true`.
-This is the same shape as `mnemo reverify` (#257), which re-briefs sessions into a
-scratch root and reuses the result on a rerun.
+`mnemo friction --backfill` re-reads each session's transcript through the ordinary
+correction path — the same prompt in use today, into a scratch root, one Haiku call
+per session — then runs the contradiction pass on whatever it finds, and appends
+the records with `backfilled: true`. Same shape as `mnemo reverify` (#257): scratch
+briefings are reused on a rerun, `--fresh` re-briefs.
+
+**Scope: every session with a transcript on disk, not only the 356.** `replay`
+already reads 395 sessions; a session that never produced a briefing can still have
+contradicted a rule. Restricting the sweep to briefed sessions would inherit
+exactly the sampling bias this subsystem exists to remove. Sessions are swept
+newest-first, so an interrupted run has recovered the most relevant history.
 
 Dry run by default, printing per session: *corrections found*, *none found*,
-*transcript gone*. `--apply` writes exactly what the dry run showed, with no
-second LLM pass.
+*transcript gone*. `--apply` writes exactly what the dry run showed, with no second
+briefing pass. `--since DATE` and `--project` bound a run.
 
-At the measured rate of 1.67 corrections per briefing, 356 briefings suggest
-roughly 500–600 recoverable records — but the rate was measured on September
-sessions under the current prompt, and older sessions may differ, so the dry run
-is the number that counts, not this estimate.
+At the measured rate of 1.67 corrections per briefing, the 356 unasked briefings
+alone suggest roughly 500–600 recoverable records; the wider sweep may find more.
+That rate was measured on September sessions under the current prompt and older
+sessions may differ, so the dry run is the number that counts, not this estimate.
 
 ## Error handling
 
@@ -207,8 +259,11 @@ Every failure degrades to "no ledger record", never to a broken extraction or a
 lost briefing:
 
 - ledger write fails → log one `.errors.log` row, extraction continues
-- extractor returns no contradiction field (old prompt, malformed response) →
-  record with `contradicts: []` and `link_basis: "none"`
+- the contradiction pass fails, times out, or returns malformed JSON → the
+  correction is still recorded, with `contradicts: []` and `link_basis: "none"`.
+  A correction is never lost because the link could not be resolved.
+- the contradiction pass is unavailable (no `claude` on PATH, network off) →
+  same as above; the ledger degrades to an unlinked record
 - quote fails `corrections.verify` → not recorded at all, as today
 - transcript missing during backfill → reported, never fabricated
 - `contradicts` names a slug not in the vault → recorded, flagged by
@@ -225,8 +280,11 @@ The circuit breaker (#314) governs the hook path unchanged.
 - **Contract**: a correction whose quote does not verify never reaches the ledger.
 - **Integration**: one extraction run end to end writes ledger rows whose
   `session_id` and `briefing` resolve to real files.
-- **Real-data**: the backfill dry run over the actual 356 briefings, asserting it
+- **Real-data**: the backfill dry run over the real sessions on disk, asserting it
   reports rather than raises on every missing transcript.
+- **Real-data**: `candidates.py` ranks the whole eligible pool — a fixture where
+  the true contradiction sits outside a `source_count`-ordered top-80 must still
+  surface it, which is the failure this design exists to avoid.
 - No test may assert a fixed count from the maintainer's vault — those are
   measurements, and they belong in the report, not in an assertion.
 
@@ -243,11 +301,13 @@ The circuit breaker (#314) governs the hook path unchanged.
 ## Success criteria
 
 1. Every correction the extractor finds appears in the ledger with a verified quote.
-2. The backfill dry run reports a per-session outcome for all 356 briefings without
-   raising.
+2. The backfill dry run reports a per-session outcome for every session with a
+   transcript on disk, without raising.
 3. `mnemo friction` states how many live rules stand contradicted — a number the
-   vault has never been able to produce.
-4. Full suite green; no change to what the reflex injects.
+   vault has never been able to produce — and the rank distribution of confirmed
+   links, so `CONTRADICTION_CANDIDATES` can be revisited against evidence.
+4. Full suite green; no change to what the reflex injects and no change to the
+   consolidation prompt's output.
 
 Once the ledger has history, subsystem 2 can act on it, and the open question the
 vault has never been able to ask — *how much of what I hold has already been
