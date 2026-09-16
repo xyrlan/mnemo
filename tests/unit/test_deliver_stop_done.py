@@ -37,6 +37,44 @@ def test_stops_a_done_session(monkeypatch, tree):
     assert result == [("aaaaaaaa", None)]
 
 
+def test_stops_every_done_session_in_one_tree(monkeypatch, tree):
+    """Two done children in one tree, and both are stopped.
+
+    Not hypothetical: ``sessions_in`` joins on ``cwd``, and a reused branch
+    name — ``fix/issue-158`` dispatched twice — puts the jobs of both lives at
+    the same path. Stopping only the first would leave the other holding its
+    briefing forever, which is the exact failure this command exists to fix.
+    """
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda _t: [_Session("aaaaaaaa", "done"), _Session("bbbbbbbb", "done")],
+    )
+    stopped = []
+    monkeypatch.setattr(delivery, "stop_session",
+                        lambda sid: stopped.append(sid) or None)
+
+    result = delivery.stop_done_in(tree)
+
+    assert stopped == ["aaaaaaaa", "bbbbbbbb"]
+    assert result == [("aaaaaaaa", None), ("bbbbbbbb", None)]
+
+
+def test_a_done_session_after_a_skipped_one_is_still_stopped(monkeypatch, tree):
+    """The skips are ``continue``, not an exit: what follows them still runs."""
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda _t: [_Session("bbbbbbbb", "blocked"),
+                    _Session("cccccccc", "done", live=False),
+                    _Session("dddddddd", "done")],
+    )
+    stopped = []
+    monkeypatch.setattr(delivery, "stop_session",
+                        lambda sid: stopped.append(sid) or None)
+
+    assert delivery.stop_done_in(tree) == [("dddddddd", None)]
+    assert stopped == ["dddddddd"]
+
+
 def test_leaves_a_blocked_session_alone(monkeypatch, tree):
     monkeypatch.setattr(delivery, "sessions_in",
                         lambda _t: [_Session("bbbbbbbb", "blocked")])
@@ -140,6 +178,9 @@ def test_stop_done_reports_a_failed_stop(in_repo, monkeypatch, capsys):
     assert deliver.cmd_deliver(_args(stop_done=True)) == 0
     out = capsys.readouterr().out
     assert "`claude stop ffffffff` failed: no such job" in out
+    # And does not then contradict itself. The child finished and is still
+    # running — that is why the stop had something to fail against.
+    assert "nothing finished and still running" not in out
 
 
 def test_the_parser_accepts_stop_done() -> None:

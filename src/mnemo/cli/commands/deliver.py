@@ -1,6 +1,6 @@
 """``mnemo deliver`` — the last metre of a dispatch, from the parent's side.
 
-Two commands, not a prompt:
+Three commands, not a prompt:
 
 - ``mnemo deliver --review`` is read-only. Every dispatch worktree, whether it
   is clean, how far ahead of the base branch, a diffstat, and any PR that already
@@ -8,6 +8,8 @@ Two commands, not a prompt:
 - ``mnemo deliver <id> [<id>...]`` pushes and opens a PR for **exactly** the
   ids named, and nothing else. Once a PR is open it stops the child that did
   the work, if that child is ``done`` (#311) — never one still working.
+- ``mnemo deliver --stop-done`` stops every finished child in the repo's
+  dispatch worktrees and delivers nothing at all.
 
 **Naming an id is the approval.** There is deliberately no ``--all`` and no
 "deliver everything that is ready": one flag approving N children is precisely
@@ -16,7 +18,14 @@ diff — the expensive part, and the part that must stay per-child — and then
 spends one command instead of three on the mechanics, which are not worth
 repeating N times.
 
-Both halves work on a pipe. ``mnemo sessions`` and ``mnemo session`` are
+``--stop-done`` is not that flag wearing a different name. It approves
+nothing, because it publishes nothing: a stop is what makes ``SessionEnd``
+fire, and what it produces is the child's briefing, not a PR. The decision it
+takes for N children is the one the maintainer would otherwise take N times
+with no diff to read — which is why it is refused outright when combined with
+ids or ``--review``.
+
+All three work on a pipe. ``mnemo sessions`` and ``mnemo session`` are
 pipe-safe by design and this joins them; an interactive y/n confirmation would
 break that, and was rejected for it. The approval is in the argv, where it is
 visible in shell history, not in a keystroke nobody can audit.
@@ -223,20 +232,25 @@ def _stop_done(*, repo_root: Path) -> int:
 
     Pushes nothing, opens nothing, removes nothing: the whole command is the
     ``claude stop`` that makes ``SessionEnd`` fire (#247). Returns 0 even when
-    nothing was stopped — "nothing finished and still running" is a successful
-    report, the same way ``--review`` finding nothing ready is.
+    nothing was stopped — a sweep that found nothing is a successful report,
+    the same way ``--review`` finding nothing ready is, and a stop that failed
+    has already said so on its own line.
     """
     from mnemo.core.sessions import delivery
 
-    stopped = 0
+    found = 0
     for tree in delivery.dispatch_worktrees(repo_root=repo_root):
         for short_id, why in delivery.stop_done_in(tree):
+            found += 1
             if why is None:
                 print(f"{tree.name}: stopped {short_id}")
-                stopped += 1
             else:
                 print(f"{tree.name}: `claude stop {short_id}` failed: {why}")
-    if not stopped:
+    if not found:
+        # Counted on finding one, not on stopping it. A sweep where every stop
+        # failed has already printed why, and following that with "nothing
+        # finished and still running" would contradict it: something did
+        # finish, and it is still running precisely because the stop failed.
         print("nothing finished and still running")
     return 0
 
