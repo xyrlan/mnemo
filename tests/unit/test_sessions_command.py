@@ -127,6 +127,7 @@ def test_consume_unblocks_redeems_the_markers(monkeypatch, tmp_path: Path) -> No
         consumed, failed, skipped = 1, 0, 0
         learned = [{"slug": "argon2-not-bcrypt", "name": "Use argon2"}]
         errors: list[str] = []
+        remaining, locked = 0, False
 
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
@@ -151,6 +152,7 @@ def test_consume_unblocks_reports_what_it_learned(monkeypatch, capsys, tmp_path:
         consumed, failed, skipped = 1, 0, 0
         learned = [{"slug": "argon2-not-bcrypt", "name": "Use argon2"}]
         errors: list[str] = []
+        remaining, locked = 0, False
 
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
@@ -176,6 +178,7 @@ def test_consume_unblocks_says_so_when_there_is_nothing(
         consumed, failed, skipped = 0, 0, 0
         learned: list = []
         errors: list[str] = []
+        remaining, locked = 0, False
 
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
     monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
@@ -407,3 +410,50 @@ def test_the_all_flag_never_points_at_itself(monkeypatch, capsys) -> None:
     assert sessions_cmd.cmd_sessions(args) == 0
 
     assert "--all" not in capsys.readouterr().out
+
+
+def test_consume_unblocks_defers_to_a_running_sweep(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """Every SessionEnd spawns this, so passes overlap by design (#329). The
+    one that loses the lock says so instead of printing an empty success,
+    which would read as "nothing to learn" and hide a backlog."""
+    from mnemo.core.sessions import unblocks
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "mnemo.core.sessions.unblocks.consume",
+        lambda cfg, *, vault_root: unblocks.ConsumeReport(locked=True),
+    )
+
+    args = argparse.Namespace(
+        json=False, watch=False, consume_unblocks=True, **{"all": False}
+    )
+    assert sessions_cmd.cmd_sessions(args) == 0
+    out = capsys.readouterr().out
+    assert "already running" in out
+    assert "no unblocked session" not in out
+
+
+def test_consume_unblocks_names_the_backlog_it_left(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """A bounded pass that stops at five must not look like it finished the
+    queue: the next SessionEnd takes the next five, and a maintainer watching
+    a backlog drain needs the number."""
+    from mnemo.core.sessions import unblocks
+
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: tmp_path)
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "mnemo.core.sessions.unblocks.consume",
+        lambda cfg, *, vault_root: unblocks.ConsumeReport(consumed=5, remaining=35),
+    )
+
+    args = argparse.Namespace(
+        json=False, watch=False, consume_unblocks=True, **{"all": False}
+    )
+    sessions_cmd.cmd_sessions(args)
+
+    assert "remaining: 35 marker(s)" in capsys.readouterr().out

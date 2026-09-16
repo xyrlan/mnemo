@@ -220,10 +220,14 @@ def test_doctor_lists_at_most_five_ids(home: Path, capsys) -> None:
     assert "7 finished" in out and "and 2 more" in out
 
 
-def test_registered_last_in_doctor() -> None:
-    assert doctor_mod.DOCTOR_CHECKS[-1] == (
+def test_registered_in_doctor() -> None:
+    """Among the process rows at the end of the registry. It stopped being the
+    last one when #329 added a second census beside it; what matters is that
+    doctor calls it at all — an unregistered check is a measurement nobody
+    ever sees."""
+    assert (
         "background_processes", background_processes._doctor_check_background_processes,
-    )
+    ) in doctor_mod.DOCTOR_CHECKS
 
 
 def test_the_pool_assumption_is_stated() -> None:

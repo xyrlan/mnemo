@@ -266,7 +266,12 @@ def test_one_pass_over_many_failing_markers_writes_one_errors_log_row(
 ) -> None:
     """#314: 27 stuck markers failing in one pass wrote 27 same-second rows and
     tripped the circuit breaker. A pass is one action: one row, with the count
-    and every id, and the breaker stays closed."""
+    and every id, and the breaker stays closed.
+
+    Run unbounded (``limit=0``) on purpose: a default pass stops at
+    ``MAX_PER_PASS`` (#329), so 27 markers would take six passes and six rows,
+    and the property being pinned here is per-pass. Unbounded is also the shape
+    a maintainer draining a backlog by hand still gets."""
     from mnemo.core import errors
 
     vault = tmp_path / "vault"
@@ -285,7 +290,7 @@ def test_one_pass_over_many_failing_markers_writes_one_errors_log_row(
     path.write_text(json.dumps({"seen": seen}), encoding="utf-8")
     _fail_learn(monkeypatch, "")
 
-    report = unblocks.consume({}, vault_root=vault)
+    report = unblocks.consume({}, vault_root=vault, limit=0)
 
     assert report.failed == 27
     rows = _error_lines(vault)
@@ -297,7 +302,7 @@ def test_one_pass_over_many_failing_markers_writes_one_errors_log_row(
     assert all(sid in message for sid in sids)
     assert errors.should_run(vault) is True
 
-    unblocks.consume({}, vault_root=vault)
+    unblocks.consume({}, vault_root=vault, limit=0)
     assert len(_error_lines(vault)) == 1, "an unchanged error is not logged again"
 
 

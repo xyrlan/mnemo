@@ -611,6 +611,15 @@ def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
 
 
 def main() -> int:
+    # Nothing at all inside a session mnemo launched for itself (#329): the
+    # `claude --print` helpers that brief and extract run under the user's own
+    # settings, mnemo's hooks included, so an unguarded hook here schedules the
+    # work whose helper is running it. See :mod:`mnemo.core.hook_guard`.
+    from mnemo.core.hook_guard import hooks_off
+
+    if hooks_off():
+        return 0
+
     try:
         payload = json.load(sys.stdin)
     except Exception:

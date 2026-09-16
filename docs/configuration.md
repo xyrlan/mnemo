@@ -273,6 +273,13 @@ place as the audit trail.
 ## Environment overrides
 
 - `MNEMO_CONFIG_PATH` — load config from this path instead of the default
+- `MNEMO_HOOKS_OFF` — when set to anything but `0`/`false`/`no`/`off`, every
+  mnemo hook returns immediately: no logging, no injection, no enforcement, no
+  background work. mnemo sets it on the `claude --print` helpers it launches
+  for itself, so a briefing or an extraction does not fire the hooks that
+  would schedule another one (#329). Setting it in your own shell silences
+  mnemo for every session started from it; `mnemo doctor` says so when it sees
+  it set.
 
 ## Turning capture off
 
