@@ -5,7 +5,191 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-15
+
 ### Added
+
+- **A repo can carry its rules, and a second vault can take them: `mnemo
+  publish` and `mnemo import`.** A vault was one person's; `export` was
+  one-way and lossy by design. `publish` writes the rules attributed to the
+  repo you are in to `<repo>/.mnemo-shared/<type>/<slug>.md` in a portable
+  shape — the evidence quote kept verbatim, every vault path and `enforce`
+  block dropped, provenance as an opaque per-vault id (created on first use
+  at `.mnemo/vault-id`, never a hostname or a git identity), `user` pages
+  excluded by default — and prunes only the files it wrote itself, so two
+  contributors publishing into one tree never delete each other's rules. A
+  manifest under `.mnemo/share/` lets `mnemo status` and `mnemo doctor` say
+  when the tree is behind the vault. `import [PATH]` stages every rule into
+  `shared/_inbox/<type>/` — never `shared/` — with `origin: imported`,
+  `confidence: verified-elsewhere` where it was published verified, and the
+  local project stamped in `projects:`; a ledger skips what was already
+  staged and what came from this vault; a slug that is live becomes a
+  `.proposed.md` rewrite for `mnemo rewrites`, and one that exists under
+  another type is refused by path. `mnemo export` renders an imported rule's
+  quote as another contributor's, not the reader's. Built as a three-piece
+  contract (`docs/superpowers/contracts/2026-09-13-share-rules.md`) and
+  landed with `mnemo land --merge`. (#245)
+
+- **Every subcommand the parser offers now has a handler, by test.** The two
+  commands above parsed on master and printed `unknown command`: neither
+  piece's `files:` listed `cli/commands/__init__.py`, whose import list is
+  what makes `@command` run, and every test imported the module directly.
+  `test_every_subcommand_has_a_handler` walks the built parser's choices
+  against the registry. (#245)
+
+- **`mnemo reverify` gives the evidence gate the input it was missing.**
+  The label-only half of `mnemo replay`'s split — sixty `confidence:
+  verified` pages that `mnemo reclassify` labelled against raw transcript
+  turns — cites briefings written before `## Corrections` existed, so
+  today's gate fails every one of them mechanically, real corrections
+  included. `mnemo reverify` re-briefs each of those sessions once through
+  the ordinary briefing path (the prompt as it stands today, into a scratch
+  root, one Haiku call per session) and looks the page's quote up in the
+  regenerated Corrections; a tighter span of the same turn counts, and the
+  page then keeps the briefing's span. Dry run by default, printed per page
+  — *verified now*, *still fails*, *quote too short*, *no transcript*, *no
+  briefing cited* — and saved to `.mnemo/reverify-plan.json`; a rerun reuses
+  the scratch briefings (`--fresh` to re-brief). `--apply` executes
+  exactly what the dry run showed, without a second LLM pass: a verified
+  page gets the bare briefing path as its `evidence.source` and the
+  regenerated briefing installed, so `page_verifies` passes from then on; a
+  page that was re-briefed and still fails is demoted to `reference` with
+  `demoted_from: feedback`, the marker reclassify and the extractor share.
+  A page whose transcript is gone is reported and never touched. Same
+  archive and manifest as reclassify; `--undo ID` restores every file, the
+  swapped briefings included. Two latent bugs in reclassify's frontmatter
+  surgery fixed on the way: a second keep duplicated the `evidence:` block,
+  and a demote left the page's own `confidence: verified` line behind the
+  new `confidence: inferred`, which the parser then preferred. Dry run on
+  the maintainer's vault: 60 pages, 28 sessions re-briefed (22 pages have
+  no transcript left), 2 verified now, 32 still fail, 3 too short. (#257)
+
+- **`mnemo dispatch --model <id>` picks what a child runs on.** Every dispatched child used to take whatever `~/.claude/settings.json` resolved to, so the child that designs a decomposition and the child that sweeps a mechanical fix across 44 call sites cost the same — measured across 21 children in one day, all on the same top-tier model, none of it chosen. The flag applies to every child of the invocation and takes what `claude --model` takes (an alias like `haiku`, or a full id); mnemo keeps no list of valid models, so an unknown one fails in the child's own startup where the error names the real vocabulary. `--dry-run` prints what each child would get before anything is spent. (#268)
+- **A contract piece may carry `model:`, which wins over the flag.** The contract is written and reviewed knowing what each piece is, so a blanket typed at the command line does not silently re-price the pieces someone already thought about. Optional: every contract written before this parses unchanged. (#268)
+- **`mnemo session <id>` names the model a child is on, and `mnemo sessions` ends with the models in play.** Read from the session's own `respawnFlags` — where Claude Code records it even when nothing was passed, because it resolves the machine default into them — not from the sibling `model` key, which is `null` on every real session. The queue says it once in a footer rather than once per row: real rows already run 87–135 columns, and the same id repeated down the table would buy nothing. (#268)
+
+- **`mnemo sessions` shows what each finished child spent before its first edit, and sums it.** Each PRONTAS row ends with `32u/+107k`: tool uses before the child first changed its working tree, and how much context that added over the first turn's baseline. A line under the table totals the finished children, and `mnemo session <id>` prints the baseline, how many reflex rules the opening prompt carried and which edit ended the count. `--json` carries it per session under `exploration`. "Changed the tree" is not "called `Edit`": on the 50 dispatch transcripts on disk, 15 children first edited through `Bash` and 5 others first called `Write` on a file outside the repo, so counting tool names got 15 of 50 wrong. (#269)
+- **`tools/measure_exploration.py` splits that number by reflex injection.** First result, over those 50 children: a median 22 tool uses and +45k tokens before the first edit with no rule injected (n=38), 27.5 and +41k with one (n=6), 25.5 and +46k with two (n=6); Spearman +0.11 for rules against uses, n=50. Nothing here says the injected rules replaced exploration. It is a correlation over what happened, not a test, and every child also gets the SessionStart briefing whatever reflex does. `--list` prints the edit chosen for every transcript so the Bash classifier can be checked by eye. (#269)
+
+- **CI is a second source of corrections, and a red-then-green run now teaches
+  one.** The vault had one correction channel — the user typing one — and
+  `mnemo replay` says what that yields here: eighteen gate-verified
+  correction-backed rules out of 1830 pages, none of which ever carried into a
+  later session's prompt. Meanwhile CI corrected the model four times in the
+  same class inside a fortnight (`'charmap' codec can't decode byte 0x90`,
+  `[WinError 2] The system cannot find the file specified`, `assert 312 == 310`,
+  a cp1252 `SKILL.md` drift), each with an exact quote, and each became a rule
+  only because the maintainer wrote one by hand. When a branch's CI goes red
+  and a later push turns it green, `mnemo.core.ci_corrections` now extracts the
+  failing test, the assertion text as the quote, and the files the fix touched.
+  A red run with no green successor is not a pair and teaches nothing; a
+  failure still present in the green log is dropped, so a flaky test mints
+  nothing. The `gh` path sits behind `autopilot.network.enabled` like every
+  other GitHub call and refuses before anything leaves the machine, while the
+  same extraction runs against a local `pytest` red→green pair with no network
+  at all. (#272)
+- **A log quote is its own evidence class: `confidence: verified-ci`.** A quote
+  a runner printed is not the user's words, so it gets a distinct value, the
+  way `verified-elsewhere` marks an imported rule. Every surface that speaks in
+  the user's voice compares `== "verified"`, so the "learned since your last
+  session" banner, `mnemo learn` and `mnemo status` all exclude it unchanged,
+  and publishing a CI rule downgrades it to `inferred` rather than letting it
+  hop to another vault as something a person said. CI pages are staged as
+  `reference`, not `feedback`: the evidence gate demotes an unverifiable
+  `feedback` page *and nulls its evidence*, which would strip exactly the quote
+  this feature exists to keep. The gate for human corrections is untouched and
+  is never asked of a CI page — its quote is checked by the run that printed
+  it. (#272)
+- **`mnemo replay` gains an origin axis: user or CI.** The counts that matter —
+  correction-backed rules in the vault, and carried correction-backed prompts,
+  injections and distinct rules — are now split by which channel did the
+  correcting, at every level, with the two halves guaranteed to sum to the
+  whole. The vault line keeps saying "cite a correction you typed" while the
+  user is the only source, and only widens once a red run has actually taught
+  something. (#272)
+
+- **`mnemo stale` finds live rules that cite a file the repo no longer has.** A rule written against `src/parser.py` keeps pointing there long after the file became `src/mnemo/cli/parser.py`. Run it inside a project: it checks every path cited by the live rules attributed to that repo against `HEAD`, and when a path is gone but its basename is unique it says where it moved to. Read-only, with `--json` for scripting; `mnemo doctor` grows a row that counts the same thing. On this vault it reports 26 of 1728 live rules across six repos (1.5%). (#274)
+- **It checks cited paths and deliberately not cited symbols, and the report says so.** #274 also proposed checking backticked identifiers. Measured first: of 153 identifiers absent from `HEAD` across six repos, **none had ever been defined in that repo's history** — every one was third-party vocabulary (`login_customer_id`, `period_end`, `GetMessage()`), a name the rule was proposing ("create a helper, e.g. `getFoo()`"), or one it said had been deleted. Nothing in the token separates those from a real rename, so identifiers are counted as skipped rather than flagged, and `mnemo stale --why` explains the refusal. There is no `--apply`: with the finding this rare and this specific, the useful output is a pointer to re-read the rule, not a frontmatter stamp. (#274)
+
+- **`mnemo doctor` names what the Claude Code daemon is holding in memory.** One row splits the daemon's idle pre-warmed spare from the background children it keeps resident, with MB, age and state for each — `✓ claude daemon: 1 idle spare (146 MB, oldest 5m); 7 children resident (2.19 GB: 2 blocked, 2 done, 3 working)` — and lists the finished children still resident with `claude stop <id>` as the way to let one go. It warns when there is more than one idle spare, or a spare the running daemon does not own. Read-only; silent on Windows and wherever no daemon roster exists. (#280)
+- **Dispatch does not warm a pool of spares, so mnemo retires none.** #280 read `ps | grep bg-spare` during a freeze as 12 orphaned spares. Measured against `daemon.log`, `daemon/roster.json` and `ps`: the daemon keeps **one** idle spare and replaces it the moment a `--bg` claims it (86 of 86 claims), and a claimed spare keeps its `bg-spare` argv for life — so that grep counts running children as spares. The 1.19 GB was five working children plus one spare; the "1d19h orphans" were a `done` child from the day before, which the daemon itself retired under low memory. Killing the spare only makes the daemon spawn another, and no CLI flag caps the pool; the assumption is recorded as `daemon-spare-pool` in `mnemo.core.claude_cli` and checked by the live test. (#280)
+
+- **`mnemo sessions --json` names the session that dispatched each child.** Every row carries `parent_session`: the full id of the Claude Code session that ran `mnemo dispatch`, read from the `CLAUDE_CODE_SESSION_ID` its Bash tool exports, or `null` for a dispatch run from a plain terminal. Nothing Claude Code writes links a `--bg` child to its parent, so a consumer summing children's tokens onto the session that spawned them had only a guess. The link is kept in `<vault>/.mnemo/dispatch-parents.jsonl`, not in the child's worktree as first proposed: on the machine this was measured on, 36 of 43 dispatch children, and 34 of 37 finished ones, had already lost their worktree while their job, and its token count, were still on disk. Only the parent is recorded. The issue or piece still comes from `cwd`, and the start time from the job's own `createdAt`. (#288)
+
+- **`mnemo sessions` now shows what fills a session's context, per tool.**
+  `sessions --json` adds `context_breakdown: {tool: tokens}`, the tokens each
+  tool's results put in the context. A row gets a `Bash 46%` suffix only when
+  one tool (MCP tools counted per server) fills at least 40% of the context.
+  Otherwise the row stays as it was. On the 24 jobs on disk that bar flagged
+  one. The numbers are not `/context`'s. `/context` counts `len(JSON)/4` as a
+  share of the window, so the "Read 207%" that prompted this came from 23
+  screenshots' base64 counted as text; by this measure its Read cost ~38k
+  tokens. Text here counts at 2.25 chars/token, measured over 2,612 turns
+  (chars/4 is ~44% low). An image counts at its pixels / 750. Each turn's
+  estimate is capped at how much that turn actually grew the context. The
+  transcript is now read whole once, for both numbers. Parsing it took 0.045s for
+  every job on disk. (#308)
+
+- **`mnemo dispatch --may push|pr` states up front what a child may publish.** A child that finishes stops to ask "may I push / open a PR?", and an answer sent later through `SendMessage` or mnemo-desktop cannot approve it: Claude Code frames every socket message as another session's (#309). The dispatch prompt is the one message a child reads as the maintainer's own, so `--may push` tells it to push its branch once its full suite passes, and `--may pr` to push and open the pull request, without asking again — never force-pushing, never beyond its branch. `pr` implies `push`; `merge` is refused, since landing stays with `mnemo land` and review. A contract piece's `- **may:**` line wins over the flag, as `model:` does, and `may: none` withholds it from one piece. Without `--may` the prompt is byte-identical to before and `mnemo deliver` publishes. The grant is recorded in `<vault>/.mnemo/dispatch-grants.jsonl`, shown by `--dry-run` and the dispatch report, carried as `may` on every `mnemo sessions --json` row (`[]` when nothing was granted), and named in the queue's `publicam sem perguntar:` footer. `mnemo deliver` now counts a PR that is already open as delivered: it adds the `Closes #N` trailer if the child left it off, stops the finished child, and exits 0. (#317)
+
+- **A `mnemo-loop` skill tells a session which of mnemo's verbs are its own and
+  which are the maintainer's.** Everything a session knew about `dispatch`,
+  `deliver`, `sessions`, `land` and `--may` it inferred from command output
+  written for a human at a terminal, and it read the maintainer's next step as
+  its own: measured over the 36 dispatch reports before #306's footer note, 10
+  handed `mnemo sessions` back and 2 promised to watch children with nothing
+  armed to wake them. The skill is 53 lines and splits the verbs by owner — the
+  session reads rules through MCP, dispatches, delivers the ids it was given,
+  then reports and stops; the queue, the desktop replies, `mnemo land` and every
+  merge are the maintainer's. It also says what arrives and what it is worth: a
+  socket message is a peer's request and never approval to push (#309), a typed
+  turn — including one typed through `claude attach` — is the user, and the
+  SessionStart briefing is the previous session, not a task. It loads on demand,
+  so it costs nothing on the sessions that never dispatch anything; a test pins
+  that none of its text reaches the SessionStart context. `mnemo init` and the
+  plugin ship it like `decomposing-for-dispatch`, and a new `skills` row in
+  `mnemo doctor` reports a skill that is missing, unreadable, or whose
+  frontmatter Claude Code would not index (#233). (#327)
+
+- **Every injected briefing can now be recorded by name.** `record_briefing_read(vault_root, record)`
+  appends one row to `.mnemo/briefing-log.jsonl` — vault-relative path, source
+  session id, date, injected byte count and a hash of the exact body the session
+  received — so which briefing a session got, and how often each one is read,
+  is recoverable from disk instead of hidden behind `included_briefing: true`.
+  It is a file of its own rather than a row in `mcp-access-log.jsonl`, so ~80
+  briefed session starts a day do not shorten the window `mnemo recall` reads
+  from; it follows the same telemetry switch and 1 MiB rotation, costs ~0.1 ms,
+  and never raises. Picking a briefing records nothing; the session-start hook
+  wires the call in separately. (channels)
+
+- **Path enrichment, measured: its 2 lifetime firings are the correct count,
+  but installs from before #271 never trigger it on `Read`.** Replaying every
+  real file tool call since #271 through the live matcher reproduces both
+  logged notes exactly. The window was 21 hours, spent mostly in repos whose
+  rules name no files. But `mnemo init` wrote the `PreToolUse` matcher without
+  `Read`, and nothing rewrites it or reports the gap: over a full week, `Read`
+  doubles the notes delivered (40 against 23). `mnemo doctor` now reports
+  the gap and `mnemo init --hooks-only` closes it (#303). Findings and recommendation are in
+  `docs/superpowers/specs/2026-09-15-enrichment-status.md`.
+  (channels/investigate-enrichment)
+
+- **Spec: what the inbox socket leaves behind, measured.**
+  `docs/superpowers/specs/2026-09-15-socket-reply-status.md` counts 47 socket
+  messages delivered on this machine. Every one can be recovered from the
+  receiver's transcript (`origin.kind == "peer"`, or a `queued_command`
+  attachment when the receiver was busy), and all 39 `SendMessage` sends pair
+  with their receipt. Replies look one-way only for raw socket writes, which
+  carry no return address. Recommends no send log, and names one defect: the
+  unblock detector stores Claude Code's peer framing as the answer for 8 of
+  27 markers. (channels)
+
+- **`mnemo land --merge --admin`** passes `--admin` through to `gh pr merge`,
+  for a repo whose branch protection the maintainer owns and is choosing to
+  bypass — on this one, master requires a code-owner approval nobody else
+  can give, so every landing is one. Never implied: without the flag a
+  protection that refuses the merge still stops the landing with `gh`'s
+  reason, exactly as before. Found on the first real landing (#245's three
+  pieces), where the rehearsal passed and the merge step could not.
 
 - **`mnemo recall` now says whether a missed rule was buried or absent.**
   Every "miss" the harness has ever reported was a rule that *was* returned,
@@ -79,6 +263,300 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   Verified against the two contracts this repo has actually dispatched.
 
 ### Fixed
+
+- **The unblock detector reads the answer out of the transcript instead of
+  trying to catch `tempo` mid-flip.** A background session that is answered
+  is back at `blocked` within about ten seconds, and every trigger the sweep
+  rides — `mnemo sessions` typed by hand, `SessionEnd` of some *other*
+  session — fires on an event unrelated to that window; measured on the real
+  transcripts, 107 of 126 answers were out of reach of their own session's
+  end by arithmetic, and a 3s poll loop caught 3 of 3 while `SessionEnd`
+  caught none (#203). No cadence fixes that, and a poll loop is a daemon. So
+  `detector.sweep` now keeps a byte bookmark per session in
+  `session-queue.json`, reads the session's transcript forward from it, and
+  records every human turn it finds — a `SendMessage` from your own session
+  included — as one unblock with `answered_at`, an `answer` excerpt and the
+  question it answered. A first sighting baselines at the end of the file, so
+  upgrading does not turn old history into markers; the opening prompt is
+  never an edge; and the `tempo` comparison remains only for a transcript
+  that cannot be read. Late is now just late: the consumer re-reads the
+  transcript anyway. (#176)
+
+- **A correction is a reaction, and the evidence gate now says so in both
+  directions.** Measured on the maintainer's vault before touching anything
+  (`docs/specs/2026-09-13-extraction-corrections-measurement.md`): 100 of
+  the 100 feedback pages demoted since the `## Corrections` section existed
+  had no supporting correction in any source briefing — the gate was right
+  every time, the extractor types *Decisions made* as feedback. Of the 64
+  Corrections items the briefings hold, 23 quote only the session's first
+  user turn, 21 of them dispatched children whose sole user turn is mnemo's
+  own dispatch template; three of the vault's nineteen gate-verified rules
+  cite "Do NOT merge or push without asking." or "Choosing is part of your
+  job…" as the user's words. And the four truest corrections of September
+  were emitted as `type: reference` with a quote that verifies at the
+  feedback bar, invisible to a gate that only demoted. Three changes, none
+  a threshold: `corrections.verify` ignores the opening turn when it is a
+  dispatch brief mnemo itself wrote (a human's first message still counts —
+  the README's one-line loop is a first-turn correction — and a quote the
+  user repeats later is kept either way); `evidence.verify_page` retypes a `reference`
+  page whose quote verifies to verified `feedback`, the mirror of the
+  demotion it already did; the briefing prompt states what a correction is
+  not (the opening message, approvals, questions, feature requests, bug
+  reports) and that the `→` half is an imperative rule, not what was done.
+  `mnemo replay` on the same 2100 prompts, both gates applied to today's
+  pages: carried 117 → 117, hindsight 24 → 23, not-yet-learned 85 → 85,
+  correction-backed rules 78 → 75 and carried-correction-backed 3 → 2 — the
+  one lost was an approval prompt matching an approval quote, which fell
+  under the relative gap when nine evidence-bearing pages moved. The
+  measurement also grades `mnemo reclassify`'s 61 keep verdicts by hand:
+  3–4 are corrections, the rest feature requests, bug reports and approvals,
+  so 53 of the 78 "correction-backed" rules carry a label no current gate
+  would issue. Not changed: thresholds, the 1320 demoted pages, the 60
+  reclassify-era labels, the replay's definition. (#244)
+
+- **Dispatched PRs no longer collide in `CHANGELOG.md`.** Five children
+  dispatched in parallel (#233–#237) touched disjoint code and still
+  conflicted with each other in one file, because each added its entry at
+  the top of `## [Unreleased]` — the first merge invalidated the other four,
+  and the rest were rebased, re-tested and re-run through CI one at a time.
+  A change now documents itself in `changelog.d/<id>.<section>.md`, one file
+  per change that nothing else touches; `python3 tools/assemble_changelog.py`
+  folds the fragments into `## [Unreleased]` under their headings at release
+  and removes them, a release with no fragments leaves the file byte for
+  byte, and the release workflow refuses to publish while any fragment is
+  still pending. The dispatch prompt tells a child where to write when the
+  repo keeps a `changelog.d/`, and says nothing where it does not. (#246)
+
+- **A live `shared/<type>/` page with no state entry is now user-owned, never
+  overwritten.** Pages the extraction ledger has never written are exactly
+  the ones a person put there — written by hand, `mv`-promoted out of
+  `_inbox/` (the documented review path), or imported by `mnemo import`. The
+  single-source auto-promote branch wrote over them unconditionally, so a
+  `verified` page someone reviewed was replaced by an `inferred` re-emission
+  with nothing but an `auto_promoted` line in the extract summary to show for
+  it; the prompt makes the collision routine, since it advertises every slug
+  on disk as one to reuse. Such a page now takes the door an edited sacred
+  page already takes: the re-emission lands as
+  `shared/_inbox/<type>/<slug>.proposed.md`, counted under `conflicts:`, and
+  the live page is left byte for byte, with no entry adopted into the ledger.
+  A proposal that differs from the staged one only in its run stamps is not
+  rewritten, so an unreviewed proposal does not churn on every run. Not
+  changed: whether a same-type `inferred` re-emission may replace a
+  `verified` page whose entry it matches — the evidence gate retypes every
+  feedback page that fails to verify, so that overwrite has no path through
+  the pipeline. (#248)
+
+- **Every text file mnemo reads or writes is UTF-8 on every platform.** 44 call
+  sites in the package used the platform default encoding, which is cp1252 on
+  Windows: a `settings.json` holding a non-ASCII path, a session cache entry
+  with an accented directory name, or a vault page in Portuguese decoded as
+  mojibake or failed with `'charmap' codec can't decode`, silently inside a
+  hook. Three Windows-only CI failures in one day (#233, #236, #243) were
+  this class, each fixed at the one site CI hit; now every `read_text`,
+  `write_text`, `open` and `fdopen` in `src/`, `tools/` and `tests/` names
+  its encoding, the settings backup is a byte copy, the slash-command and
+  `.gitignore` probes tolerate files saved in another encoding, and a
+  repo-wide test fails on any new bare call. (#255)
+
+- **`mnemo replay` splits "cite a correction you typed" by provenance, and
+  quotes only the half the evidence gate can stand behind.** The
+  `confidence: verified` label has been written by three different bars
+  (#244), and every surface that counts it counted them alike. The replay
+  now re-asks today's gate of each verified page — the quote must sit in
+  the `## Corrections` of a briefing the rule was built from, the same
+  predicate `verify_page` uses — and prints *gate-verified* and *label only*
+  side by side, in the text and in every `replay-report.json` figure
+  (`vault`, `prompts`, `injections`, `rules`, `rate`, `top_carried`).
+  Measured on the maintainer's vault, 2107 prompts: 78 correction-backed
+  rules are 18 gate-verified and 60 label only; the 3 carried prompts
+  "citing your own words" are all label only, so the honest number is **0**.
+  The 60 are not demoted: every one cites a briefing that has no
+  `## Corrections` section at all (written before 2026-09), so today's gate
+  fails them mechanically, the 3–4 real corrections among them included —
+  re-verifying would drop exactly the rules a human would keep. Deciding
+  them needs a human grade or a re-briefing of those sessions, not the gate.
+  (#257)
+
+- **A rule that names a file is now shown when a session opens or edits that
+  file — the path-scoped enrichment had never fired once.** Claude Code hands
+  `PreToolUse` an absolute `file_path` and `activates_on.path_globs` are
+  written relative to the repo, so even `**/` globs could not match: across
+  3,660 real `Edit`/`Write` calls on disk, 0 did, while 655 live rules carried
+  globs. The path is now taken relative to its own git root (a worktree's, in
+  a worktree), `Read` triggers it as well as the writing tools, and each rule
+  is shown once per session rather than once per day for the whole vault, so
+  parallel dispatched children each get the note. Only globs that name a file
+  fire (`prisma/schema.prisma`, `**/screens/HomeScreen.tsx`); area globs
+  (`src/app/**`, `**/*.ts`) are ignored, because replayed over the real
+  transcripts they would have averaged 6.2 notes a session against 1.6. The
+  extraction prompt now asks for file paths only. Standalone installs: run
+  `mnemo init --hooks-only` to add `Read` to the hook matcher (`mnemo doctor`
+  says when it is missing); the plugin picks it up on update. (#271)
+
+- **`mnemo sessions` now shows the dispatch children it was hiding.** The
+  queue scoped by exact directory, so a maintainer running it in their repo
+  never saw the sessions dispatched from it — every child lives in a
+  `<repo>-wt-<issue>` worktree beside the repo, which never matched. On a real
+  machine that printed an empty queue while four sessions waited, one blocked
+  for five hours. A repo and its dispatch worktrees are now one queue, and an
+  empty scoped listing names how many sessions are elsewhere instead of
+  reading as "nothing is running". (#281)
+
+- **The live CLI contract no longer claims every child records a model.**
+  `bg-model-flag` was measured before the lean child profile existed, and
+  stated that `respawnFlags` carries a resolved `--model` even when the
+  dispatcher passed none. A lean child (now the default) passes its own
+  `--settings`, so Claude Code has no user-level default left to resolve and
+  writes no `--model` at all — measured both arms on 2.1.270, one flag apart.
+  Two shipped features that each passed alone therefore failed together, in a
+  suite CI does not run. The assumption now states both arms, the default-path
+  spawn test pins what a lean child must carry, and the resolution half is
+  asserted on a full-profile child, the only arm that can still exhibit it.
+  `Session.model` being `None` for a lean child is the honest answer, not a
+  failed read. (#282)
+
+- **`mnemo deliver` and `mnemo land` measure against the repo's default
+  branch, not a hardcoded `master`.** In a repo whose default branch is
+  `main`, `deliver --review` reported every committed piece as "no commits
+  ahead of master" and `deliver <id>` refused it; `land` rehearsed from a
+  `master` that did not exist. The base is now read from
+  `refs/remotes/origin/HEAD`, then `gh repo view` when the remote was added by
+  hand, and falls back to `master` only when neither answers. A base branch
+  that exists nowhere is reported by name instead of reading as nothing to
+  deliver. (#287)
+
+- `mnemo briefing` and every other `claude -p` call no longer fail with `Can't access working directory` when the hook runs from a worktree the dispatcher already removed: the subprocess falls back to the home directory.
+
+- **`mnemo sessions --json` now says what a session is doing, not what Claude
+  Code guessed it was doing.** Each row gains `activity` (the last tool call
+  from the transcript: `tool`, `target`, `since`, `at`, `repeated`) and
+  `status_line` — the same line the table prints: `needs` for a waiting
+  session, the tool call for a working one, the result for a finished one.
+  `detail` is Claude Code's own summary and is now only the fallback. On
+  2026-09-15 it read "awaiting task specification; message truncated" for
+  twenty minutes over a child that was editing files and committing, and
+  mnemo-desktop, which reads `--json`, showed exactly that. The table already
+  preferred the tool call; both surfaces now share one rule. Raw fields are
+  unchanged. (#293)
+
+- **Unblock markers from dispatch worktrees are learned from instead of
+  failing forever, and a worktree's transcripts count toward its repo.**
+  Discovery named each Claude Code project directory by decoding its name,
+  which cannot be decoded: `mnemo-wt-200` came back as `mnemo/wt/200`, a path
+  that never existed, so every dispatch child's transcripts were filed under
+  an agent like `200`. It now reads the `cwd` Claude Code records inside the
+  transcript, and a dispatch tree that has since been removed
+  (`<repo>-wt-<n>`, `<repo>-wt-c-<slug>`) is filed under its repo rather than
+  an orphan `<repo>-wt-<n>` namespace. On the real vault, `learn` resolves 40
+  of 40 pending unblock markers (0 before); `mnemo backfill` and `mnemo learn`
+  in the `mnemo` repo see 121 transcripts where they saw 49. A hand-made
+  worktree whose directory is gone still keeps its own name. (#301)
+
+- **An imported rule, once promoted, now reaches the reflex.** An imported page
+  has no `sources:` and names its project only in `projects:`, but the reflex
+  index read the project from sources alone, so the rule indexed with no project
+  and was never offered for injection — while the MCP tools and the SessionStart
+  topic list, which read the page directly, still showed it. The index now uses
+  the `projects:` fallback, as `rule_activation` already did. The extractor's
+  "existing rules" hint had the same gap in the other direction: it read an
+  imported rule as project-less and advertised it to every project's
+  extraction; it is now scoped to the importing project. No page in an existing
+  vault changes attribution. (#302)
+
+- **`mnemo doctor` now warns when an installed hook is older than the one this
+  version ships, and `mnemo init --hooks-only` fixes it without touching
+  anything else.** `mnemo init` writes each hook's matcher once. When #271
+  added `Read` to the `PreToolUse` matcher, existing installs kept the old one,
+  and `mnemo status` still counted the hook healthy. Over a week on a real
+  machine that halved what path enrichment delivered (23 notes against 40).
+  The new `hook_matcher` row compares the global and project `settings.json`
+  with the running version. `--hooks-only` rewrites mnemo's hook entries after
+  a backup and leaves the statusLine, MCP server, commands and skills alone. It
+  refuses where no mnemo hook is installed, so it cannot start a second install
+  next to the plugin. (#303)
+- **Re-running `mnemo init` no longer resets `mnemo.config.json`.** It wrote
+  `{"vaultRoot": ...}` over the whole file, so a user who followed #271's
+  advice to re-run it lost every non-default setting without warning, such as
+  `extraction.subprocessTimeout` or `doctor.skipStatuslineDrift`. `init` now
+  sets `vaultRoot` and keeps the rest. A file that isn't a JSON object is copied
+  to `mnemo.config.json.bak.<timestamp>` before it is replaced. (#303)
+
+- **`mnemo land` finds a dataclass field, a class constant or an enum member
+  that a contract exposes.** The check reduced `ConsumeReport.retired` to
+  `retired` and then only accepted an assignment at column zero, so an
+  attribute, which is always indented, never counted. On 2026-09-15 that
+  refused the `channels` contract's `unblocks-retire` piece on a correct tree,
+  and it had to be merged around the gate. A dotted name whose owner is a
+  class in the piece's files is now looked up among that class's own members:
+  fields, constants, methods, nested classes and `self.<name>` set in its
+  methods. A local variable of the same name does not count, and neither does
+  a method of the same name on a different class, which used to pass. A
+  qualifier that is not a class there, like `briefing_select.pick`, is looked
+  up as before. (#305)
+
+- **`mnemo dispatch` no longer hands a session the queue as its own next
+  step.** Run through a session's Bash tool, the `queue:  mnemo sessions`
+  footer came back to the maintainer as the model's promise — "Acompanho com
+  `mnemo sessions`… te aviso quando terminarem" — with nothing armed that
+  would ever wake it. When `CLAUDE_CODE_SESSION_ID` is set, dispatch now ends
+  with a note to that session: the children are detached, nothing notifies
+  it, report the ids and stop unless the maintainer asked it to watch. A plain
+  terminal gets the footer unchanged, and `/mnemo:dispatch`'s description no
+  longer says "to watch them". `tools/measure_dispatch_reports.py` counts
+  dispatch reports that name the queue with no watcher behind them, split by
+  whether the note was shown: 2 of 36 before it, both in sessions outside the
+  mnemo repo. (#306)
+
+- **`mnemo sessions` token column now shows how full each session's context is.**
+  It used to copy `tokens` from Claude Code's `state.json`, which is not the
+  context size: on all 18 jobs measured it read 3-65x low (`fee17ecd`: 14k
+  where `/context` said 92.6k). The column is now read from the transcript's
+  last real model turn (`input + cache_creation + cache_read`), the number
+  `/context` prints, skipping synthetic API-error turns. `sessions --json` adds
+  it as `context_tokens`; the raw `tokens` field is still there, unchanged.
+  (#307)
+
+- **One noisy command no longer pauses every hook for an hour.** The circuit
+  breaker now counts strikes, one per distinct `(where, kind)` per minute,
+  instead of raw `.errors.log` rows. On 2026-09-15 a single `mnemo sessions
+  --consume-unblocks` pass wrote 27 same-second `unblocks.consume` rows,
+  opened the breaker, and the next session ends wrote no briefing. A hook
+  that keeps failing still trips it, because every minute it fails is a new
+  strike. The unblock consumer also writes one row per pass now, with the
+  count and every session id, instead of one row per marker. `mnemo doctor`'s
+  closed-breaker row shows what it has counted (`27 errors in the last hour,
+  most from unblocks.consume; 1 of 10 strikes`), so you can see the breaker
+  filling up before it opens. (#314)
+
+- **mnemo's own `claude` helpers no longer fire mnemo's hooks.** Briefing,
+  extraction and `learn` run `claude --print` under your full settings — which
+  is how they reach your subscription — and those settings carry mnemo's
+  SessionStart and SessionEnd, so every helper was a session that scheduled
+  another briefing, extraction and unblock sweep. One machine reached 42
+  concurrent sweeps and 34 helpers behind 7 real sessions, at load average 118.
+  Helpers now run with `MNEMO_HOOKS_OFF=1` and every hook returns immediately
+  when it sees it. (#329)
+- **`mnemo sessions --consume-unblocks` takes a lock and stops at five markers
+  a pass.** A sweep is spawned by every session end, so passes overlapped and
+  each one re-ran the same briefings and extractions over the whole backlog;
+  now the second pass exits quietly and says so, and a 40-marker backlog drains
+  five at a time instead of holding one process for minutes. (#329)
+- **`mnemo doctor` counts the helper processes.** One row for live unblock
+  sweeps and `claude --print` helpers, which warns at the shape above — and
+  tells you when `MNEMO_HOOKS_OFF` is set in your own shell, where it would
+  silence mnemo entirely. (#329)
+
+- **Unblock markers whose transcript is gone are retired instead of retried
+  forever, and every deferred marker now says why.** `mnemo sessions
+  --consume-unblocks` retires a marker (`ConsumeReport.retired`) only when no
+  `<session_id>.jsonl` exists in any Claude Code project directory, so a
+  session whose transcript is still on disk is never discarded. A marker
+  that fails for any other reason stays pending, with `attempts` and
+  `last_error` on it in `.mnemo/session-queue.json`, and one `.errors.log`
+  line (`unblocks.consume`) each time its error changes. On the real vault
+  all 27 stuck markers still have their transcripts, so none retire: they
+  fail because `learn` cannot find a worktree session's transcript from its
+  `cwd`, and that is a separate bug. (channels)
 
 - **A dispatch child stopped after its worktree was removed no longer files
   its briefing under `bots/<repo>-wt-N/`.** (#247) #225 made every naming
@@ -159,6 +637,63 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **A dispatched child no longer inherits your whole Claude Code profile.**
+  `mnemo dispatch` used to start every child on the same configuration you use
+  interactively — every plugin, every MCP server, every unrelated skill and
+  hook — none of which is what the child was dispatched for, and all of which
+  it pays for on its first turn and carries to its last. Children now start
+  with the repo's own `.claude/` settings plus mnemo's hooks and MCP server,
+  and nothing else: measured over three background children per arm, ~58,000
+  first-turn input tokens becomes ~42,000, a saving of ~16,000 tokens (~27%)
+  per child. The lean arm also varies by three tokens between runs where the
+  full profile moves with whatever you installed that day, so children are
+  reproducible as well as cheaper. Pass `--full-profile` (or set
+  `MNEMO_DISPATCH_FULL_PROFILE=1`) for a child that genuinely needs one of
+  your plugins. (#270)
+
+- **`mnemo sessions` hides finished children whose worktree is gone.** Claude
+  Code keeps a background job's record until `claude rm`, long after the
+  dispatcher removed its tree on merge: on 2026-09-15 that was 48 records and
+  14 PRONTAS rows for work merged days earlier. A `done`/`stopped` session
+  whose `cwd` no longer exists now leaves the text queue and `--json` (so the
+  desktop cockpit too), with a footer counting what was hidden; `--stale`
+  lists them again and `--json` rows carry `is_stale`. A blocked session is
+  never hidden. `mnemo doctor` names every such job with a pasteable
+  `claude rm` line; transcripts survive `claude rm`, only the job record goes.
+  (#292)
+
+- **`mnemo deliver <id>` stops the child once its PR is open.** Nothing in
+  mnemo ended a finished child: the daemon retires one only after 8 h idle,
+  each held 300–400 MB until then, and — because only a *stopped* child fires
+  `SessionEnd` (#247) — the children that finished cleanly were exactly the
+  ones that never wrote a briefing (0 of 12 `done` jobs on disk had one;
+  `claude stop` on a `done` child was measured to run its SessionEnd hook).
+  After printing the PR URL, `deliver` runs `claude stop` on every session in
+  that worktree whose state is `done`; the row still reads `done` and the
+  worktree is left in place for `SessionEnd` to resolve. A child still working
+  or blocked is left running, with one line saying so. (#311)
+
+- **The SessionStart briefing now goes through a selection step, and it still
+  picks the newest on purpose.** `briefing_select.pick(vault, project, query=)`
+  ranks the last 10 briefings with reflex's BM25 scorer and gates, and keeps
+  the newest unless a query clearly names an older one. The hook has no query
+  to give it: it runs before the first prompt is written, and the one task
+  signal it does have, the checked-out branch, picked the best briefing 5
+  times in 20 on mnemo's real briefings, the same as newest-wins
+  (`tools/measure_briefing_query.py`). The hook also records which briefing it
+  injected, through `record_briefing_read`. (channels/briefing-query)
+
+- **A dispatched child's briefing is now documented and tested as the
+  canonical project's, both ways.** It looked like children got no briefing:
+  no `bots/<repo>-wt-*/` namespace holds one, and no inject event names a
+  worktree. Their own transcripts say otherwise. Of 92 children, every one
+  that could get a briefing did (71). The rest started before their project
+  had any briefing (16) or hit the circuit breaker (5). All 26 briefings
+  children wrote landed under the canonical project, and none were lost with
+  a worktree. Nothing about the behaviour changes. New tests run the real
+  hooks from a real `mnemo-wt-*` worktree, so a later change that gives
+  children a namespace of their own fails loudly. (channels: child-briefing)
+
 - **The README tells both halves.** It told the memory story only — the
   dispatch loop that shipped in 1.4, 1.5 and this week (`dispatch` →
   `sessions` → `deliver` → `land`, `replay` to measure the vault) was one
@@ -173,6 +708,33 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   tree moved to getting-started, which also gains a "The dispatch loop"
   section — issue form and contract form, delivering, landing, and what a
   blocked child's answer becomes — at the depth the queue already had. (#243)
+
+### Internal
+
+- **Declined to add a `check:` rule field; documented why in `docs/issue-273-findings.md`.** The field already exists as `enforce:` — with a matcher, a PreToolUse block, `mnemo list-enforced`, two `mnemo doctor` checks, and extraction-prompt guidance that defaults to omitting it. The measured gap is adoption, not schema: 1 of 1842 live rules carries a declarative check. Two findings that would have bitten an implementation are recorded there — a grep-shaped check for the rule #273 cites as its prototype reports 22 false positives on a clean tree where the AST scanner reports 0, and `mnemo publish` drops `enforce:` on purpose, because a rule that can block a tool call is not something another vault gets to install. (#273)
+
+- **An unblock marker's `answer` no longer starts with Claude Code's peer
+  framing.** A raw write to a session's inbox socket arrives without the
+  `<cross-session-message>` wrapper, so the header line ("Another Claude
+  session sent a message:") and the permission paragraph after it were stored
+  as the answer: 14 of 47 markers on a real vault. Both are now stripped by
+  their text, where Claude Code places them. Nothing reads the field today —
+  `unblocks.consume` re-briefs from the whole transcript — so no rule was ever
+  learned from it; this keeps the recorded data honest. (#304)
+
+- **Declined to tell dispatch children that a marked inbox reply carries the
+  maintainer's authority; documented why in
+  `docs/superpowers/specs/2026-09-15-inbox-reply-authority.md`.** Any process
+  that can write to a child's inbox socket could send the marker. On this
+  machine, 6 of the 8 unwrapped socket writes came from a Claude session's Bash
+  script, and exporting the marker in `sessions --json` would give it to every
+  session. On the child that prompted the issue, 3 of the 6 "maintainer
+  replies" were haiku's output from the desktop's English rewrite. Measured
+  instead: a reply typed through `claude attach` lands as
+  `origin.kind == "human"`, the same as the opening prompt. That is the path
+  mnemo-desktop should use for approvals. The dispatch prompt is unchanged. (#309)
+
+- **Measured why `.mnemo-shared` never ran; recorded in `docs/superpowers/specs/2026-09-15-shared-layer-status.md`.** `publish` → commit → clone → `import` → promote → re-publish → `rewrites` all work on first contact against a copy of the real vault. It never ran because it has existed for ~39 hours in no released version (the share pieces merged after the `v1.5.0` tag, PyPI's latest), with zero non-dry-run invocations in any transcript and nothing that invites a publisher before the first publish. One real defect surfaced: a promoted imported rule is invisible to the reflex — `core/reflex/index.py` calls `projects_for_rule` without `frontmatter=`, so the `projects:` fallback imported pages rely on never fires, while the MCP tools and topic list see the rule. The spec recommends fixing that line before the release that first ships `publish`/`import`, then keeping the layer and documenting the flow in `docs/getting-started.md`; removal is rejected because mnemo-desktop's marketplace pane runs both commands. (channels)
 
 ## [1.5.0] — 2026-09-13
 
