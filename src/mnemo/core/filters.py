@@ -247,12 +247,24 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
     double quotes are stripped so downstream consumers receive bare values
     (e.g. ``'git commit.*'`` → ``git commit.*``).
     """
-    if not text.startswith("---\n"):
+    # CRLF as well as LF: most callers hand over `read_text`, whose universal
+    # newlines have already folded a CRLF page to LF, but a caller that reads
+    # bytes to preserve a page's line endings (`friction.retire`) hands the
+    # CRLF straight through, and returning {} for it reads as "no frontmatter".
+    if text.startswith("---\n"):
+        start = 4
+    elif text.startswith("---\r\n"):
+        start = 5
+    else:
         return {}
-    end = text.find("\n---\n", 4)
+    end = -1
+    for term in ("\n---\n", "\n---\r\n"):
+        end = text.find(term, start)
+        if end != -1:
+            break
     if end == -1:
         return {}
-    body = text[4:end]
+    body = text[start:end]
 
     out: dict[str, Any] = {}
     current_list_key: str | None = None   # top-level block-list key
