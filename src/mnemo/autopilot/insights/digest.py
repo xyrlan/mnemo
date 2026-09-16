@@ -157,7 +157,10 @@ def render_digest_markdown(digest: DigestData, date_str: str) -> str:
         f"- prompts: {fmt_int(digest.reflex_prompt_count)} (last {digest.since_days}d)",
     ]
     emit_pct = fmt_pct(digest.reflex_emit_rate * 100)
-    lines.append(f"- emit-rate: {emit_pct}  (target band: 3-12%)")
+    # No target band: the 3-12% one was never validated and could not tell a
+    # carried injection from a hindsight one (#333). `mnemo replay` answers
+    # that question; the rate here is descriptive.
+    lines.append(f"- emit-rate: {emit_pct}  (descriptive — see `mnemo replay` for carried)")
     if digest.reflex_top_silence_reasons:
         reasons_str = ", ".join(
             f"{r} ({c})" for r, c in digest.reflex_top_silence_reasons[:3]

@@ -1,7 +1,9 @@
 """Read side of per-project reflex calibration.
 
 The autopilot calibrator (:mod:`mnemo.autopilot.tuner.reflex_calibrator`)
-writes ``.mnemo/reflex-config.{project}.json`` targeting a 3-12% emit rate.
+writes ``.mnemo/reflex-config.{project}.json`` when replay measures a carried
+peak strictly inside the safe range — and a human writes it by hand, with
+``"pinned": true``, when they have decided the value themselves (#333).
 This module is the consumer: the UserPromptSubmit hook merges these values
 over the global config before running the gates. The file format is the
 contract between the two — the calibrator's ``min_tokens`` field holds the
@@ -21,7 +23,8 @@ def load_project_thresholds(vault_root: Path, project: str) -> dict:
     """Return gate-threshold overrides for ``project``, keyed by gate names.
 
     Only keys present in the file with the right type are returned; callers
-    fall back per-key to global config for anything absent.
+    fall back per-key to global config for anything absent. A ``"pinned"``
+    key is bookkeeping for the calibrator, not a gate, so it is ignored here.
     """
     path = vault_root / ".mnemo" / f"reflex-config.{project}.json"
     try:

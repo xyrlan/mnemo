@@ -173,24 +173,60 @@ def _tune_bm25(vault: Path, dry_run: bool) -> None:
 
 
 def _tune_reflex(vault: Path, dry_run: bool, project: str | None) -> None:
+    """Measure carried per threshold value, then write only a measured peak.
+
+    The emit rate from ``reflex-log.jsonl`` is still printed — it is what
+    actually happened — but since #333 it is not what the calibrator targets.
+    """
     from mnemo.autopilot.tuner.reflex_calibrator import (
+        KNOBS,
+        NO_CHANGE_INSUFFICIENT,
+        MIN_ELIGIBLE_PROMPTS,
         analyze_reflex_log,
         calibrate_thresholds,
+        carried_curves,
         load_reflex_config,
         open_reflex_calibration_pr,
     )
 
     stats_map = analyze_reflex_log(vault_root=vault, project=project)
-    if not stats_map:
-        print("[reflex-calibrator] no reflex log data — skipping")
+    curves = carried_curves(vault_root=vault)
+    if not curves:
+        print("[reflex-calibrator] no transcripts to replay — skipping")
         return
 
     per_project = {}
-    for proj, stats in stats_map.items():
-        cfg = calibrate_thresholds(stats, current=load_reflex_config(proj, vault))
-        if cfg is None:
-            print(f"[reflex-calibrator] {proj}: insufficient data (< 100 prompts) — skipping")
+    too_small = 0
+    for proj in sorted(curves):
+        if project is not None and proj != project:
+            continue
+        current = load_reflex_config(proj, vault)
+        cfg, reasons = calibrate_thresholds(proj, curves=curves, current=current)
         per_project[proj] = cfg
+
+        if set(reasons.values()) == {NO_CHANGE_INSUFFICIENT}:
+            too_small += 1
+            continue
+
+        stats = stats_map.get(proj)
+        live = (
+            f"live emit {stats.emit_rate:.1%} over {stats.eligible_prompts} scored"
+            if stats else "no live log"
+        )
+        for knob in KNOBS:
+            points = curves[proj][knob]
+            best = max(points, key=lambda p: p.carried)
+            print(
+                f"[reflex-calibrator] {proj}: {knob} — carried peaks at "
+                f"{best.value:g} ({best.carried} of {points[0].prompts} prompts), "
+                f"{reasons.get(knob)} ({live})"
+            )
+
+    if too_small:
+        print(
+            f"[reflex-calibrator] {too_small} project(s) under the "
+            f"{MIN_ELIGIBLE_PROMPTS}-prompt bar — not tuned"
+        )
 
     open_reflex_calibration_pr(per_project, vault_root=vault, dry_run=dry_run)
 
