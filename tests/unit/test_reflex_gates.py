@@ -23,16 +23,49 @@ def test_absolute_floor_failure():
     assert res.silence_reason == "absolute_floor_fail"
 
 
-def test_relative_gap_failure():
+def test_relative_gap_failure_when_opted_in():
     scores = [("a", 3.0), ("b", 2.5)]  # ratio 1.2 < 1.5
     res = evaluate_gates(scores, query_tokens=["prisma", "mock", "orm"],
                          doc_tokens_by_slug={
                              "a": {"prisma", "mock", "orm"},
                              "b": {"prisma", "mock"},
                          },
-                         thresholds=DEFAULT_THRESHOLDS)
+                         thresholds={**DEFAULT_THRESHOLDS, "relative_gap": 1.5})
     assert res.accepted_slugs == []
     assert res.silence_reason == "relative_gap_fail"
+
+
+def test_relative_gap_is_off_by_default():
+    # #332: a near-tie means two rules apply — both go out, capped at two.
+    assert DEFAULT_THRESHOLDS["relative_gap"] == 1.0
+    scores = [("a", 3.0), ("b", 2.5), ("c", 2.4)]
+    res = evaluate_gates(scores, query_tokens=["prisma", "mock", "orm"],
+                         doc_tokens_by_slug={
+                             "a": {"prisma", "mock", "orm"},
+                             "b": {"prisma", "mock"},
+                             "c": {"prisma", "mock"},
+                         },
+                         thresholds=DEFAULT_THRESHOLDS)
+    assert res.accepted_slugs == ["a", "b"]
+    assert res.silence_reason is None
+
+
+@pytest.mark.parametrize("gap", [1.0, 0.5])
+def test_exact_tie_emits_both_when_gap_is_off(gap):
+    scores = [("a", 4.0), ("b", 4.0)]
+    res = evaluate_gates(scores, query_tokens=["prisma", "mock"],
+                         doc_tokens_by_slug={"a": {"prisma", "mock"}, "b": {"prisma", "mock"}},
+                         thresholds={**DEFAULT_THRESHOLDS, "relative_gap": gap})
+    assert res.accepted_slugs == ["a", "b"]
+
+
+def test_gap_off_still_leaves_the_floor_to_judge_relevance():
+    scores = [("a", 1.9), ("b", 1.9)]
+    res = evaluate_gates(scores, query_tokens=["prisma", "mock"],
+                         doc_tokens_by_slug={"a": {"prisma", "mock"}, "b": {"prisma", "mock"}},
+                         thresholds=DEFAULT_THRESHOLDS)
+    assert res.accepted_slugs == []
+    assert res.silence_reason == "absolute_floor_fail"
 
 
 def test_term_overlap_failure():

@@ -94,7 +94,7 @@ DEFAULTS: dict[str, Any] = {
         "maxEmissionsPerSession": 10,
         "thresholds": {
             "termOverlapMin": 2,
-            "relativeGap": 1.5,
+            "relativeGap": 1.0,
             "absoluteFloor": 2.0,
             "floorReferenceDocs": 30,
             "minQueryTokens": 3,

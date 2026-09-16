@@ -81,7 +81,7 @@ def gate_thresholds(reflex_cfg: dict, overrides: dict | None = None) -> dict:
         "term_overlap_min": int(overrides.get(
             "term_overlap_min", thresholds.get("termOverlapMin", 2))),
         "relative_gap": float(overrides.get(
-            "relative_gap", thresholds.get("relativeGap", 1.5))),
+            "relative_gap", thresholds.get("relativeGap", 1.0))),
         "absolute_floor": float(overrides.get(
             "absolute_floor", thresholds.get("absoluteFloor", 2.0))),
         "floor_reference_docs": int(overrides.get(

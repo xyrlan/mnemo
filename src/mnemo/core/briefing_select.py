@@ -34,6 +34,12 @@ from mnemo.core.reflex.tokenizer import tokenize
 # pasted in: their "state at end of session" has been overtaken ten times.
 POOL_SIZE = 10
 
+# One briefing is carried, not two, so a tie between the top two *is*
+# ambiguity here: replacing the newest briefing needs a clear winner. Reflex
+# turned this gate off (#332) because it injects both near-tied rules; this
+# chooser cannot, so it keeps the gap reflex shipped with before that.
+RELATIVE_GAP = 1.5
+
 # Words every branch-naming scheme uses and no briefing is *about*.
 _BRANCH_NOISE = frozenset({
     "master", "main", "develop", "development", "dev", "trunk", "head",
@@ -133,7 +139,8 @@ def choose(
 
     The gate's term-overlap bar is capped at the query's own length: a branch
     is one to four words, and a one-word query that matches has matched all
-    of itself. The floor and the relative gap are reflex's, unchanged.
+    of itself. The floor is reflex's, unchanged; the relative gap is
+    :data:`RELATIVE_GAP`, because only one briefing can win.
     """
     if not records:
         return Choice(record=None, reason="no_briefings")
@@ -152,7 +159,7 @@ def choose(
     named = [(_session_id(records[int(k)]), v) for k, v in scores]
     if not scores:
         return Choice(record=newest, reason="no_match", query_tokens=q)
-    th = dict(gates.DEFAULT_THRESHOLDS)
+    th = dict(gates.DEFAULT_THRESHOLDS, relative_gap=RELATIVE_GAP)
     th.update(thresholds or {})
     th["term_overlap_min"] = min(int(th["term_overlap_min"]), len(q))
     result = gates.evaluate_gates(
