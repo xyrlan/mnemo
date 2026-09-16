@@ -142,6 +142,10 @@ def cmd_session(args: argparse.Namespace) -> int:
     # the model is one of the answers. The queue says it once in a footer
     # instead of once per row — see render._models.
     flags = [f for f in (session.state, session.tempo, session.model) if f]
+    # Labelled, because a bare "high" beside a tempo reads as one. Absent is
+    # the default, never a failed read (#351), so nothing is printed for it.
+    if session.effort:
+        flags.append(f"esforço {session.effort}")
     if session.live is True:
         flags.append("live")
     elif session.live is False:

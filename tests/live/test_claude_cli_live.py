@@ -309,6 +309,56 @@ def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(2))
 
 
+def test_effort_levels_match_the_cli(real_claude: Path) -> None:
+    """``bg-effort-flag``, half one: ``EFFORT_LEVELS`` is the CLI's own list (#351).
+
+    Free: ``--version`` short-circuits, so the unknown level is warned about
+    and no model is called. The warning is the only place the list is printed.
+    """
+    result = subprocess.run(
+        ["claude", "--effort", "mnemo-not-a-level", "--version"],
+        capture_output=True, text=True, timeout=30,
+    )
+    printed = result.stdout + result.stderr
+    assert "Valid values:" in printed, (
+        f"bg-effort-flag: an unknown --effort no longer lists the valid ones: {printed!r}"
+    )
+    listed = printed.split("Valid values:", 1)[1].split("\n", 1)[0].strip().rstrip(".")
+    assert tuple(v.strip() for v in listed.split(",")) == claude_cli.EFFORT_LEVELS, (
+        f"bg-effort-flag: the CLI accepts {listed!r}; update EFFORT_LEVELS"
+    )
+
+
+def test_bg_and_effort_compose(real_claude: Path, tmp_path: Path) -> None:
+    """``bg-effort-flag``, half two: ``--effort`` survives ``--bg`` (#351).
+
+    On the lean default, where no other flag would put a value there, and on
+    haiku at ``low`` so the proof is the cheapest spawn available. What is
+    checked is what was *recorded*: nothing observable says how hard a child
+    actually reasoned.
+    """
+    repo = _git_repo(tmp_path / "live-effort")
+    tree = dispatch.ensure_worktree(3, repo_root=repo)
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku", effort="low")
+        assert claude_cli.SHORT_ID_RE.match(short_id), (
+            f"bg-effort-flag: `--bg --effort low` printed no id: {short_id!r}"
+        )
+        state_path = real_claude / "jobs" / short_id / "state.json"
+        data = _until(lambda: _state(state_path), seconds=30)
+        assert data, "bg-effort-flag: no state.json for the child"
+        assert jobs._parse(short_id, data).effort == "low", (
+            f"bg-effort-flag: spawned with --effort low, respawnFlags say "
+            f"{data.get('respawnFlags')!r}"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
+
+
 def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
     """``lean-child-profile``: the flags drop the user profile, and mnemo survives.
 
