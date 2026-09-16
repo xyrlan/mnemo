@@ -135,12 +135,24 @@ def briefing_projects(vault_root: Path) -> dict[str, str]:
 
 def default_project_for(vault_root: Path) -> Callable[[str, str], str]:
     """The hook's own resolution when the tree still exists; the briefing's
-    record of the project when it does not."""
+    record of the project when it does not.
+
+    A removed dispatch tree (``<repo>-wt-<n>``, ``<repo>-wt-c-<slug>``) is
+    folded into its sibling repo first (#334). While the child ran, its
+    ``.git`` pointer led the hook to the repo, so that is the project it
+    queried; the tree's basename is a namespace no rule is filed under, and
+    replaying against it scored those prompts against the universal rules
+    alone. The fold also wins over the briefing, which a child delivered
+    before #301 may have filed under that same basename.
+    """
     from mnemo.core.agent import resolve_canonical_agent
+    from mnemo.core.backfill.discover import fold_gone_dispatch_tree
 
     by_session = briefing_projects(vault_root)
 
     def _resolve(cwd: str, session_id: str) -> str:
+        if cwd:
+            cwd = fold_gone_dispatch_tree(cwd)
         if cwd and Path(cwd).is_dir():
             return resolve_canonical_agent(cwd).name
         if session_id in by_session:
