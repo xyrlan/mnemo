@@ -41,11 +41,17 @@ class Decision:
 
 
 def candidates_for_project(index: dict, project: str) -> list[str]:
-    """Slugs in scope for ``project``: its own rules plus the universal ones."""
+    """Slugs in scope for ``project``: its own rules plus the universal ones.
+
+    Retired rules (``doc["retired"]``, see ``reflex/index.py``) are never
+    candidates. This is the single chokepoint for that: the hook, ``replay``
+    and ``mnemo why`` all rank through here, so none of them filters again.
+    """
     docs = index.get("docs") or {}
     return [
         slug for slug, doc in docs.items()
-        if project in (doc.get("projects") or []) or doc.get("universal")
+        if (project in (doc.get("projects") or []) or doc.get("universal"))
+        and not doc.get("retired")
     ]
 
 
