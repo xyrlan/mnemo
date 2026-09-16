@@ -217,6 +217,23 @@ class TestCalibrateThresholds:
         config, _ = calibrate_thresholds("p", curves=curves, current=current)
         assert config is None
 
+    def test_sweep_starts_at_the_shipped_default(self):
+        """#332 turned the gap gate off (1.0). A grid starting above that
+        could call 1.15 an interior peak without ever measuring the default."""
+        from mnemo.autopilot.tuner.reflex_calibrator import GAP_CANDIDATES, KNOBS
+        from mnemo.core.reflex.gates import DEFAULT_THRESHOLDS
+        assert GAP_CANDIDATES[0] == DEFAULT_THRESHOLDS["relative_gap"] == 1.0
+        assert KNOBS["relative_gap"][1][0] == 1.0
+
+    def test_gap_off_beating_an_inner_bump_writes_nothing(self):
+        # A bump at 1.15 is a peak of 1.1..3.0, but not of the range that
+        # includes the gate being off.
+        curve = [(1.0, 260), (1.1, 200), (1.15, 240), (1.5, 77), (3.0, 7)]
+        curves = _curve("p", curve, _MONOTONE_FLOOR)
+        config, reasons = calibrate_thresholds("p", curves=curves, current=None)
+        assert config is None
+        assert reasons["relative_gap"] == NO_CHANGE_MONOTONE
+
     def test_interior_peak_is_written(self):
         peaked = [(1.1, 40), (1.15, 60), (1.25, 300), (1.5, 55), (3.0, 10)]
         curves = _curve("p", peaked, _MONOTONE_FLOOR)

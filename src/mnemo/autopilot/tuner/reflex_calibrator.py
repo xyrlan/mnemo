@@ -153,20 +153,23 @@ class ReflexConfig:
 # Set after class definitions
 DEFAULT_REFLEX_CONFIG = ReflexConfig(
     project="__default__",
-    relative_gap=float(DEFAULT_THRESHOLDS.get("relative_gap", 1.5)),
+    relative_gap=float(DEFAULT_THRESHOLDS.get("relative_gap", 1.0)),
     absolute_floor=float(DEFAULT_THRESHOLDS.get("absolute_floor", 2.0)),
     min_tokens=int(DEFAULT_THRESHOLDS.get("term_overlap_min", 2)),
 )
 
-# Safe bounds for calibrated thresholds
-_REL_GAP_MIN = 1.1
+# Safe bounds for calibrated thresholds. 1.0 is gap-off, the shipped default
+# since #332, so it is part of the sweep: an interior peak must beat the gate
+# being off, or the calibrator would raise a project's gap above the default
+# on a curve that never measured the default.
+_REL_GAP_MIN = 1.0
 _REL_GAP_MAX = 3.0
 _ABS_FLOOR_MIN = 0.5
 _ABS_FLOOR_MAX = 5.0
 
 # The values swept per knob. They span the safe range end to end so that a
 # peak found strictly inside it is a peak of the whole range, not of the grid.
-GAP_CANDIDATES: tuple[float, ...] = (1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0)
+GAP_CANDIDATES: tuple[float, ...] = (1.0, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0)
 FLOOR_CANDIDATES: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
 
 #: knob name → (candidate grid, safe bounds)

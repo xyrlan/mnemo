@@ -11,7 +11,7 @@ def test_reflex_defaults_exist(tmp_path, monkeypatch):
     assert reflex["enabled"] is True  # v0.8.0 stable — on-by-default
     assert reflex["maxEmissionsPerSession"] == 10
     assert reflex["thresholds"]["termOverlapMin"] == 2
-    assert reflex["thresholds"]["relativeGap"] == 1.5
+    assert reflex["thresholds"]["relativeGap"] == 1.0  # gap gate off (#332)
     assert reflex["thresholds"]["absoluteFloor"] == 2.0
     assert reflex["bm25f"]["fieldWeights"]["aliases"] == 2.5
 

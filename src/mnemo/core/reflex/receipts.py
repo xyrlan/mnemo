@@ -156,7 +156,7 @@ def _explain(
     top_slug, top_score = candidates[0]
 
     if reason == "relative_gap_fail":
-        gap = float(thresholds.get("relative_gap", 1.5))
+        gap = float(thresholds.get("relative_gap", 1.0))
         runner = candidates[1][1] if len(candidates) > 1 else 0.0
         needed = gap * runner
         return (

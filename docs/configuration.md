@@ -132,15 +132,15 @@ the notice at all.
 
 ### `reflex` — per-prompt rule retrieval
 
-The single most relevant rule, injected inline before Claude answers, and only
-when it clears all three thresholds.
+The most relevant rule (or two, when a second one also clears the floor and
+the overlap check), injected inline before Claude answers.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `reflex.enabled` | `true` | Run retrieval on every prompt |
 | `reflex.maxEmissionsPerSession` | `10` | Stop injecting after this many hits in one session |
 | `reflex.thresholds.termOverlapMin` | `2` | Query/rule terms that must overlap |
-| `reflex.thresholds.relativeGap` | `1.5` | How far the top hit must beat the runner-up |
+| `reflex.thresholds.relativeGap` | `1.0` | How far the top hit must beat the runner-up. `1.0` turns the check off (the default since #332: a near-tie means two rules apply, and both are injected); set it above `1.0` to silence prompts without a clear winner |
 | `reflex.thresholds.absoluteFloor` | `2.0` | Minimum score to inject at all (scaled down in small vaults, see next row) |
 | `reflex.thresholds.floorReferenceDocs` | `30` | Below this many rules the floor is scaled down with the vault's idf ceiling, so a young vault can inject at all |
 | `reflex.thresholds.minQueryTokens` | `3` | Prompts shorter than this are skipped |

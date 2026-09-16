@@ -385,8 +385,10 @@ them at session start. All three default to `scope="project"`; pass
 ### Reflex
 
 On every prompt, mnemo runs BM25F retrieval over its rule index and injects
-the single most relevant rule inline — only when it clears a triple gate on
-term overlap, relative score gap, and an absolute floor. The floor scales
+the most relevant rule inline — plus the runner-up when it is nearly as good —
+only when it clears an absolute score floor and a term-overlap check. (A
+relative-gap gate that demanded one clear winner is still configurable, but
+off by default: a near-tie means two rules apply, #332.) The floor scales
 with the vault's size, so the first rule you learn can fire on the next
 prompt instead of waiting for the vault to grow. Fail-open: any error means
 the prompt passes through untouched.
@@ -494,10 +496,10 @@ not reach:
 09:41:24  injected  mnemo-1.0-roadmap (6.84)
           ahead of  recall-degrades-with-topic-size (3.45)
 
-09:30:07  silent    recall-degrades-with-topic-size led at 4.21 but needed 5.78
-                    (1.50 x the runner-up's 3.85) to be clearly ahead
-                    recall-degrades-with-topic-size  4.21
-                    mnemo-1.0-roadmap                3.85
+09:30:07  silent    recall-degrades-with-topic-size led at 1.21, under the 2.00 floor
+                    — nothing scored well enough to be worth saying
+                    recall-degrades-with-topic-size  1.21
+                    mnemo-1.0-roadmap                0.85
 ```
 
 Detailed errors land in `~/mnemo/.errors.log` under `where=extract.bg.*`. If

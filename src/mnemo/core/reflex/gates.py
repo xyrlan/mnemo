@@ -1,15 +1,28 @@
-"""Triple-gate confidence check for Reflex.
+"""Confidence gates for Reflex.
 
-Silence is the default; emission requires ALL THREE to pass against the
-top-1 candidate:
+Silence is the default; emission requires these to pass against the top-1
+candidate:
 
   (a) term-overlap >= term_overlap_min across the UNION of indexed fields
-  (b) relative gap  s[0] >= relative_gap * s[1]   (or s[1] == 0)
+  (b) relative gap  s[0] >= relative_gap * s[1]   (or s[1] == 0) — OFF by
+      default (relative_gap 1.0), see below
   (c) absolute floor s[0] >= absolute_floor
 
 If top-1 passes, top-2 is included ONLY IF it ALSO passes (a) and its score
-clears the absolute_floor. We deliberately do not re-check relative gap on
-top-2 — the purpose of top-2 is "nearly as good as top-1, not worth hiding."
+clears the absolute_floor. Relative gap is never re-checked on top-2 — the
+purpose of top-2 is "nearly as good as top-1, not worth hiding."
+
+Why (b) is off (#332). Gate (b) assumed a near-tie between the top two
+rules means an *ambiguous* prompt, and silenced the whole prompt on it — the
+same condition under which top-2 is admitted as "nearly as good". Replayed
+over the maintainer's vault (2723 prompts, 1937 rules, 2026-09-16) the
+premise is backwards: injections on prompts whose top1/top2 ratio is below
+1.05 were 56% carried and 5.6% hindsight, against 44% and 7.3% on prompts
+with a clear winner (ratio >= 1.5). A near-tie means two rules apply, not
+that neither does. At the old default of 1.5 the gate silenced 1773 prompts
+and carried injections fell from 684 to 163. "Is this relevant at all?" is
+(c)'s question, and the 2-slug cap already bounds the cost of a tie. The
+knob stays for a user who wants it: any value above 1.0 re-enables (b).
 
 BM25F's Laplace idf caps out at ln((N-0.5)/1.5+1), which grows with the
 vault's doc count N — a term present in exactly one doc of a one-rule vault
@@ -27,7 +40,7 @@ from dataclasses import dataclass, field
 
 DEFAULT_THRESHOLDS: dict = {
     "term_overlap_min": 2,
-    "relative_gap": 1.5,
+    "relative_gap": 1.0,
     "absolute_floor": 2.0,
     "floor_reference_docs": 30,
 }
@@ -73,7 +86,7 @@ def evaluate_gates(
     thresholds: dict,
     doc_count: int | None = None,
 ) -> GateResult:
-    """Run the triple-gate and return at most 2 accepted slugs (top-1, [top-2])."""
+    """Run the gates and return at most 2 accepted slugs (top-1, [top-2])."""
     if not scores:
         return GateResult(silence_reason="index_missing")
 
@@ -81,7 +94,7 @@ def evaluate_gates(
     top2 = scores[1] if len(scores) > 1 else (None, 0.0)
 
     t_overlap_min = int(thresholds.get("term_overlap_min", 2))
-    rel_gap = float(thresholds.get("relative_gap", 1.5))
+    rel_gap = float(thresholds.get("relative_gap", 1.0))
     configured_floor = float(thresholds.get("absolute_floor", 2.0))
     reference_docs = int(thresholds.get("floor_reference_docs", 30))
     abs_floor = effective_absolute_floor(configured_floor, doc_count, reference_docs)
@@ -90,8 +103,8 @@ def evaluate_gates(
     if top1_score < abs_floor:
         return GateResult(silence_reason="absolute_floor_fail", effective_floor=abs_floor)
 
-    # (b) relative gap — s2 == 0 is trivially passing.
-    if top2[1] > 0 and top1_score < rel_gap * top2[1]:
+    # (b) relative gap — off at <= 1.0; s2 == 0 is trivially passing.
+    if rel_gap > 1.0 and top2[1] > 0 and top1_score < rel_gap * top2[1]:
         return GateResult(silence_reason="relative_gap_fail", effective_floor=abs_floor)
 
     # (a) term overlap.
