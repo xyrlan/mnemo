@@ -55,7 +55,7 @@ def _repo_root() -> Path | None:
     return Path(top) if top else None
 
 
-def _default_grant(value: str | None):
+def _default_grant(value: str | None) -> grants.Grant:
     """What a child may publish, defaulting to ``pr`` when nothing was said.
 
     The default inverted on 2026-09-16. It used to be ``()`` — "Do not merge
