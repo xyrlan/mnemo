@@ -290,20 +290,26 @@ NO_GRANT = "Do not merge or push without asking."
 #: what turns that transcript into a briefing. Stopping first would end the
 #: session with nothing to write down; not stopping at all is the state this
 #: replaces, where the report is written and never becomes memory.
-_CLOSING_PROMPT = """
-How to finish, whatever you decided:
+#:
+#: Held as unwrapped sentences, one per step, because the grant is substituted
+#: mid-sentence into step 2: pre-wrapped prose would keep the line breaks the
+#: shortest phrasing happened to need and run 40 columns long on the others.
+#: :func:`_wrap` lays them out at render time, as the publish clause is.
+_CLOSING_STEPS = (
+    "Write your closing report in this session — what you did, what you "
+    "decided and why, what you refused. This is the only copy: it becomes "
+    "the session's briefing.",
+    "Ask git whether there is work to publish: a clean tree on your own "
+    "branch with at least one commit ahead of the base. If there is"
+    "{publish_hint}. If there is not — you refused the task, or it needed no "
+    "change — publish nothing. Do not decide this from memory; run git and "
+    "read it.",
+    "Stop yourself, last: `claude stop ${{CLAUDE_CODE_SESSION_ID:0:8}}`. Your "
+    "conversation is kept. Nothing else stops you, and a session left running "
+    "writes no briefing at all.",
+)
 
-1. Write your closing report in this session — what you did, what you
-   decided and why, what you refused. This is the only copy: it becomes the
-   session's briefing.
-2. Ask git whether there is work to publish: a clean tree on your own branch
-   with at least one commit ahead of the base. If there is{publish_hint}. If
-   there is not — you refused the task, or it needed no change — publish
-   nothing. Do not decide this from memory; run git and read it.
-3. Stop yourself, last: `claude stop ${{CLAUDE_CODE_SESSION_ID:0:8}}`. Your
-   conversation is kept. Nothing else stops you, and a session left running
-   writes no briefing at all.
-"""
+_CLOSING_HEADING = "\nHow to finish, whatever you decided:\n"
 
 
 def _closing_clause(may: grants.Grant = ()) -> str:
@@ -314,6 +320,9 @@ def _closing_clause(may: grants.Grant = ()) -> str:
     a child that refused the task has no commits and publishes nothing, but
     its reasoning is the most valuable briefing in the system, because no diff
     carries it.
+
+    Each step is wrapped under its own number, so a continuation never starts
+    at column 0 where it would read as a new section.
     """
     if "pr" in may:
         hint = ", push it and open the pull request you were granted"
@@ -321,7 +330,14 @@ def _closing_clause(may: grants.Grant = ()) -> str:
         hint = ", push it (do not open a pull request)"
     else:
         hint = ", say so in your report and leave it for `mnemo deliver`"
-    return _CLOSING_PROMPT.format(publish_hint=hint)
+    steps = "\n".join(
+        _wrap(
+            step.format(publish_hint=hint),
+            initial_indent=f"{number}. ", subsequent_indent="   ",
+        )
+        for number, step in enumerate(_CLOSING_STEPS, start=1)
+    )
+    return f"{_CLOSING_HEADING}\n{steps}\n"
 
 
 def _publish_clause(

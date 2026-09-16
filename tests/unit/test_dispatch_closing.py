@@ -1,4 +1,6 @@
 """The child is told how to end itself (2026-09-16 design)."""
+import pytest
+
 from mnemo.core import dispatch
 
 
@@ -45,3 +47,20 @@ def test_refusing_child_is_still_told_to_report_and_stop():
     """A child with no grant still ends itself — the stop is unconditional."""
     prompt = dispatch.build_prompt(211, title="t", body="b", may=())
     assert "claude stop" in prompt
+
+
+@pytest.mark.parametrize("may", [(), ("push",), ("push", "pr")])
+def test_the_closing_steps_stay_wrapped_under_their_numbers(may) -> None:
+    """Wrapped under its number: a line at column 0 would read as a new section.
+
+    Every grant phrases step 2 differently and the longest of them is the one
+    that must still fit, so each is measured rather than the default alone.
+    """
+    lines = dispatch._closing_clause(may).splitlines()
+    steps = [line for line in lines if line[:2] in ("1.", "2.", "3.")]
+    assert len(steps) == 3
+    assert all(len(line) <= 78 for line in lines)
+    # Continuations hang under their number instead of starting a section.
+    for line in lines:
+        if line and line not in steps and not line.endswith(":"):
+            assert line.startswith("   "), line
