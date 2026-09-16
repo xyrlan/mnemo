@@ -107,6 +107,28 @@ def _print_scope_line(label: str, settings_path: Path, expected_events: tuple[st
         print(f"Hooks ({label}): {n}/{len(expected_events)} — {settings_path}")
 
 
+def _print_hook_drift(scope: str) -> None:
+    """Report a matcher narrower than this version ships (#337).
+
+    The hook count above says 4/4 whether or not the matcher still covers what
+    the code expects, which is how an install ran a week at half reach with
+    nothing but ``mnemo doctor`` — opt-in — able to say so. Silent when every
+    matcher is current, and never fatal: a status line is not worth a
+    traceback.
+    """
+    from mnemo.install import hook_drift
+
+    try:
+        drifts = hook_drift.scan()
+    except Exception:  # noqa: BLE001
+        return
+    for drift in drifts:
+        if scope not in ("all", drift.scope):
+            continue
+        for line in drift.status_lines():
+            print(line)
+
+
 @command("status")
 def cmd_status(args: argparse.Namespace) -> int:
     import os
@@ -135,6 +157,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             _print_scope_line("project", project_settings, expected_events)
         if scope in ("global", "all"):
             _print_scope_line("global", global_settings, expected_events)
+        _print_hook_drift(scope)
     _print_hosts_status()
     if err_mod.should_run(vault):
         print("Circuit breaker: closed (ok)")

@@ -44,6 +44,31 @@ def _maybe_prune_briefings(vault: Path, cfg: dict) -> None:
     marker.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
 
 
+def _maybe_repair_hook_matchers(vault: Path, cfg: dict, cwd: str | None = None) -> None:
+    """Bring an installed hook matcher up to what this version ships (#337).
+
+    ``mnemo init`` writes each matcher once, so a release that widens one —
+    #271 added ``Read`` to ``PreToolUse`` — reaches nobody who already has
+    mnemo installed. Before this, only ``mnemo doctor`` said so, and ``doctor``
+    is opt-in: the maintainer's own install ran a week at half reach (23 notes
+    where the current matcher delivers 40) with ``status`` calling it healthy.
+
+    The write is the narrow one #303 built for exactly this: mnemo's own hook
+    entries in ``settings.json``, after a backup, leaving config, statusLine,
+    MCP and other tools' hooks alone. It happens once per distinct drift, so a
+    matcher the user narrows back by hand afterwards is theirs to keep.
+
+    The current session already loaded its hooks and keeps them; the notice
+    goes to stderr because stdout carries the injection envelope.
+    """
+    from mnemo.install import hook_drift
+
+    if not cfg.get("install", {}).get("autoRepairHooks", True):
+        return
+    for notice in hook_drift.auto_repair(vault, cwd=Path(cwd) if cwd else None):
+        print(notice, file=sys.stderr)
+
+
 def _build_injection_payload(
     vault_root: Path,
     current_project: str | None = None,
@@ -674,6 +699,10 @@ def main() -> int:
             _maybe_prune_briefings(vault, cfg)
         except Exception as e:
             errors.log_error(vault, "session_start.briefings_prune", e)
+        try:
+            _maybe_repair_hook_matchers(vault, cfg, cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_start.hook_repair", e)
         try:
             mirror.mirror_all(cfg)
         except Exception as e:
