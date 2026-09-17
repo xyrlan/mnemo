@@ -174,3 +174,42 @@ def test_is_job_scratch_honours_a_custom_config_dir(monkeypatch):
     assert C.is_job_scratch("/opt/claude-home/jobs/1f87be87/tmp/probe")
     assert not C.is_job_scratch("/opt/claude-home/jobs/1f87be87/out")
     assert not C.is_job_scratch("/opt/claude-homer/jobs/1f87be87/tmp")
+
+
+# --- #360: a `!` shell-mode turn is not the user's words ------------------------
+
+SHELL_MERGE = "<bash-input> gh pr merge 186 --squash --delete-branch --admin</bash-input>"
+
+
+def test_is_shell_turn_matches_the_three_shell_mode_blocks_only():
+    assert C.is_shell_turn(SHELL_MERGE)
+    assert C.is_shell_turn("  <bash-stdout>merged</bash-stdout><bash-stderr></bash-stderr>")
+    assert C.is_shell_turn("<bash-stderr>fatal: no upstream</bash-stderr>")
+    assert not C.is_shell_turn("pode abrir o merge com gh pr merge --admin")
+    assert not C.is_shell_turn("why did <bash-input> show up in the briefing?")
+    assert not C.is_shell_turn("")
+
+
+def test_verify_rejects_a_quote_found_only_in_a_shell_command():
+    items = [C.Correction(quote=SHELL_MERGE, rule="Merge with --admin")]
+    kept, rejected = C.verify(items, ["open the PR", SHELL_MERGE])
+    assert kept == [] and rejected == items
+
+
+def test_verify_rejects_a_quote_found_only_in_shell_output():
+    out = "<bash-stdout>never retry on 4xx, only on 5xx</bash-stdout><bash-stderr></bash-stderr>"
+    items = [C.Correction(quote="never retry on 4xx, only on 5xx", rule="r")]
+    assert C.verify(items, ["add a retry helper", out]) == ([], items)
+
+
+def test_verify_keeps_a_quote_the_user_also_typed_outside_the_shell():
+    quote = "gh pr merge 186 --squash --delete-branch --admin"
+    items = [C.Correction(quote=quote, rule="r")]
+    turns = [SHELL_MERGE, "just run gh pr merge 186 --squash --delete-branch --admin yourself"]
+    assert C.verify(items, turns) == (items, [])
+
+
+def test_verify_skips_shell_turns_after_a_dispatch_brief_too():
+    items = [C.Correction(quote=SHELL_MERGE, rule="r")]
+    turns = ["Work on issue #12 in this repo: x", SHELL_MERGE]
+    assert C.verify(items, turns) == ([], items)

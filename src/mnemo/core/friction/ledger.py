@@ -246,11 +246,17 @@ def iter_records(
     value anything branches on. The ledger is a plain text file in the
     maintainer's vault and a hand edit must not crash every reader of it.
     A missing key is not corruption — it takes the field's default.
+
+    A row whose quote is a ``!`` shell-mode block
+    (:func:`corrections.is_shell_turn`) is skipped too. ``verify`` no longer
+    lets one in, but rows written before it did are already on disk (#360),
+    and every reader — the report, retirement, ``is_retired`` — must stop
+    counting them without the append-only file being rewritten.
     """
     cutoff = _since_bound(since)
     for row in iter_rotated_rows(ledger_path(Path(vault_root))):
         rec = _from_row(row)
-        if rec is None:
+        if rec is None or corrections.is_shell_turn(rec.quote):
             continue
         if project is not None and rec.project != project:
             continue

@@ -161,6 +161,24 @@ def is_job_scratch(cwd: str) -> bool:
     return len(parts) >= 3 and parts[0] == "jobs" and bool(parts[1]) and parts[2] == "tmp"
 
 
+#: How Claude Code records a ``!`` shell-mode turn: the command the user ran,
+#: and what it printed. Typed, or printed, but addressed to a shell.
+_SHELL_TURN_RE = re.compile(r"^\s*<(?:bash-input|bash-stdout|bash-stderr)>", re.I)
+
+
+def is_shell_turn(text: str) -> bool:
+    """True when *text* is a ``!`` shell-mode command or its output.
+
+    A command the user runs is the user acting, not the user telling the
+    assistant anything — and its output is not the user's words at all.
+    Measured on the real vault (#360): 10 of the 90 backfilled corrections
+    were ``<bash-input>`` blocks, and three of them (``gh pr merge … --admin``)
+    were linked as contradicting ``merge-requires-admin`` — the largest single
+    cluster in the ledger, from the user doing what the rule described.
+    """
+    return bool(_SHELL_TURN_RE.match(text or ""))
+
+
 def verify(
     items: list[Correction], user_turns: list[str],
 ) -> tuple[list[Correction], list[Correction]]:
@@ -181,10 +199,14 @@ def verify(
     is exactly "never use npm in this repo, always yarn" as the first and
     only thing typed, and that is a correction. A quote the user repeats
     later in the session is kept either way: the repetition is the reaction.
+
+    Shell-mode turns (:func:`is_shell_turn`) never count either: a quote found
+    only in a ``!`` command or its output is not something the user said.
     """
     kept: list[Correction] = []
     rejected: list[Correction] = []
-    reactions = user_turns[1:] if user_turns and is_dispatch_brief(user_turns[0]) else user_turns
+    turns = user_turns[1:] if user_turns and is_dispatch_brief(user_turns[0]) else user_turns
+    reactions = [t for t in turns if not is_shell_turn(t)]
     for item in items:
         if any(quote_matches_turn(item.quote, t) for t in reactions):
             kept.append(item)
