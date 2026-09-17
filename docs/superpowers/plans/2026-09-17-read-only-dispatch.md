@@ -402,10 +402,15 @@ def test_the_read_only_closing_asks_for_a_comment_not_a_push():
 def test_the_read_only_closing_keeps_the_report_and_the_stop():
     """Neither depends on the posture, and the briefing is the artefact the
     implement-path already calls the most valuable in the system.
+
+    Asserted on the unwrapped source rather than the rendered prompt: `_wrap`
+    breaks step 1 between "session's" and "briefing", so any substring long
+    enough to be meaningful spans a newline and an indent.
     """
     prompt = dispatch.build_prompt(361, title="t", body="b", read_only=True)
 
-    assert "becomes the session's briefing" in prompt
+    assert dispatch._READ_ONLY_CLOSING_STEPS[0] == dispatch._CLOSING_STEPS[0]
+    assert "This is the only copy" in prompt
     assert "claude stop" in prompt
 
 
@@ -462,11 +467,13 @@ Keep the existing docstring and add to it:
 Body:
 
 ```python
+    # `.format()` unconditionally, never guarded on a placeholder being
+    # present: it collapses `{{` to `{` whether or not it substitutes anything,
+    # and `_CLOSING_STEPS[2]` relies on that to render
+    # `${CLAUDE_CODE_SESSION_ID:0:8}`. An extra kwarg is harmless; a skipped
+    # call silently doubles those braces on the implement path.
     if read_only:
-        steps_source = tuple(
-            step.format(issue=issue) if "{issue}" in step else step
-            for step in _READ_ONLY_CLOSING_STEPS
-        )
+        steps_source = tuple(step.format(issue=issue) for step in _READ_ONLY_CLOSING_STEPS)
     else:
         if "pr" in may:
             hint = ", push it and open the pull request you were granted"
@@ -474,10 +481,7 @@ Body:
             hint = ", push it (do not open a pull request)"
         else:
             hint = ", say so in your report and leave it for `mnemo deliver`"
-        steps_source = tuple(
-            step.format(publish_hint=hint) if "{publish_hint}" in step else step
-            for step in _CLOSING_STEPS
-        )
+        steps_source = tuple(step.format(publish_hint=hint) for step in _CLOSING_STEPS)
     steps = "\n".join(
         _wrap(step, initial_indent=f"{number}. ", subsequent_indent="   ")
         for number, step in enumerate(steps_source, start=1)
@@ -485,7 +489,7 @@ Body:
     return f"{_CLOSING_HEADING}\n{steps}\n"
 ```
 
-Note the `.format` is now guarded by a substring check on each step. `_CLOSING_STEPS[2]` contains `${{CLAUDE_CODE_SESSION_ID:0:8}}`, which `str.format` collapses to single braces — calling `.format` on it unconditionally would change the implement-path's text. The `test_the_implement_closing_is_unchanged` test above is what catches that.
+`.format` is called on every step in both branches. It must NOT be guarded on a placeholder being present: `str.format` collapses `{{` to `{` whether or not it substitutes anything, and `_CLOSING_STEPS[2]` depends on that collapse to render `${CLAUDE_CODE_SESSION_ID:0:8}`. Skipping the call leaves doubled braces in the child's prompt. Passing an unused kwarg is harmless — `str.format` only raises on a *missing* key, never an extra one. `test_the_implement_closing_is_unchanged` is what catches a regression here.
 
 - [ ] **Step 4: Run the tests**
 
@@ -495,7 +499,22 @@ python -m pytest tests/unit/test_dispatch_read_only.py -v
 
 Expected: all pass, including Task 3's prompt tests.
 
-- [ ] **Step 5: Run the full suite**
+- [ ] **Step 5: Extend the frozen-signature guard**
+
+`tests/unit/test_dispatch_plan.py::test_prompt_never_prescribes_an_approach` enumerates `build_prompt`'s exact parameter set to stop a caller smuggling in a preferred solution. Adding `read_only` breaks it by design, and it must be extended — with the reasoning, in the style of the entries already there, or the guard degrades into a list that grows whenever it is inconvenient:
+
+```python
+    # `repo_root` is context — where this repo keeps its changelog — not a
+    # way in for a preferred solution. `may` is a permission (#317): which of
+    # three fixed words the maintainer granted, never free text. `read_only`
+    # is a posture (#371): one bit choosing investigate-or-build, and a bit
+    # cannot carry an approach.
+    assert params == {"issue", "title", "body", "repo_root", "may", "read_only"}
+```
+
+This is the only authorised edit to that file.
+
+- [ ] **Step 6: Run the full suite**
 
 ```bash
 python -m pytest -q
@@ -503,7 +522,7 @@ python -m pytest -q
 
 Expected: all pass. `_closing_clause` is called on every dispatch, so a regression here reaches every existing test.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/mnemo/core/dispatch.py tests/unit/test_dispatch_read_only.py
