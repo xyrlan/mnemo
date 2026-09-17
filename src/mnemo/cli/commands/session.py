@@ -145,7 +145,7 @@ def cmd_session(args: argparse.Namespace) -> int:
     # Labelled, because a bare "high" beside a tempo reads as one. Absent is
     # the default, never a failed read (#351), so nothing is printed for it.
     if session.effort:
-        flags.append(f"esforço {session.effort}")
+        flags.append(f"effort {session.effort}")
     if session.live is True:
         flags.append("live")
     elif session.live is False:

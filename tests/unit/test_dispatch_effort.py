@@ -309,14 +309,14 @@ def _session(short_id: str, effort: str | None) -> Session:
 
 def test_a_queue_on_the_default_says_nothing_about_effort() -> None:
     """The common case — no child chose one — is not rendered as anything."""
-    assert "esforço" not in render_queue([_session("a" * 8, None), _session("b" * 8, None)])
+    assert "effort" not in render_queue([_session("a" * 8, None), _session("b" * 8, None)])
 
 
 def test_a_queue_with_a_chosen_effort_names_it_and_counts_the_default() -> None:
     out = render_queue([_session("a" * 8, "max"), _session("b" * 8, None),
                         _session("c" * 8, None)])
-    line = next(l for l in out.splitlines() if "esforço:" in l)
-    assert line == "  esforço: padrão ×2, max"
+    line = next(l for l in out.splitlines() if "effort:" in l)
+    assert line == "  effort: default ×2, max"
 
 
 # --- the command line ------------------------------------------------------

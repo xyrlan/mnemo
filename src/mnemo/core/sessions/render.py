@@ -321,19 +321,19 @@ def _efforts(sessions: list[Session]) -> str:
     is omitted when every session is on the default: no default is ever
     recorded (``bg-effort-flag``), so "all default" is the unchanged case and
     a line saying so on every queue would be noise. Once any session names a
-    level, the rest are counted as ``padrão`` — the default, not unknown.
+    level, the rest are counted as ``default`` — the default, not unknown.
     """
     counts: dict[str, int] = {}
     for s in sessions:
-        key = s.effort or "padrão"
+        key = s.effort or "default"
         counts[key] = counts.get(key, 0) + 1
-    if set(counts) <= {"padrão"}:
+    if set(counts) <= {"default"}:
         return ""
     parts = [
         f"{effort} ×{count}" if count > 1 else effort
         for effort, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
-    return "  esforço: " + ", ".join(parts)
+    return "  effort: " + ", ".join(parts)
 
 
 def _grants(sessions: list[Session]) -> str:
