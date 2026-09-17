@@ -58,6 +58,28 @@ def test_hook_emits_on_confident_match(tmp_vault, monkeypatch, synthetic_index):
     assert "[[use-prisma-mock]]" in text
 
 
+def test_dedupe_is_per_session_not_vault_wide(tmp_vault, monkeypatch, synthetic_index):
+    """#361: a rule one session was told is still news to another session;
+    only the session that already has it is spared the repeat."""
+    _enable_reflex(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    prompt = "How do I mock prisma in a jest test with typescript"
+
+    _, first = _run_hook({"cwd": str(tmp_vault), "session_id": "sid-a", "prompt": prompt})
+    _, repeat = _run_hook({"cwd": str(tmp_vault), "session_id": "sid-a", "prompt": prompt})
+    _, other = _run_hook({"cwd": str(tmp_vault), "session_id": "sid-b", "prompt": prompt})
+
+    assert "[[use-prisma-mock]]" in first
+    assert repeat == ""
+    assert "[[use-prisma-mock]]" in other
+
+    log = [json.loads(line) for line in
+           (tmp_vault / ".mnemo" / "reflex-log.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(e["session_id"], e.get("silence_reason")) for e in log] == [
+        ("sid-a", None), ("sid-a", "deduped"), ("sid-b", None),
+    ]
+
+
 def _one_rule_index(vault) -> None:
     """Seed a reflex-index.json with ONLY the high-signal 'use-prisma-mock' rule.
 

@@ -337,7 +337,7 @@ def run(
     """Replay the prompts, oldest first, through the hook's decision.
 
     The hook's two stateful guards are simulated from the transcript clock:
-    the per-session emission cap, and the vault-wide injected cache that
+    the per-session emission cap, and the per-session injected cache that
     resets on the day rollover. What is *not* simulated is the export
     suppression (rules already in a tree's rules file) — the export manifest
     describes the tree as it is today, not as it was.
@@ -348,7 +348,7 @@ def run(
     overrides_cache: dict[str, dict] = {}
 
     emitted_per_session: dict[str, int] = {}
-    injected_cache: set[str] = set()
+    injected_cache: set[tuple[str, str]] = set()  # (session_id, slug)
     cache_day: Optional[str] = None
 
     injections: list[Injection] = []
@@ -377,14 +377,15 @@ def run(
             silence[reason] = silence.get(reason, 0) + 1
             continue
 
-        survivors = [s for s in decision.accepted if s not in injected_cache]
+        survivors = [s for s in decision.accepted
+                     if (prompt.session_id, s) not in injected_cache]
         if not survivors:
             silence["deduped"] = silence.get("deduped", 0) + 1
             continue
 
         fired_prompts += 1
         for slug in survivors:
-            injected_cache.add(slug)
+            injected_cache.add((prompt.session_id, slug))
             emitted_per_session[prompt.session_id] = emitted_per_session.get(prompt.session_id, 0) + 1
             f = facts.get(slug)
             injections.append(Injection(

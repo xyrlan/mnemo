@@ -188,8 +188,8 @@ def _explain(
         )
 
     if reason == "deduped":
-        return (f"{top_slug} won at {_num(top_score)} but was already injected "
-                "today — suppressed as a repeat", True)
+        return (f"{top_slug} won at {_num(top_score)} but this session was "
+                "already told it today — suppressed as a repeat", True)
 
     return (f"{reason} — top candidate {top_slug} at {_num(top_score)}", True)
 

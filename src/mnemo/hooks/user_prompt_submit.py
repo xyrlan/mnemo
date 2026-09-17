@@ -103,8 +103,8 @@ def main() -> int:
                          exported=exported)
             return 0
 
-        # Dedupe against injected_cache (day-lifetime)
-        cache = session_state.read_injected_cache(vault)
+        # Dedupe against what this session was already told today (#361)
+        cache = session_state.read_injected_cache(vault, sid)
         survivors = [s for s in accepted if s not in cache]
         if not survivors:
             _log_silence(vault, sid, project, prompt_raw, reason="deduped",

@@ -64,7 +64,7 @@ def test_enrichment_emits_then_dedupes_same_slug(tmp_vault, monkeypatch):
 
     # the session remembers the slug, and the reflex's cache does too
     assert "react-modal" in session_state.read_enriched_slugs(tmp_vault, "sid-e2e")
-    assert "react-modal" in session_state.read_injected_cache(tmp_vault)
+    assert "react-modal" in session_state.read_injected_cache(tmp_vault, "sid-e2e")
 
     # second invocation — same slug already shown to this session → silent
     rc, out2 = _run(payload)

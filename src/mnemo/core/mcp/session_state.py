@@ -120,24 +120,45 @@ def _write(vault_root: Path, data: dict) -> None:
             pass
 
 
-def read_injected_cache(vault_root: Path) -> dict:
-    """Return the injected_cache mapping (slug -> unix_ts).
+def _session_cache(data: dict, sid: str) -> dict:
+    """The mutable ``{slug: ts}`` map for *sid* inside *data*, created on demand.
 
-    Lifetime: day-scoped, vault-wide. The cache is reset on the next day
-    rollover via ``increment()`` (which also wipes ``session_emissions``).
-    It is NOT scoped per-session — two concurrent sessions of the same vault
-    share the cache, and ``SessionEnd`` evicts only the ``session_emissions``
-    entry for the sid, not the cache slugs that sid injected.
+    A vault written before #361 holds the flat ``{slug: ts}`` shape, whose
+    entries name no session. They are dropped here rather than guessed at:
+    the cache is day-scoped, so the worst case is one repeat per session
+    until the rollover.
+    """
+    cache = data.get("injected_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+    cache = {k: v for k, v in cache.items() if isinstance(v, dict)}
+    data["injected_cache"] = cache
+    return cache.setdefault(sid, {})
+
+
+def read_injected_cache(vault_root: Path, sid: str) -> dict:
+    """Return the slugs already injected into session *sid* today (slug -> unix_ts).
+
+    Lifetime: day-scoped, per-session. The file stores
+    ``injected_cache = {sid: {slug: ts}}`` and the next day rollover via
+    ``increment()`` wipes it. Two concurrent sessions of the same vault do
+    NOT share entries: a rule one session was told is still news to another
+    (#361 — two thirds of the old vault-wide dedupe silenced a session that
+    had never seen the rule). ``SessionEnd`` leaves the entries in place, so
+    a ``--resume``d session, whose context still holds them, is not told
+    again.
 
     Never raises.
     """
-    return dict(_load(vault_root).get("injected_cache", {}))
+    cache = _load(vault_root).get("injected_cache")
+    entry = cache.get(sid) if isinstance(cache, dict) else None
+    return dict(entry) if isinstance(entry, dict) else {}
 
 
 def add_injection(vault_root: Path, *, slug: str, sid: str, now_ts: int) -> None:
-    """Record that *slug* was injected at *now_ts* (unix seconds). Never raises."""
+    """Record that *slug* was injected into *sid* at *now_ts* (unix seconds). Never raises."""
     data = _load(vault_root)
-    data["injected_cache"][slug] = int(now_ts)
+    _session_cache(data, sid)[slug] = int(now_ts)
     _write(vault_root, data)
 
 
@@ -164,9 +185,9 @@ def bump_emission(
 def read_enriched_slugs(vault_root: Path, sid: str) -> set[str]:
     """Return the slugs PreToolUse enrichment already injected into *sid*. Never raises.
 
-    Session-scoped on purpose, unlike ``injected_cache``: that cache is shared
-    by every session of the day, so the first dispatched child to open a file
-    would use up its notes for all its siblings (#271).
+    Session-scoped on purpose: a vault-wide list would let the first
+    dispatched child to open a file use up its notes for all its siblings
+    (#271).
     """
     entry = _load(vault_root).get("session_emissions", {}).get(sid) or {}
     slugs = entry.get("enriched") or []
@@ -176,8 +197,9 @@ def read_enriched_slugs(vault_root: Path, sid: str) -> set[str]:
 def record_enrichment(vault_root: Path, *, sid: str, slugs: list[str], now_ts: int) -> None:
     """Record one enrichment emission of *slugs* for *sid* in a single write.
 
-    Adds the slugs to the session's ``enriched`` list and to ``injected_cache``
-    (so the prompt-time reflex does not repeat them) and bumps ``enrich_count``
+    Adds the slugs to the session's ``enriched`` list and to its
+    ``injected_cache`` entry (so the prompt-time reflex does not repeat them
+    in this session) and bumps ``enrich_count``
     once per slug. Never raises.
     """
     data = _load(vault_root)
@@ -185,8 +207,9 @@ def record_enrichment(vault_root: Path, *, sid: str, slugs: list[str], now_ts: i
     if entry is None:
         entry = {"started_at": int(now_ts), "reflex_count": 0, "enrich_count": 0}
     enriched = entry.get("enriched") if isinstance(entry.get("enriched"), list) else []
+    injected = _session_cache(data, sid)
     for slug in slugs:
-        data["injected_cache"][slug] = int(now_ts)
+        injected[slug] = int(now_ts)
         if slug not in enriched:
             enriched.append(slug)
     entry["enriched"] = enriched
@@ -220,7 +243,12 @@ def gc_old_sessions(vault_root: Path, *, now_ts: int, ttl_seconds: int = 24 * 36
 
 
 def evict_session(vault_root: Path, sid: str) -> None:
-    """On SessionEnd: drop session_emissions[sid] entirely. Never raises."""
+    """On SessionEnd: drop session_emissions[sid] entirely. Never raises.
+
+    The session's ``injected_cache`` entry is kept until the day rollover: a
+    ``--resume``d session keeps its sid and its context, so the rules it was
+    told are still on screen.
+    """
     data = _load(vault_root)
     if sid in data["session_emissions"]:
         del data["session_emissions"][sid]
