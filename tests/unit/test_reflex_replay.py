@@ -286,8 +286,13 @@ def test_day_level_dedupe_and_session_cap_are_simulated(env):
 
     out = _run(vault, same_day + next_day)
 
-    assert len(out.injections) == 2, "once per day, vault-wide, like injected_cache"
+    assert len(out.injections) == 2, "once per session per day, like injected_cache"
     assert out.silence.get("deduped") == 2
+
+    other_session = [_p(SID_C, T0 + timedelta(days=2, minutes=5))]
+    shared = _run(vault, same_day + other_session)
+    assert [i.session_id for i in shared.injections] == [SID_B, SID_C], (
+        "another session that day is not deduped against SID_B (#361)")
 
     capped = R.run(same_day + next_day, build_index(vault), R.rule_facts(vault),
                    reflex_cfg={"maxEmissionsPerSession": 1})

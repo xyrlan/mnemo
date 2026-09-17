@@ -30,7 +30,7 @@ def test_enrichment_skips_when_slug_already_injected(tmp_vault, monkeypatch):
     session_state.add_injection(tmp_vault, slug="use-prisma-mock", sid="sid-a", now_ts=100)
 
     # Assert the cache is readable — this is what the hook consults.
-    assert "use-prisma-mock" in session_state.read_injected_cache(tmp_vault)
+    assert "use-prisma-mock" in session_state.read_injected_cache(tmp_vault, "sid-a")
 
 
 def test_enrichment_returns_silence_when_cap_reached(tmp_vault, monkeypatch):
