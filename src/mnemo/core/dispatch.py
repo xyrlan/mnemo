@@ -647,10 +647,18 @@ _SHORT_ID_RE = claude_cli.SHORT_ID_RE
 _ANSI_RE = claude_cli.ANSI_RE
 _short_id_from = claude_cli.short_id_from
 
+#: The tools a read-only child may not call. Measured 2026-09-17 against the
+#: real CLI: the block holds and reaches the child's own subagents, and an
+#: unknown name is reported rather than ignored ("matches no known tool").
+#: It closes these tools and nothing else — the same measurement showed the
+#: child can still write through Bash, so this prevents accident and drift,
+#: never intent.
+READ_ONLY_TOOLS = ("Edit", "Write", "NotebookEdit")
+
 
 def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
-    effort: str | None = None,
+    effort: str | None = None, read_only: bool = False,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -730,6 +738,24 @@ def spawn_child(
     not fail in the child — it is ignored with a warning and the child runs on
     the default, which is the one outcome a caller who asked for ``max``
     cannot notice.
+
+    **Read-only (#371).** *read_only* closes :data:`READ_ONLY_TOOLS` —
+    ``Edit``, ``Write``, ``NotebookEdit`` — via ``--disallowedTools``, for a
+    child meant to investigate and report rather than build. The block
+    reaches the child's own subagents (measured 2026-09-17), so a read-only
+    dispatch cannot launder an edit through a Task. It does **not** close
+    ``Bash``: the same measurement showed the child can still write through
+    it, so this flag prevents accident and drift, never a determined child.
+    When *read_only* is false (the default), the argv is byte-identical to a
+    dispatch that never heard of this flag.
+
+    ``--disallowedTools`` is emitted **first**, before ``--model``/``--effort``
+    and lean's own flags, because it is variadic and space-separated: it
+    swallows every token after it up to the next flag. Emitted last, it would
+    eat the positional prompt and the child would start with no instructions
+    at all (measured 2026-09-17 — the run died with "Input must be provided
+    either through stdin or as a prompt argument"). Placing it first
+    guarantees a flag always follows the tool list.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -737,6 +763,13 @@ def spawn_child(
             f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}"
         )
     args = ["claude", "--bg"]
+    if read_only:
+        # First, so a flag always follows the list. `--disallowedTools` is
+        # variadic and space-separated: emitted last it swallows the
+        # positional prompt, and the child starts with no instructions at all
+        # (measured 2026-09-17 — the run died with "Input must be provided
+        # either through stdin or as a prompt argument").
+        args += ["--disallowedTools", *READ_ONLY_TOOLS]
     if model:
         args += ["--model", model]
     if effort:
