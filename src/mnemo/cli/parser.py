@@ -168,10 +168,14 @@ def _build_parser() -> argparse.ArgumentParser:
     # closes its file-editing tools, where `--may` only decides what it may
     # publish. The two are refused together in `cmd_dispatch` — a child with
     # nothing to publish cannot be given a publishing grant.
+    # The help says what is closed, never that the child "cannot write": it can,
+    # through the shell, measured 2026-09-17. Overstating that here is how a
+    # maintainer ends up trusting the flag for something it does not do.
     dispatch_p.add_argument("--read-only", dest="read_only", action="store_true",
                             help="the child investigates the issue and comments its "
-                                 "finding; its file-editing tools are closed and it "
-                                 "publishes nothing")
+                                 "finding instead of building; Edit/Write/NotebookEdit "
+                                 "are closed (it can still write through the shell) and "
+                                 "it publishes nothing, so --may is refused with it")
     # Opt back *in* to the maintainer's profile. The default is lean (#270)
     # because a child needs the vault and the repo, not nine plugins; this is
     # for the child that genuinely needs one of them. Orthogonal to --model:
