@@ -129,7 +129,15 @@ class _Spawn:
 
 READ_ONLY_TOOLS = ("Edit", "Write", "NotebookEdit")
 
+# Every test below that calls `spawn_child` directly carries
+# `@pytest.mark.real_spawn`. `tests/conftest.py`'s autouse
+# `_no_real_detached_jobs` otherwise replaces `spawn_child` itself with a no-op,
+# so the test would measure the stub rather than the argv — and the
+# byte-identical test would pass for a hollow reason, comparing two empty lists
+# down the same no-op path. Nine test modules already carry it for this reason.
 
+
+@pytest.mark.real_spawn
 def test_read_only_child_is_spawned_with_the_file_tools_closed(monkeypatch, tmp_path):
     spawn = _Spawn()
     monkeypatch.setattr(dispatch.subprocess, "run", spawn)
@@ -142,6 +150,7 @@ def test_read_only_child_is_spawned_with_the_file_tools_closed(monkeypatch, tmp_
     assert spawn.args[at + 1:at + 1 + len(READ_ONLY_TOOLS)] == list(READ_ONLY_TOOLS)
 
 
+@pytest.mark.real_spawn
 def test_the_prompt_survives_the_variadic_tool_list(monkeypatch, tmp_path):
     """Measured 2026-09-17: `--disallowedTools` takes a space-separated list and
     swallows whatever follows it. Emitted last, it eats the positional prompt and
@@ -159,6 +168,7 @@ def test_the_prompt_survives_the_variadic_tool_list(monkeypatch, tmp_path):
     assert after.startswith("-"), f"a flag must follow the tool list, got {after!r}"
 
 
+@pytest.mark.real_spawn
 def test_a_normal_child_argv_is_byte_identical(monkeypatch, tmp_path):
     """A dispatch that is not read-only runs the command it ran before."""
     plain, ro = _Spawn(), _Spawn()
@@ -180,7 +190,8 @@ def test_a_normal_child_argv_is_byte_identical(monkeypatch, tmp_path):
 python -m pytest tests/unit/test_dispatch_read_only.py -v
 ```
 
-Expected: FAIL with `TypeError: spawn_child() got an unexpected keyword argument 'read_only'`
+Expected: FAIL with `TypeError: spawn_child() got an unexpected keyword argument 'read_only'`.
+If instead you see `assert '--disallowedTools' in []`, the `real_spawn` marker is missing from that test — the autouse guard stubbed `spawn_child` and you are measuring the stub.
 
 - [ ] **Step 3: Add the parameter and the argv**
 
