@@ -164,6 +164,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "without asking: push, or pr (push + open the PR); "
                                  "defaults to pr, `none` withholds; "
                                  "a contract piece's own `may:` wins over it")
+    # A posture, not a permission: it changes what the child is asked to do and
+    # closes its file-editing tools, where `--may` only decides what it may
+    # publish. The two are refused together in `cmd_dispatch` — a child with
+    # nothing to publish cannot be given a publishing grant.
+    dispatch_p.add_argument("--read-only", dest="read_only", action="store_true",
+                            help="the child investigates the issue and comments its "
+                                 "finding; its file-editing tools are closed and it "
+                                 "publishes nothing")
     # Opt back *in* to the maintainer's profile. The default is lean (#270)
     # because a child needs the vault and the repo, not nine plugins; this is
     # for the child that genuinely needs one of them. Orthogonal to --model:

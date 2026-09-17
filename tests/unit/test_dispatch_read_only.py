@@ -1,10 +1,12 @@
 """The read-only posture: a child that investigates and cannot edit files."""
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
 
+from mnemo.cli.commands import dispatch as cli_dispatch
 from mnemo.core import dispatch
 
 
@@ -180,3 +182,33 @@ def test_dispatch_issue_carries_the_posture_to_the_child(monkeypatch, tmp_path):
     assert seen["read_only"] is True
     assert "Investigate issue #361" in seen["prompt"]
     assert result.read_only is True
+
+
+def _args(**over):
+    base = dict(issues=[361], contract=None, model=None, effort=None, may=None,
+                read_only=False, example=False, dry_run=False, full_profile=False)
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_read_only_with_a_grant_is_refused_before_anything_spawns(capsys, monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("nothing may spawn")
+
+    monkeypatch.setattr(cli_dispatch, "_repo_root", lambda: None)
+
+    code = cli_dispatch.cmd_dispatch(_args(read_only=True, may="pr"))
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "--read-only" in out and "--may" in out
+
+
+def test_read_only_alone_is_accepted():
+    """`--may` defaults to `pr`, so the refusal must key on what was *typed*,
+    not on the resolved grant — otherwise `--read-only` can never be used alone.
+    """
+    from mnemo.core.sessions import grants
+
+    assert cli_dispatch._grant_for(_args(read_only=True)) == ()
+    assert cli_dispatch._grant_for(_args()) == grants.parse("pr")
