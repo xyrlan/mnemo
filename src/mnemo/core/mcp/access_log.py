@@ -91,6 +91,7 @@ def record_llm_call(
         "tool": "llm.call",
         "purpose": purpose,
         "model": model,
+        "provider": response.provider,
         "project": project,
         "agent": agent,
         "usage": {

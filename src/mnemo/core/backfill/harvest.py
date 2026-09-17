@@ -134,8 +134,9 @@ def harvest_session(jsonl_path: Path, agent: str, cfg: dict) -> list[Path]:
     timeout = int(extraction_cfg.get("subprocessTimeout") or 60)
 
     transcript = flatten_transcript_events(events)
+    provider = llm.resolve(cfg)
     t0 = _time.perf_counter()
-    response = llm.call(
+    response = provider(
         prompts.build_harvest_prompt(transcript),
         system=prompts.HARVEST_SYSTEM_PROMPT,
         model=model,

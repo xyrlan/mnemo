@@ -82,6 +82,8 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
     extraction = cfg.get("extraction") or {}
     model = extraction.get("model") or "claude-haiku-4-5"
     timeout = int(extraction.get("subprocessTimeout") or 60)
+    from mnemo.core import llm
+    provider = llm.resolve(cfg)
 
     rules = R.collect_rules(vault)
     limit = getattr(args, "limit", None)
@@ -100,6 +102,7 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
 
     plan = R.plan(
         vault, model=model, timeout=timeout, batch_size=BATCH_SIZE, limit=limit,
+        call=provider,
     )
     R.save_plan(vault, plan)
 

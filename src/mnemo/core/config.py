@@ -17,6 +17,8 @@ DEFAULTS: dict[str, Any] = {
         "overrides": {},
     },
     "extraction": {
+        # #358: which provider answers the model calls (``core.llm.PROVIDERS``).
+        "provider": "claude-cli",
         "model": "claude-haiku-4-5",
         "chunkSize": 10,
         "subprocessTimeout": 60,

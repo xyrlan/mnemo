@@ -37,8 +37,8 @@ def test_plan_uses_the_configured_extraction_model_and_timeout(tmp_path, monkeyp
 
     seen = {}
 
-    def fake_plan(vault, *, model, timeout, batch_size, limit):
-        seen.update(model=model, timeout=timeout, limit=limit)
+    def fake_plan(vault, *, model, timeout, batch_size, limit, call):
+        seen.update(model=model, timeout=timeout, limit=limit, call=call)
         return R.Plan(run_id="r", llm_calls=1, verdicts=[])
 
     monkeypatch.setattr(R, "plan", fake_plan)
@@ -47,6 +47,8 @@ def test_plan_uses_the_configured_extraction_model_and_timeout(tmp_path, monkeyp
     args = argparse.Namespace(command="reclassify", apply=False, undo=None, yes=True, limit=1)
     assert cmd.cmd_reclassify(args) == 0
     assert seen["model"] == "claude-x" and seen["timeout"] == 7
+    from mnemo.core import llm
+    assert seen["call"] is llm.PROVIDERS["claude-cli"]  # #358: the resolved provider
     assert "claude-x" in capsys.readouterr().out
 
 
