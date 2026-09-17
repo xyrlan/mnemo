@@ -98,6 +98,12 @@ def record_llm_call(
             "input_tokens": int(response.input_tokens or 0),
             "output_tokens": int(response.output_tokens or 0),
         },
+        # What the claude CLI billed for this call, as it reported it; None
+        # when it reported nothing. telemetry_doctor reads this key (#370).
+        "cost_usd": (
+            float(response.total_cost_usd)
+            if response.total_cost_usd is not None else None
+        ),
         "elapsed_ms": float(elapsed_ms),
         "result_count": 1,
     }

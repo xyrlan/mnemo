@@ -46,6 +46,7 @@ def test_record_llm_call_writes_entry(tmp_path: Path, monkeypatch) -> None:
     assert e["project"] == "myproj"
     assert e["agent"] == "myproj"
     assert e["usage"] == {"input_tokens": 1234, "output_tokens": 56}
+    assert e["cost_usd"] == 0.001
     assert e["elapsed_ms"] == 2345.6
     assert "timestamp" in e and e["timestamp"].endswith("Z")
     assert e["result_count"] == 1  # so access_log_summary.is_well_formed accepts it
@@ -76,6 +77,7 @@ def test_record_llm_call_handles_missing_usage(tmp_path: Path, monkeypatch) -> N
     entries = _read_log(tmp_path)
     assert len(entries) == 1
     assert entries[0]["usage"] == {"input_tokens": 0, "output_tokens": 0}
+    assert entries[0]["cost_usd"] is None
 
 
 def test_record_session_start_inject_writes_entry(tmp_path: Path, monkeypatch) -> None:

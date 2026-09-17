@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +13,8 @@ from mnemo.autopilot.selffix.telemetry_doctor import (
     open_telemetry_fix_pr,
     scan_telemetry,
 )
+from mnemo.core.llm import LLMResponse
+from mnemo.core.mcp import access_log
 
 
 @pytest.fixture(autouse=True)
@@ -32,20 +35,34 @@ def _network_on(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _write_access_log(tmp_path: Path, entries: list) -> None:
-    log_path = tmp_path / ".mnemo" / "mcp-access-log.jsonl"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
+@pytest.fixture(autouse=True)
+def _telemetry_on(monkeypatch):
+    monkeypatch.setattr(
+        "mnemo.core.mcp.access_log._load_telemetry_config",
+        lambda: (True, 1_048_576),
+    )
 
 
-def _write_reflex_log(tmp_path: Path, entries: list) -> None:
-    log_path = tmp_path / ".mnemo" / "reflex-log.jsonl"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
+def _log_calls(
+    vault: Path, n: int, *, cost: Optional[float] = 0.002,
+    input_tokens: Optional[int] = 1200,
+) -> None:
+    """Append ``n`` rows through the production writer — never a hand-built
+    dict, whose shape is what hid #370."""
+    for _ in range(n):
+        access_log.record_llm_call(
+            vault,
+            LLMResponse(
+                text="x", total_cost_usd=cost, input_tokens=input_tokens,
+                output_tokens=40, api_key_source="none", raw={},
+            ),
+            purpose="extraction", model="claude-haiku-4-5",
+            project="p", agent="p", elapsed_ms=10.0,
+        )
+
+
+def _log_path(vault: Path) -> Path:
+    return vault / ".mnemo" / "mcp-access-log.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -78,93 +95,91 @@ def test_scan_telemetry_returns_empty_when_no_log(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_the_writer_row_is_what_the_doctor_selects(tmp_path: Path) -> None:
+    """#370: the doctor selected on ``event`` while the writer writes
+    ``tool``, so no real row ever reached a check."""
+    _log_calls(tmp_path, 1)
+    row = json.loads(_log_path(tmp_path).read_text(encoding="utf-8"))
+    assert row["tool"] == "llm.call"
+    assert "event" not in row
+    assert row["cost_usd"] == 0.002
+    assert row["usage"]["input_tokens"] == 1200
+
+
 def test_scan_telemetry_detects_cost_usd_always_zero(tmp_path: Path) -> None:
-    entries = [
-        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0}
-        for _ in range(10)
-    ]
-    _write_access_log(tmp_path, entries)
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    kinds = [a.kind for a in anomalies]
+    _log_calls(tmp_path, 10, cost=0.0)
+    kinds = [a.kind for a in scan_telemetry(vault_root=tmp_path)]
     assert "cost_usd_always_zero" in kinds
+
+
+def test_scan_telemetry_detects_cost_never_reported(tmp_path: Path) -> None:
+    """A CLI result without ``total_cost_usd`` lands as ``cost_usd: null``."""
+    _log_calls(tmp_path, 6, cost=None)
+    flagged = [a for a in scan_telemetry(vault_root=tmp_path)
+               if a.kind == "cost_usd_always_zero"]
+    assert len(flagged) == 1
+    assert flagged[0].affected_count == 6
 
 
 def test_scan_telemetry_counts_entries_in_the_rotated_file(tmp_path: Path) -> None:
     """#140: entries split across ``.1`` and the live file must be pooled —
     three in the rotated file plus two live clears the minimum and flags."""
-    live = [
-        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0}
-        for _ in range(2)
-    ]
-    _write_access_log(tmp_path, live)
-    rotated = tmp_path / ".mnemo" / "mcp-access-log.jsonl.1"
-    with rotated.open("w", encoding="utf-8") as f:
-        for _ in range(3):
-            f.write(json.dumps(
-                {"ts": "2026-04-29T10:00:00Z", "event": "llm.call", "cost_usd": 0}
-            ) + "\n")
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    flagged = [a for a in anomalies if a.kind == "cost_usd_always_zero"]
+    _log_calls(tmp_path, 3, cost=0.0)
+    _log_path(tmp_path).rename(tmp_path / ".mnemo" / "mcp-access-log.jsonl.1")
+    _log_calls(tmp_path, 2, cost=0.0)
+    flagged = [a for a in scan_telemetry(vault_root=tmp_path)
+               if a.kind == "cost_usd_always_zero"]
     assert len(flagged) == 1
     assert flagged[0].affected_count == 5
 
 
 def test_scan_telemetry_no_anomaly_when_cost_nonzero(tmp_path: Path) -> None:
-    entries = [
-        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0.005}
-        for _ in range(5)
-    ] + [
-        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0}
-        for _ in range(2)
-    ]
-    _write_access_log(tmp_path, entries)
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    kinds = [a.kind for a in anomalies]
-    assert "cost_usd_always_zero" not in kinds
+    _log_calls(tmp_path, 5, cost=0.005)
+    _log_calls(tmp_path, 2, cost=0.0)
+    assert scan_telemetry(vault_root=tmp_path) == []
 
 
-def test_scan_telemetry_ignores_entries_without_llm_call_event(tmp_path: Path) -> None:
-    entries = [
-        {"ts": "2026-04-30T10:00:00Z", "event": "mcp.read", "cost_usd": 0}
-        for _ in range(10)
-    ]
-    _write_access_log(tmp_path, entries)
-    # non-llm.call entries with zero cost should NOT trigger the anomaly
-    # (they don't have a cost_usd field in normal usage)
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    # We only look at llm.call events — 0 such events means no anomaly
-    assert anomalies == []
+def test_rows_from_before_cost_was_recorded_are_not_flagged(tmp_path: Path) -> None:
+    """Rows written before #370 have no ``cost_usd`` key — absence of the key
+    is history, not a zero cost."""
+    _log_calls(tmp_path, 8)
+    log = _log_path(tmp_path)
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    for r in rows:
+        del r["cost_usd"]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    _log_calls(tmp_path, 2, cost=0.0)  # too few new rows to judge
+    assert scan_telemetry(vault_root=tmp_path) == []
+
+
+def test_scan_telemetry_ignores_other_tools(tmp_path: Path) -> None:
+    access_log.record(tmp_path, {
+        "timestamp": "2026-09-17T10:00:00Z", "tool": "read_mnemo_rule",
+        "agent": "p", "project": "p", "result_count": 1, "elapsed_ms": 1.0,
+    })
+    _log_calls(tmp_path, 4, cost=0.0)  # one short of the minimum
+    assert scan_telemetry(vault_root=tmp_path) == []
 
 
 # ---------------------------------------------------------------------------
-# scan_telemetry — prompt_tokens_null
+# scan_telemetry — input_tokens_zero
 # ---------------------------------------------------------------------------
 
 
-def test_scan_telemetry_detects_prompt_tokens_null(tmp_path: Path) -> None:
-    entries = [
-        {"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0.01, "prompt_tokens": None}
-        for _ in range(5)
-    ]
-    _write_access_log(tmp_path, entries)
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    kinds = [a.kind for a in anomalies]
-    assert "prompt_tokens_null" in kinds
+def test_scan_telemetry_detects_input_tokens_missing(tmp_path: Path) -> None:
+    """The writer records an unreported count as 0 under ``usage``."""
+    _log_calls(tmp_path, 5, input_tokens=None)
+    flagged = [a for a in scan_telemetry(vault_root=tmp_path)
+               if a.kind == "input_tokens_zero"]
+    assert len(flagged) == 1
+    assert flagged[0].affected_count == 5
 
 
-def test_scan_telemetry_no_prompt_tokens_anomaly_when_below_threshold(tmp_path: Path) -> None:
-    """Only flag prompt_tokens_null when null rate exceeds threshold."""
-    entries = (
-        [{"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0.01,
-          "prompt_tokens": None}]
-        + [{"ts": "2026-04-30T10:00:00Z", "event": "llm.call", "cost_usd": 0.01,
-            "prompt_tokens": 100}
-           for _ in range(20)]
-    )
-    _write_access_log(tmp_path, entries)
-    anomalies = scan_telemetry(vault_root=tmp_path)
-    kinds = [a.kind for a in anomalies]
-    assert "prompt_tokens_null" not in kinds
+def test_scan_telemetry_no_input_tokens_anomaly_when_below_threshold(tmp_path: Path) -> None:
+    _log_calls(tmp_path, 1, input_tokens=None)
+    _log_calls(tmp_path, 20)
+    kinds = [a.kind for a in scan_telemetry(vault_root=tmp_path)]
+    assert "input_tokens_zero" not in kinds
 
 
 # ---------------------------------------------------------------------------
