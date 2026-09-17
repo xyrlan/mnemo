@@ -36,7 +36,9 @@ design keeps it there.
 ## Goals
 
 1. A maintainer can dispatch a child that **investigates and reports**.
-2. The child **cannot** write code — enforced, not requested.
+2. The child's **file-editing tools are closed** — measured, not merely asked
+   for. See "The enforcement question" below for the exact, deliberately
+   narrow claim this supports.
 3. The finding lands somewhere durable: a comment on the issue it investigated.
 4. Nothing about the existing implement-path changes behaviour.
 
@@ -95,11 +97,16 @@ commits-ahead check) with "post your finding as a comment on the issue".
 The "no approach is prescribed" paragraph stays verbatim: it is the passage that
 already licenses a measured refusal, and it reads correctly for an investigator.
 
-**2. The spawn.** `spawn_child` appends `--disallowedTools Edit,Write,NotebookEdit`
-to the argv before the positional prompt (`dispatch.py:739-750`). This is the
-first tool-level restriction mnemo has ever placed on a child. Everything
-existing — `--may`, `may:`, `files:`, `NO_GRANT` — restricts by *wording the
-prompt*, and nothing enforces any of it at the runtime.
+**2. The spawn.** `spawn_child` emits `--disallowedTools Edit Write NotebookEdit`
+into the argv (`dispatch.py:739-750`). This is the first tool-level restriction
+mnemo has ever placed on a child. Everything existing — `--may`, `may:`,
+`files:`, `NO_GRANT` — restricts by *wording the prompt*, and nothing constrains
+the runtime at all.
+
+The list is space-separated and variadic, so it must not be the last thing
+before the positional prompt or it absorbs it (measured; see below). Emit it
+before the existing `--model`/`--effort`/lean flags, so a flag always follows
+it.
 
 **3. The closing.** A read-only variant of `_closing_clause` whose step 2 is
 "post your finding as a comment on the issue with `gh issue comment`", not the
@@ -133,26 +140,68 @@ The session briefing remains the second copy, as for every child. A read-only
 child that cannot reach `gh` still writes its briefing, so the finding is never
 lost outright — it is merely less discoverable.
 
-## The enforcement question — stated honestly
+## The enforcement question — what was measured
 
-`claude --help` documents `--allowedTools`, `--disallowedTools` and `--tools`.
-The design above assumes `--disallowedTools Edit,Write,NotebookEdit` causes the
-child to refuse those tool calls.
+Measured 2026-09-17 against the real CLI, `claude --print` in a throwaway
+directory.
 
-**This has not been verified in this session.** An attempt to test it live —
-spawning `claude --print` with the flag in a throwaway directory and asking it to
-write a file — was denied by the auto-mode classifier (`[Create Unsafe Agents]`),
-and was not worked around.
+**The file tools are genuinely blocked.** Asked to put a word in a file with the
+Write tool under `--disallowedTools Edit Write`, the child answered "Cannot —
+Write tool disabled this session (and in subagents)" and left the file
+untouched. The restriction reaches subagents, which matters: a read-only child
+that could delegate its way around the flag would not be read-only at all.
 
-The implementation plan must open with that verification, executed rather than
-inferred, before any of the three changes are written. The repo's own standing
-rule applies: grep is a proxy, run the function.
+**Tool names are validated.** A malformed invocation produced one
+`Permission deny rule "<word>" matches no known tool — check for typos.` per
+word. A misspelled tool name is reported, not silently ignored — so
+`--disallowedTools NotebookEdit` fails loudly if that name is ever wrong.
 
-**If the flag does not hold**, the design degrades to prompt-only: changes 1 and
-3 still stand and still deliver the feature, and change 2 is dropped along with
-every claim that the restriction is enforced. What must not happen is shipping
-change 2 while describing it as a guarantee that was never observed — the repo
-has a documented history of exactly that failure
+**Argv shape is load-bearing.** `--disallowedTools` takes a space-separated
+variadic list, so it swallows whatever follows it. In the first attempt it ate
+the prompt itself and the run died with "Input must be provided either through
+stdin or as a prompt argument". mnemo passes the prompt as a *positional*
+(`dispatch.py:750`), and the comment at `dispatch.py:745-748` already warns that
+flags must precede it — which is exactly the collision. The flag must therefore
+be emitted early, with another flag after it, or the prompt must be separated
+with `--`. This is a test requirement, not a footnote: an argv that silently
+absorbs the prompt produces a child that never gets its instructions.
+
+### What was NOT measured: whether Bash bypasses the restriction
+
+A read-only child needs Bash (`gh`, `git log`, `rg`, the suite), so Bash is not
+restricted by this design. The open question is whether the child can therefore
+write files through the shell — `printf > file`, `tee`, a heredoc — with the
+file tools closed.
+
+Three attempts to measure this from within this session were blocked by a
+*different* mechanism: the sandbox that wraps `claude --print` here refused
+output redirection and `tee` even for paths inside its own stated allowed
+directory. That sandbox does not exist around a `claude --bg` dispatch child, so
+the result says nothing either way about the real case.
+
+**Therefore the honest claim for this design is narrower than "enforced":**
+
+> The file-editing tools are closed. A read-only child cannot edit or write
+> through them, and neither can its subagents. Whether it can still write
+> through the shell is unmeasured; if it can, the restriction prevents accident
+> and drift, not intent.
+
+That is still materially stronger than prompt-only (approach B), where nothing
+is closed at all, and it is what the implementation should claim until the
+remaining question is answered.
+
+**The first step of the implementation plan is to answer it** — against a real
+dispatched read-only child, not `claude --print`, because only the child's own
+environment reproduces the case. Depending on the answer:
+
+- **Bash cannot write:** the design's guarantee is complete; say so, with the
+  transcript.
+- **Bash can write:** keep the flag and the narrower claim above, and record the
+  bypass in the spec and the `--read-only` help text. Do not quietly widen the
+  claim to cover it.
+
+What must not happen is shipping any wording that describes a guarantee which
+was never observed — the repo has a documented history of exactly that failure
 (`verify-subagent-claims-by-running`, `grep-is-a-proxy-run-the-function`).
 
 ## Blast radius
@@ -181,9 +230,12 @@ adding a per-child spawn flag end to end.
 - Prompt-level: a read-only prompt contains no "run the full test suite" and no
   changelog fragment; contains the `gh issue comment` instruction; still
   contains the refusal paragraph and all three closing steps.
-- Argv-level: `spawn_child` emits `--disallowedTools` before the positional
-  prompt, and emits nothing when not read-only (byte-identical argv to today —
-  the same invariant `dispatch.py:282` already holds for `--may`).
+- Argv-level: `spawn_child` emits `--disallowedTools` with at least one flag
+  after it, and the positional prompt arrives intact and last — the regression
+  this pins is the measured one, where the variadic list ate the prompt and the
+  child got no instructions at all. Emits nothing when not read-only
+  (byte-identical argv to today — the same invariant `dispatch.py:282` already
+  holds for `--may`).
 - Contract-level: `read-only:` parses; an invalid value raises `ContractError`
   before any tree exists, as `may:` does (`contracts.py:490-491`).
 - Live: the verification above, run once, recorded in the PR with its output.
@@ -203,3 +255,7 @@ adding a per-child spawn flag end to end.
    files it may change, in a posture where it may change none, is probably a
    contract error worth catching at parse time. Left open: it needs a real
    contract to reason about, and none exists yet.
+4. **Can a read-only child write through Bash?** Unmeasured — see "The
+   enforcement question". This is the one open item that gates how the feature
+   may describe itself, and it is the first step of the implementation plan
+   rather than a follow-up.
