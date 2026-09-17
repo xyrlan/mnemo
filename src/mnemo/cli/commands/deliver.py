@@ -191,11 +191,17 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
 def _stop_finished(tree: Path, *, label: str) -> None:
     """Stop the child that did this work, now that its PR is open (#311).
 
-    Nothing else stops it. The daemon retires a finished child after 8 h idle,
-    and until then it holds ~300-400 MB (three measured 2026-09-15); worse,
-    only a *stopped* child fires ``SessionEnd`` (#247), so a child left to the
-    daemon never writes its briefing. The worktree is untouched — SessionEnd
-    resolves its cwd, so the stop has to come before any removal, and this
+    Nothing else stops it. The daemon retires a finished child once it has sat
+    idle, and until then it holds ~300-400 MB (three measured 2026-09-15);
+    worse, only a *stopped* child fires ``SessionEnd`` (#247), so a child left
+    to the daemon never writes its briefing. How long "idle" is varies (#350;
+    every ``bg retire`` line in ``~/.claude/daemon.log``, 2026-08-13 →
+    2026-09-16): 60-61 m in 34 of 45, including all 9 on 2026-09-16; 8 h in 5,
+    all just after a daemon start, sweeping children older sessions left;
+    11-44 m in 6 tagged ``[low memory]``. No cause for the split is verified.
+    So the window in which a stop still yields the briefing typically closes
+    within the hour, and within minutes on a loaded machine. The worktree is
+    untouched — SessionEnd resolves its cwd, so the stop has to come before any removal, and this
     command removes nothing.
 
     Only ``state == "done"``. A child still working, or blocked on a question,
