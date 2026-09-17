@@ -103,10 +103,12 @@ mnemo has ever placed on a child. Everything existing — `--may`, `may:`,
 `files:`, `NO_GRANT` — restricts by *wording the prompt*, and nothing constrains
 the runtime at all.
 
-The list is space-separated and variadic, so it must not be the last thing
-before the positional prompt or it absorbs it (measured; see below). Emit it
-before the existing `--model`/`--effort`/lean flags, so a flag always follows
-it.
+The list is space-separated and variadic: it consumes every following token
+until a flag, so the prompt must be fenced off with `--`. Ending it by relying
+on a later flag is not enough — `--model`, `--effort` and the lean flags are all
+optional, and `--full-profile` with no model puts the prompt straight after the
+list, where the CLI reads it as a tool name and the child starts with no
+instructions at all. Both halves measured 2026-09-17.
 
 **3. The closing.** A read-only variant of `_closing_clause` whose step 2 is
 "post your finding as a comment on the issue with `gh issue comment`", not the

@@ -151,21 +151,34 @@ def test_read_only_child_is_spawned_with_the_file_tools_closed(monkeypatch, tmp_
 
 
 @pytest.mark.real_spawn
-def test_the_prompt_survives_the_variadic_tool_list(monkeypatch, tmp_path):
-    """Measured 2026-09-17: `--disallowedTools` takes a space-separated list and
-    swallows whatever follows it. Emitted last, it eats the positional prompt and
-    the child starts with no instructions at all.
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"lean": False},
+        {"lean": False, "model": "haiku"},
+        {"model": "haiku", "effort": "high"},
+    ],
+    ids=["defaults", "full-profile", "full-profile+model", "model+effort"],
+)
+def test_the_prompt_is_never_eaten_by_the_variadic_tool_list(monkeypatch, tmp_path, kwargs):
+    """`--disallowedTools` consumes tokens until a flag, so the prompt must be
+    fenced off explicitly. Relying on a later flag to stop it holds only while
+    one happens to be present: `--full-profile` with no model puts the prompt
+    straight after the list, where the CLI reads it as a tool name and the run
+    dies with "Input must be provided either through stdin or as a prompt
+    argument" (measured 2026-09-17).
     """
     spawn = _Spawn()
     monkeypatch.setattr(dispatch.subprocess, "run", spawn)
     monkeypatch.setattr(dispatch.claude_cli, "require_short_id", lambda out: "abc12345")
 
-    dispatch.spawn_child("do the thing", cwd=tmp_path, read_only=True)
+    dispatch.spawn_child("THE PROMPT", cwd=tmp_path, read_only=True, **kwargs)
 
-    assert spawn.args[-1] == "do the thing"
+    assert spawn.args[-1] == "THE PROMPT"
     at = spawn.args.index("--disallowedTools")
     after = spawn.args[at + 1 + len(READ_ONLY_TOOLS)]
-    assert after.startswith("-"), f"a flag must follow the tool list, got {after!r}"
+    assert after == "--", f"the tool list must be closed explicitly, got {after!r}"
 
 
 @pytest.mark.real_spawn
@@ -209,12 +222,13 @@ Add `read_only: bool = False` to `spawn_child`'s keyword-only parameters, and em
 ```python
     args = ["claude", "--bg"]
     if read_only:
-        # First, so a flag always follows the list. `--disallowedTools` is
-        # variadic and space-separated: emitted last it swallows the
-        # positional prompt, and the child starts with no instructions at all
-        # (measured 2026-09-17 — the run died with "Input must be provided
-        # either through stdin or as a prompt argument").
-        args += ["--disallowedTools", *READ_ONLY_TOOLS]
+        # `--disallowedTools` is variadic and space-separated, so it consumes
+        # every following token until a flag. `--` ends it explicitly: relying
+        # on a later flag to stop it is relying on `--model`/`--effort`/lean
+        # happening to be present, and `--full-profile` with no model makes the
+        # prompt the next token, where the CLI reads it as a tool name and the
+        # child starts with no instructions at all (measured 2026-09-17).
+        args += ["--disallowedTools", *READ_ONLY_TOOLS, "--"]
     if model:
         args += ["--model", model]
 ```
