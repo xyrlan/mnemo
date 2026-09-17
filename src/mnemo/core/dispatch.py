@@ -256,6 +256,37 @@ job, not failing it.
 {closing}"""
 
 
+#: The read-only posture's opening prompt. Deliberately parallel to `_PROMPT`:
+#: same issue block, same worktree sentence, same refusal licence. What differs
+#: is the task (investigate, do not implement) and the closing, which asks for a
+#: comment on the issue rather than a check for commits to publish.
+_ANALYSIS_PROMPT = """Investigate issue #{issue} in this repo: {title}
+
+Read the full issue with `gh issue view {issue}` — including its comments,
+which often re-scope it. The body as it stands:
+
+---
+{body}
+---
+
+You are in a git worktree of your own on branch `{branch}`. You are here to
+find something out, not to build anything: your file-editing tools are closed,
+and nothing you learn needs a diff to be worth having.
+
+What is being asked of you:
+- Answer the question the issue actually poses. If the issue poses none, say
+  what question it should have posed and answer that instead.
+- Reach for evidence over inference. Run the code, read the log, count the
+  rows. A claim you measured is worth more than a claim you reasoned to.
+- Say what you could not determine, and why. An honest gap is a finding.
+
+No approach is prescribed. Decide what the issue actually calls for from the
+evidence in the repo. If the issue rests on a premise the code shows to be
+wrong, say so and show the evidence — a measured correction is the most
+valuable thing you can return.
+{closing}"""
+
+
 _CHANGELOG_PROMPT = """
 Document the change for users in `changelog.d/{name}.<section>.md` — one new
 file holding the `- ` bullet(s) a `CHANGELOG.md` entry would carry, with
@@ -312,10 +343,25 @@ _CLOSING_STEPS = (
     "writes no briefing at all.",
 )
 
+#: The read-only closing. Steps 1 and 3 are `_CLOSING_STEPS`' own, word for
+#: word: the report and the stop do not depend on the posture. Step 2 is the
+#: difference — a finding goes to the issue, because the worktree it was found
+#: in is removed and a briefing alone is read by whoever runs `mnemo sessions`.
+_READ_ONLY_CLOSING_STEPS = (
+    _CLOSING_STEPS[0],
+    "Post your finding as a comment on the issue: `gh issue comment {issue} "
+    "--body-file -`, with the body on stdin. Lead with the answer, then the "
+    "evidence for it. If you could not reach `gh`, say so in your report — it "
+    "is the only other copy.",
+    _CLOSING_STEPS[2],
+)
+
 _CLOSING_HEADING = "\nHow to finish, whatever you decided:\n"
 
 
-def _closing_clause(may: grants.Grant = ()) -> str:
+def _closing_clause(
+    may: grants.Grant = (), *, read_only: bool = False, issue: Target | None = None,
+) -> str:
     """The end-of-life instructions every child gets, grant or no grant.
 
     *may* only decides how step 2 is phrased — whether publishing is something
@@ -326,19 +372,29 @@ def _closing_clause(may: grants.Grant = ()) -> str:
 
     Each step is wrapped under its own number, so a continuation never starts
     at column 0 where it would read as a new section.
+
+    *read_only* swaps step 2 for a comment on *issue*: a read-only child has
+    nothing to publish, and the check for commits ahead would be asking it to
+    look for something the posture guarantees is not there.
     """
-    if "pr" in may:
-        hint = ", push it and open the pull request you were granted"
-    elif "push" in may:
-        hint = ", push it (do not open a pull request)"
+    # `.format()` unconditionally, never guarded on a placeholder being
+    # present: it collapses `{{` to `{` whether or not it substitutes
+    # anything, and `_CLOSING_STEPS[2]` relies on that to render
+    # `${CLAUDE_CODE_SESSION_ID:0:8}`. An extra kwarg is harmless; a skipped
+    # call silently doubles those braces.
+    if read_only:
+        steps_source = tuple(step.format(issue=issue) for step in _READ_ONLY_CLOSING_STEPS)
     else:
-        hint = ", say so in your report and leave it for `mnemo deliver`"
+        if "pr" in may:
+            hint = ", push it and open the pull request you were granted"
+        elif "push" in may:
+            hint = ", push it (do not open a pull request)"
+        else:
+            hint = ", say so in your report and leave it for `mnemo deliver`"
+        steps_source = tuple(step.format(publish_hint=hint) for step in _CLOSING_STEPS)
     steps = "\n".join(
-        _wrap(
-            step.format(publish_hint=hint),
-            initial_indent=f"{number}. ", subsequent_indent="   ",
-        )
-        for number, step in enumerate(_CLOSING_STEPS, start=1)
+        _wrap(step, initial_indent=f"{number}. ", subsequent_indent="   ")
+        for number, step in enumerate(steps_source, start=1)
     )
     return f"{_CLOSING_HEADING}\n{steps}\n"
 
@@ -387,7 +443,7 @@ def _wrap(text: str, **indent: str) -> str:
 
 def build_prompt(
     issue: int, *, title: str, body: str, repo_root: Path | str | None = None,
-    may: grants.Grant = (),
+    may: grants.Grant = (), read_only: bool = False,
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -408,6 +464,14 @@ def build_prompt(
     publishing, never how to build the thing published (#317).
     """
     branch = branch_name(issue)
+    if read_only:
+        return _ANALYSIS_PROMPT.format(
+            issue=issue,
+            title=title or f"issue #{issue}",
+            body=(body or "").strip() or "(empty — read it with gh)",
+            branch=branch,
+            closing=_closing_clause(read_only=True, issue=issue),
+        )
     return _PROMPT.format(
         issue=issue,
         title=title or f"issue #{issue}",

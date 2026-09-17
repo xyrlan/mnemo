@@ -87,3 +87,71 @@ def test_a_normal_child_argv_is_byte_identical(monkeypatch, tmp_path):
 
     assert plain.args == ro.args
     assert "--disallowedTools" not in plain.args
+
+
+def test_the_analysis_prompt_does_not_ask_for_an_implementation():
+    prompt = dispatch.build_prompt(
+        361, title="dedupe suppresses the strongest matches",
+        body="Measured: 30.7% of silences.", read_only=True,
+    )
+
+    assert "Run the full test suite before claiming the work is done." not in prompt
+    assert "changelog.d" not in prompt
+    assert "investigate" in prompt.lower()
+
+
+def test_the_analysis_prompt_keeps_the_refusal_licence():
+    """The passage that licenses a measured refusal reads correctly for an
+    investigator, and is the reason the outcome was reachable at all.
+    """
+    prompt = dispatch.build_prompt(361, title="t", body="b", read_only=True)
+
+    assert "No approach is prescribed" in prompt
+
+
+def test_the_analysis_prompt_names_the_issue_and_the_worktree():
+    prompt = dispatch.build_prompt(361, title="the title", body="the body", read_only=True)
+
+    assert "#361" in prompt
+    assert "the title" in prompt
+    assert "the body" in prompt
+    assert dispatch.branch_name(361) in prompt
+
+
+def test_the_implement_prompt_is_unchanged():
+    """Byte-identical for every existing caller."""
+    before = dispatch.build_prompt(361, title="t", body="b")
+    after = dispatch.build_prompt(361, title="t", body="b", read_only=False)
+
+    assert before == after
+    assert "Run the full test suite before claiming the work is done." in before
+
+
+def test_the_read_only_closing_asks_for_a_comment_not_a_push():
+    prompt = dispatch.build_prompt(361, title="t", body="b", read_only=True)
+
+    assert "gh issue comment 361" in prompt
+    assert "commit ahead of the base" not in prompt
+    assert "mnemo deliver" not in prompt
+
+
+def test_the_read_only_closing_keeps_the_report_and_the_stop():
+    """Neither depends on the posture, and the briefing is the artefact the
+    implement-path already calls the most valuable in the system.
+
+    Asserted on the unwrapped source rather than the rendered prompt: `_wrap`
+    breaks step 1 between "session's" and "briefing", so any substring long
+    enough to be meaningful spans a newline and an indent.
+    """
+    prompt = dispatch.build_prompt(361, title="t", body="b", read_only=True)
+
+    assert dispatch._READ_ONLY_CLOSING_STEPS[0] == dispatch._CLOSING_STEPS[0]
+    assert "This is the only copy" in prompt
+    assert "claude stop" in prompt
+
+
+def test_the_implement_closing_is_unchanged():
+    from mnemo.core.sessions import grants
+
+    for may in ((), grants.parse("push"), grants.parse("pr")):
+        assert dispatch._closing_clause(may) == dispatch._closing_clause(may, read_only=False)
