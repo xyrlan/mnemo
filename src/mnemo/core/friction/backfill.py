@@ -471,7 +471,7 @@ def plan(
             cached = previous.get(sid)
             if cached is not None and cached.status in (FOUND, NONE_FOUND) \
                     and cached.transcript_sha256 == sha and cached.project == proj:
-                emit(cached)
+                emit(_without_shell_quotes(cached))
                 continue
 
             entry = SessionPlan(session_id=sid, project=proj, status=NONE_FOUND,
@@ -480,6 +480,7 @@ def plan(
             entry.ts = _session_start(events)
             turns = user_turns(events)
             reactions = turns[1:] if turns and corrections.is_dispatch_brief(turns[0]) else turns
+            reactions = [t for t in reactions if not corrections.is_shell_turn(t)]
             if not reactions:
                 # Nothing the user typed can carry a correction; a briefing call
                 # here would be paid for a result verify() must reject.
@@ -522,6 +523,25 @@ def plan(
     result.complete = True
     save_plan(result, out_path)
     return result
+
+
+def _without_shell_quotes(entry: SessionPlan) -> SessionPlan:
+    """A cached session as today's ``verify`` would have planned it.
+
+    A plan saved before ``verify`` refused shell-mode turns (#360) can hold a
+    ``<bash-input>`` quote; reusing it verbatim would put that quote back in
+    the dry run and, on ``--apply``, in the ledger. Dropping it needs no model
+    call — the verdict is mechanical — so the cache stays a cache.
+    """
+    kept = [c for c in entry.corrections if not corrections.is_shell_turn(c.quote)]
+    if len(kept) == len(entry.corrections):
+        return entry
+    entry.rejected += len(entry.corrections) - len(kept)
+    entry.corrections = kept
+    if not entry.corrections:
+        entry.status = NONE_FOUND
+        entry.detail = f"{entry.rejected} proposed quote(s) not typed by the user"
+    return entry
 
 
 def _vault_relative(path: Path, vault_root: Path) -> str:
@@ -568,6 +588,8 @@ def apply(vault_root: Path, plan: BackfillPlan) -> BackfillReport:
             continue
         report.sessions += 1
         for c in s.corrections:
+            if corrections.is_shell_turn(c.quote):
+                continue  # a plan saved before #360; see _without_shell_quotes
             key = (s.session_id, corrections.normalize(c.quote))
             if key in seen:
                 report.duplicates += 1

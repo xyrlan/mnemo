@@ -524,3 +524,98 @@ def test_an_interrupted_command_exits_130_and_points_at_the_plan(cli_vault, monk
     monkeypatch.setattr(BF, "plan", interrupted)
     assert cmd_friction(_ns(backfill=True)) == 130
     assert "rerun `mnemo friction --backfill`" in capsys.readouterr().err
+
+
+# --- #360: a `!` shell command is not a correction ----------------------------
+
+SHELL = "<bash-input> gh pr merge 186 --squash --delete-branch --admin</bash-input>"
+
+
+def test_a_shell_command_quote_is_rejected_at_plan_time(world):
+    vault, projects, _ = world
+    _transcript(projects, S_FOUND, ["fix the merge step", SHELL], mtime=2_000_000_000)
+    briefer = Briefer({S_FOUND: [(SHELL, RULE)], S_NONE: []})
+    resolver = _resolver(["merge-requires-admin"])
+
+    p = _plan(vault, projects, briefer, resolver=resolver)
+
+    s = {x.session_id: x for x in p.sessions}[S_FOUND]
+    assert s.status == BF.NONE_FOUND and s.corrections == [] and s.rejected == 1
+    assert resolver.calls == []
+
+
+def test_a_session_with_only_shell_turns_is_never_briefed(world):
+    vault, projects, _ = world
+    _transcript(projects, S_FOUND, [SHELL, "<bash-stdout>merged</bash-stdout>"],
+                mtime=2_000_000_000)
+    briefer = Briefer({S_FOUND: [(SHELL, RULE)], S_NONE: []})
+
+    p = _plan(vault, projects, briefer)
+
+    s = {x.session_id: x for x in p.sessions}[S_FOUND]
+    assert s.status == BF.NONE_FOUND and s.detail == "no typed turns"
+    assert S_FOUND not in briefer.calls
+
+
+def _stale_plan_with_a_shell_quote(vault, projects, briefer):
+    """The plan as a sweep before #360 saved it: the shell quote kept and linked."""
+    p = _plan(vault, projects, briefer)
+    s = {x.session_id: x for x in p.sessions}[S_FOUND]
+    s.corrections.append(BF.PlannedCorrection(
+        quote=SHELL, rule=RULE, contradicts=["merge-requires-admin"],
+        ranks={"merge-requires-admin": 2}, link_basis=ledger.LINK_EXTRACTOR, candidates=2,
+    ))
+    BF.save_plan(p, BF.plan_path(vault))
+    return p
+
+
+def test_a_cached_plan_drops_its_shell_quotes_without_a_model_call(world):
+    vault, projects, briefer = world
+    _stale_plan_with_a_shell_quote(vault, projects, briefer)
+    resolver = _resolver(["merge-requires-admin"])
+
+    again = _plan(vault, projects, briefer, resolver=resolver)
+
+    s = {x.session_id: x for x in again.sessions}[S_FOUND]
+    assert [c.quote for c in s.corrections] == [QUOTE]
+    assert s.rejected == 1 and s.status == BF.FOUND
+    assert resolver.calls == [] and again.briefing_calls == 0
+
+
+def test_a_cached_session_left_with_nothing_is_none_found(world):
+    vault, projects, briefer = world
+    p = _stale_plan_with_a_shell_quote(vault, projects, briefer)
+    s = {x.session_id: x for x in p.sessions}[S_FOUND]
+    s.corrections = s.corrections[1:]
+    BF.save_plan(p, BF.plan_path(vault))
+
+    again = _plan(vault, projects, briefer)
+
+    s = {x.session_id: x for x in again.sessions}[S_FOUND]
+    assert s.status == BF.NONE_FOUND and s.corrections == [] and s.rejected == 1
+
+
+def test_apply_of_a_stale_plan_writes_no_shell_quote(world, telemetry_on):
+    vault, projects, briefer = world
+    stale = _stale_plan_with_a_shell_quote(vault, projects, briefer)
+
+    report = BF.apply(vault, stale)
+
+    assert len(report.written) == 1 and report.failed == 0
+    raw = ledger.ledger_path(vault).read_text(encoding="utf-8")
+    assert "bash-input" not in raw
+    ranks = BF.link_ranks_path(vault).read_text(encoding="utf-8").splitlines()
+    assert len(ranks) == 1
+
+
+def test_summary_no_longer_counts_a_shell_row_already_in_the_ledger(world, telemetry_on):
+    vault, _, _ = world
+    ledger.record(vault, ledger.FrictionRecord(
+        ts="2026-09-12T19:37:50Z", session_id=S_FOUND, project="proj", quote=SHELL,
+        rule_text=RULE, contradicts=["merge-requires-admin"], link_basis=ledger.LINK_EXTRACTOR,
+        backfilled=True,
+    ))
+
+    s = BF.summarize(vault)
+
+    assert s["records"] == 0 and s["contradicted_live"] == []

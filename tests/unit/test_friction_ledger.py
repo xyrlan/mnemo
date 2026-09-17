@@ -585,3 +585,19 @@ def test_an_unverified_quote_is_stored_verbatim_without_complaint(tmp_path, tele
 
     assert ledger.record(tmp_path, _rec(quote=fabricated)) is not None
     assert list(ledger.iter_records(tmp_path))[0].quote == fabricated
+
+
+# --- #360: rows quoting a shell command stop counting -------------------------
+
+
+def test_a_row_quoting_a_shell_command_is_not_read_back(tmp_path, telemetry_on):
+    shell = "<bash-input> gh pr merge 186 --squash --delete-branch --admin</bash-input>"
+    ledger.record(tmp_path, _rec(quote=shell, contradicts=["merge-requires-admin"],
+                                 link_basis=ledger.LINK_EXTRACTOR))
+    kept = ledger.record(tmp_path, _rec(session_id="s2"))
+
+    assert [r.id for r in ledger.iter_records(tmp_path)] == [kept]
+    # Still on disk — the ledger is append-only — and still blocks a re-append.
+    assert len(_lines(tmp_path)) == 2
+    assert ledger.record(tmp_path, _rec(quote=shell)) is None
+    assert len(_lines(tmp_path)) == 2
