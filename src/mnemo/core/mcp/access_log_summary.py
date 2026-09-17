@@ -60,6 +60,12 @@ def summarize(entries: list[dict]) -> dict:
     inj_total = 0
     inj_with_briefing = 0
     inj_total_bytes = 0
+    # A row is one SessionStart fire, and one session fires again on every
+    # /clear (#359). Rows written before the hook recorded ``session_id``
+    # cannot be told apart, so they stay out of the distinct counts.
+    inj_sessions: set[str] = set()
+    inj_sessions_briefed: set[str] = set()
+    inj_without_id = 0
 
     for entry in entries:
         if not _is_well_formed(entry):
@@ -108,8 +114,16 @@ def summarize(entries: list[dict]) -> dict:
         elif tool == "session_start.inject":
             inj_total += 1
             inj_total_bytes += int(entry.get("envelope_bytes", 0))
-            if bool(entry.get("included_briefing", False)):
+            briefed = bool(entry.get("included_briefing", False))
+            if briefed:
                 inj_with_briefing += 1
+            sid = entry.get("session_id")
+            if sid:
+                inj_sessions.add(str(sid))
+                if briefed:
+                    inj_sessions_briefed.add(str(sid))
+            else:
+                inj_without_id += 1
 
     for bucket in by_project.values():
         calls = int(bucket["calls"])
@@ -132,9 +146,14 @@ def summarize(entries: list[dict]) -> dict:
             "unknown_models": sorted(unknown_models),
         },
         "injection_stats": {
+            # Row counts, kept under their historical names: each is a
+            # SessionStart fire, not a session.
             "total_sessions": inj_total,
             "sessions_with_briefing": inj_with_briefing,
             "total_envelope_bytes": inj_total_bytes,
+            "distinct_sessions": len(inj_sessions),
+            "distinct_sessions_with_briefing": len(inj_sessions_briefed),
+            "rows_without_session_id": inj_without_id,
         },
     }
 
@@ -195,9 +214,16 @@ def format_human(summary: dict) -> str:
         lines.append("")
         lines.append("SessionStart injection:")
         lines.append(
-            f"  {inj['total_sessions']} sessions, "
+            f"  {inj['total_sessions']} starts, "
             f"{inj['sessions_with_briefing']} with briefing, "
             f"avg envelope \u2248 {inj['total_envelope_bytes'] // max(inj['total_sessions'], 1)} bytes"
         )
+        if inj.get("distinct_sessions", 0):
+            unattributed = inj.get("rows_without_session_id", 0)
+            lines.append(
+                f"  {inj['distinct_sessions']} distinct sessions, "
+                f"{inj['distinct_sessions_with_briefing']} briefed"
+                + (f" ({unattributed} older starts carry no session id)" if unattributed else "")
+            )
 
     return "\n".join(lines)

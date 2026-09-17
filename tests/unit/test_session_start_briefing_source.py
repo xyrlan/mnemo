@@ -128,6 +128,26 @@ def test_only_the_startup_counts_as_a_briefing_read(
     assert reads() == 1
 
 
+def test_rows_name_the_session_that_received_them(
+    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys
+) -> None:
+    # #359: the briefing row's ``session_id`` is the briefing's author; the
+    # hook's own session id and source are what make a row countable.
+    _seed(tmp_vault, monkeypatch)
+    _, inject_rows = _run(tmp_vault, monkeypatch, capsys, "clear")
+
+    (read,) = [
+        json.loads(line)
+        for line in (tmp_vault / ".mnemo" / "briefing-log.jsonl")
+        .read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert read["session_id"] == "abc123"
+    assert read["reader_session_id"] == "s1"
+    assert read["source"] == "clear"
+    assert inject_rows[0]["session_id"] == "s1"
+
+
 def test_config_off_still_wins_on_startup(
     tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys
 ) -> None:

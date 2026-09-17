@@ -56,8 +56,15 @@ def _rows(vault: Path) -> list[dict]:
 
 
 def test_signature_is_the_contract():
-    params = list(inspect.signature(briefing.record_briefing_read).parameters)
-    assert params == ["vault_root", "record"]
+    sig = inspect.signature(briefing.record_briefing_read)
+    positional = [
+        n for n, p in sig.parameters.items() if p.kind is not p.KEYWORD_ONLY
+    ]
+    assert positional == ["vault_root", "record"]
+    # #359: the reading side is keyword-only and optional, so the contract's
+    # two-argument call still records a row.
+    keyword = {n: p.default for n, p in sig.parameters.items() if p.kind is p.KEYWORD_ONLY}
+    assert keyword == {"reader_session_id": None, "source": None}
     # Reachable through the briefing API the injector picks with.
     assert briefing.record_briefing_read is access_log.record_briefing_read
 
@@ -78,7 +85,28 @@ def test_row_names_the_briefing_the_picker_returned(tmp_path, telemetry_on):
     assert row["timestamp"].endswith("Z")
     assert set(row) == {
         "timestamp", "project", "path", "session_id", "date", "body_bytes", "body_sha256",
+        "reader_session_id", "source",
     }
+    assert row["reader_session_id"] is None
+    assert row["source"] is None
+
+
+def test_row_names_the_reader_apart_from_the_author(tmp_path, telemetry_on):
+    # #359: newest-wins hands one briefing to every session a project starts,
+    # so ``session_id`` (the author) repeats across readers by design. The
+    # reader is its own field, and every read keeps its own row.
+    _write_briefing(tmp_path, "mnemo", "author")
+    rec = briefing.pick_latest_briefing(tmp_path, "mnemo")
+    briefing.record_briefing_read(tmp_path, rec, reader_session_id="r1", source="startup")
+    briefing.record_briefing_read(tmp_path, rec, reader_session_id="r2", source="startup")
+    briefing.record_briefing_read(tmp_path, rec, reader_session_id="r1", source="clear")
+
+    rows = _rows(tmp_path)
+    assert [r["session_id"] for r in rows] == ["author"] * 3
+    assert len({r["body_sha256"] for r in rows}) == 1
+    assert [(r["reader_session_id"], r["source"]) for r in rows] == [
+        ("r1", "startup"), ("r2", "startup"), ("r1", "clear"),
+    ]
 
 
 def test_hash_and_size_cover_exactly_the_injected_text(tmp_path, telemetry_on):

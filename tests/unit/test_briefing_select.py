@@ -222,17 +222,19 @@ def test_hook_records_the_briefing_it_injects(tmp_path: Path, monkeypatch) -> No
     reads: list = []
     monkeypatch.setattr(
         briefing, "record_briefing_read",
-        lambda vault_root, record: reads.append((vault_root, record)),
+        lambda vault_root, record, **kw: reads.append((vault_root, record, kw)),
         raising=False,
     )
     _write(tmp_path, "p", "old", date="2026-09-01", body="old body")
     _write(tmp_path, "p", "new", date="2026-09-15", body="new body")
     payload = session_start._build_injection_payload(
         tmp_path, current_project="p", inject_briefing=True,
+        session_id="reader", source="startup",
     )
     assert "new body" in payload
     assert len(reads) == 1
-    vault_root, rec = reads[0]
+    vault_root, rec, kw = reads[0]
+    assert kw == {"reader_session_id": "reader", "source": "startup"}
     assert vault_root == tmp_path
     assert rec.frontmatter["session_id"] == "new"
     assert rec.body.rstrip() in payload
@@ -241,14 +243,14 @@ def test_hook_records_the_briefing_it_injects(tmp_path: Path, monkeypatch) -> No
 def test_hook_records_nothing_without_a_briefing(tmp_path: Path, monkeypatch) -> None:
     reads: list = []
     monkeypatch.setattr(briefing, "record_briefing_read",
-                        lambda *a: reads.append(a), raising=False)
+                        lambda *a, **kw: reads.append(a), raising=False)
     session_start._build_injection_payload(tmp_path, current_project="p", inject_briefing=True)
     session_start._build_injection_payload(tmp_path, current_project="p", inject_briefing=False)
     assert reads == []
 
 
 def test_a_failing_recorder_does_not_cost_the_briefing(tmp_path: Path, monkeypatch) -> None:
-    def boom(vault_root, record):
+    def boom(vault_root, record, **kw):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(briefing, "record_briefing_read", boom, raising=False)
