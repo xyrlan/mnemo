@@ -821,14 +821,25 @@ def spawn_child(
     dispatch that never heard of this flag.
 
     ``--disallowedTools`` is variadic and space-separated: it swallows every
-    token after it up to the next flag, so the tool list is closed with an
-    explicit ``--`` rather than relying on ``--model``/``--effort``/lean's own
-    flags to happen to follow it. That reliance is real: ``lean=False`` with
-    no model gives it nothing to swallow but the prompt, which is then read as
-    a tool name and the child starts with no instructions at all (measured
-    2026-09-17 — the run died with "Input must be provided either through
-    stdin or as a prompt argument"). ``--`` was confirmed against the real CLI
-    to end the list correctly wherever it is placed.
+    token after it up to the next flag. Two placements were measured against
+    the real CLI on 2026-09-17, and both halves matter.
+
+    Relying on a later flag to end the list is not enough. ``lean=False`` with
+    no model leaves nothing between the list and the prompt, so the prompt is
+    read as a tool name and the run dies with "Input must be provided either
+    through stdin or as a prompt argument" — the child starts with no
+    instructions at all.
+
+    But ``--`` cannot sit right after the list either, because it ends *all*
+    flag parsing rather than just this one list. Placed there it turns
+    ``--setting-sources`` and every lean flag after it into positionals, and
+    the child reads ``--setting-sources`` as its prompt. That is not
+    hypothetical: the first live read-only dispatch produced a transcript whose
+    only user turn was the literal string ``--setting-sources``.
+
+    So the list is emitted early and ``--`` goes last, immediately before the
+    prompt: the flags in between stay flags, and the prompt is the prompt
+    however few of them are present.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -837,13 +848,15 @@ def spawn_child(
         )
     args = ["claude", "--bg"]
     if read_only:
-        # `--disallowedTools` is variadic and space-separated, so it consumes
-        # every following token until a flag. `--` ends it explicitly: relying
-        # on a later flag to stop it is relying on `--model`/`--effort`/lean
-        # happening to be present, and `--full-profile` with no model makes
-        # the prompt the next token, where it is read as a tool name and the
-        # child starts with no instructions at all (measured 2026-09-17).
-        args += ["--disallowedTools", *READ_ONLY_TOOLS, "--"]
+        # Early, so the flags below are between the variadic tool list and the
+        # prompt. The `--` that closes the list goes immediately before the
+        # prompt instead of here: `--` ends *all* flag parsing, not just this
+        # list, so placed here it turns `--setting-sources` and everything
+        # after into positionals — the child then reads `--setting-sources` as
+        # its prompt and never sees the real one (measured 2026-09-17 on a live
+        # dispatch, whose transcript's only user turn was the literal string
+        # `--setting-sources`).
+        args += ["--disallowedTools", *READ_ONLY_TOOLS]
     if model:
         args += ["--model", model]
     if effort:
@@ -854,6 +867,12 @@ def spawn_child(
         # Alongside --model, never instead of it: the two choose different
         # things (who the child is, and what it loads) and both survive.
         args += child_profile.lean_args(cwd)
+    if read_only:
+        # Last, immediately before the prompt. `--` ends flag parsing, so it
+        # both closes `--disallowedTools`' variadic list and guarantees the
+        # prompt is read as the prompt however few flags happen to sit between
+        # them — `lean=False` with no model leaves none at all.
+        args.append("--")
     args.append(prompt)
     try:
         result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)

@@ -56,12 +56,20 @@ def test_read_only_child_is_spawned_with_the_file_tools_closed(monkeypatch, tmp_
     ids=["defaults", "full-profile", "full-profile+model", "model+effort"],
 )
 def test_the_prompt_is_never_eaten_by_the_variadic_tool_list(monkeypatch, tmp_path, kwargs):
-    """`--disallowedTools` consumes tokens until a flag, so the prompt must be
-    fenced off explicitly. Relying on a later flag to stop it holds only while
-    one happens to be present: `--full-profile` with no model puts the prompt
-    straight after the list, where the CLI reads it as a tool name and the run
-    dies with "Input must be provided either through stdin or as a prompt
-    argument" (measured 2026-09-17).
+    """Two failures, one on each side, both measured 2026-09-17 on the real CLI.
+
+    Without a fence the prompt is eaten: `--disallowedTools` consumes tokens
+    until a flag, and `lean=False` with no model leaves it nothing but the
+    prompt, which the CLI reads as a tool name before dying with "Input must be
+    provided either through stdin or as a prompt argument".
+
+    With the fence in the wrong place the *flags* are eaten: `--` ends all flag
+    parsing, not just this list, so placed right after the tools it turns
+    `--setting-sources` and every lean flag into positionals. The first live
+    read-only dispatch did exactly that — its transcript's only user turn was
+    the literal string `--setting-sources`.
+
+    Hence: list early, `--` last, flags in between still flags.
     """
     spawn = _Spawn()
     monkeypatch.setattr(dispatch.subprocess, "run", spawn)
@@ -70,9 +78,18 @@ def test_the_prompt_is_never_eaten_by_the_variadic_tool_list(monkeypatch, tmp_pa
     dispatch.spawn_child("THE PROMPT", cwd=tmp_path, read_only=True, **kwargs)
 
     assert spawn.args[-1] == "THE PROMPT"
+    assert spawn.args[-2] == "--", "the prompt must be fenced off by `--`"
+
+    # Nothing between the tool list and that `--` may be swallowed: every token
+    # there is either a flag or a flag's value, and `--` appears exactly once.
     at = spawn.args.index("--disallowedTools")
-    after = spawn.args[at + 1 + len(READ_ONLY_TOOLS)]
-    assert after == "--", f"the tool list must be closed explicitly, got {after!r}"
+    assert spawn.args[at + 1:at + 1 + len(READ_ONLY_TOOLS)] == list(READ_ONLY_TOOLS)
+    assert spawn.args.count("--") == 1
+
+    between = spawn.args[at + 1 + len(READ_ONLY_TOOLS):-2]
+    for flag in ("--setting-sources", "--strict-mcp-config", "--model", "--effort"):
+        if flag in spawn.args:
+            assert flag in between, f"{flag} must stay a flag, not fall past `--`"
 
 
 @pytest.mark.real_spawn
