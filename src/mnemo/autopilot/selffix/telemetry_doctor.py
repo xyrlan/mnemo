@@ -4,8 +4,13 @@ Scans the MCP access log for telemetry anomalies and opens a draft PR
 explaining what's broken so a human can fix the root cause.
 
 Current anomalies detected:
-- ``cost_usd_always_zero`` — ``llm.call`` entries have cost_usd = 0 always.
-- ``prompt_tokens_null`` — ``llm.call`` entries have null prompt_tokens > threshold.
+- ``cost_usd_always_zero`` — ``llm.call`` entries never carry a nonzero cost_usd.
+- ``input_tokens_zero`` — ``llm.call`` entries report 0 input tokens > threshold.
+
+Both read the row ``access_log.record_llm_call`` writes — ``tool`` (not
+``event``), a top-level ``cost_usd``, and tokens nested under ``usage``. A check
+keyed on a field nothing writes can never fire, and still reads as coverage
+(#370).
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 from mnemo.core.log_utils import iter_rotated_rows
 
-_PROMPT_TOKENS_NULL_THRESHOLD = 0.1  # flag if > 10% of llm.call entries have null tokens
+_INPUT_TOKENS_ZERO_THRESHOLD = 0.1  # flag if > 10% of llm.call entries report no input
 _MIN_LLM_CALL_ENTRIES = 5  # don't flag with too few data points
 
 
@@ -49,7 +54,7 @@ def scan_telemetry(*, vault_root: Path) -> List[TelemetryAnomaly]:
     log_path = vault_root / ".mnemo" / "mcp-access-log.jsonl"
     llm_call_entries: List[dict] = [
         entry for entry in iter_rotated_rows(log_path)
-        if entry.get("event") == "llm.call"
+        if entry.get("tool") == "llm.call"
     ]
 
     if not llm_call_entries:
@@ -57,17 +62,21 @@ def scan_telemetry(*, vault_root: Path) -> List[TelemetryAnomaly]:
 
     anomalies: List[TelemetryAnomaly] = []
     anomalies.extend(_check_cost_usd_always_zero(llm_call_entries))
-    anomalies.extend(_check_prompt_tokens_null(llm_call_entries))
+    anomalies.extend(_check_input_tokens_zero(llm_call_entries))
     return anomalies
 
 
 def _check_cost_usd_always_zero(entries: List[dict]) -> List[TelemetryAnomaly]:
-    """Flag when all llm.call entries have cost_usd == 0 or missing."""
+    """Flag when no llm.call entry carries a nonzero cost_usd.
+
+    Rows written before ``record_llm_call`` recorded cost have no ``cost_usd``
+    key and are skipped; a row whose key is ``None`` counts — that is the CLI
+    reporting no cost, which is the defect this check exists to notice.
+    """
     if len(entries) < _MIN_LLM_CALL_ENTRIES:
         return []
-    # Only consider entries that have the cost_usd key
     with_cost = [e for e in entries if "cost_usd" in e]
-    if not with_cost:
+    if len(with_cost) < _MIN_LLM_CALL_ENTRIES:
         return []
     nonzero = [e for e in with_cost if (e.get("cost_usd") or 0) != 0]
     if nonzero:
@@ -76,35 +85,51 @@ def _check_cost_usd_always_zero(entries: List[dict]) -> List[TelemetryAnomaly]:
         TelemetryAnomaly(
             kind="cost_usd_always_zero",
             detail=(
-                f"cost_usd field on llm.call is always 0 across {len(with_cost)} entries "
-                f"— pricing table likely not applied"
+                f"cost_usd on llm.call is 0 or null across all {len(with_cost)} "
+                f"entries — the claude CLI result carried no total_cost_usd, "
+                f"or core/llm.py stopped reading it"
             ),
             affected_count=len(with_cost),
         )
     ]
 
 
-def _check_prompt_tokens_null(entries: List[dict]) -> List[TelemetryAnomaly]:
-    """Flag when > threshold of llm.call entries have null prompt_tokens."""
+def _input_tokens(entry: dict) -> Optional[int]:
+    usage = entry.get("usage")
+    if not isinstance(usage, dict) or "input_tokens" not in usage:
+        return None
+    try:
+        return int(usage["input_tokens"] or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _check_input_tokens_zero(entries: List[dict]) -> List[TelemetryAnomaly]:
+    """Flag when > threshold of llm.call entries report 0 input tokens.
+
+    ``record_llm_call`` writes an unreported count as 0, so 0 is how a missing
+    count looks on disk. Every call sends a prompt; a real one is never 0.
+    """
     if len(entries) < _MIN_LLM_CALL_ENTRIES:
         return []
-    with_field = [e for e in entries if "prompt_tokens" in e]
-    if not with_field:
+    counts = [n for n in (_input_tokens(e) for e in entries) if n is not None]
+    if not counts:
         return []
-    null_count = sum(1 for e in with_field if e.get("prompt_tokens") is None)
-    if null_count == 0:
+    zero_count = sum(1 for n in counts if n == 0)
+    if zero_count == 0:
         return []
-    null_rate = null_count / len(with_field)
-    if null_rate <= _PROMPT_TOKENS_NULL_THRESHOLD:
+    zero_rate = zero_count / len(counts)
+    if zero_rate <= _INPUT_TOKENS_ZERO_THRESHOLD:
         return []
     return [
         TelemetryAnomaly(
-            kind="prompt_tokens_null",
+            kind="input_tokens_zero",
             detail=(
-                f"prompt_tokens is null in {null_count}/{len(with_field)} llm.call entries "
-                f"({null_rate:.0%}) — possible missing field on early reflex entries"
+                f"usage.input_tokens is 0 in {zero_count}/{len(counts)} llm.call "
+                f"entries ({zero_rate:.0%}) — the claude CLI result's usage block "
+                f"was missing or core/llm.py stopped summing it"
             ),
-            affected_count=null_count,
+            affected_count=zero_count,
         )
     ]
 
