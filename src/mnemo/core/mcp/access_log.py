@@ -111,12 +111,17 @@ def record_session_start_inject(
     project: str | None,
     agent: str,
     source: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Append a `session_start.inject` entry. Never raises.
 
     ``source`` is Claude Code's SessionStart source (startup, resume, clear,
     compact, fork), so a before/after on resume injections is a log query
     rather than a transcript reconstruction (#352).
+
+    ``session_id`` is the session the envelope went to. One session fires
+    SessionStart again on every ``/clear``, so without it a row count reads
+    as a session count and is not one (#359).
     """
     entry = {
         "timestamp": _utc_iso_z(),
@@ -126,13 +131,28 @@ def record_session_start_inject(
         "project": project,
         "agent": agent,
         "source": source,
+        "session_id": session_id,
         "result_count": 1,
     }
     record(vault_root, entry)
 
 
-def briefing_read_entry(vault_root: Path, record: "BriefingRecord") -> dict:
+def briefing_read_entry(
+    vault_root: Path,
+    record: "BriefingRecord",
+    *,
+    reader_session_id: str | None = None,
+    source: str | None = None,
+) -> dict:
     """The ``briefing-log.jsonl`` row for one injected briefing.
+
+    ``session_id`` is the session that WROTE the briefing, not the one that
+    read it: newest-wins hands one briefing to every session a project starts
+    until a newer one lands, so 23 rows naming one ``session_id`` were 12
+    different readers on the maintainer's vault (#359). ``reader_session_id``
+    and ``source`` (Claude Code's SessionStart source) name the reading side,
+    so "briefed sessions" is a count of distinct readers, and a second row for
+    one reader shows whether it came from a ``/clear`` or a double fire.
 
     ``path`` is vault-relative so the row survives a vault move, and joins a
     ``session_start.inject`` row on ``project`` plus a timestamp seconds away.
@@ -160,10 +180,18 @@ def briefing_read_entry(vault_root: Path, record: "BriefingRecord") -> dict:
         "date": str(fm.get("date") or ""),
         "body_bytes": len(body),
         "body_sha256": "sha256:" + hashlib.sha256(body).hexdigest()[:16],
+        "reader_session_id": reader_session_id,
+        "source": source,
     }
 
 
-def record_briefing_read(vault_root: Path, record: "BriefingRecord") -> None:
+def record_briefing_read(
+    vault_root: Path,
+    record: "BriefingRecord",
+    *,
+    reader_session_id: str | None = None,
+    source: str | None = None,
+) -> None:
     """Append one row to ``.mnemo/briefing-log.jsonl`` for an injected briefing.
 
     Call it where a briefing is actually handed to a session, not where one is
@@ -177,7 +205,10 @@ def record_briefing_read(vault_root: Path, record: "BriefingRecord") -> None:
     from. Same telemetry switch and size cap as the access log. Never raises.
     """
     try:
-        entry = briefing_read_entry(Path(vault_root), record)
+        entry = briefing_read_entry(
+            Path(vault_root), record,
+            reader_session_id=reader_session_id, source=source,
+        )
     except Exception:
         return
     _append(Path(vault_root), _BRIEFING_LOG_FILENAME, entry)

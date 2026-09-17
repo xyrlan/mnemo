@@ -107,6 +107,8 @@ def _build_injection_payload(
     vault_root: Path,
     current_project: str | None = None,
     inject_briefing: bool = False,
+    session_id: str | None = None,
+    source: str | None = None,
 ) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
@@ -119,7 +121,8 @@ def _build_injection_payload(
     When ``inject_briefing`` is True and ``current_project`` has at least one
     briefing on disk, appends a ``[last-briefing session=… date=… duration_minutes=…]``
     block (verbatim body) as the last section. The block is omitted on any
-    read/parse failure or when no briefing exists.
+    read/parse failure or when no briefing exists. ``session_id`` and
+    ``source`` describe the session receiving it, for the briefing-log row.
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core import rule_activation
@@ -212,7 +215,9 @@ def _build_injection_payload(
                 # returns, so building the block is handing it to the session.
                 # Its own try: telemetry must never cost the session its briefing.
                 try:
-                    briefing_mod.record_briefing_read(vault_root, rec)
+                    briefing_mod.record_briefing_read(
+                        vault_root, rec, reader_session_id=session_id, source=source,
+                    )
                 except Exception:
                     pass
         except Exception:
@@ -807,11 +812,14 @@ def main() -> int:
         if cfg.get("injection", {}).get("enabled", False):
             try:
                 canonical_name = agent.resolve_canonical_agent(cwd).name
+                reader_sid = sid if sid != "unknown" else None
                 inject_briefing = _briefing_wanted(cfg, source)
                 payload_text = _build_injection_payload(
                     vault,
                     current_project=canonical_name,
                     inject_briefing=inject_briefing,
+                    session_id=reader_sid,
+                    source=source,
                 )
                 # The notice stands on its own: a brand-new vault has no
                 # topics and no briefing, so the payload it would ride along
@@ -858,6 +866,7 @@ def main() -> int:
                             project=canonical_name,
                             agent=canonical_name,
                             source=source,
+                            session_id=reader_sid,
                         )
                     except Exception as exc:
                         errors.log_error(vault, "session_start.inject_telemetry", exc)

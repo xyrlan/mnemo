@@ -60,6 +60,55 @@ def test_summary_includes_session_start_inject() -> None:
     assert inj["total_envelope_bytes"] == 1234 + 567
 
 
+def _inject(briefed: bool, session_id: str | None) -> dict:
+    entry = {
+        "tool": "session_start.inject",
+        "envelope_bytes": 100,
+        "included_briefing": briefed,
+        "project": "myproj",
+        "agent": "myagent",
+        "result_count": 1,
+    }
+    if session_id is not None:
+        entry["session_id"] = session_id
+    return entry
+
+
+# format_human prints nothing past its header on a log with no MCP call.
+_MCP_CALL = {"tool": "list_rules_by_topic", "project": "myproj", "result_count": 2}
+
+
+def test_injection_counts_distinct_sessions_apart_from_starts() -> None:
+    # #359: one session fires SessionStart on every /clear, so rows are starts.
+    entries = [
+        _inject(True, "a"),
+        _inject(True, "a"),   # /clear in the same session
+        _inject(False, "a"),  # resume
+        _inject(False, "b"),
+        _inject(True, None),  # written before rows carried session_id
+    ]
+    inj = access_log_summary.summarize(entries)["injection_stats"]
+    assert inj["total_sessions"] == 5
+    assert inj["sessions_with_briefing"] == 3
+    assert inj["distinct_sessions"] == 2
+    assert inj["distinct_sessions_with_briefing"] == 1
+    assert inj["rows_without_session_id"] == 1
+
+    text = access_log_summary.format_human(
+        access_log_summary.summarize(entries + [_MCP_CALL])
+    )
+    assert "5 starts, 3 with briefing" in text
+    assert "2 distinct sessions, 1 briefed (1 older starts carry no session id)" in text
+
+
+def test_injection_without_session_ids_prints_no_distinct_line() -> None:
+    text = access_log_summary.format_human(
+        access_log_summary.summarize([_inject(True, None), _MCP_CALL])
+    )
+    assert "1 starts, 1 with briefing" in text
+    assert "distinct sessions" not in text
+
+
 def test_summary_unknown_model_estimated_cost_excluded() -> None:
     """Entries with unknown models contribute tokens but not USD."""
     entries = [_llm_entry("briefing", "future-model-z", 1_000_000, 1_000_000)]
