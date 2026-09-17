@@ -9,6 +9,7 @@ disk.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 
@@ -120,6 +121,44 @@ DISPATCH_BRIEF_OPENINGS: tuple[str, ...] = (
 def is_dispatch_brief(turn: str) -> bool:
     """True when *turn* is the opening prompt ``mnemo dispatch`` hands a child."""
     return (turn or "").lstrip().startswith(DISPATCH_BRIEF_OPENINGS)
+
+
+_JOB_SCRATCH_RE = re.compile(r"(?:^|/)\.claude/jobs/[^/]+/tmp(?:/|$)")
+
+
+def is_job_scratch(cwd: str) -> bool:
+    """True when *cwd* lies inside a background Claude Code job's scratch dir.
+
+    ``<config dir>/jobs/<id>/tmp`` is the ``$CLAUDE_JOB_DIR/tmp`` a background
+    session is told to put throwaway files in. A session whose cwd is there
+    was started *by that session* — a probe of the harness ("Use the Bash
+    tool to run exactly this command: touch probe-file-86 . Do nothing
+    else."), a dispatch rehearsal — and every turn in it was written by an
+    agent, not typed by a person changing how they want to work (#348).
+    Measured 2026-09-16: 13 of 466 transcripts on disk recorded such a cwd,
+    all 13 probes or rehearsals, and two of them had been linked to a live
+    rule by the contradiction pass. The same exclusion as
+    :func:`is_dispatch_brief`, one layer further out: the whole session, not
+    its opening turn.
+
+    Mechanical on purpose. The probes' wording varies ("Reply with the single
+    word ok", "Run exactly this shell command … and nothing else"), so a
+    phrase list would chase it. A system temp dir is too wide: the one
+    such session with a correction on disk is the five-minute loop's "never
+    use npm in this repo, always yarn", typed in ``/private/tmp/mnemo-demo``.
+    Nor is "the cwd no longer exists": that is every removed dispatch tree.
+    """
+    text = (cwd or "").replace("\\", "/")
+    if not text:
+        return False
+    if _JOB_SCRATCH_RE.search(text):
+        return True
+    config = os.environ.get("CLAUDE_CONFIG_DIR", "").replace("\\", "/").rstrip("/")
+    if not config:
+        return False
+    rest = text[len(config) + 1:] if text.startswith(config + "/") else ""
+    parts = rest.split("/")
+    return len(parts) >= 3 and parts[0] == "jobs" and bool(parts[1]) and parts[2] == "tmp"
 
 
 def verify(

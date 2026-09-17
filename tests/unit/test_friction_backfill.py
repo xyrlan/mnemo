@@ -213,6 +213,51 @@ def test_a_session_with_nothing_typed_costs_no_briefing(world):
     assert "dddddddd-4444" not in briefer.calls
 
 
+S_PROBE = "ffffffff-6666-0000-0000-000000000006"
+PROBE_CWD = "/Users/x/.claude/jobs/d8d44ec2/tmp/probe86"
+PROBE = "Use the Bash tool to run exactly this command: touch probe-file-86 . Do nothing else."
+
+
+def test_a_probe_session_is_set_aside_unbriefed_and_unlinked(world):
+    """#348: a session another session ran in its scratch dir is not the user."""
+    vault, projects, _ = world
+    _transcript(projects, S_PROBE, [PROBE], cwd=PROBE_CWD, mtime=2_100_000_000)
+    briefer = Briefer({S_FOUND: [(QUOTE, RULE)], S_NONE: [], S_PROBE: [(PROBE, "Run exactly the command given.")]})
+    resolve = _resolver(["merge-requires-admin"])
+    p = _plan(vault, projects, briefer, resolver=resolve)
+
+    s = {s.session_id: s for s in p.sessions}[S_PROBE]
+    assert s.status == BF.SCRATCH and not s.corrections
+    assert PROBE_CWD in s.detail
+    assert S_PROBE not in briefer.calls
+    assert PROBE not in resolve.calls
+    assert p.corrections == 1
+    assert "scratch session" in BF.format_plan(p)
+    assert BF.load_plan(BF.plan_path(vault)).to_dict() == p.to_dict()
+
+
+def test_a_probe_the_old_plan_linked_is_not_carried_over(world, telemetry_on):
+    """A plan saved before #348 holds the probe as found; the rerun must not reuse it."""
+    vault, projects, briefer = world
+    _transcript(projects, S_PROBE, [PROBE], cwd=PROBE_CWD, mtime=2_100_000_000)
+    old = _plan(vault, projects, briefer)
+    from mnemo.core.briefing import transcript_sha256
+    path = projects / "-nowhere-proj" / f"{S_PROBE}.jsonl"
+    stale = BF.SessionPlan(
+        session_id=S_PROBE, project=BF._project_for(path, None, PROBE_CWD), status=BF.FOUND,
+        transcript_sha256=transcript_sha256(path) or "",
+        corrections=[BF.PlannedCorrection(quote=PROBE, rule="r", contradicts=["merge-requires-admin"],
+                                          link_basis=ledger.LINK_EXTRACTOR)],
+    )
+    old.sessions = [s for s in old.sessions if s.session_id != S_PROBE] + [stale]
+    BF.save_plan(old, BF.plan_path(vault))
+
+    p = _plan(vault, projects, Briefer({}))
+    assert {s.session_id: s for s in p.sessions}[S_PROBE].status == BF.SCRATCH
+    BF.apply(vault, p)
+    assert all(r.session_id != S_PROBE for r in ledger.iter_records(vault))
+
+
 def test_a_failed_link_keeps_the_correction(world):
     vault, projects, briefer = world
 

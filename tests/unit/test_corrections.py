@@ -144,3 +144,33 @@ def test_is_dispatch_brief_matches_only_mnemo_openings():
     assert C.is_dispatch_brief('  You are building one piece of the feature "f": s')
     assert not C.is_dispatch_brief("never use npm in this repo, always yarn")
     assert not C.is_dispatch_brief("")
+
+
+def test_is_job_scratch_matches_a_background_jobs_scratch_dir(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    # The two sessions #348 found linked to a live rule, and one that moved into a tree.
+    assert C.is_job_scratch("/Users/x/.claude/jobs/d8d44ec2/tmp/probe86")
+    assert C.is_job_scratch("/Users/x/.claude/jobs/d8d44ec2/tmp")
+    assert C.is_job_scratch("/Users/x/.claude/jobs/d8d44ec2/tmp/probe86/.claude/worktrees/probe-86-task")
+    assert C.is_job_scratch(r"C:\Users\x\.claude\jobs\d8d44ec2\tmp\probe")
+
+
+def test_is_job_scratch_leaves_real_work_alone(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    # The five-minute loop's real correction was typed in a system temp dir.
+    assert not C.is_job_scratch("/private/tmp/mnemo-demo/app")
+    # A removed dispatch tree is gone, not scratch.
+    assert not C.is_job_scratch("/Users/x/github/mnemo-wt-158")
+    assert not C.is_job_scratch("/Users/x/github/mnemo/.claude/worktrees/fix-1")
+    # The job dir itself, and a project merely named like one.
+    assert not C.is_job_scratch("/Users/x/.claude/jobs/d8d44ec2")
+    assert not C.is_job_scratch("/Users/x/.claude/jobs/d8d44ec2/tmpfiles")
+    assert not C.is_job_scratch("/Users/x/code/jobs/abc/tmp")
+    assert not C.is_job_scratch("")
+
+
+def test_is_job_scratch_honours_a_custom_config_dir(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/opt/claude-home/")
+    assert C.is_job_scratch("/opt/claude-home/jobs/1f87be87/tmp/probe")
+    assert not C.is_job_scratch("/opt/claude-home/jobs/1f87be87/out")
+    assert not C.is_job_scratch("/opt/claude-homer/jobs/1f87be87/tmp")

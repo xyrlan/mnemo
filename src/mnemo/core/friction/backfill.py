@@ -12,6 +12,11 @@ listed too, as *transcript gone*, and nothing is fabricated for them.
 
 Per session, :func:`plan`:
 
+0. sets aside a session whose ``cwd`` is a background job's scratch dir
+   (:func:`mnemo.core.corrections.is_job_scratch`) as *scratch session*,
+   without a briefing: every turn in it was written by another session probing
+   the harness, and the contradiction pass would otherwise link "do nothing
+   else" to a rule the user still wants (#348);
 1. re-briefs the transcript through the ordinary path
    (:func:`mnemo.core.briefing.generate_session_briefing`) into a scratch root,
    one Haiku call, reused on a rerun unless ``fresh`` — the shape
@@ -59,13 +64,16 @@ FOUND = "corrections_found"
 NONE_FOUND = "none_found"
 GONE = "transcript_gone"
 FAILED = "briefing_failed"
+#: The session ran in a background job's scratch dir: a probe, not the user (#348).
+SCRATCH = "scratch_session"
 
-STATUS_ORDER = (FOUND, NONE_FOUND, GONE, FAILED)
+STATUS_ORDER = (FOUND, NONE_FOUND, GONE, FAILED, SCRATCH)
 LABELS = {
     FOUND: "corrections found",
     NONE_FOUND: "none found",
     GONE: "transcript gone",
     FAILED: "briefing failed",
+    SCRATCH: "scratch session",
 }
 
 #: ``(transcript, project, session_id, out_root) -> briefing path``; raises on failure.
@@ -252,7 +260,7 @@ def _briefed_sessions(vault_root: Path) -> dict:
     return out
 
 
-def _project_for(path: Path, briefed: Optional[tuple]) -> str:
+def _project_for(path: Path, briefed: Optional[tuple], cwd: Optional[str]) -> str:
     """The briefing's record of the project first — it was resolved while the
     tree still existed — then the transcript's own ``cwd`` (#301), then the
     project directory's name."""
@@ -260,7 +268,6 @@ def _project_for(path: Path, briefed: Optional[tuple]) -> str:
         return briefed[0]
     from mnemo.core.backfill import discover
 
-    cwd = discover.recorded_cwd([path])
     if cwd:
         try:
             return discover.agent_for_cwd(cwd)
@@ -384,6 +391,7 @@ def plan(
     On ``KeyboardInterrupt`` the partial plan is saved (``complete: false``)
     before the interrupt propagates.
     """
+    from mnemo.core.backfill.discover import recorded_cwd
     from mnemo.core.briefing import _load_jsonl_events, transcript_sha256
     from mnemo.core.extract.inbox.rendering import _extract_body
     from mnemo.core.mcp.recall_sessions import _transcripts_by_session
@@ -447,8 +455,16 @@ def plan(
                                  detail="briefed, but the transcript is no longer on disk"))
                 continue
 
-            proj = _project_for(path, briefed.get(sid))
+            cwd = recorded_cwd([path])
+            proj = _project_for(path, briefed.get(sid), cwd)
             if project is not None and proj != project:
+                continue
+
+            if corrections.is_job_scratch(cwd or ""):
+                # Checked before the cache: a plan written before #348 holds
+                # these sessions as found, links and all.
+                emit(SessionPlan(session_id=sid, project=proj, status=SCRATCH,
+                                 detail=f"ran in a background job's scratch dir ({cwd})"))
                 continue
 
             sha = transcript_sha256(path) or ""
@@ -788,7 +804,7 @@ def format_plan(p: BackfillPlan, *, sessions: bool = True) -> str:
 
 __all__ = [
     "FAILED", "FOUND", "GONE", "LABELS", "LINK_RANKS_NAME", "NONE_FOUND", "PLAN_NAME",
-    "SCRATCH_DIR", "STATUS_ORDER",
+    "SCRATCH", "SCRATCH_DIR", "STATUS_ORDER",
     "BackfillPlan", "BackfillReport", "PlannedCorrection", "SessionPlan",
     "apply", "format_plan", "format_session", "format_summary", "load_plan",
     "plan", "plan_path", "save_plan", "summarize",
