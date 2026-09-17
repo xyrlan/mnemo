@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 
 class LLMSubprocessError(Exception):
@@ -29,6 +29,18 @@ class LLMTimeoutError(LLMSubprocessError):
     an environment problem and merely re-wedges on an oversized input.
 
     A subclass, so ``except LLMSubprocessError`` keeps catching it.
+    """
+
+
+class UnknownProviderError(LLMSubprocessError, ValueError):
+    """``extraction.provider`` names no provider mnemo has.
+
+    Raised by :func:`resolve`, before any model is called, so a typo in the
+    config stops a run at its first line instead of failing every chunk of it.
+    It is a configuration error (``ValueError``) and an environmental one: an
+    ``LLMSubprocessError`` subclass, so a batch caller that splits
+    environmental from attributable failures (``cli/commands/backfill.py``)
+    aborts the sweep rather than charging the same error to every transcript.
     """
 
 
@@ -60,6 +72,10 @@ class LLMResponse:
     output_tokens: int | None
     api_key_source: str | None
     raw: dict
+    # Which provider answered. A provider that cannot price a call or count its
+    # tokens reports ``None`` for those fields — unknown, never ``0`` — and
+    # this name is what tells that row apart from a broken default one.
+    provider: str = "claude-cli"
 
 
 # Seam for test monkey-patching. Tests replace this symbol directly.
@@ -270,3 +286,59 @@ def call(
         api_key_source=api_key_source,
         raw={"events": events, "result": result_event, "init": init_event},
     )
+
+
+# --------------------------------------------------------------- providers
+#
+# #358: every model call mnemo makes goes through one provider, resolved from
+# ``extraction.provider`` next to the ``extraction.model`` it already reads.
+# ``claude-cli`` — :func:`call` above, unchanged — is the default and, today,
+# the only one. It runs under the user's full Claude Code settings on purpose,
+# which is how it reaches a subscription without an API key; a provider added
+# here must keep that path first-class and must carry ``MNEMO_HOOKS_OFF``
+# (``hook_guard.disable_hooks``) to any helper that could fire mnemo's hooks.
+
+DEFAULT_PROVIDER = "claude-cli"
+
+
+class Provider(Protocol):
+    """One model call: prompt + system + model + timeout -> :class:`LLMResponse`.
+
+    Raises the errors :func:`call` documents (``LLMSubprocessError`` and its
+    ``LLMTimeoutError``, ``LLMEnvelopeError``), which callers already split.
+    """
+
+    def __call__(
+        self, prompt: str, *, system: str | None, model: str, timeout: int,
+    ) -> LLMResponse: ...
+
+
+def _claude_cli(
+    prompt: str, *, system: str | None, model: str, timeout: int,
+) -> LLMResponse:
+    # Looks ``call`` up when invoked, not when registered, so a test that
+    # replaces ``llm.call`` still intercepts every resolved call site.
+    return call(prompt, system=system, model=model, timeout=timeout)
+
+
+PROVIDERS: dict[str, Provider] = {
+    DEFAULT_PROVIDER: _claude_cli,
+}
+
+
+def resolve(cfg: Mapping[str, Any] | None) -> Provider:
+    """The provider ``cfg["extraction"]["provider"]`` names.
+
+    Absent or empty means :data:`DEFAULT_PROVIDER`. Anything else that is not a
+    registered name raises :class:`UnknownProviderError` here, so callers
+    resolve before their first call rather than failing mid-run.
+    """
+    extraction = (cfg or {}).get("extraction") or {}
+    name = extraction.get("provider") or DEFAULT_PROVIDER
+    provider = PROVIDERS.get(name) if isinstance(name, str) else None
+    if provider is None:
+        known = ", ".join(sorted(PROVIDERS))
+        raise UnknownProviderError(
+            f"unknown extraction.provider {name!r}; known: {known}"
+        )
+    return provider

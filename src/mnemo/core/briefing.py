@@ -190,8 +190,9 @@ def generate_session_briefing(
     transcript = flatten_transcript_events(events)
     turns = user_turns(events)
     prompt_text = prompts.build_briefing_prompt(transcript, user_turns=turns)
+    provider = llm.resolve(cfg)
     t0 = _time.perf_counter()
-    response = llm.call(
+    response = provider(
         prompt_text,
         system=prompts.BRIEFING_SYSTEM_PROMPT,
         model=model,

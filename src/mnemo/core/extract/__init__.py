@@ -449,6 +449,10 @@ def _run_extraction_body(
     # Clearing before `promote_projects` rather than after is still correct:
     # the cache fills lazily on first prompt build, and the fragment scans only
     # rule kinds, so the project pages that phase writes cannot stale it.
+    # #358: resolved first, before this run writes anything. An unknown
+    # provider is a config error that stops the run, not a per-chunk failure
+    # the cluster loop below would count and skip.
+    provider = llm.resolve(cfg)
     prompts.existing_rules.clear_cache()
     state = inbox.load_state(state_path)
     scan_result = scanner.scan(vault_root, state)
@@ -553,7 +557,7 @@ def _run_extraction_body(
             prompt_text = builder(chunk, vault_root=vault_root)
             t0 = time.perf_counter()
             try:
-                response = llm.call(
+                response = provider(
                     prompt_text,
                     system=system_prompt,
                     model=model,

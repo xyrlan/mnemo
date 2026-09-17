@@ -70,8 +70,9 @@ def resolve(
     corroboration is recorded, never required.
 
     No candidates means nothing can be contradicted, so no model is called.
-    ``runner`` defaults to the ``claude --print`` path extraction uses
-    (``core.llm.call``), which runs the helper under ``MNEMO_HOOKS_OFF=1``.
+    ``runner`` defaults to the provider extraction uses (``core.llm.resolve``;
+    ``claude --print`` unless ``extraction.provider`` says otherwise), which
+    runs the helper under ``MNEMO_HOOKS_OFF=1``.
     """
     quote, rule = correction_text(correction)
     if not candidates or not quote.strip():
@@ -130,11 +131,9 @@ def _as_payload(reply: Any) -> dict:
 
 
 def _default_runner(prompt: str, *, system: str) -> str:
-    """One ``claude --print`` call, configured the way extraction is."""
-    from mnemo.core import llm
-
+    """One model call, configured the way extraction is."""
     model, timeout = _default_model()
-    return llm.call(prompt, system=system, model=model, timeout=timeout).text
+    return _default_provider()(prompt, system=system, model=model, timeout=timeout).text
 
 
 def _default_model() -> tuple[str, int]:
@@ -147,6 +146,20 @@ def _default_model() -> tuple[str, int]:
         return str(model), timeout
     except Exception:
         return _DEFAULT_MODEL, _DEFAULT_TIMEOUT
+
+
+def _default_provider():
+    """The configured provider. An unknown name raises instead of quietly
+    falling back to the default the way an unreadable config does."""
+    from mnemo.core import llm
+
+    try:
+        from mnemo.core.config import load_config
+
+        cfg = load_config()
+    except Exception:
+        cfg = None
+    return llm.resolve(cfg)
 
 
 __all__ = ["LinkResult", "Runner", "resolve"]
