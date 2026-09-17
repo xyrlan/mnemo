@@ -140,7 +140,7 @@ class Session:
 
         A dispatch child's tree is removed once its PR merges, but Claude Code
         keeps the job record until someone runs ``claude rm``. On 2026-09-15
-        that was 48 records, 14 of them rendering as PRONTAS for days — work
+        that was 48 records, 14 of them rendering as DONE for days — work
         already merged, reading as work ready to look at.
 
         A blocked session is never stale, whatever its tree: a question the

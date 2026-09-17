@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from mnemo.core.sessions.jobs import Session
 
-EMPTY = "  nenhuma sessão em background"
+EMPTY = "  no background sessions"
 NO_TIMESTAMP = "9999"  # sorts after every real ISO-8601 timestamp
 
 # The detail/activity column. Named rather than repeated as a literal because
@@ -56,7 +56,7 @@ def _age(updated_at: str | None, *, now: datetime | None = None) -> str:
     delta = (now or datetime.now(timezone.utc)) - ts
     minutes = int(delta.total_seconds() // 60)
     if minutes < 1:
-        return "agora"
+        return "now"
     if minutes < 60:
         return f"{minutes}m"
     return f"{minutes // 60}h"
@@ -311,7 +311,7 @@ def _models(sessions: list[Session]) -> str:
         f"{model} ×{count}" if count > 1 else model
         for model, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
-    return "  modelos: " + ", ".join(parts)
+    return "  models: " + ", ".join(parts)
 
 
 def _efforts(sessions: list[Session]) -> str:
@@ -351,9 +351,14 @@ def _grants(sessions: list[Session]) -> str:
     held = [s for s in sessions if s.may and not s.is_done]
     if not held:
         return ""
-    return "  publicam sem perguntar: " + ", ".join(
+    return "  may publish unasked: " + ", ".join(
         f"{s.short_id} ({'+'.join(s.may)})" for s in held
     )
+
+
+def plural(count: int, noun: str) -> str:
+    """``1 use``, ``2 uses``: the count with its noun, English plural."""
+    return f"{count} {noun}" + ("" if count == 1 else "s")
 
 
 def _thousands(value: int) -> str:
@@ -387,9 +392,8 @@ def _exploration_total(done: list[Session], explorations) -> str:
     count, uses, tokens = total(found)
     if not count:
         return ""
-    plural = "sessão" if count == 1 else "sessões"
-    return (f"  antes da 1ª edição (u/+tokens): {uses} usos, +{_thousands(tokens)} "
-            f"em {count} {plural} prontas")
+    return (f"  before first edit (u/+tokens): {plural(uses, 'use')}, "
+            f"+{_thousands(tokens)} across {plural(count, 'done session')}")
 
 
 def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
@@ -398,7 +402,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
 
     *pr_lookup* maps a :class:`Session` to the PR it produced, or ``None``.
     Injected rather than called from here so this module stays pure (#217);
-    omitted, the PRONTAS bucket falls back to whatever the child volunteered
+    omitted, the DONE bucket falls back to whatever the child volunteered
     in ``children``, exactly as before. See :func:`_prs`.
 
     *activities* maps ``short_id`` to :class:`~mnemo.core.activity.Activity`.
@@ -416,11 +420,11 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
 
     *explorations* maps ``short_id`` to
     :class:`~mnemo.core.activity.exploration.Exploration` (#269) and adds one
-    column to the end of each PRONTAS row, plus a total under the table. Only
+    column to the end of each DONE row, plus a total under the table. Only
     finished sessions get it: a working child's count is still moving, and the
     activity column already says what it is doing. Omitted, nothing changes.
 
-    Both TRABALHANDO and PRONTAS rows end with ``Bash 46%`` when one tool's
+    Both WORKING and DONE rows end with ``Bash 46%`` when one tool's
     results fill at least :data:`NOTABLE_SHARE` of the context, read off
     ``Session.context_breakdown`` (#308); every other row is unchanged.
     """
@@ -438,16 +442,16 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     lines: list[str] = []
 
     if waiting:
-        lines.append(f"TE ESPERANDO ({len(waiting)})")
+        lines.append(f"WAITING ON YOU ({len(waiting)})")
         for s in waiting:
             age = _age(s.updated_at)
             lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {status_line(s) or '—'}")
             if s.suggested_reply:
-                lines.append(f"        ↳ sugerido: \"{s.suggested_reply}\"")
+                lines.append(f"        ↳ suggested: \"{s.suggested_reply}\"")
         lines.append("")
 
     if working:
-        lines.append(f"TRABALHANDO ({len(working)})")
+        lines.append(f"WORKING ({len(working)})")
         for s in working:
             detail = status_line(s, acts.get(s.short_id)) or "—"
             row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {detail:<{DETAIL_WIDTH}}{_tokens(s):>6}"
@@ -456,7 +460,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         lines.append("")
 
     if done:
-        lines.append(f"PRONTAS ({len(done)})")
+        lines.append(f"DONE ({len(done)})")
         for s in done:
             row = f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {status_line(s, pr_lookup=pr_lookup) or '—':<{DETAIL_WIDTH}}{_tokens(s):>6}"
             suffix = "  ".join(x for x in (_exploration(explored.get(s.short_id)), _filled(s)) if x)
@@ -466,7 +470,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     if abandoned:
         # Listed, not hidden. These asked for a human and their process died
         # before getting one; the user decides whether that still matters.
-        lines.append(f"ABANDONADAS ({len(abandoned)})")
+        lines.append(f"ABANDONED ({len(abandoned)})")
         for s in abandoned:
             age = _age(s.updated_at)
             lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  {status_line(s) or '—'}")
@@ -487,6 +491,6 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     if waiting:
         lines.append(f"  attach: claude attach {waiting[0].short_id}")
     if abandoned:
-        lines.append(f"  limpar: claude rm {abandoned[0].short_id}")
+        lines.append(f"  remove: claude rm {abandoned[0].short_id}")
 
     return "\n".join(lines).rstrip() + "\n"

@@ -21,7 +21,7 @@ import argparse
 
 from mnemo.cli.parser import command
 
-NO_ACTIONS = "  nenhuma ação registrada na janela lida"
+NO_ACTIONS = "  no actions recorded in the window read"
 
 
 def _find(sessions, short_id: str):
@@ -102,7 +102,7 @@ def _exploration_line(session) -> str:
     starts long after the first edit.
     """
     from mnemo.core.activity import exploration_for
-    from mnemo.core.sessions.render import _thousands
+    from mnemo.core.sessions.render import _thousands, plural
 
     try:
         found = exploration_for(session.link_scan_path, session.cwd)
@@ -112,13 +112,13 @@ def _exploration_line(session) -> str:
         return ""
 
     rules = found.injected or 0
-    injected = f"{rules} regra{'s' if rules != 1 else ''} do reflex no prompt de abertura"
+    injected = f"{plural(rules, 'reflex rule')} in the opening prompt"
     base = f"base {_thousands(found.baseline)}"
     if not found.reached:
-        return (f"  ainda sem edição: {found.uses} usos, +{_thousands(found.tokens)} tokens "
+        return (f"  no edit yet: {plural(found.uses, 'use')}, +{_thousands(found.tokens)} tokens "
                 f"({base}) · {injected}")
     first = f"{found.tool} {found.target}" if found.target else str(found.tool)
-    return (f"  antes da 1ª edição: {found.uses} usos, +{_thousands(found.tokens)} tokens "
+    return (f"  before first edit: {plural(found.uses, 'use')}, +{_thousands(found.tokens)} tokens "
             f"({base}) · {injected} → {first}")
 
 
@@ -133,8 +133,8 @@ def cmd_session(args: argparse.Namespace) -> int:
 
     session = _find(read_sessions(cwd=None), short_id)
     if session is None:
-        print(f"sessão não encontrada: {short_id}")
-        print("  listar: mnemo sessions --all")
+        print(f"session not found: {short_id}")
+        print("  list: mnemo sessions --all")
         return 1
 
     # The model goes here rather than in the queue's table (#268): this view
@@ -149,14 +149,14 @@ def cmd_session(args: argparse.Namespace) -> int:
     if session.live is True:
         flags.append("live")
     elif session.live is False:
-        flags.append("morta")
+        flags.append("dead")
     print(f"{session.short_id}  {session.label}  {' · '.join(flags)}")
     if session.cwd:
         print(session.cwd)
     print("")
 
     if not session.link_scan_path:
-        print("  esta sessão não registrou um transcript (linkScanPath ausente)")
+        print("  this session recorded no transcript (linkScanPath missing)")
         return 0
 
     spent = _exploration_line(session)

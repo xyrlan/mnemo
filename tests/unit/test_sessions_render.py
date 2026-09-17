@@ -19,7 +19,7 @@ def _blocked(short_id: str, needs: str, *, updated_at: str = "2026-09-12T12:00:0
 
 
 def test_empty_says_so() -> None:
-    assert "nenhuma sessão em background" in render_queue([])
+    assert "no background sessions" in render_queue([])
 
 
 def test_blocked_section_comes_first() -> None:
@@ -28,7 +28,7 @@ def test_blocked_section_comes_first() -> None:
         _blocked("b0", "responde?", name="bloqueada"),
     ])
 
-    assert out.index("TE ESPERANDO") < out.index("TRABALHANDO")
+    assert out.index("WAITING ON YOU") < out.index("WORKING (")
     assert out.index("bloqueada") < out.index("trabalhando")
 
 
@@ -61,7 +61,7 @@ def test_needs_is_shown_and_falls_back_to_detail() -> None:
 def test_suggested_reply_renders_when_present() -> None:
     out = render_queue([_blocked("a", "qual idioma?", name="x", suggested_reply="português")])
 
-    assert "sugerido" in out
+    assert "suggested" in out
     assert "português" in out
 
 
@@ -71,7 +71,7 @@ def test_done_section_lists_pull_requests() -> None:
         children=({"id": "307", "kind": "pr"}, {"id": "308", "kind": "pr"}),
     )])
 
-    assert "PRONTAS" in out
+    assert "DONE (" in out
     assert "#307" in out and "#308" in out
 
 
@@ -88,7 +88,7 @@ def test_no_attach_hint_when_nothing_is_blocked() -> None:
 
 
 def test_age_says_agora_under_a_minute() -> None:
-    assert _age("2026-09-12T12:29:30.000Z", now=NOW) == "agora"
+    assert _age("2026-09-12T12:29:30.000Z", now=NOW) == "now"
 
 
 def test_age_counts_minutes_up_to_an_hour() -> None:
@@ -117,7 +117,7 @@ def test_age_accepts_a_timestamp_without_a_timezone() -> None:
 
 def test_age_of_a_future_timestamp_reads_as_agora() -> None:
     """Documents today's behaviour: a negative delta falls in the <1min branch."""
-    assert _age("2026-09-12T13:00:00.000Z", now=NOW) == "agora"
+    assert _age("2026-09-12T13:00:00.000Z", now=NOW) == "now"
 
 
 # --- activity column (layer 1) ---
@@ -350,7 +350,7 @@ def test_the_label_budget_holds_in_every_bucket():
     for bucket, long_session in buckets.items():
         out = render_queue([long_session, short[bucket]])
         rows = [l for l in out.splitlines() if l.startswith(("  w", "  k", "  d", "  a"))
-                and not l.startswith("  attach") and not l.startswith("  limpar")]
+                and not l.startswith("  attach") and not l.startswith("  remove")]
 
         assert len(rows) == 2, (bucket, out)
         # Every row must reserve the same number of columns for the label, so
@@ -510,7 +510,7 @@ def test_omitting_the_lookup_changes_nothing():
 
 
 def test_the_lookup_is_only_asked_about_finished_sessions():
-    """A `gh` call per row is the cost; the PR column is only in PRONTAS."""
+    """A `gh` call per row is the cost; the PR column is only in DONE."""
     asked = []
     sessions = [
         _done("d1"),

@@ -36,7 +36,7 @@ def test_a_finished_row_ends_with_uses_and_growth() -> None:
     out = render_queue([_done("a1", context_tokens=64_000)],
                        explorations={"a1": Exploration(uses=32, tokens=107_400, baseline=70_000, reached=True)})
 
-    row = next(line for line in out.splitlines() if "a1" in line and "PRONTAS" not in line)
+    row = next(line for line in out.splitlines() if "a1" in line and "DONE (" not in line)
     assert row.endswith("64k  32u/+107k")
 
 
@@ -50,7 +50,7 @@ def test_working_rows_never_get_the_column() -> None:
     working = Session(short_id="w1", state="working", tempo="active", name="w1")
     out = render_queue([working], explorations={"w1": Exploration(uses=5, tokens=1000, reached=True)})
     assert "5u/" not in out
-    assert "antes da 1ª edição" not in out
+    assert "before first edit" not in out
 
 
 def test_the_total_sums_measured_rows_and_says_how_many() -> None:
@@ -59,7 +59,7 @@ def test_the_total_sums_measured_rows_and_says_how_many() -> None:
         "a1": Exploration(uses=20, tokens=40_000, reached=True),
         "a2": Exploration(uses=12, tokens=10_000, reached=True),
     })
-    assert "antes da 1ª edição (u/+tokens): 32 usos, +50k em 2 sessões prontas" in out
+    assert "before first edit (u/+tokens): 32 uses, +50k across 2 done sessions" in out
 
 
 # --- the detail view ----------------------------------------------------------
@@ -94,8 +94,8 @@ def test_session_prints_the_exploration_line(monkeypatch, tmp_path, capsys) -> N
     assert cmd_session(argparse.Namespace(short_id="abc", limit=15)) == 0
 
     out = capsys.readouterr().out
-    assert ("antes da 1ª edição: 2 usos, +21k tokens (base 70k) · "
-            "2 regras do reflex no prompt de abertura → Edit x.py") in out
+    assert ("before first edit: 2 uses, +21k tokens (base 70k) · "
+            "2 reflex rules in the opening prompt → Edit x.py") in out
 
 
 def test_session_without_an_edit_says_so(monkeypatch, tmp_path, capsys) -> None:
@@ -105,7 +105,7 @@ def test_session_without_an_edit_says_so(monkeypatch, tmp_path, capsys) -> None:
 
     assert cmd_session(argparse.Namespace(short_id="abc", limit=15)) == 0
 
-    assert "ainda sem edição: 1 usos, +0 tokens (base 500) · 0 regras" in capsys.readouterr().out
+    assert "no edit yet: 1 use, +0 tokens (base 500) · 0 reflex rules" in capsys.readouterr().out
 
 
 # --- the command --------------------------------------------------------------

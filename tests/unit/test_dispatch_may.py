@@ -313,9 +313,9 @@ def test_the_queue_names_the_children_that_will_publish_on_their_own() -> None:
         Session(short_id="aaaa0002", state="working", tempo="active"),
         Session(short_id="aaaa0003", state="done", tempo="idle", may=("push",)),
     ])
-    footer = [l for l in out.splitlines() if "publicam sem perguntar" in l]
+    footer = [l for l in out.splitlines() if "may publish unasked" in l]
     # Only the one still able to act on it: a finished child's grant is spent.
-    assert footer == ["  publicam sem perguntar: aaaa0001 (push+pr)"]
+    assert footer == ["  may publish unasked: aaaa0001 (push+pr)"]
 
 
 def test_a_queue_with_no_grants_says_nothing_about_them() -> None:

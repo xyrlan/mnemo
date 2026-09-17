@@ -155,6 +155,7 @@ def test_the_view_lists_pieces_in_landing_order_with_pr_and_signatures(
     assert "?" in out            # `mnemo api --serve` names no identifier
     assert "✗" not in out
     assert "--merge" in out      # the next command, spelled out
+    assert "contract f (2 pieces, in landing order)" in out
 
 
 def test_the_view_says_why_a_piece_cannot_land_and_exits_1(
@@ -216,6 +217,7 @@ def test_merge_rehearses_then_merges_every_open_pr_in_order(
     ]
     out = capsys.readouterr().out
     assert "suite green" in out
+    assert out.index("REHEARSAL") < out.index("LANDING") < out.index("contract landed")
 
 
 def test_a_red_suite_merges_nothing(in_repo: Path, contract: Path, gh: dict, capsys) -> None:
@@ -226,6 +228,7 @@ def test_a_red_suite_merges_nothing(in_repo: Path, contract: Path, gh: dict, cap
     assert gh["__merged__"] == []
     out = capsys.readouterr().out
     assert "storage" in out and "suite red" in out
+    assert "stopped at storage: nothing was landed" in out
 
 
 def test_merge_refuses_a_contract_the_view_would_refuse(
@@ -262,6 +265,7 @@ def test_merge_survives_a_gh_refusal_and_says_where_it_stopped(
     out = capsys.readouterr().out
     assert "storage" in out and "not mergeable" in out
     assert "mnemo land" in out  # the rerun hint: what landed is skipped next time
+    assert "stopped at storage. Landed pieces are skipped" in out
 
 
 # --- the parser -------------------------------------------------------------

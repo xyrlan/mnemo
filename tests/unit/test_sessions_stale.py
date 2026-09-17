@@ -92,7 +92,7 @@ def test_the_text_queue_hides_them_and_says_how_many(monkeypatch, capsys, trees)
     assert "merged01" not in out
     assert "ready002" in out
     assert "asking03" in out
-    assert "1 prontas com a árvore já removida" in out
+    assert "1 done with the worktree already removed" in out
     assert "--stale" in out
 
 

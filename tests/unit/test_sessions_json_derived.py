@@ -134,5 +134,5 @@ def test_stopped_sessions_render_as_finished() -> None:
                 name="s", updated_at="2026-09-13T16:37:45.000Z"),
     ])
 
-    assert "TRABALHANDO" not in out
-    assert "PRONTAS" in out
+    assert "WORKING (" not in out
+    assert "DONE (" in out

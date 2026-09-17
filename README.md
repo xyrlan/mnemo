@@ -36,14 +36,14 @@ exactly as it is into you.
 happens there until you act:
 
 ```
-TE ESPERANDO (1)
+WAITING ON YOU (1)
   a41c8e2f  #196 queue liveness                   4m  Which of the two should own the hint?
 
-TRABALHANDO (2)
+WORKING (2)
   13b6f4f3  #207 sessions docs                 Read docs/getting-started.md (+31)    9k
   3a14bdd9  #206 label column                  Bash pytest -q (+12) ↻                7k
 
-PRONTAS (1)
+DONE (1)
   7c1e9a04  #205 unblock consumer              #199                                 22k
 
   attach: claude attach a41c8e2f
@@ -70,17 +70,17 @@ order, owners before consumers, and whether each promised signature actually
 exists on its branch:
 
 ```
-contrato dispatch-last-metre (3 peças, em ordem de pouso)
+contract dispatch-last-metre (3 pieces, in landing order)
   1. delivery            feat/dispatch-last-metre/delivery  [origin/feat/dispatch-last-metre/delivery]
        PR: https://github.com/xyrlan/mnemo/pull/219 (MERGED)
-       expõe   ✓ `ready(worktree, *, repo_root) -> Readiness`
-       expõe   ✓ `pr_for(branch, *, repo_root) -> str | None`
+       exposes  ✓ `ready(worktree, *, repo_root) -> Readiness`
+       exposes  ✓ `pr_for(branch, *, repo_root) -> str | None`
   2. contract-discovery  feat/dispatch-last-metre/contract-discovery  [origin/feat/dispatch-last-metre/contract-discovery]
        PR: https://github.com/xyrlan/mnemo/pull/220 (MERGED)
   3. watch-modes         feat/dispatch-last-metre/watch-modes  [origin/feat/dispatch-last-metre/watch-modes]
        PR: https://github.com/xyrlan/mnemo/pull/221 (MERGED)
 
-  tudo pousado — nada a fazer
+  all landed — nothing to do
 ```
 
 `--merge` rehearses the sequence in a throwaway worktree — merge, check the

@@ -254,7 +254,7 @@ def test_a_pr_the_child_opened_itself_is_delivered(
     assert stopped == [("stop", "5eed0317")]  # no push, no second PR
     assert trailers == [("https://x/pull/320", 317)]
     out = capsys.readouterr().out
-    assert "PR já existe — https://x/pull/320" in out
+    assert "PR already exists — https://x/pull/320" in out
     assert "stopped 5eed0317" in out
 
 
@@ -263,7 +263,7 @@ def test_a_dead_pr_on_a_reused_branch_name_does_not_block_delivery(
     in_repo: Path, pushed: list, monkeypatch, capsys, state: str
 ) -> None:
     """`fix/issue-158` carried PR #192, merged two days before the issue was
-    dispatched again; the second child's work was refused as "PR já existe"
+    dispatched again; the second child's work was refused as "PR already exists"
     against a PR that had already landed. Only an OPEN PR is a duplicate."""
     _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
     monkeypatch.setattr(
@@ -276,7 +276,7 @@ def test_a_dead_pr_on_a_reused_branch_name_does_not_block_delivery(
     assert pushed == [("push", "feat/f/delivery")]
     out = capsys.readouterr().out
     assert "https://x/pull/249" in out
-    assert "já existe" not in out
+    assert "already exists" not in out
 
 
 def test_a_failed_push_does_not_open_a_pr(in_repo: Path, monkeypatch, capsys) -> None:
@@ -434,7 +434,7 @@ def test_review_buckets_ready_from_not_ready(in_repo: Path, capsys) -> None:
     deliver.cmd_deliver(_args(review=True))
     out = capsys.readouterr().out
 
-    assert out.index("PRONTAS") < out.index("NÃO PRONTAS")
+    assert out.index("READY (") < out.index("NOT READY (")
     assert "c-delivery" in out and "c-empty" in out
     assert "nothing to deliver" in out
 

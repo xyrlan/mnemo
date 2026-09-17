@@ -243,7 +243,7 @@ provides it); without it, hooks skip silently rather than erroring.
 ## `mnemo sessions` says there are none, but I have some running
 
 ```
-  nenhuma sessão em background
+  no background sessions
 ```
 
 The queue is scoped to the repo you are standing in. A session started
@@ -285,13 +285,13 @@ of. The queue skips it rather than guessing; it is still a real session, and
 problem on that directory rather than anything in the vault.
 
 Death does not remove a session from the queue. A session whose process died
-while working stays in `TRABALHANDO` with whatever it was last doing — the
+while working stays in `WORKING` with whatever it was last doing — the
 bucket is chosen by what the session recorded, not by whether the process is
 still alive. What liveness does decide is the blocked pair: a session blocked
-on a human moves to `ABANDONADAS` once the process behind it is *provably*
+on a human moves to `ABANDONED` once the process behind it is *provably*
 gone, so a question nobody will ever answer stops competing for the top of the
 queue. Provably is the operative word — only a roster that positively reports
-the pid as gone counts, and an unknown one is left in `TE ESPERANDO` rather
+the pid as gone counts, and an unknown one is left in `WAITING ON YOU` rather
 than being written off.
 
 ## The activity column is empty, or stuck
@@ -301,8 +301,8 @@ An empty column means the session has no transcript to read yet
 looking. `mnemo session <short_id>` says which:
 
 ```
-  esta sessão não registrou um transcript (linkScanPath ausente)
-  nenhuma ação registrada na janela lida
+  this session recorded no transcript (linkScanPath missing)
+  no actions recorded in the window read
 ```
 
 A column that never moves is the signal working, not failing: the count rises
