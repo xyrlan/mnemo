@@ -81,7 +81,7 @@ def _doctor_check_background_processes(
         listed = ", ".join(ids) + (f" and {more} more" if more > 0 else "")
         kb = sum(w.rss_kb for w in finished)
         print(f"  ℹ {len(finished)} finished child(ren) still hold "
-              f"{residents.format_mb(kb)} until the daemon retires them (idle 8h, "
-              f"or sooner on low memory); `claude stop <id>` frees one you are "
+              f"{residents.format_mb(kb)} until the daemon retires them (usually after "
+              f"~60m idle, sooner on low memory); `claude stop <id>` frees one you are "
               f"done with: {listed}")
     return True

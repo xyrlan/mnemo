@@ -18,8 +18,9 @@ on 2026-09-14 against ``daemon.log``, ``daemon/roster.json`` and ``ps``:
   daemon upgrade and retired by the daemon at 1d19h under ``[low memory]``.
 
 So the resident memory is *workers* — children the daemon keeps alive after
-they finish, until they sit ``idle 8h`` or memory runs low — and the pool is a
-constant ~200 MB. mnemo does not retire either: killing the spare makes the
+they finish, until they sit idle (``idle 60m`` in most ``bg retire`` lines,
+``idle 8h`` on a fresh daemon's sweep; #350) or memory runs low — and the
+pool is a constant ~200 MB. mnemo does not retire either: killing the spare makes the
 daemon spawn another, and stopping a ``done`` child is the maintainer's call
 (``SendMessage`` still reaches it). What mnemo can do is name the split in one
 line, which :func:`census` computes and ``mnemo doctor`` prints.
