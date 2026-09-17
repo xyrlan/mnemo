@@ -120,7 +120,7 @@ def test_transcript_with_no_tool_use_says_so(monkeypatch, tmp_path, capsys):
 
     assert cmd_session(_args()) == 0
 
-    assert "nenhuma ação" in capsys.readouterr().out
+    assert "no actions recorded" in capsys.readouterr().out
 
 
 def test_prefix_match_on_short_id(session_with_actions, capsys):

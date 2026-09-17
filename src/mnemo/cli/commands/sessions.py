@@ -179,7 +179,7 @@ def _stale_footer(hidden: int) -> str:
     """
     if not hidden:
         return ""
-    return f"  {hidden} prontas com a árvore já removida (mnemo sessions --stale)"
+    return f"  {hidden} done with the worktree already removed (mnemo sessions --stale)"
 
 
 @command("sessions")
@@ -353,5 +353,5 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         except Exception:
             elsewhere = 0
         if elsewhere:
-            print(f"  {elsewhere} em outros diretórios (mnemo sessions --all)")
+            print(f"  {elsewhere} in other directories (mnemo sessions --all)")
     return 0

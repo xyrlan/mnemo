@@ -102,33 +102,34 @@ def _print_view(states, *, contract_path: str) -> None:
         if s.pr:
             print(f"       PR: {s.pr} ({s.pr_state})")
         else:
-            print("       PR: nenhum")
+            print("       PR: none")
         if s.exposes:
             for sig, ok in s.exposes:
-                print(f"       expõe   {_mark(ok)} {sig}")
+                print(f"       exposes  {_mark(ok)} {sig}")
         if s.consumes:
             for sig, owner, ok in s.consumes:
-                print(f"       consome {_mark(ok)} {sig} de {owner}")
+                print(f"       consumes {_mark(ok)} {sig} from {owner}")
         if s.reason:
             print(f"       ✗ {s.reason}")
 
     blocked = [s for s in states if not s.landable]
     print()
     if blocked:
-        print(f"NÃO POUSA ({len(blocked)}): "
+        print(f"CANNOT LAND ({len(blocked)}): "
               + ", ".join(s.piece.slug for s in blocked))
     else:
         pending = [s for s in states if not s.merged]
         if pending:
-            print(f"  pousar: mnemo land {contract_path} --merge")
+            print(f"  land: mnemo land {contract_path} --merge")
         else:
-            print("  tudo pousado — nada a fazer")
+            print("  all landed — nothing to do")
 
 
 @command("land")
 def cmd_land(args: argparse.Namespace) -> int:
     """Show a contract's landing order and signatures, or land it."""
     from mnemo.core import contracts, landing
+    from mnemo.core.sessions.render import plural
 
     root = _repo_root()
     if root is None:
@@ -150,7 +151,7 @@ def cmd_land(args: argparse.Namespace) -> int:
         print(str(exc))
         return 1
 
-    print(f"contrato {contract.feature} ({len(states)} peças, em ordem de pouso)")
+    print(f"contract {contract.feature} ({plural(len(states), 'piece')}, in landing order)")
     _print_view(states, contract_path=path)
 
     blocked = [s for s in states if not s.landable]
@@ -173,7 +174,7 @@ def _land(states, *, root: Path, args: argparse.Namespace, contract_path: str) -
     method = str(getattr(args, "method", None) or "squash")
 
     print()
-    print("ENSAIO (worktree temporário, nada é pousado ainda)")
+    print("REHEARSAL (temporary worktree, nothing is landed yet)")
     try:
         rehearsal = landing.rehearse(states, repo_root=root, suite=suite)
     except landing.LandingError as exc:
@@ -188,12 +189,12 @@ def _land(states, *, root: Path, args: argparse.Namespace, contract_path: str) -
     if not rehearsal.ok:
         failed = rehearsal.failed
         print()
-        print(f"parou em {failed.slug}: nada foi pousado. Corrija a peça e "
-              f"rode `mnemo land {contract_path} --merge` de novo.")
+        print(f"stopped at {failed.slug}: nothing was landed. Fix the piece and "
+              f"run `mnemo land {contract_path} --merge` again.")
         return 1
 
     print()
-    print("POUSO")
+    print("LANDING")
     steps = landing.merge_prs(
         states, repo_root=root, method=method,
         admin=bool(getattr(args, "admin", False)),
@@ -205,11 +206,11 @@ def _land(states, *, root: Path, args: argparse.Namespace, contract_path: str) -
     if failed is not None:
         landed = [s.slug for s in steps if s.ok and not s.skipped]
         print()
-        print(f"parou em {failed.slug}"
-              + (f" — pousadas: {', '.join(landed)}" if landed else "")
-              + f". As que pousaram são puladas ao rodar "
-              f"`mnemo land {contract_path} --merge` de novo.")
+        print(f"stopped at {failed.slug}"
+              + (f" — landed: {', '.join(landed)}" if landed else "")
+              + f". Landed pieces are skipped when you run "
+              f"`mnemo land {contract_path} --merge` again.")
         return 1
     print()
-    print("  contrato pousado")
+    print("  contract landed")
     return 0

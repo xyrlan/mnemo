@@ -371,7 +371,7 @@ def _session(short_id: str, model: str | None) -> Session:
 
 def test_the_queue_names_the_models_in_play() -> None:
     out = render_queue([_session("a" * 8, "opus[1m]"), _session("b" * 8, "haiku")])
-    assert "modelos:" in out
+    assert "models:" in out
     assert "opus[1m]" in out and "haiku" in out
 
 
@@ -385,13 +385,13 @@ def test_the_majority_model_is_named_first() -> None:
     """The outlier reads at the end of the line, where the eye lands last."""
     sessions = [_session(f"{i}" * 8, "opus") for i in range(3)]
     sessions.append(_session("z" * 8, "haiku"))
-    line = next(l for l in render_queue(sessions).splitlines() if "modelos:" in l)
+    line = next(l for l in render_queue(sessions).splitlines() if "models:" in l)
     assert line.index("opus") < line.index("haiku")
 
 
 def test_a_queue_that_records_no_model_says_nothing() -> None:
     """An older Claude Code writes no ``respawnFlags``; no line beats a blank one."""
-    assert "modelos:" not in render_queue([_session("a" * 8, None)])
+    assert "models:" not in render_queue([_session("a" * 8, None)])
 
 
 def test_the_model_does_not_become_a_column() -> None:

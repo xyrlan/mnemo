@@ -227,7 +227,7 @@ def test_review_names_the_children_holding_memory(in_repo, monkeypatch, capsys):
 
     assert deliver.cmd_deliver(_args(review=True)) == 0
     out = capsys.readouterr().out
-    assert "TERMINADAS, NÃO PARADAS (1)" in out
+    assert "FINISHED, NOT STOPPED (1)" in out
     assert "#211  aaaaaaaa" in out
     assert "mnemo deliver --stop-done" in out
 
@@ -250,4 +250,4 @@ def test_review_is_silent_when_nothing_is_holding(in_repo, monkeypatch, capsys):
                     _Session("cccccccc", "done", live=False)])
 
     assert deliver.cmd_deliver(_args(review=True)) == 0
-    assert "TERMINADAS" not in capsys.readouterr().out
+    assert "FINISHED, NOT STOPPED" not in capsys.readouterr().out

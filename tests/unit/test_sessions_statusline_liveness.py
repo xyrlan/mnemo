@@ -77,5 +77,5 @@ def test_badge_matches_the_rendered_list(tmp_path: Path) -> None:
     out = render_queue(read_sessions(jobs_root, claude_home=home))
     badge = statusline._blocked_segment(jobs_root, claude_home=home)
 
-    assert "TE ESPERANDO (1)" in out
+    assert "WAITING ON YOU (1)" in out
     assert badge == "1 esperando"

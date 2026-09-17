@@ -766,21 +766,21 @@ mnemo deliver --stop-done     # stop every finished child, delivered or not
 ```
 
 ```
-PRONTAS (1)
+READY (1)
   #205  fix/issue-205
       3 commits ahead of master, 4 files changed, 118 insertions(+), 9 deletions(-)
 
-NÃO PRONTAS (2)
+NOT READY (2)
   #206  fix/issue-206
       uncommitted changes — commit them or discard them first
   #207  fix/issue-207
       no commits ahead of master — nothing to deliver
 
-TERMINADAS, NÃO PARADAS (1)
+FINISHED, NOT STOPPED (1)
   #207  9f2ab410
-      sem briefing até parar: mnemo deliver --stop-done
+      no briefing until stopped: mnemo deliver --stop-done
 
-  entregar: mnemo deliver 205
+  deliver: mnemo deliver 205
 ```
 
 The third group is the one children usually land in when they finish with
@@ -817,17 +817,17 @@ mnemo land docs/superpowers/contracts/2026-09-13-dispatch-last-metre.md
 ```
 
 ```
-contrato dispatch-last-metre (3 peças, em ordem de pouso)
+contract dispatch-last-metre (3 pieces, in landing order)
   1. delivery            feat/dispatch-last-metre/delivery  [origin/feat/dispatch-last-metre/delivery]
        PR: https://github.com/xyrlan/mnemo/pull/219 (MERGED)
-       expõe   ✓ `ready(worktree, *, repo_root) -> Readiness`
-       expõe   ✓ `pr_for(branch, *, repo_root) -> str | None`
+       exposes  ✓ `ready(worktree, *, repo_root) -> Readiness`
+       exposes  ✓ `pr_for(branch, *, repo_root) -> str | None`
   2. contract-discovery  feat/dispatch-last-metre/contract-discovery  [origin/feat/dispatch-last-metre/contract-discovery]
        PR: https://github.com/xyrlan/mnemo/pull/220 (MERGED)
   3. watch-modes         feat/dispatch-last-metre/watch-modes  [origin/feat/dispatch-last-metre/watch-modes]
        PR: https://github.com/xyrlan/mnemo/pull/221 (MERGED)
 
-  tudo pousado — nada a fazer
+  all landed — nothing to do
 ```
 
 Presence is a name check, not a string check: `consumes` and `exposes` are
@@ -838,7 +838,7 @@ refused by name.
 
 A piece that would otherwise land is checked against its pull request's CI,
 and a failing check refuses it — `✗ CI red on <check>` against that piece,
-and the piece named under `NÃO POUSA`. The verdict is read check by check
+and the piece named under `CANNOT LAND`. The verdict is read check by check
 (`gh pr checks --json name,bucket`), not from the run's conclusion or the
 PR's rollup: a repository may mark a job non-blocking, and such a job fails
 while both aggregates still report success. Pending is not failure, and an
@@ -882,23 +882,23 @@ mnemo sessions
 ```
 
 ```
-TE ESPERANDO (1)
+WAITING ON YOU (1)
   a41c8e2f  #196 queue liveness                   4m  Which of the two should own the hint?
 
-TRABALHANDO (2)
+WORKING (2)
   13b6f4f3  #207 sessions docs                 Read docs/getting-started.md (+31)    9k
   3a14bdd9  #206 label column                  Bash pytest -q (+12) ↻                7k
 
-PRONTAS (1)
+DONE (1)
   7c1e9a04  #205 unblock consumer              #199                                 22k
 
   attach: claude attach a41c8e2f
 ```
 
-Four buckets, and the order is the point. **TE ESPERANDO** is a session blocked
+Four buckets, and the order is the point. **WAITING ON YOU** is a session blocked
 on a human, and it comes first because it is the only bucket where nothing
-happens until you act. **TRABALHANDO** is running, **PRONTAS** has finished
-(the column shows the PRs it opened), and **ABANDONADAS** asked for a human and
+happens until you act. **WORKING** is running, **DONE** has finished
+(the column shows the PRs it opened), and **ABANDONED** asked for a human and
 then died before getting one — listed rather than hidden, because whether a
 dead session still matters is your call, not mnemo's. A session only lands
 there when its process is *provably* gone; when mnemo cannot tell, the session
@@ -911,7 +911,7 @@ stops writing, so the *stalest* entry is the likeliest corpse rather than the
 most urgent question. The freshest one is the one actually waiting on you, so
 it gets the top line and the `attach:` hint. The abandoned bucket sorts the
 other way — oldest first — because there the stalest really is the one to
-clear, and it gets its own `limpar:` hint.
+clear, and it gets its own `remove:` hint.
 
 ### What the activity column tells you
 
@@ -966,15 +966,15 @@ is how you get inside — that is Claude Code's job, not mnemo's.
 ### What a child spent before its first edit
 
 A dispatched child starts out knowing the vault, and still pays to find its way
-around a repo the parent already knew. The PRONTAS rows end with that price, and
+around a repo the parent already knew. The DONE rows end with that price, and
 a line under the table sums it across the finished children:
 
 ```
-PRONTAS (2)
+DONE (2)
   934f353f  #247 dispatch orphan namespace     #262                  64k  32u/+107k
   aafd88e7  c-format format share-rules piece  #259                  33k  9u/+41k
 
-  antes da 1ª edição (u/+tokens): 41 usos, +148k em 2 sessões prontas
+  before first edit (u/+tokens): 41 uses, +148k across 2 done sessions
 ```
 
 `32u/+107k` is 32 tool uses before the child first changed its working tree,
@@ -1024,7 +1024,7 @@ each redraw instead of writing escape codes into your log.
 
 A finished child whose worktree was removed (its PR merged, the dispatcher
 cleaned up) is hidden from the queue and from `--json`: Claude Code keeps its
-job record until `claude rm`, so without this they pile up under PRONTAS for
+job record until `claude rm`, so without this they pile up under DONE for
 days. A footer counts what was hidden; `--stale` lists them again, and
 `mnemo doctor` prints the `claude rm` line that clears them. A blocked session
 is never hidden, whatever happened to its tree.

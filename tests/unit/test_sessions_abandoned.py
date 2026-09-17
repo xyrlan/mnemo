@@ -130,17 +130,17 @@ def test_abandoned_sessions_leave_the_waiting_bucket() -> None:
         _blocked("alive", live=True, name="viva"),
     ])
 
-    waiting = out.split("ABANDONADAS")[0]
+    waiting = out.split("ABANDONED")[0]
     assert "viva" in waiting
     assert "morta" not in waiting
-    assert "TE ESPERANDO (1)" in out
+    assert "WAITING ON YOU (1)" in out
 
 
 def test_abandoned_sessions_are_still_listed(tmp_path: Path) -> None:
     """Re-bucketed, never hidden: the user must still see and be able to rm it."""
     out = render_queue([_blocked("dead", live=False, name="morta")])
 
-    assert "ABANDONADAS" in out
+    assert "ABANDONED" in out
     assert "morta" in out
     assert "dead" in out
 
@@ -192,5 +192,5 @@ def test_a_session_with_no_timestamp_does_not_take_the_attach_hint() -> None:
 def test_abandoned_does_not_leak_into_working_or_done() -> None:
     out = render_queue([_blocked("dead", live=False, name="morta")])
 
-    assert "TRABALHANDO" not in out
-    assert "PRONTAS" not in out
+    assert "WORKING (" not in out
+    assert "DONE (" not in out

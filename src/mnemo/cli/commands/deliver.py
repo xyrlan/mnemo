@@ -77,7 +77,7 @@ def _review(*, repo_root: Path) -> int:
     blocked = [r for r in states if not r.ready]
 
     if ready:
-        print(f"PRONTAS ({len(ready)})")
+        print(f"READY ({len(ready)})")
         for r in ready:
             ahead = f"{r.ahead} commit" + ("s" if r.ahead != 1 else "")
             print(f"  {r.label}  {r.branch}")
@@ -88,11 +88,11 @@ def _review(*, repo_root: Path) -> int:
                 # was already delivered — but a branch pushed again after
                 # review comments is the same row, and only the maintainer
                 # knows which one this is.
-                print(f"      PR já existe: {r.pr}")
+                print(f"      PR already exists: {r.pr}")
         print()
 
     if blocked:
-        print(f"NÃO PRONTAS ({len(blocked)})")
+        print(f"NOT READY ({len(blocked)})")
         for r in blocked:
             print(f"  {r.label}  {r.branch or '—'}")
             print(f"      {r.reason}")
@@ -109,10 +109,10 @@ def _review(*, repo_root: Path) -> int:
         if s.state == "done" and s.live is not False
     ]
     if holding:
-        print(f"TERMINADAS, NÃO PARADAS ({len(holding)})")
+        print(f"FINISHED, NOT STOPPED ({len(holding)})")
         for label, short_id in holding:
             print(f"  {label}  {short_id}")
-        print("      sem briefing até parar: mnemo deliver --stop-done")
+        print("      no briefing until stopped: mnemo deliver --stop-done")
         print()
 
     if ready:
@@ -121,7 +121,7 @@ def _review(*, repo_root: Path) -> int:
         # approval, so the hint that saves the typing must not collapse them
         # into a flag — copying this line is still a per-child decision the
         # maintainer can edit before running.
-        print(f"  entregar: mnemo deliver {names}")
+        print(f"  deliver: mnemo deliver {names}")
     return 0
 
 
@@ -161,7 +161,7 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         # previous life of the name — `fix/issue-158` was dispatched twice,
         # two days apart — and the commits ahead of the base now are new work
         # that `gh pr create` will open a new PR for.
-        print(f"{state.label}: PR já existe — {state.pr}")
+        print(f"{state.label}: PR already exists — {state.pr}")
         delivery.close_on_merge(state.pr, target=state.target, worktree=tree)
         _stop_finished(tree, label=state.label)
         return True
