@@ -118,8 +118,10 @@ def test_prompt_never_prescribes_an_approach() -> None:
 
     # `repo_root` is context — where this repo keeps its changelog — not a
     # way in for a preferred solution. `may` is a permission (#317): which of
-    # three fixed words the maintainer granted, never free text.
-    assert params == {"issue", "title", "body", "repo_root", "may"}
+    # three fixed words the maintainer granted, never free text. `read_only`
+    # is a posture (#371): one bit choosing investigate-or-build, and a bit
+    # cannot carry an approach.
+    assert params == {"issue", "title", "body", "repo_root", "may", "read_only"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:

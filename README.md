@@ -32,6 +32,20 @@ and a worktree resolves to the repo it was cut from, so every rule the vault
 holds for that repo — *use yarn, never npm* included — is injected into them
 exactly as it is into you.
 
+Not every issue wants a patch. Some want an answer first:
+
+```bash
+mnemo dispatch 361 --read-only
+```
+
+That child investigates and posts its finding as a comment on the issue
+instead of building. Its file-editing tools are closed at spawn — Edit, Write
+and NotebookEdit, its own subagents included — so habit cannot turn an
+investigation into a branch. It can still write through the shell if it sets
+out to, which is why it keeps a worktree of its own: the restriction is there
+to prevent drift, not to contain a child that means to build. It publishes
+nothing, so `--may` is refused alongside it.
+
 `mnemo sessions` is the queue. Blocked on a human comes first, because nothing
 happens there until you act:
 

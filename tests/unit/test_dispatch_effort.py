@@ -136,7 +136,7 @@ def _fetch(issue: int, *, repo_root):
 def _recording(monkeypatch) -> list:
     spawned: list = []
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         spawned.append(effort)
         return "a1b2c3d4"
 
@@ -367,7 +367,7 @@ def test_the_flag_reaches_the_dispatch_and_the_report(
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None: (
+        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None, read_only=False: (
             seen.update(effort=effort),
             [dispatch.Dispatched(issue=351, worktree=tmp_path, short_id="a1b2c3d4",
                                  model=model, effort=effort)],

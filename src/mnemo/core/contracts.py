@@ -55,7 +55,9 @@ PATH_RE = re.compile(r"^[A-Za-z0-9._*?\[\]!-]+(?:/[A-Za-z0-9._*?\[\]!-]+)*/?$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]+(?:\[[A-Za-z0-9]+\])?$")
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
-_FIELD_RE = re.compile(r"^-\s+\*\*(files|exposes|consumes|model|effort|may)\:\*\*\s*(.*)$")
+_FIELD_RE = re.compile(
+    r"^-\s+\*\*(files|exposes|consumes|model|effort|may|read-only)\:\*\*\s*(.*)$"
+)
 # "`sig` from owner" — the signature keeps its backticks (it is quoted
 # verbatim so a later diff of the contract is meaningful, and Task 5 quotes it
 # into a child's prompt as literal text). The owner is a lookup key rather
@@ -233,6 +235,10 @@ class Piece:
     # build. It is a permission, so it is only as good as the review of the
     # contract that carries it.
     may: tuple[str, ...] | None = None
+    #: Whether this piece is an investigation rather than a build. `None` is
+    #: absent — the piece takes `mnemo dispatch --read-only`; `True`/`False`
+    #: override it, as `may` does.
+    read_only: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -445,6 +451,7 @@ def parse_contract(path: Path | str) -> Contract:
     model: str | None = None
     effort: str | None = None
     may: tuple[str, ...] | None = None
+    read_only: bool | None = None
 
     def flush() -> None:
         # Bind the current accumulator values now, not the names — a
@@ -459,7 +466,7 @@ def parse_contract(path: Path | str) -> Contract:
             pieces.append(
                 Piece(
                     slug=slug, files=files, exposes=exposes, consumes=consumes,
-                    model=model, effort=effort, may=may,
+                    model=model, effort=effort, may=may, read_only=read_only,
                 )
             )
 
@@ -468,7 +475,8 @@ def parse_contract(path: Path | str) -> Contract:
         if heading:
             flush()
             slug = heading.group(1).strip()
-            files, exposes, consumes, model, effort, may = [], [], [], None, None, None
+            files, exposes, consumes = [], [], []
+            model, effort, may, read_only = None, None, None, None
             continue
         matched = _FIELD_RE.match(line)
         if not matched or slug is None:
@@ -493,6 +501,19 @@ def parse_contract(path: Path | str) -> Contract:
                 may = grants.parse(value)
             except grants.GrantError as exc:
                 raise ContractError(f"piece {slug!r}: may: {exc}") from exc
+        elif key == "read-only":
+            # Refused here, not at spawn, for the same reason `may` is: a
+            # contract that cannot be trusted is refused before any tree
+            # exists.
+            word = value.strip().lower()
+            if word in ("yes", "true", "on"):
+                read_only = True
+            elif word in ("no", "false", "off"):
+                read_only = False
+            else:
+                raise ContractError(
+                    f"piece {slug!r}: read-only takes yes or no, not {value.strip()!r}"
+                )
         elif key == "exposes":
             exposes = _split_signatures(value)
         else:

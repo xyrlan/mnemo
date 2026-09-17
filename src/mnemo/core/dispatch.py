@@ -164,6 +164,13 @@ class Dispatched:
     #: What this child may publish without asking, as rendered into its
     #: prompt (#317): ``()`` for nothing, the unchanged default.
     may: tuple[str, ...] = ()
+    #: Whether this child was spawned to investigate rather than build
+    #: (#371): its file-editing tools are closed and its closing asks for a
+    #: comment on the issue, never a push. Set even when ``short_id`` could
+    #: not be read back — the ``ContractBroken`` branch of ``_spawn_into`` —
+    #: because a child whose id is missing from the queue still loses its
+    #: posture there if this field silently reverted to the default.
+    read_only: bool = False
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -256,6 +263,37 @@ job, not failing it.
 {closing}"""
 
 
+#: The read-only posture's opening prompt. Deliberately parallel to `_PROMPT`:
+#: same issue block, same worktree sentence, same refusal licence. What differs
+#: is the task (investigate, do not implement) and the closing, which asks for a
+#: comment on the issue rather than a check for commits to publish.
+_ANALYSIS_PROMPT = """Investigate issue #{issue} in this repo: {title}
+
+Read the full issue with `gh issue view {issue}` — including its comments,
+which often re-scope it. The body as it stands:
+
+---
+{body}
+---
+
+You are in a git worktree of your own on branch `{branch}`. You are here to
+find something out, not to build anything: your file-editing tools are closed,
+and nothing you learn needs a diff to be worth having.
+
+What is being asked of you:
+- Answer the question the issue actually poses. If the issue poses none, say
+  what question it should have posed and answer that instead.
+- Reach for evidence over inference. Run the code, read the log, count the
+  rows. A claim you measured is worth more than a claim you reasoned to.
+- Say what you could not determine, and why. An honest gap is a finding.
+
+No approach is prescribed. Decide what the issue actually calls for from the
+evidence in the repo. If the issue rests on a premise the code shows to be
+wrong, say so and show the evidence — a measured correction is the most
+valuable thing you can return.
+{closing}"""
+
+
 _CHANGELOG_PROMPT = """
 Document the change for users in `changelog.d/{name}.<section>.md` — one new
 file holding the `- ` bullet(s) a `CHANGELOG.md` entry would carry, with
@@ -312,10 +350,25 @@ _CLOSING_STEPS = (
     "writes no briefing at all.",
 )
 
+#: The read-only closing. Steps 1 and 3 are `_CLOSING_STEPS`' own, word for
+#: word: the report and the stop do not depend on the posture. Step 2 is the
+#: difference — a finding goes to the issue, because the worktree it was found
+#: in is removed and a briefing alone is read by whoever runs `mnemo sessions`.
+_READ_ONLY_CLOSING_STEPS = (
+    _CLOSING_STEPS[0],
+    "Post your finding as a comment on the issue: `gh issue comment {issue} "
+    "--body-file -`, with the body on stdin. Lead with the answer, then the "
+    "evidence for it. If you could not reach `gh`, say so in your report — it "
+    "is the only other copy.",
+    _CLOSING_STEPS[2],
+)
+
 _CLOSING_HEADING = "\nHow to finish, whatever you decided:\n"
 
 
-def _closing_clause(may: grants.Grant = ()) -> str:
+def _closing_clause(
+    may: grants.Grant = (), *, read_only: bool = False, issue: Target | None = None,
+) -> str:
     """The end-of-life instructions every child gets, grant or no grant.
 
     *may* only decides how step 2 is phrased — whether publishing is something
@@ -326,19 +379,29 @@ def _closing_clause(may: grants.Grant = ()) -> str:
 
     Each step is wrapped under its own number, so a continuation never starts
     at column 0 where it would read as a new section.
+
+    *read_only* swaps step 2 for a comment on *issue*: a read-only child has
+    nothing to publish, and the check for commits ahead would be asking it to
+    look for something the posture guarantees is not there.
     """
-    if "pr" in may:
-        hint = ", push it and open the pull request you were granted"
-    elif "push" in may:
-        hint = ", push it (do not open a pull request)"
+    # `.format()` unconditionally, never guarded on a placeholder being
+    # present: it collapses `{{` to `{` whether or not it substitutes
+    # anything, and `_CLOSING_STEPS[2]` relies on that to render
+    # `${CLAUDE_CODE_SESSION_ID:0:8}`. An extra kwarg is harmless; a skipped
+    # call silently doubles those braces.
+    if read_only:
+        steps_source = tuple(step.format(issue=issue) for step in _READ_ONLY_CLOSING_STEPS)
     else:
-        hint = ", say so in your report and leave it for `mnemo deliver`"
+        if "pr" in may:
+            hint = ", push it and open the pull request you were granted"
+        elif "push" in may:
+            hint = ", push it (do not open a pull request)"
+        else:
+            hint = ", say so in your report and leave it for `mnemo deliver`"
+        steps_source = tuple(step.format(publish_hint=hint) for step in _CLOSING_STEPS)
     steps = "\n".join(
-        _wrap(
-            step.format(publish_hint=hint),
-            initial_indent=f"{number}. ", subsequent_indent="   ",
-        )
-        for number, step in enumerate(_CLOSING_STEPS, start=1)
+        _wrap(step, initial_indent=f"{number}. ", subsequent_indent="   ")
+        for number, step in enumerate(steps_source, start=1)
     )
     return f"{_CLOSING_HEADING}\n{steps}\n"
 
@@ -387,7 +450,7 @@ def _wrap(text: str, **indent: str) -> str:
 
 def build_prompt(
     issue: int, *, title: str, body: str, repo_root: Path | str | None = None,
-    may: grants.Grant = (),
+    may: grants.Grant = (), read_only: bool = False,
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -408,6 +471,14 @@ def build_prompt(
     publishing, never how to build the thing published (#317).
     """
     branch = branch_name(issue)
+    if read_only:
+        return _ANALYSIS_PROMPT.format(
+            issue=issue,
+            title=title or f"issue #{issue}",
+            body=(body or "").strip() or "(empty — read it with gh)",
+            branch=branch,
+            closing=_closing_clause(read_only=True, issue=issue),
+        )
     return _PROMPT.format(
         issue=issue,
         title=title or f"issue #{issue}",
@@ -647,10 +718,18 @@ _SHORT_ID_RE = claude_cli.SHORT_ID_RE
 _ANSI_RE = claude_cli.ANSI_RE
 _short_id_from = claude_cli.short_id_from
 
+#: The tools a read-only child may not call. Measured 2026-09-17 against the
+#: real CLI: the block holds and reaches the child's own subagents, and an
+#: unknown name is reported rather than ignored ("matches no known tool").
+#: It closes these tools and nothing else — the same measurement showed the
+#: child can still write through Bash, so this prevents accident and drift,
+#: never intent.
+READ_ONLY_TOOLS = ("Edit", "Write", "NotebookEdit")
+
 
 def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
-    effort: str | None = None,
+    effort: str | None = None, read_only: bool = False,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -730,6 +809,37 @@ def spawn_child(
     not fail in the child — it is ignored with a warning and the child runs on
     the default, which is the one outcome a caller who asked for ``max``
     cannot notice.
+
+    **Read-only (#371).** *read_only* closes :data:`READ_ONLY_TOOLS` —
+    ``Edit``, ``Write``, ``NotebookEdit`` — via ``--disallowedTools``, for a
+    child meant to investigate and report rather than build. The block
+    reaches the child's own subagents (measured 2026-09-17), so a read-only
+    dispatch cannot launder an edit through a Task. It does **not** close
+    ``Bash``: the same measurement showed the child can still write through
+    it, so this flag prevents accident and drift, never a determined child.
+    When *read_only* is false (the default), the argv is byte-identical to a
+    dispatch that never heard of this flag.
+
+    ``--disallowedTools`` is variadic and space-separated: it swallows every
+    token after it up to the next flag. Two placements were measured against
+    the real CLI on 2026-09-17, and both halves matter.
+
+    Relying on a later flag to end the list is not enough. ``lean=False`` with
+    no model leaves nothing between the list and the prompt, so the prompt is
+    read as a tool name and the run dies with "Input must be provided either
+    through stdin or as a prompt argument" — the child starts with no
+    instructions at all.
+
+    But ``--`` cannot sit right after the list either, because it ends *all*
+    flag parsing rather than just this one list. Placed there it turns
+    ``--setting-sources`` and every lean flag after it into positionals, and
+    the child reads ``--setting-sources`` as its prompt. That is not
+    hypothetical: the first live read-only dispatch produced a transcript whose
+    only user turn was the literal string ``--setting-sources``.
+
+    So the list is emitted early and ``--`` goes last, immediately before the
+    prompt: the flags in between stay flags, and the prompt is the prompt
+    however few of them are present.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -737,6 +847,16 @@ def spawn_child(
             f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}"
         )
     args = ["claude", "--bg"]
+    if read_only:
+        # Early, so the flags below are between the variadic tool list and the
+        # prompt. The `--` that closes the list goes immediately before the
+        # prompt instead of here: `--` ends *all* flag parsing, not just this
+        # list, so placed here it turns `--setting-sources` and everything
+        # after into positionals — the child then reads `--setting-sources` as
+        # its prompt and never sees the real one (measured 2026-09-17 on a live
+        # dispatch, whose transcript's only user turn was the literal string
+        # `--setting-sources`).
+        args += ["--disallowedTools", *READ_ONLY_TOOLS]
     if model:
         args += ["--model", model]
     if effort:
@@ -747,6 +867,12 @@ def spawn_child(
         # Alongside --model, never instead of it: the two choose different
         # things (who the child is, and what it loads) and both survive.
         args += child_profile.lean_args(cwd)
+    if read_only:
+        # Last, immediately before the prompt. `--` ends flag parsing, so it
+        # both closes `--disallowedTools`' variadic list and guarantees the
+        # prompt is read as the prompt however few flags happen to sit between
+        # them — `lean=False` with no model leaves none at all.
+        args.append("--")
     args.append(prompt)
     try:
         result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
@@ -771,6 +897,7 @@ def _spawn_into(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -792,11 +919,14 @@ def _spawn_into(
     child is running either way.
     """
     try:
-        short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean, effort=effort)
+        short_id = spawn_child(
+            prompt, cwd=tree, model=model, lean=lean, effort=effort,
+            read_only=read_only,
+        )
     except claude_cli.ContractBroken as exc:
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc),
-            model=model, effort=effort, may=may,
+            model=model, effort=effort, may=may, read_only=read_only,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -811,7 +941,7 @@ def _spawn_into(
     grants.record(short_id, may)
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
-        model=model, effort=effort, may=may,
+        model=model, effort=effort, may=may, read_only=read_only,
     )
 
 
@@ -821,6 +951,7 @@ def dispatch_issue(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -835,9 +966,9 @@ def dispatch_issue(
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body,
-                     repo_root=repo_root, may=may),
+                     repo_root=repo_root, may=may, read_only=read_only),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
-        may=may, effort=effort,
+        may=may, effort=effort, read_only=read_only,
     )
 
 
@@ -847,6 +978,7 @@ def dispatch_all(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -868,6 +1000,7 @@ def dispatch_all(
                 dispatch_issue(
                     issue, repo_root=repo_root, fetch=fetch,
                     model=model, lean=lean, may=may, effort=effort,
+                    read_only=read_only,
                 )
             )
         except DispatchError as exc:
@@ -881,6 +1014,7 @@ def dispatch_piece(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -909,7 +1043,7 @@ def dispatch_piece(
         build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
         model=piece.model or model, lean=lean, may=granted,
-        effort=piece.effort or effort,
+        effort=piece.effort or effort, read_only=read_only,
     )
 
 
@@ -918,11 +1052,17 @@ def piece_grant(piece: contracts.Piece, may: grants.Grant = ()) -> grants.Grant:
     return may if piece.may is None else piece.may
 
 
+def piece_read_only(piece: contracts.Piece, read_only: bool) -> bool:
+    """The piece's own posture, or the dispatch's when it declares none."""
+    return read_only if piece.read_only is None else piece.read_only
+
+
 def dispatch_contract(
     contract: contracts.Contract, *, repo_root: Path | str,
     model: str | None = None, lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -952,6 +1092,7 @@ def dispatch_contract(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
                     model=model, lean=lean, may=may, effort=effort,
+                    read_only=piece_read_only(piece, read_only),
                 )
             )
         except DispatchError as exc:

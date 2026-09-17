@@ -79,6 +79,20 @@ def _default_grant(value: str | None) -> grants.Grant:
     return grants.parse(value)
 
 
+def _grant_for(args: argparse.Namespace) -> grants.Grant:
+    """The grant this dispatch runs with, `()` when the posture is read-only.
+
+    Keyed on what was *typed*: `--may` defaults to `pr`, so resolving the grant
+    first and then refusing a non-empty one would make `--read-only` unusable
+    on its own.
+    """
+    from mnemo.core.sessions import grants
+
+    if getattr(args, "read_only", False):
+        return ()
+    return _default_grant(getattr(args, "may", None))
+
+
 @command("dispatch")
 def cmd_dispatch(args: argparse.Namespace) -> int:
     """Spawn a child per issue. Returns 1 if any of them failed to start."""
@@ -99,8 +113,17 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
               f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}")
         return 1
 
+    read_only = bool(getattr(args, "read_only", False))
+    if read_only and getattr(args, "may", None) is not None:
+        # Before anything could spawn, as the grant refusal is. Not a
+        # tightening or a loosening but a contradiction: a read-only child
+        # produces nothing to publish, so a publishing grant on it is a
+        # statement about work that cannot exist.
+        print("--read-only: a read-only child publishes nothing, "
+              "so it cannot be given --may")
+        return 1
     try:
-        may = _default_grant(getattr(args, "may", None))
+        may = _grant_for(args)
     except grants.GrantError as exc:
         # Before anything else that could spawn: a grant that cannot be given
         # is refused while there is still nothing to roll back.
@@ -137,7 +160,8 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     if contract_path:
         return _dispatch_contract(
-            contract_path, root=root, args=args, lean=lean, may=may
+            contract_path, root=root, args=args, lean=lean, may=may,
+            read_only=read_only,
         )
 
     if getattr(args, "dry_run", False):
@@ -151,7 +175,8 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     return _report(
         core.dispatch_all(
-            issues, repo_root=root, model=model, lean=lean, may=may, effort=effort
+            issues, repo_root=root, model=model, lean=lean, may=may, effort=effort,
+            read_only=read_only,
         ),
         lean=lean,
     )
@@ -220,7 +245,7 @@ def _may_suffix(may: tuple[str, ...]) -> str:
 
 def _dispatch_contract(
     path: str, *, root: Path, args: argparse.Namespace, lean: bool = True,
-    may: tuple[str, ...] = (),
+    may: tuple[str, ...] = (), read_only: bool = False,
 ) -> int:
     """Read, validate, then dispatch — refusing before any tree is created."""
     from mnemo.core import contracts
@@ -255,7 +280,7 @@ def _dispatch_contract(
     try:
         results = core.dispatch_contract(
             contract, repo_root=root, model=model, lean=lean, may=may,
-            effort=effort,
+            effort=effort, read_only=read_only,
         )
     except core.DispatchError as exc:
         print(str(exc))

@@ -145,7 +145,7 @@ def _fetch(issue: int, *, repo_root):
 def test_every_child_of_one_dispatch_gets_the_model(repo: Path, monkeypatch) -> None:
     spawned: list = []
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         spawned.append(model)
         return "a1b2c3d4"
 
@@ -162,7 +162,7 @@ def test_every_child_of_one_dispatch_gets_the_model(repo: Path, monkeypatch) -> 
 
 def test_a_dispatch_with_no_model_records_none(repo: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True, effort=None: "a1b2c3d4"
+        dispatch, "spawn_child", lambda prompt, *, cwd, model=None, lean=True, effort=None, read_only=False: "a1b2c3d4"
     )
     result = dispatch.dispatch_issue(268, repo_root=repo, fetch=_fetch)
     assert result.model is None
@@ -193,7 +193,7 @@ def test_a_pieces_own_model_wins_over_the_flag(repo: Path, monkeypatch) -> None:
     """
     spawned: list = []
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         spawned.append(model)
         return "a1b2c3d4"
 
@@ -209,7 +209,7 @@ def test_a_contract_with_no_models_takes_the_flag(repo: Path, monkeypatch) -> No
     spawned: list = []
     monkeypatch.setattr(
         dispatch, "spawn_child",
-        lambda prompt, *, cwd, model=None, lean=True, effort=None: (spawned.append(model), "a1b2c3d4")[1],
+        lambda prompt, *, cwd, model=None, lean=True, effort=None, read_only=False: (spawned.append(model), "a1b2c3d4")[1],
     )
     dispatch.dispatch_contract(
         _contract(repo, models=[None, None]), repo_root=repo, model="sonnet"
@@ -425,7 +425,7 @@ def test_the_flag_reaches_the_dispatch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None: (
+        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None, read_only=False: (
             seen.update(model=model),
             [dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4")],
         )[1],
@@ -441,7 +441,7 @@ def test_the_report_says_which_model_was_chosen(monkeypatch, capsys, tmp_path: P
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None: [
+        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None, read_only=False: [
             dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4",
                                 model=model)
         ],
@@ -458,7 +458,7 @@ def test_a_dispatch_with_no_model_claims_no_choice(monkeypatch, capsys, tmp_path
     monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         dispatch, "dispatch_all",
-        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None: [
+        lambda issues, *, repo_root, model=None, lean=True, may=(), effort=None, read_only=False: [
             dispatch.Dispatched(issue=268, worktree=tmp_path, short_id="a1b2c3d4")
         ],
     )
