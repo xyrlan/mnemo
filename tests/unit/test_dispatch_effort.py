@@ -136,7 +136,7 @@ def _fetch(issue: int, *, repo_root):
 def _recording(monkeypatch) -> list:
     spawned: list = []
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         spawned.append(effort)
         return "a1b2c3d4"
 

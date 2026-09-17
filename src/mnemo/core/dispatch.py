@@ -164,6 +164,13 @@ class Dispatched:
     #: What this child may publish without asking, as rendered into its
     #: prompt (#317): ``()`` for nothing, the unchanged default.
     may: tuple[str, ...] = ()
+    #: Whether this child was spawned to investigate rather than build
+    #: (#371): its file-editing tools are closed and its closing asks for a
+    #: comment on the issue, never a push. Set even when ``short_id`` could
+    #: not be read back — the ``ContractBroken`` branch of ``_spawn_into`` —
+    #: because a child whose id is missing from the queue still loses its
+    #: posture there if this field silently reverted to the default.
+    read_only: bool = False
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -871,6 +878,7 @@ def _spawn_into(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -892,11 +900,14 @@ def _spawn_into(
     child is running either way.
     """
     try:
-        short_id = spawn_child(prompt, cwd=tree, model=model, lean=lean, effort=effort)
+        short_id = spawn_child(
+            prompt, cwd=tree, model=model, lean=lean, effort=effort,
+            read_only=read_only,
+        )
     except claude_cli.ContractBroken as exc:
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc),
-            model=model, effort=effort, may=may,
+            model=model, effort=effort, may=may, read_only=read_only,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -911,7 +922,7 @@ def _spawn_into(
     grants.record(short_id, may)
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
-        model=model, effort=effort, may=may,
+        model=model, effort=effort, may=may, read_only=read_only,
     )
 
 
@@ -921,6 +932,7 @@ def dispatch_issue(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -935,9 +947,9 @@ def dispatch_issue(
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body,
-                     repo_root=repo_root, may=may),
+                     repo_root=repo_root, may=may, read_only=read_only),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
-        may=may, effort=effort,
+        may=may, effort=effort, read_only=read_only,
     )
 
 
@@ -947,6 +959,7 @@ def dispatch_all(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -968,6 +981,7 @@ def dispatch_all(
                 dispatch_issue(
                     issue, repo_root=repo_root, fetch=fetch,
                     model=model, lean=lean, may=may, effort=effort,
+                    read_only=read_only,
                 )
             )
         except DispatchError as exc:
@@ -981,6 +995,7 @@ def dispatch_piece(
     lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -1009,7 +1024,7 @@ def dispatch_piece(
         build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
         model=piece.model or model, lean=lean, may=granted,
-        effort=piece.effort or effort,
+        effort=piece.effort or effort, read_only=read_only,
     )
 
 
@@ -1023,6 +1038,7 @@ def dispatch_contract(
     model: str | None = None, lean: bool = True,
     may: grants.Grant = (),
     effort: str | None = None,
+    read_only: bool = False,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -1052,6 +1068,7 @@ def dispatch_contract(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
                     model=model, lean=lean, may=may, effort=effort,
+                    read_only=read_only,
                 )
             )
         except DispatchError as exc:

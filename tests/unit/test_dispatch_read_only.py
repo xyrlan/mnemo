@@ -155,3 +155,28 @@ def test_the_implement_closing_is_unchanged():
 
     for may in ((), grants.parse("push"), grants.parse("pr")):
         assert dispatch._closing_clause(may) == dispatch._closing_clause(may, read_only=False)
+
+
+def test_dispatch_issue_carries_the_posture_to_the_child(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
+        seen["prompt"] = prompt
+        seen["read_only"] = read_only
+        return "abc12345"
+
+    monkeypatch.setattr(dispatch, "spawn_child", fake_spawn)
+    monkeypatch.setattr(dispatch, "ensure_worktree", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(dispatch.claude_cli, "verify_registered", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.parents, "record", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.grants, "record", lambda *a, **k: None)
+
+    result = dispatch.dispatch_issue(
+        361, repo_root=tmp_path,
+        fetch=lambda n, **k: dispatch.Issue(number=n, title="the title", body="the body"),
+        read_only=True,
+    )
+
+    assert seen["read_only"] is True
+    assert "Investigate issue #361" in seen["prompt"]
+    assert result.read_only is True

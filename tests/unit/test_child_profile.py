@@ -265,7 +265,7 @@ def test_lean_travels_from_dispatch_all_to_the_spawn(installed, tmp_path, monkey
     """The flag is only useful if it survives the orchestration layer."""
     seen: dict = {}
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         seen["lean"] = lean
         return "a1b2c3d4"
 

@@ -230,7 +230,7 @@ def test_each_piece_is_spawned_with_its_resolved_grant(
 ) -> None:
     prompts: dict = {}
 
-    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None):
+    def fake_spawn(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
         prompts[Path(cwd).name] = prompt
         return {"proj-wt-c-one": "0000aaaa", "proj-wt-c-two": "0000bbbb"}[Path(cwd).name]
 
