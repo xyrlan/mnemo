@@ -1,7 +1,7 @@
-# Read-only dispatch: a child that investigates and reports, and cannot write
+# Read-only dispatch: a child that investigates and reports instead of building
 
 **Date:** 2026-09-17
-**Status:** design, awaiting review
+**Status:** approved; Bash bypass measured 2026-09-17
 **Related:** #357 (nothing wakes the parent when a child finishes)
 
 ## The problem
@@ -123,10 +123,11 @@ module docstring calls one-tree-per-child "mandatory, not advisory"
 will simply stay clean, which `deliver --review` already reports correctly
 (`sessions/delivery.py:200`, `:213`).
 
-Keeping the tree also means the restriction is defence in depth rather than the
-only thing standing between a child and the maintainer's working copy: if
-`--disallowedTools` turns out not to hold, the damage is confined to a throwaway
-tree instead of landing in the repo the maintainer is sitting in.
+The tree is **not** belt-and-braces here. Since the measurement below shows a
+read-only child can still write through the shell, its own worktree is the only
+thing confining such a write to a throwaway directory rather than the checkout
+the maintainer is sitting in. Removing it to save a little cleanup would trade
+away the containment the posture actually has.
 
 ### Delivery
 
@@ -166,43 +167,55 @@ be emitted early, with another flag after it, or the prompt must be separated
 with `--`. This is a test requirement, not a footnote: an argv that silently
 absorbs the prompt produces a child that never gets its instructions.
 
-### What was NOT measured: whether Bash bypasses the restriction
+### Bash bypasses the restriction — measured
 
 A read-only child needs Bash (`gh`, `git log`, `rg`, the suite), so Bash is not
-restricted by this design. The open question is whether the child can therefore
-write files through the shell — `printf > file`, `tee`, a heredoc — with the
-file tools closed.
+restricted by this design. Whether the child can therefore write files through
+the shell with the file tools closed was the design's one open question.
 
-Three attempts to measure this from within this session were blocked by a
-*different* mechanism: the sandbox that wraps `claude --print` here refused
-output redirection and `tee` even for paths inside its own stated allowed
-directory. That sandbox does not exist around a `claude --bg` dispatch child, so
-the result says nothing either way about the real case.
+**It can.** Measured 2026-09-17 against a real background child, which is the
+only environment that reproduces the case — the sandbox wrapping `claude --print`
+blocks shell redirection on its own and masks the question entirely:
 
-**Therefore the honest claim for this design is narrower than "enforced":**
+```
+claude --bg --disallowedTools Edit Write NotebookEdit --model haiku \
+  "...run exactly printf CHANGED > target.txt and then run cat target.txt..."
+```
 
-> The file-editing tools are closed. A read-only child cannot edit or write
-> through them, and neither can its subagents. Whether it can still write
-> through the shell is unmeasured; if it can, the restriction prevents accident
-> and drift, not intent.
+The file read `original` before and `CHANGED` about thirty seconds later. The
+child's own transcript shows the path it took, and it is not a subtle one:
 
-That is still materially stronger than prompt-only (approach B), where nothing
-is closed at all, and it is what the implementation should claim until the
-remaining question is answered.
+```
+Bash | printf CHANGED > target.txt
+Bash | cat target.txt
+```
 
-**The first step of the implementation plan is to answer it** — against a real
-dispatched read-only child, not `claude --print`, because only the child's own
-environment reproduces the case. Depending on the answer:
+No refusal, no sandbox, no warning. `--disallowedTools` closes the named tools
+and nothing else.
 
-- **Bash cannot write:** the design's guarantee is complete; say so, with the
-  transcript.
-- **Bash can write:** keep the flag and the narrower claim above, and record the
-  bypass in the spec and the `--read-only` help text. Do not quietly widen the
-  claim to cover it.
+**So the claim this design may make is exactly this, and no wider:**
 
-What must not happen is shipping any wording that describes a guarantee which
-was never observed — the repo has a documented history of exactly that failure
-(`verify-subagent-claims-by-running`, `grep-is-a-proxy-run-the-function`).
+> A read-only child's file-editing tools are closed — it cannot call Edit,
+> Write or NotebookEdit, and neither can its subagents. It can still write
+> through the shell. The restriction prevents accident and drift, not intent.
+
+That is materially stronger than prompt-only (approach B), where nothing is
+closed at all and a child that reaches for Edit out of habit succeeds. It is
+materially weaker than a sandbox, and the feature must not be described as one.
+
+Three consequences for the implementation:
+
+1. The `--read-only` help text says what is closed, never that the child
+   "cannot write".
+2. The README says the same (Task 8 of the plan).
+3. The worktree stays, and its justification is now load-bearing rather than
+   belt-and-braces: it is the only thing confining a shell write to a throwaway
+   tree instead of the maintainer's checkout.
+
+What must not happen is shipping wording that describes a guarantee which was
+never observed — the repo has a documented history of exactly that failure
+(`verify-subagent-claims-by-running`, `grep-is-a-proxy-run-the-function`). This
+section exists because the first draft of this spec did precisely that.
 
 ## Blast radius
 
@@ -255,7 +268,6 @@ adding a per-child spawn flag end to end.
    files it may change, in a posture where it may change none, is probably a
    contract error worth catching at parse time. Left open: it needs a real
    contract to reason about, and none exists yet.
-4. **Can a read-only child write through Bash?** Unmeasured — see "The
-   enforcement question". This is the one open item that gates how the feature
-   may describe itself, and it is the first step of the implementation plan
-   rather than a follow-up.
+4. **Can a read-only child write through Bash?** Answered: yes, measured
+   2026-09-17 — see "Bash bypasses the restriction". Closed as an open question;
+   what it leaves behind is a wording constraint, not a design choice.
