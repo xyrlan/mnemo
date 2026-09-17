@@ -98,6 +98,13 @@ SYNTHETIC_PREFIXES = (
     "[Request interrupted",
     "Base directory for this skill",
     "# Claude in Chrome browser automation",
+    # mnemo's own notice that a dispatched child finished (#357). It arrives
+    # as a peer turn, so without this it would read as a person unblocking the
+    # parent — and this very sweep runs in the hook that sends it. Spelled out
+    # rather than imported from :mod:`mnemo.core.sessions.inbox`: that module
+    # imports nothing from here, and a literal keeps it that way. The two are
+    # pinned together by a test.
+    "<mnemo-child-finished",
 )
 
 #: The byte signature of an assistant record, as Claude Code writes it

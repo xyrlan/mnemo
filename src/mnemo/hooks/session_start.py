@@ -735,6 +735,18 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.cache", e)
         try:
+            # #357: the only moment this session's inbox address is knowable.
+            # Claude Code exports the socket and token into the session's own
+            # environment and nowhere else, and the transcript records neither,
+            # so a child that finishes later can only find its parent if the
+            # parent wrote itself down here.
+            if bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
+                from mnemo.core.sessions import inbox
+
+                inbox.record(vault, inbox.address_from_env())
+        except Exception as e:
+            errors.log_error(vault, "session_start.inbox_address", e)
+        try:
             _maybe_prune_briefings(vault, cfg)
         except Exception as e:
             errors.log_error(vault, "session_start.briefings_prune", e)

@@ -122,3 +122,73 @@ def test_session_end_briefing_keeps_the_cached_name_after_the_tree_is_removed(
     assert (hook_env / "bots" / "wtrepo" / "logs" / today).exists()
     assert spawned["agent"] == "wtrepo"
     assert not (hook_env / "bots" / "wtrepo-feature-x").exists()
+
+
+# --- #357: the child tells the session that dispatched it --------------
+
+def test_session_end_notifies_the_dispatching_parent(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A child with a recorded parent gets a notice delivered on exit."""
+    from mnemo.core.sessions import inbox, parents
+
+    child = "c0da0f55-1111-2222-3333-444455556666"
+    parent = "0ff9d810-e54d-41f3-a045-b0ccff6c5186"
+    parents.log_path(hook_env).parent.mkdir(parents=True, exist_ok=True)
+    parents.log_path(hook_env).write_text(
+        json.dumps({"short_id": child[:8], "parent_session": parent}) + "\n",
+        encoding="utf-8",
+    )
+    inbox.record(hook_env, {
+        "session_id": parent, "socket": "/tmp/x.sock", "token": None,
+        "pid": 1, "pid_start": "now",
+    })
+
+    sent = []
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(inbox, "post", lambda a, t: sent.append(t) or True)
+
+    session.save(child, {"name": "myrepo", "repo_root": "/x", "has_git": True})
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+
+    assert len(sent) == 1
+    assert child[:8] in sent[0]
+    # It must announce itself as mnemo, not as the user (#309).
+    assert sent[0].startswith(inbox.NOTICE_PREFIX)
+    assert "not your user speaking" in sent[0]
+
+
+def test_session_end_says_nothing_for_a_session_nobody_dispatched(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from mnemo.core.sessions import inbox
+
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("must not send"))
+    session.save("S9", {"name": "myrepo", "repo_root": "/x", "has_git": True})
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": "S9", "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+
+
+def test_notify_parent_is_switchable_off(hook_env: Path, monkeypatch: pytest.MonkeyPatch):
+    from mnemo.core.sessions import inbox, parents
+
+    child = "c0da0f55-1111-2222-3333-444455556666"
+    parents.log_path(hook_env).parent.mkdir(parents=True, exist_ok=True)
+    parents.log_path(hook_env).write_text(
+        json.dumps({"short_id": child[:8], "parent_session": "p"}) + "\n", encoding="utf-8",
+    )
+    (hook_env / "mnemo.config.json").write_text(
+        json.dumps({"vaultRoot": str(hook_env), "dispatch": {"notifyParent": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("must not send"))
+    session.save(child, {"name": "myrepo", "repo_root": "/x", "has_git": True})
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0

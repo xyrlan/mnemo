@@ -27,6 +27,16 @@ DEFAULTS: dict[str, Any] = {
             "minIntervalMinutes": 60,
         },
     },
+    "dispatch": {
+        # #357: when a dispatched child exits, tell the session that spawned
+        # it, over that session's own inbox socket. On by default because the
+        # alternative it replaces is the maintainer relaying it by hand, and
+        # the notice is one line that carries no authority (it opens with a
+        # marker the unblock detector skips). Turn it off if a session being
+        # poked mid-thought by an unrelated child is worse than waiting.
+        # Delivery is best-effort: a parent that has exited is not queued for.
+        "notifyParent": True,
+    },
     "briefings": {
         "enabled": True,
         "injectLastOnSessionStart": True,
