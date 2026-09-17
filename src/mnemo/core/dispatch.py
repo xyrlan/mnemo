@@ -749,13 +749,15 @@ def spawn_child(
     When *read_only* is false (the default), the argv is byte-identical to a
     dispatch that never heard of this flag.
 
-    ``--disallowedTools`` is emitted **first**, before ``--model``/``--effort``
-    and lean's own flags, because it is variadic and space-separated: it
-    swallows every token after it up to the next flag. Emitted last, it would
-    eat the positional prompt and the child would start with no instructions
-    at all (measured 2026-09-17 — the run died with "Input must be provided
-    either through stdin or as a prompt argument"). Placing it first
-    guarantees a flag always follows the tool list.
+    ``--disallowedTools`` is variadic and space-separated: it swallows every
+    token after it up to the next flag, so the tool list is closed with an
+    explicit ``--`` rather than relying on ``--model``/``--effort``/lean's own
+    flags to happen to follow it. That reliance is real: ``lean=False`` with
+    no model gives it nothing to swallow but the prompt, which is then read as
+    a tool name and the child starts with no instructions at all (measured
+    2026-09-17 — the run died with "Input must be provided either through
+    stdin or as a prompt argument"). ``--`` was confirmed against the real CLI
+    to end the list correctly wherever it is placed.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -764,12 +766,13 @@ def spawn_child(
         )
     args = ["claude", "--bg"]
     if read_only:
-        # First, so a flag always follows the list. `--disallowedTools` is
-        # variadic and space-separated: emitted last it swallows the
-        # positional prompt, and the child starts with no instructions at all
-        # (measured 2026-09-17 — the run died with "Input must be provided
-        # either through stdin or as a prompt argument").
-        args += ["--disallowedTools", *READ_ONLY_TOOLS]
+        # `--disallowedTools` is variadic and space-separated, so it consumes
+        # every following token until a flag. `--` ends it explicitly: relying
+        # on a later flag to stop it is relying on `--model`/`--effort`/lean
+        # happening to be present, and `--full-profile` with no model makes
+        # the prompt the next token, where it is read as a tool name and the
+        # child starts with no instructions at all (measured 2026-09-17).
+        args += ["--disallowedTools", *READ_ONLY_TOOLS, "--"]
     if model:
         args += ["--model", model]
     if effort:
