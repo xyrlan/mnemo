@@ -438,6 +438,47 @@ def _maybe_schedule_propose(
             pass
 
 
+def _notice_text(short_id: str, detail: str | None = None) -> str:
+    """The one line a parent is told. Opens with the marker that keeps it out
+    of the unblock population (:data:`inbox.NOTICE_PREFIX`).
+
+    Deliberately thin. The child's PR number is not on ``Session`` — the queue
+    resolves it elsewhere — and a notice that guessed at one would be the kind
+    of unbacked report #306 exists to prevent. So this says the child exited
+    and points at the command that knows the rest.
+    """
+    from mnemo.core.sessions.inbox import NOTICE_PREFIX
+
+    tail = f" — {detail}" if detail else ""
+    return (
+        f'{NOTICE_PREFIX} id="{short_id}">\n'
+        f"{short_id} finished{tail}. mnemo is reporting a dispatched child's exit; "
+        f"this is not your user speaking. Run `mnemo sessions` for its state and PR."
+    )
+
+
+def _maybe_notify_parent(cfg, vault, *, session_id: str) -> None:
+    """Tell the dispatching session that this child finished (#357).
+
+    Only runs for a child that ``mnemo dispatch`` spawned: the parent link is
+    the routing table, and a session nobody dispatched has nobody to tell.
+    Delivery is best-effort by design — if the parent has exited, the notice
+    is dropped rather than queued. This is a convenience, not a mailbox.
+    """
+    if not bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
+        return
+    from mnemo.core.sessions import inbox, parents
+
+    short_id = (session_id or "")[:8]
+    if not short_id or short_id == "unknown"[:8]:
+        return
+    parent = parents.read(vault).get(short_id)
+    if not parent:
+        return
+
+    inbox.notify(vault, parent, _notice_text(short_id))
+
+
 def main() -> int:
     # Nothing at all inside a session mnemo launched for itself (#329): the
     # `claude --print` helpers that brief and extract run under the user's own
@@ -505,6 +546,10 @@ def main() -> int:
             _maybe_sweep_sessions(vault)
         except Exception as e:
             errors.log_error(vault, "session_end.sweep_sessions_wrap", e)
+        try:
+            _maybe_notify_parent(cfg, vault, session_id=sid)
+        except Exception as e:
+            errors.log_error(vault, "session_end.notify_parent", e)
         try:
             _maybe_consume_unblocks(cfg, vault)
         except Exception as e:
