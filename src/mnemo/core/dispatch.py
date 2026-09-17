@@ -1033,6 +1033,11 @@ def piece_grant(piece: contracts.Piece, may: grants.Grant = ()) -> grants.Grant:
     return may if piece.may is None else piece.may
 
 
+def piece_read_only(piece: contracts.Piece, read_only: bool) -> bool:
+    """The piece's own posture, or the dispatch's when it declares none."""
+    return read_only if piece.read_only is None else piece.read_only
+
+
 def dispatch_contract(
     contract: contracts.Contract, *, repo_root: Path | str,
     model: str | None = None, lean: bool = True,
@@ -1068,7 +1073,7 @@ def dispatch_contract(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
                     model=model, lean=lean, may=may, effort=effort,
-                    read_only=read_only,
+                    read_only=piece_read_only(piece, read_only),
                 )
             )
         except DispatchError as exc:

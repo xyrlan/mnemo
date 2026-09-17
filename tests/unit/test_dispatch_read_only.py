@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mnemo.cli.commands import dispatch as cli_dispatch
-from mnemo.core import dispatch
+from mnemo.core import contracts, dispatch
 
 
 class _Spawn:
@@ -212,3 +212,65 @@ def test_read_only_alone_is_accepted():
 
     assert cli_dispatch._grant_for(_args(read_only=True)) == ()
     assert cli_dispatch._grant_for(_args()) == grants.parse("pr")
+
+
+# Built from the repo's own `contracts.EXAMPLE` shape (frontmatter, verdict,
+# `## <slug>` heading, `- **field:** value` bullets) rather than invented —
+# see Task 7's warning about fixtures whose shape is not production's.
+_CONTRACT = """---
+feature: example-feature
+created: 2026-01-01
+verdict: parallel
+---
+
+## the-investigation
+
+- **files:** src/app/storage.py
+- **exposes:** nothing
+- **consumes:** nothing
+- **read-only:** yes
+
+Find out whether the storage layer needs to change at all.
+
+## the-build
+
+- **files:** src/app/api.py
+- **exposes:** nothing
+- **consumes:** nothing
+
+Build the thing the investigation above recommends.
+"""
+
+
+def test_a_piece_can_declare_read_only(tmp_path):
+    path = tmp_path / "contract.md"
+    path.write_text(_CONTRACT, encoding="utf-8")
+
+    contract = contracts.parse_contract(path)
+    by_slug = {p.slug: p for p in contract.pieces}
+
+    assert by_slug["the-investigation"].read_only is True
+    assert by_slug["the-build"].read_only is None
+
+
+def test_an_unreadable_read_only_value_is_refused_at_parse_time(tmp_path):
+    path = tmp_path / "contract.md"
+    path.write_text(
+        _CONTRACT.replace("**read-only:** yes", "**read-only:** maybe"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(contracts.ContractError, match="read-only"):
+        contracts.parse_contract(path)
+
+
+def test_the_piece_wins_over_the_flag():
+    """Same precedence as `may`: absent inherits, present overrides."""
+    absent = contracts.Piece(slug="s", files=[], read_only=None)
+    asked = contracts.Piece(slug="s", files=[], read_only=True)
+    refused = contracts.Piece(slug="s", files=[], read_only=False)
+
+    assert dispatch.piece_read_only(absent, True) is True
+    assert dispatch.piece_read_only(absent, False) is False
+    assert dispatch.piece_read_only(asked, False) is True
+    assert dispatch.piece_read_only(refused, True) is False
