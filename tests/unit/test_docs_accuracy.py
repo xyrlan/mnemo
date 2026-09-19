@@ -13,7 +13,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-DOCS = [REPO / "README.md", *(REPO / "docs").glob("*.md")]
+# ``CLAUDE.md`` is documentation a dispatched child reads unprompted
+# (#385), so it drifts like any other and is checked like any other.
+DOCS = [REPO / "README.md", REPO / "CLAUDE.md", *(REPO / "docs").glob("*.md")]
 
 
 def _doc_text() -> dict[Path, str]:
