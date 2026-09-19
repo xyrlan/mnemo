@@ -120,8 +120,13 @@ def test_prompt_never_prescribes_an_approach() -> None:
     # way in for a preferred solution. `may` is a permission (#317): which of
     # three fixed words the maintainer granted, never free text. `read_only`
     # is a posture (#371): one bit choosing investigate-or-build, and a bit
-    # cannot carry an approach.
-    assert params == {"issue", "title", "body", "repo_root", "may", "read_only"}
+    # cannot carry an approach. `siblings` is a roster (#384): the issues this
+    # same run started, rendered as their own numbers and titles — a fact
+    # about which children are live, and the only new parameter here that a
+    # caller does not write. A summary of the parent's reasoning would be an
+    # approach with a citation attached, and there is still no way to pass one.
+    assert params == {"issue", "title", "body", "repo_root", "may", "read_only",
+                      "siblings"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:

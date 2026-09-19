@@ -92,7 +92,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, Union
 
-from mnemo.core import child_profile, claude_cli, contracts
+from mnemo.core import child_profile, claude_cli, contracts, redact
 from mnemo.core.sessions import grants, parents
 
 WORKTREE_SUFFIX = "-wt-"
@@ -249,7 +249,7 @@ which often re-scope it. The body as it stands:
 ---
 
 You are in a git worktree of your own on branch `{branch}`. Work only here.
-
+{siblings}
 Scope limits:
 {publish}
 - Do not touch files outside what this issue needs.
@@ -279,7 +279,7 @@ which often re-scope it. The body as it stands:
 You are in a git worktree of your own on branch `{branch}`. You are here to
 find something out, not to build anything: your file-editing tools are closed,
 and nothing you learn needs a diff to be worth having.
-
+{siblings}
 What is being asked of you:
 - Answer the question the issue actually poses. If the issue poses none, say
   what question it should have posed and answer that instead.
@@ -314,6 +314,105 @@ def _changelog_prompt(name: str, repo_root: Path | str | None) -> str:
     if repo_root is None or not (Path(repo_root) / "changelog.d").is_dir():
         return ""
     return _CHANGELOG_PROMPT.format(name=name)
+
+
+#: The roster block: who else this dispatch started, and nothing else (#384).
+#:
+#: **What this carries, and what it deliberately does not.** #384 asks for
+#: three things to reach the child — what the parent ruled out, what it
+#: measured, and which sibling is doing what. Only the third is here.
+#:
+#: The first two already have a channel that works. Measured on 2026-09-19
+#: over the 118 children in ``dispatch-parents.jsonl`` that still have a
+#: transcript: **68 of 68** issue children that were handed an opening prompt
+#: ran ``gh issue view`` on their own issue — comments included, which is
+#: where a re-scoping decision lands — so everything the parent wrote down
+#: before dispatching reached every one of them. (The 69th never received a
+#: prompt: it is the read-only argv bug #371 fixed.) Passing the parent's
+#: *unwritten* reasoning instead means handing a child a conclusion it did not
+#: reach, which is the #187 failure verbatim — that child was dispatched with
+#: a measured conclusion drawn from its parent ("the slug is the cheaper
+#: signal"), refused it, and was right.
+#: :func:`build_prompt` takes no approach for that reason, and a summary of
+#: the parent's transcript is an approach with a citation attached.
+#:
+#: Who else is running is different in kind: it is a fact about the world that
+#: exists only at dispatch time, is in no issue, and prescribes nothing. The
+#: maintainer already writes it by hand — #382, #383, #384 and #385 each got
+#: an identical comment naming the other three — which is the workaround this
+#: replaces, not an argument that the need is imagined.
+#:
+#: **The cost it answers, and where it stops.** Of 36 dispatch batches
+#: measured, 30 started two or more children at once and 112 of 118 children
+#: had a live sibling. In the 16 multi-child *issue* batches, 3 had two
+#: siblings write the same file (``activity/context.py``, ``sessions/jobs.py``,
+#: ``friction/backfill.py`` + ``corrections.py``). In the 13 multi-child
+#: *contract* batches — where each piece is already told what it may not
+#: touch — **none** did. So this is rendered into the issue prompt and
+#: deliberately not into :func:`build_piece_prompt`, which says why.
+#: ``tools/measure_dispatch_siblings.py`` is that measurement; run it with
+#: ``--list``, which prints every colliding pair, before quoting the rate.
+#: Two children writing one file is an upper bound on harm, not a conflict.
+_SIBLINGS_PROMPT = """
+Other children of this same dispatch are running in parallel right now, each
+in a worktree of its own, all branched from the same commit you were:
+{items}
+
+This is not an instruction and none of it is yours to do. It is the one thing
+that is true only while you are running and is written in no issue: who else
+is editing this repo beside you. Where your work would land on theirs, read
+theirs first and keep your diff to what your own issue needs.
+"""
+
+#: How many siblings are named before the list is cut short.
+#:
+#: The child's opening prompt is already ~70k tokens, so this block has to be
+#: rounding error or it is a regression. Twelve lines at the truncation width
+#: below is under 1 KB — roughly 250 tokens, 0.4% of the baseline. The largest
+#: batch ever dispatched was 8, so the cap has never yet bitten; it exists so
+#: that a future 40-piece contract costs a footnote rather than a page.
+_SIBLING_CAP = 12
+
+#: Where one sibling's line is cut. Long enough for an issue title or a short
+#: file list, short enough that twelve of them stay a footnote.
+_SIBLING_WIDTH = 96
+
+
+def _sibling_line(label: str, detail: str) -> str:
+    """One roster row, ``- <label> — <detail>``, truncated to one line.
+
+    Newlines are stripped rather than wrapped: a row that spilled onto a
+    second line at column 0 would read as prose about the child's own task,
+    which is the one thing this block must never be mistaken for.
+    """
+    detail = " ".join((detail or "").split())
+    line = f"- {label}" + (f" — {detail}" if detail else "")
+    if len(line) > _SIBLING_WIDTH:
+        line = line[: _SIBLING_WIDTH - 1].rstrip() + "…"
+    return line
+
+
+def _siblings_clause(rows: Sequence[tuple[str, str]]) -> str:
+    """The roster, or the empty string when this child has no siblings.
+
+    Empty is load-bearing: a one-issue dispatch must render the prompt it
+    rendered before this existed, byte for byte, and
+    ``tests/unit/test_dispatch_siblings.py`` pins that.
+
+    Redacted on the way out. Nothing here is transcript — issue titles and the
+    contract's own file list — so in practice :func:`redact.redact` finds
+    nothing to do, and that is the point: #384's boundary says whatever new
+    material reaches a child passes through it, and a rule that only holds
+    while the material happens to be safe is not a rule.
+    """
+    if not rows:
+        return ""
+    shown = [_sibling_line(label, detail) for label, detail in rows[:_SIBLING_CAP]]
+    hidden = len(rows) - len(shown)
+    if hidden > 0:
+        shown.append(f"- (and {hidden} more)")
+    text = _SIBLINGS_PROMPT.format(items="\n".join(shown))
+    return redact.redact(text)[0]
 
 
 #: Said when nothing was granted — the words every child was given before #317,
@@ -451,6 +550,7 @@ def _wrap(text: str, **indent: str) -> str:
 def build_prompt(
     issue: int, *, title: str, body: str, repo_root: Path | str | None = None,
     may: grants.Grant = (), read_only: bool = False,
+    siblings: Sequence[Issue] = (),
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -469,14 +569,26 @@ def build_prompt(
     only decides whether the repo's changelog convention is stated. *may* is
     a permission, not an approach either: what the maintainer already approved
     publishing, never how to build the thing published (#317).
+
+    *siblings* is the same kind of thing again, and the narrowest of the
+    three: the other issues this one run started, so the child knows which of
+    them is live while it edits (#384). It is a roster, not a reading — see
+    :data:`_SIBLINGS_PROMPT` for why the parent's own reasoning stays out.
+    This issue is filtered from its own roster, so a caller may pass the whole
+    batch without trimming it.
     """
     branch = branch_name(issue)
+    roster = _siblings_clause(
+        [(f"#{other.number}", other.title) for other in siblings
+         if other.number != issue],
+    )
     if read_only:
         return _ANALYSIS_PROMPT.format(
             issue=issue,
             title=title or f"issue #{issue}",
             body=(body or "").strip() or "(empty — read it with gh)",
             branch=branch,
+            siblings=roster,
             closing=_closing_clause(read_only=True, issue=issue),
         )
     return _PROMPT.format(
@@ -484,6 +596,7 @@ def build_prompt(
         title=title or f"issue #{issue}",
         body=(body or "").strip() or "(empty — read it with gh)",
         branch=branch,
+        siblings=roster,
         changelog=_changelog_prompt(str(issue), repo_root),
         publish=_wrap(
             _publish_clause(may, branch=branch, issue=issue),
@@ -544,6 +657,14 @@ def build_piece_prompt(
 
     *may* is what this child was granted, already resolved — the piece's own
     ``may:`` over the dispatch's ``--may`` — by :func:`dispatch_piece`.
+
+    **A roster of the other pieces was measured and declined** (#384). Issue
+    children get one, because they are told nothing about each other and 3 of
+    16 multi-child issue batches had two siblings write the same file. A piece
+    is already told what it may not touch, and 0 of 13 multi-child contract
+    batches collided — so naming the owners would buy nothing measured, while
+    putting another piece's files inside this prompt weakens the one thing
+    that makes the boundary hard: that they are not in it.
     """
     branch = branch_name(piece.slug, feature=feature)
     consumes = ""
@@ -952,6 +1073,8 @@ def dispatch_issue(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
+    details: Issue | None = None,
+    siblings: Sequence[Issue] = (),
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -960,13 +1083,21 @@ def dispatch_issue(
     later step fails before a child exists. Raises :class:`DispatchError` with
     no state left behind; see :func:`_spawn_into` for the one case that keeps
     the tree.
+
+    *details* is the issue already read, which :func:`dispatch_all` has
+    because it reads the whole batch before it spawns any of it (#384). Given
+    one, *fetch* is not called: re-reading would be a second ``gh`` round-trip
+    for an answer already in hand, and a second answer that could differ from
+    the one the siblings were told about.
     """
-    details = fetch(issue, repo_root=repo_root)  # before any git state exists
+    if details is None:
+        details = fetch(issue, repo_root=repo_root)  # before any git state exists
     tree = ensure_worktree(issue, repo_root=repo_root)
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body,
-                     repo_root=repo_root, may=may, read_only=read_only),
+                     repo_root=repo_root, may=may, read_only=read_only,
+                     siblings=siblings),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
         may=may, effort=effort, read_only=read_only,
     )
@@ -992,13 +1123,39 @@ def dispatch_all(
     the one place a per-child model exists, because a contract is written and
     reviewed before dispatch and can say so per piece. *effort* is the same
     (#351).
+
+    **Read the whole batch before spawning any of it** (#384). Every child is
+    told which other issues this run started, and that list can only be
+    truthful if the issues have been read — a number ``gh`` refuses is not a
+    sibling, and naming it would send every other child looking for work
+    nobody is doing. Reading first costs nothing extra: the same one ``gh``
+    call per issue, moved earlier. It also makes a bad issue number refusable
+    before a single worktree exists, rather than after the ones ahead of it
+    in the list have already spawned.
+
+    The roster states intent, not outcome: a child whose *spawn* fails after
+    its siblings were told about it leaves them naming an issue nobody took.
+    That is the cheap direction — a child reads an issue and finds no branch —
+    and closing it would mean spawning the batch twice.
     """
-    out: list[Dispatched] = []
+    batch: list[tuple[int, Issue | None, str]] = []
     for issue in issues:
+        try:
+            batch.append((issue, fetch(issue, repo_root=repo_root), ""))
+        except DispatchError as exc:
+            batch.append((issue, None, str(exc)))
+    roster = [details for _, details, _ in batch if details is not None]
+
+    out: list[Dispatched] = []
+    for issue, details, error in batch:
+        if details is None:
+            out.append(Dispatched(issue=issue, error=error))
+            continue
         try:
             out.append(
                 dispatch_issue(
-                    issue, repo_root=repo_root, fetch=fetch,
+                    issue, repo_root=repo_root, fetch=fetch, details=details,
+                    siblings=roster,
                     model=model, lean=lean, may=may, effort=effort,
                     read_only=read_only,
                 )
