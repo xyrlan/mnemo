@@ -44,7 +44,9 @@ def _staged(vault: Path, slug: str, *, age_days: float = 3.0, project: str = "pr
         f"type: {page_type}\n{extra}sources:\n  - bots/{project}/x.md\n---\n\nbody\n",
         encoding="utf-8",
     )
-    ts = time.time() - age_days * 86400
+    # A minute past the day boundary: ages floor, and Windows' coarse clock can
+    # read `now` a tick before the `time.time()` this was computed from.
+    ts = time.time() - age_days * 86400 - 60
     os.utime(path, (ts, ts))
     return path
 

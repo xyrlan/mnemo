@@ -40,7 +40,9 @@ def _page(
         encoding="utf-8",
     )
     if age_days:
-        ts = time.time() - age_days * 86400
+        # A minute past the day boundary: ages floor, and Windows' coarse clock can
+        # read `now` a tick before the `time.time()` this was computed from.
+        ts = time.time() - age_days * 86400 - 60
         os.utime(path, (ts, ts))
     return path
 
