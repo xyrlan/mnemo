@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from mnemo.cli.commands import sessions as sessions_cmd
 from mnemo.cli.commands.session import cmd_session
 from mnemo.core.activity.exploration import Exploration
@@ -199,3 +201,54 @@ def test_tool_splits_children_by_injected_rules(tmp_path) -> None:
     assert report["by_injection"]["0 regras"] == {"n": 2, "median_uses": 15.0, "median_tokens": 4000.0}
     assert report["by_injection"]["2 regras"]["n"] == 1
     assert "n=3" in tool.format_report(report)
+
+
+def test_tool_reports_the_ceiling_a_repo_map_could_reach(tmp_path) -> None:
+    """#382: what the window was spent on, and how big an A/B would have to be."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from tools import measure_exploration as tool
+
+    def child(directory: str, wt: str, *commands: str, growth: int):
+        d = tmp_path / directory
+        d.mkdir()
+        cwd = f"/Users/x/github/{wt}"
+        events = []
+        for index, command in enumerate(commands):
+            use = f"u{index}"
+            events.append({**_turn("Bash", {"command": command}, 10_000), "cwd": cwd})
+            events[-1]["message"]["content"][0]["id"] = use
+            events.append({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": use, "content": "x" * 400}]}})
+        events.append({**_turn("Edit", {"file_path": f"{cwd}/a"}, 10_000 + growth), "cwd": cwd})
+        (d / "s.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+
+    child("-a-mnemo-wt-1", "mnemo-wt-1", "ls src", "cat src/a.py", growth=8_000)
+    child("-a-mnemo-wt-2", "mnemo-wt-2", 'grep -rn "x" src/', "cat src/b.py", growth=4_000)
+    # Never mutated: its split is a floor, so it is not in the shares.
+    (tmp_path / "-a-mnemo-wt-3").mkdir()
+    (tmp_path / "-a-mnemo-wt-3" / "s.jsonl").write_text(json.dumps(
+        {**_turn("Bash", {"command": "ls"}, 1), "cwd": "/Users/x/github/mnemo-wt-3"}) + "\n",
+        encoding="utf-8")
+
+    report = tool.measure_kinds(str(tmp_path))
+
+    assert report["n"] == 2
+    assert report["by_kind"]["list"] == {"uses": 1.0, "chars": 400.0, "answerable": True}
+    assert report["by_kind"]["read"]["uses"] == 2.0
+    assert report["by_kind"]["search"]["answerable"] is True
+    assert report["by_kind"]["read"]["answerable"] is False
+    # One of two uses is answerable; its result is 100 tokens of the 200 the
+    # two returned, and it carries half of whatever the growth does not explain.
+    assert report["rows"][0]["ceiling_tokens"] == pytest.approx(100 + (8_000 - 200) / 2)
+    assert report["median_floor_tokens"] == 100.0
+
+    out = tool.format_kinds(report, listing=True)
+    assert "mnemo-wt-1" in out and "list=1.0" in out
+    assert "por braço" in out
+
+
+def test_tool_says_so_when_no_child_reached_a_mutation() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from tools import measure_exploration as tool
+
+    assert "nenhum transcript" in tool.format_kinds({"rows": [], "n": 0})
