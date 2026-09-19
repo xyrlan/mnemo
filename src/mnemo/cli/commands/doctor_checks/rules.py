@@ -143,8 +143,9 @@ def _doctor_check_staged_proposals(vault: Path) -> bool:
     #159 excluded the plain pages on the grounds that they "follow their own
     path". That path has no consumer. ``rewrites.classify`` keeps only
     proposals with a live counterpart, ``filters.is_consumer_visible`` hides
-    everything under ``_inbox/`` from recall and MCP, and promotion is a
-    manual ``mv``. On the real vault that left 194 pages no surface counted,
+    everything under ``_inbox/`` from recall and MCP, and promotion was a
+    manual ``mv`` until ``mnemo inbox`` (#380). On the real vault that left 194
+    pages no surface counted,
     while the only automatic code path that touches them deletes them
     (``extract._force_clear_inbox_cluster_dirs``, on an unscoped ``--force``).
     ``hooks/session_start`` even told a fresh vault that "``mnemo doctor``
@@ -250,7 +251,8 @@ def _doctor_check_staged_proposals(vault: Path) -> bool:
         f"  \u26a0 {n} staged {word} awaiting review in shared/{INBOX_DIR}/ "
         f"({composition}; {_oldest(plain)})"
     )
-    print("       \u2192 promotion is a manual `mv` to shared/<type>/; nothing promotes them")
+    print("       \u2192 `mnemo inbox` lists them; `--promote KEY` moves one into "
+          "shared/<type>/, `--drop KEY` archives it")
     print(
         "       \u2192 an unscoped `mnemo extract --force` deletes staged "
         "feedback/user/reference pages unless they are backfill-stamped"

@@ -79,6 +79,19 @@ DEFAULTS: dict[str, Any] = {
     "scoping": {
         "universalThreshold": 2,
     },
+    "inbox": {
+        # #380: what waits in shared/_inbox/ reaches the maintainer at session
+        # start instead of only when they think to run `mnemo doctor`. The
+        # three numbers below are the whole noise budget — a block of at most
+        # `offerMax` bullets, at most one per project per `offerIntervalHours`,
+        # and no page repeated inside `offerCooldownDays`. Set
+        # `offerOnSessionStart` false to keep the queue silent; `mnemo inbox`
+        # still lists it.
+        "offerOnSessionStart": True,
+        "offerMax": 2,
+        "offerCooldownDays": 7,
+        "offerIntervalHours": 24,
+    },
     "install": {
         # #337: a matcher this version widened reaches an install that already
         # exists only through `inject_hooks` — `mnemo init` writes each one

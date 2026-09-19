@@ -171,7 +171,8 @@ def test_plain_line_names_oldest_and_the_force_risk(tmp_path: Path, capsys) -> N
     out = capsys.readouterr().out
     assert "2 staged pages awaiting review in shared/_inbox/" in out
     assert "oldest old.md, 9 days" in out
-    assert "manual `mv`" in out
+    # #380 replaced the manual `mv` with a command; doctor points at it.
+    assert "`mnemo inbox`" in out
     assert "`mnemo extract --force` deletes" in out
 
 

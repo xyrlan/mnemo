@@ -209,7 +209,7 @@ self-fix PRs are opened, no outcomes are polled. Set
 
 At `SessionStart` mnemo hands the agent a block of context. Everything in it
 is disclosure — you can read exactly what mnemo is telling the agent on your
-behalf, and each part can be switched off. At most four pieces appear:
+behalf, and each part can be switched off. At most five pieces appear:
 
 1. **The topic envelope** — the list of memory topics available for this
    project, so the agent knows what it can ask for. Controlled by
@@ -236,12 +236,30 @@ behalf, and each part can be switched off. At most four pieces appear:
    prompt — the rest are counted on a trailing line and listed in full by
    `mnemo status` under **Recently learned**.
 
+5. **The staged-page offer** — what extraction *staged* rather than promoted,
+   opened by `[mnemo staged for review — project=<name>, N waiting]` and closed
+   by `[/mnemo staged]`. One bullet per page: its key, its description, how old
+   it is, why it staged, and the command that acts on it — `mnemo inbox
+   --promote <key>`. A staged page is invisible to recall, so whatever it holds
+   carries nothing while it waits; this is what puts it in front of you while
+   you are already working on the project it came from. It only reads: nothing
+   promotes, accepts or drops a page without you.
+
+   Three numbers under `inbox` bound it, because it rides on the same prompt as
+   the briefing: `offerMax` (2) bullets per block, at most one block per project
+   per `offerIntervalHours` (24), and no page offered twice inside
+   `offerCooldownDays` (7) — so the queue rotates instead of repeating its head.
+   `offerOnSessionStart: false` silences the block; `mnemo inbox` still lists
+   the queue. Every offer and every decision is appended to
+   `.mnemo/inbox-offers.jsonl`, which is what makes `mnemo inbox --stats` able
+   to say how many pages were resolved this week and how long they took.
+
 A rule mnemo wrote silently is a rule you cannot correct, which is why the
 announcement exists at all: extraction writes into the vault on its own, so
 the veto has to be one line away rather than three commands deep in a
 directory you have never opened.
 
-Two files under the vault's `.mnemo/` back the third block:
+Two files under the vault's `.mnemo/` back the fourth block:
 
 - `.mnemo/learned.jsonl` — the append-only ledger, one line per promoted rule.
 - `.mnemo/announced.json` — the per-project high-water mark, so a rule is
@@ -249,6 +267,30 @@ Two files under the vault's `.mnemo/` back the third block:
   deleting the ledger loses the history without breaking anything.
 
 ## Maintenance commands
+
+### `mnemo inbox`
+
+The review queue for `shared/_inbox/`. Extraction stages a page there whenever
+it will not promote it on its own — a feedback page whose quote failed the
+evidence gate, a reconstruction from an old transcript, a page whose sources
+span two projects — and a staged page is served to nobody until you move it.
+
+```bash
+mnemo inbox                       # staged for the project you are standing in
+mnemo inbox --all                 # every project
+mnemo inbox --show KEY            # print one page before deciding
+mnemo inbox --promote KEY         # into shared/<type>/, where recall reaches it
+mnemo inbox --drop KEY            # archived under shared/_archive/dropped-<run>/
+mnemo inbox --stats               # depth, median age, what drained this week
+```
+
+`KEY` is `<type>/<slug>`, or a bare slug while only one type holds it. Both
+decisions also write `.mnemo/extraction-state.json`, which a hand `mv` did not:
+a promoted page's entry becomes `promoted`, so the next extraction does not
+stage an update proposal for a source that never changed, and a dropped page's
+becomes `dismissed`, so it does not come back unless you run `mnemo extract
+--force`. `mnemo rewrites` is the sibling command for the other half of that
+directory — the `.proposed.md` rewrites of rules that are already live.
 
 ### `mnemo reclassify`
 
