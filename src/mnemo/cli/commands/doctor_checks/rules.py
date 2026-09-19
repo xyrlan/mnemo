@@ -131,35 +131,129 @@ def _doctor_check_stray_proposed(vault: Path) -> bool:
 
 
 def _doctor_check_staged_proposals(vault: Path) -> bool:
-    """#159: count the ``.proposed.md`` rewrites waiting in ``shared/_inbox/``.
+    """#159 + #375: report both populations waiting in ``shared/_inbox/``.
 
-    The extractor stages a rewrite of a hand-edited rule for human review and
-    promotion is a manual ``mv``. Nothing ever said how many were waiting, so
-    after #156 relocated the strays the backlog was 33 files nobody had seen.
+    Two things stage there and only one of them was ever counted:
 
-    Advisory only: these are real proposals, never garbage. Plain staged pages
-    in ``_inbox`` (demotions, backfill) are not counted — they are not rewrites
-    of a live rule and follow their own path.
+    * ``.proposed.md`` rewrites of a live rule, which ``mnemo rewrites``
+      merges or rejects (#159 — that backlog was 33 files nobody had seen);
+    * plain pages, which the evidence gate demotes
+      (``extract/evidence.verify_page``) or multi-source staging routes here.
+
+    #159 excluded the plain pages on the grounds that they "follow their own
+    path". That path has no consumer. ``rewrites.classify`` keeps only
+    proposals with a live counterpart, ``filters.is_consumer_visible`` hides
+    everything under ``_inbox/`` from recall and MCP, and promotion is a
+    manual ``mv``. On the real vault that left 194 pages no surface counted,
+    while the only automatic code path that touches them deletes them
+    (``extract._force_clear_inbox_cluster_dirs``, on an unscoped ``--force``).
+    ``hooks/session_start`` even told a fresh vault that "``mnemo doctor``
+    lists them", which it did not.
+
+    So: two lines, kept separate rather than summed — the populations need
+    different decisions. Advisory only; neither is garbage.
+
+    Scope is :func:`filters.iter_staged_pages`, the ``_inbox/<type>/`` dirs
+    every writer targets, not an ``rglob`` of ``_inbox``. See that docstring
+    for why: the rglob counted archive copies the acting tool cannot see.
     """
     import time
 
-    from mnemo.core.filters import INBOX_DIR, is_proposed_sibling
+    from mnemo.core.backfill.origin import is_backfill_frontmatter
+    from mnemo.core.extract.demotion import is_demoted_frontmatter
+    from mnemo.core.filters import (
+        INBOX_DIR,
+        is_proposed_sibling,
+        iter_staged_pages,
+        parse_frontmatter,
+    )
 
-    inbox = vault / "shared" / INBOX_DIR
-    proposals = sorted(
-        (p for p in inbox.rglob("*.md") if is_proposed_sibling(p)),
-        key=lambda p: p.stat().st_mtime,
-    ) if inbox.is_dir() else []
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _oldest(pages: list[Path]) -> str:
+        page = pages[0]
+        age_days = int((time.time() - _mtime(page)) // 86400)
+        return f"oldest {page.name}, {age_days} days"
+
+    staged = sorted(iter_staged_pages(vault), key=_mtime)
+    proposals = [p for p in staged if is_proposed_sibling(p)]
+    plain = [p for p in staged if not is_proposed_sibling(p)]
+
     if not proposals:
         print("  \u2713 no staged rewrites awaiting review")
+    else:
+        n = len(proposals)
+        word = "rewrite" if n == 1 else "rewrites"
+        print(
+            f"  \u26a0 {n} staged {word} awaiting review in shared/{INBOX_DIR}/ "
+            f"({_oldest(proposals)})"
+        )
+        # ``mnemo rewrites`` is the tool that acts on these, and it skips a
+        # proposal with no live rule to merge into (and every
+        # ``.update-proposed.md``). Saying so here keeps doctor from quoting a
+        # number the command then refuses to show. Asking ``classify`` rather
+        # than re-deriving the rule keeps the two from drifting; it reads and
+        # diffs each proposal and is deliberately unguarded, so a failure here
+        # costs the note, never the check.
+        try:
+            from mnemo.core.rewrites.classify import classify
+
+            actionable = len(classify(vault))
+        except Exception:
+            actionable = n
+        if actionable == 0:
+            print(
+                "       \u2192 none of them still has a live rule to merge into; "
+                "`mnemo rewrites` skips them all"
+            )
+        elif actionable < n:
+            print(
+                f"       \u2192 only {actionable} of them still have a live rule to "
+                "merge into; `mnemo rewrites` skips the rest"
+            )
+
+    if not plain:
         return True
-    n = len(proposals)
-    word = "rewrite" if n == 1 else "rewrites"
-    oldest = proposals[0]
-    age_days = int((time.time() - oldest.stat().st_mtime) // 86400)
+
+    # Why a page is staged decides what a reviewer does with it, so the line
+    # says. Order is the order of the checks: a demoted page carries the
+    # backfill stamp too when it came from a transcript, and reading the
+    # demotion first matches what the evidence gate did to it last.
+    buckets = {"demotion": 0, "backfill": 0, "multi-source": 0, "other": 0}
+    for page in plain:
+        try:
+            fm = parse_frontmatter(page.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            fm = {}
+        fm = fm or {}
+        if is_demoted_frontmatter(fm):
+            buckets["demotion"] += 1
+        elif is_backfill_frontmatter(fm):
+            buckets["backfill"] += 1
+        elif len(fm.get("sources") or []) >= 2:
+            buckets["multi-source"] += 1
+        else:
+            buckets["other"] += 1
+
+    n = len(plain)
+    word = "page" if n == 1 else "pages"
+    composition = ", ".join(
+        f"{c} {label}s" if label == "demotion" and c != 1 else f"{c} {label}"
+        for label, c in buckets.items()
+        if c
+    )
     print(
         f"  \u26a0 {n} staged {word} awaiting review in shared/{INBOX_DIR}/ "
-        f"(oldest {oldest.name}, {age_days} days)"
+        f"({composition}; {_oldest(plain)})"
+    )
+    print("       \u2192 promotion is a manual `mv` to shared/<type>/; nothing promotes them")
+    print(
+        "       \u2192 an unscoped `mnemo extract --force` deletes staged "
+        "feedback/user/reference pages unless they are backfill-stamped"
     )
     return True
 

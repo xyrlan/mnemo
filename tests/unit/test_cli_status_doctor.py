@@ -666,7 +666,12 @@ def test_doctor_rule_integrity_ignores_inbox_drafts(tmp_path, monkeypatch, capsy
 
     cli.main(["doctor"])
     out = capsys.readouterr().out
-    assert "draft.md" not in out
+    # Scoped to the integrity complaint, not the whole report: since #375 the
+    # staged-pages line names the oldest page in ``_inbox/``, which is this
+    # one. Being listed as a backlog item is the point; being reported as a
+    # malformed rule is what this test forbids.
+    assert "Rule feedback/draft.md" not in out
+    assert "1 staged page awaiting review" in out
 
 
 def test_doctor_rule_integrity_happy_path_silent(tmp_path, monkeypatch, capsys):

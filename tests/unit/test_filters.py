@@ -14,6 +14,7 @@ from mnemo.core.filters import (
     MANAGED_TAGS,
     derive_rule_slug,
     is_consumer_visible,
+    iter_staged_pages,
     parse_frontmatter,
     topic_tags,
 )
@@ -509,3 +510,59 @@ def test_parse_frontmatter_reads_both_line_endings(nl):
     assert fm.get("name") == "a-rule"
     assert fm.get("superseded_by_friction") == "f-20260916-abc"
     assert fm.get("tags") == ["one", "two"]
+
+
+# --- iter_staged_pages: the review queue, one level deep (#375) -----------
+#
+# Scope is ``shared/_inbox/<type>/``, the shape every writer builds. An older
+# ``mnemo rewrites`` left archive copies under ``_inbox/proposals/`` and
+# ``_inbox/rejected-<run>/``; on the real vault those were 34 of the 36 files
+# an ``rglob`` called "awaiting review", while ``mnemo rewrites`` could act on
+# none of them.
+
+
+def _write(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\nname: n\ntype: reference\n---\n\nbody\n", encoding="utf-8")
+    return path
+
+
+def test_iter_staged_pages_yields_every_page_type(tmp_path):
+    for page_type in ("feedback", "user", "reference", "project"):
+        _write(tmp_path / "shared" / "_inbox" / page_type / "a.md")
+
+    names = {p.parent.name for p in iter_staged_pages(tmp_path)}
+
+    assert names == {"feedback", "user", "reference", "project"}
+
+
+def test_iter_staged_pages_includes_proposed_siblings(tmp_path):
+    # Unlike ``iter_shared_pages``, which yields rules. This yields the queue,
+    # and a staged rewrite is in it; callers split with ``is_proposed_sibling``.
+    _write(tmp_path / "shared" / "_inbox" / "reference" / "a.md")
+    _write(tmp_path / "shared" / "_inbox" / "reference" / "a.proposed.md")
+
+    assert {p.name for p in iter_staged_pages(tmp_path)} == {"a.md", "a.proposed.md"}
+
+
+def test_iter_staged_pages_skips_dirs_that_are_not_a_page_type(tmp_path):
+    _write(tmp_path / "shared" / "_inbox" / "proposals" / "a.proposed.md")
+    _write(tmp_path / "shared" / "_inbox" / "rejected-20260912T164010" / "b.proposed.md")
+
+    assert list(iter_staged_pages(tmp_path)) == []
+
+
+def test_iter_staged_pages_does_not_descend_below_the_type_dir(tmp_path):
+    _write(tmp_path / "shared" / "_inbox" / "reference" / "nested" / "a.md")
+
+    assert list(iter_staged_pages(tmp_path)) == []
+
+
+def test_iter_staged_pages_ignores_live_dirs(tmp_path):
+    _write(tmp_path / "shared" / "reference" / "live.md")
+
+    assert list(iter_staged_pages(tmp_path)) == []
+
+
+def test_iter_staged_pages_on_a_vault_with_no_inbox(tmp_path):
+    assert list(iter_staged_pages(tmp_path)) == []
