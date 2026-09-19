@@ -91,8 +91,11 @@ def test_it_separates_what_the_hook_pays_from_what_the_scan_costs(world) -> None
     report = tool.measure(str(vault), projects=str(projects), repeats=2)
 
     hook = report["hook_ms"]
+    # Each figure is rounded to 3 places on its own, so the rounded difference
+    # and the difference of the rounded can sit a full 0.001 apart — and float
+    # error then lands either side of a tolerance of exactly that.
     assert hook["added"] == pytest.approx(
-        hook["arbitrated_offer"] - hook["staged_offer_only"], abs=0.001
+        hook["arbitrated_offer"] - hook["staged_offer_only"], abs=0.0015
     )
     assert report["scan"]["candidates"] == 1
     assert report["scan"]["seconds"] >= 0
