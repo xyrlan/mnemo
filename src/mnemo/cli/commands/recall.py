@@ -60,7 +60,13 @@ def cmd_recall(args: argparse.Namespace) -> int:
             print(msg)
         return 0
 
-    results = [run_case(vault, c) for c in cases]
+    # One load for the whole sweep: every queried case reads the same reflex
+    # index for its vocabulary diagnostic, and that file is the largest in the
+    # vault.
+    from mnemo.core.reflex import index as _reflex_index
+
+    reflex_idx = _reflex_index.load_index(vault)
+    results = [run_case(vault, c, reflex_index=reflex_idx) for c in cases]
     log_entries = count_log_entries(log_path)
     report = aggregate(results, log_entries=log_entries, orphan_dropped=orphan_dropped)
     mnemo_dir.mkdir(parents=True, exist_ok=True)
