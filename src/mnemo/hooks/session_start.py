@@ -976,6 +976,17 @@ def main() -> int:
             except Exception as e:
                 errors.log_error(vault, "session_start.injection", e)
 
+        # #396: make sure something is alive to wake a rate-limited child when
+        # its reset comes round. Not a wake: this costs one roster read and at
+        # most one detached spawn, because the account limit that stalls the
+        # children silences every hook, so the thing that has to survive the
+        # window cannot be this one. See :mod:`mnemo.core.sessions.rewake`.
+        try:
+            from mnemo.core.sessions import rewake
+            rewake.on_session_start(cfg, vault_root=vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.rewake", e)
+
         # autopilot — fire any due hook-driven operations. Always best-effort:
         # any failure here is logged + swallowed, must never block the session.
         try:

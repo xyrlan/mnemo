@@ -39,6 +39,18 @@ DEFAULTS: dict[str, Any] = {
         # Delivery is best-effort: a parent that has exited is not queued for.
         "notifyParent": True,
     },
+    "resume": {
+        # #396: wake a rate-limited child once its own reset has passed,
+        # without anyone typing `mnemo resume`. On by default because it
+        # grants nothing and publishes nothing — the child carries on with the
+        # prompt it already had — and because the alternative it replaces is
+        # six children idling until somebody notices. Only a stall carrying a
+        # `quotaLimits.resetsAt` is ever woken, at most once per reset window.
+        # Turn `auto` off if an account window being spent while you are not
+        # watching is worse than children idling until you are.
+        "auto": True,
+        "maxPerPass": 5,
+    },
     "procedures": {
         # #392: what counts as a procedure children keep rediscovering.
         # ``minChildren`` is the bar for "keep" — one child working something

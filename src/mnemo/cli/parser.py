@@ -216,6 +216,12 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="every repo, not just this one")
     resume_p.add_argument("--dry-run", dest="dry_run", action="store_true",
                           help="print what would be woken and spend nothing")
+    # Not a second way to wake: the same pass, waiting for the clock instead
+    # of being run once it has passed. SessionStart starts one of these on its
+    # own (#396); a maintainer runs it by hand to watch a dispatch out.
+    resume_p.add_argument("--watch", action="store_true",
+                          help="stay running and wake each child as its own reset "
+                               "comes round; exits when nothing is left to watch")
     land_p = sub.add_parser(
         "land",
         help="a delivered contract's pieces in landing order with their PRs and "

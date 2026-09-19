@@ -182,3 +182,54 @@ def test_a_working_child_is_never_a_candidate(bench, capsys) -> None:
 def test_resume_is_in_the_user_facing_help(capsys) -> None:
     assert cli.main(["help"]) == 0
     assert "resume" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# --watch, the same pass waiting on the clock (#396)
+# ---------------------------------------------------------------------------
+
+
+def test_watch_runs_the_watcher_and_reports_what_it_woke(bench, capsys, monkeypatch) -> None:
+    """``--watch`` is not a second way to wake: it is :func:`rewake.watch`.
+
+    Stubbed here down to its report, because the loop itself is measured in
+    ``test_sessions_rewake.py``; what this pins is that the flag reaches it and
+    that a maintainer watching a dispatch is told what happened.
+    """
+    from mnemo.core.sessions import rewake
+
+    seen: list = []
+
+    def _watch(cfg, **kwargs):
+        seen.append(kwargs)
+        report = rewake.WatchReport(ticks=3, stopped="idle")
+        report.woken.append("594436f2  #380 something")
+        return report
+
+    monkeypatch.setattr(rewake, "watch", _watch)
+    assert cli.main(["resume", "--watch"]) == 0
+    out = capsys.readouterr().out
+    assert seen  # the flag got there
+    assert "resumed: 594436f2" in out
+    assert "1 resumed over 3 check(s)" in out
+    assert bench["woken"] == []  # the ordinary pass never ran
+
+
+def test_watch_says_so_when_a_watcher_is_already_waiting(bench, capsys, monkeypatch) -> None:
+    from mnemo.core.sessions import rewake
+
+    monkeypatch.setattr(rewake, "watch",
+                        lambda cfg, **k: rewake.WatchReport(stopped="locked"))
+    assert cli.main(["resume", "--watch"]) == 0
+    assert "another watcher is already waiting" in capsys.readouterr().out
+
+
+def test_watch_refuses_when_auto_is_off(bench, capsys, monkeypatch) -> None:
+    from mnemo.core import config as config_mod
+
+    monkeypatch.setattr(config_mod, "load_config",
+                        lambda *a, **k: {"resume": {"auto": False}})
+    assert cli.main(["resume", "--watch"]) == 0
+    out = capsys.readouterr().out
+    assert "resume.auto is off" in out
+    assert "mnemo resume` still wakes by hand" in out

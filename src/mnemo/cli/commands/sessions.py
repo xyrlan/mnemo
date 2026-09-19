@@ -198,6 +198,43 @@ def _stale_footer(hidden: int) -> str:
     return f"  {hidden} done with the worktree already removed (mnemo sessions --stale)"
 
 
+def _woken_footer(rows: list) -> str:
+    """What mnemo woke on its own, and when. '' when it woke nothing (#396).
+
+    The queue is where the maintainer looks, and by the time they look a child
+    mnemo woke is back under WORKING with nothing on the row to say who
+    restarted it. Without this the only record is a line inside the child's
+    own transcript, which is exactly what #396 said was not enough.
+
+    Ordered newest first by the ledger, capped at three ids so a whole
+    dispatch woken at once reads as one line rather than six.
+    """
+    if not rows:
+        return ""
+    import time as _time
+
+    ids = [str(r.get("short_id") or r.get("session_id", "")[:8]) for r in rows]
+    shown = ", ".join(ids[:3]) + (f" +{len(ids) - 3}" if len(ids) > 3 else "")
+    ago = max(0, int((_time.time() - rows[0]["at_epoch"]) // 60))
+    return (f"  woken by mnemo: {len(rows)} child(ren) in the last day "
+            f"({shown}; most recent {ago}m ago)")
+
+
+def _woken(scope) -> list:
+    """The recent automatic wakes for the queue footer. Never raises."""
+    try:
+        from mnemo.core import config as config_mod
+        from mnemo.core import paths as paths_mod
+        from mnemo.core.sessions import rewake
+        from mnemo.core.sessions.jobs import in_scope
+
+        cfg = config_mod.load_config()
+        rows = rewake.recent_wakes(paths_mod.vault_root(cfg))
+        return [r for r in rows if in_scope(r.get("cwd"), scope)]
+    except Exception:
+        return []
+
+
 @command("sessions")
 def cmd_sessions(args: argparse.Namespace) -> int:
     """Print background sessions, blocked first."""
@@ -364,6 +401,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
                        stalls=_stalls(found)))
     if hidden[0]:
         print(_stale_footer(hidden[0]))
+    woken_footer = _woken_footer(_woken(scope))
+    if woken_footer:
+        print(woken_footer)
     if not found and scope is not None:
         # An empty scoped queue and an empty machine render identically, and
         # the first one is a lie by omission: #281 sat on four waiting

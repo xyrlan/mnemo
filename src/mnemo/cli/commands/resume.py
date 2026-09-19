@@ -41,11 +41,14 @@ carries on with the prompt the maintainer already wrote. The decision being
 taken N times is "continue the work I already dispatched", and taking it once
 is the whole point of the issue's "one command, or none".
 
-*Or none* was considered and refused. mnemo has no daemon on purpose
-(:mod:`mnemo.core.sessions.detector` says why), and the triggers a sweep
-could ride — ``mnemo sessions``, the ``SessionEnd`` hook — are read-only
-today. Spending the account's budget as a side effect of printing a queue is
-not a thing a queue should do.
+*Or none* was considered and refused here, and #396 answered it elsewhere.
+The refusal stands where it was aimed: printing a queue still wakes nothing,
+and no hook spends the account's budget on the path that decides how fast a
+session starts. What #396 added is a process that is not a hook and not a
+queue — :mod:`mnemo.core.sessions.rewake`, started before anything stalls and
+alive after everything else is dead, because the measurement says the limit
+that stalls the children also silences every hook that could notice them.
+``mnemo resume --watch`` is that process, run by hand.
 """
 from __future__ import annotations
 
@@ -100,10 +103,47 @@ def _describe(session, stall) -> str:
     return f"{session.short_id}  {session.label}  —  {_stall_line(stall)}"
 
 
+def _watch(args: argparse.Namespace) -> int:
+    """``mnemo resume --watch`` — wait out the clock and wake as it comes round.
+
+    The same pass as below, on a slow tick, in a process that makes no API
+    call of its own and so survives the account limit that stalled the
+    children in the first place (#396). SessionStart starts one when there is
+    something to watch; this is the same thing with a terminal attached.
+
+    Unscoped, unlike a bare ``mnemo resume``: a watcher is not a person
+    reading a list, and the children it is waiting for may be in any repo.
+    """
+    from mnemo.core import config as config_mod
+    from mnemo.core import paths as paths_mod
+    from mnemo.core.sessions import rewake
+
+    cfg = config_mod.load_config()
+    vault = paths_mod.vault_root(cfg)
+    if not rewake.enabled(cfg):
+        print("resume.auto is off in mnemo.config.json; nothing is woken "
+              "automatically. `mnemo resume` still wakes by hand.")
+        return 0
+    report = rewake.watch(cfg, vault_root=vault)
+    if report.stopped == "locked":
+        print("another watcher is already waiting on these resets")
+        return 0
+    for line in report.woken:
+        print(f"  resumed: {line}")
+    for line in report.failed:
+        print(f"  failed: {line}")
+    print(f"{len(report.woken)} resumed over {report.ticks} check(s); "
+          f"stopped: {report.stopped}")
+    return 0
+
+
 @command("resume")
 def cmd_resume(args: argparse.Namespace) -> int:
     """Wake every stalled child whose reset has passed."""
     import os
+
+    if getattr(args, "watch", False):
+        return _watch(args)
 
     from mnemo.core.sessions import stalls as stalls_mod
     from mnemo.core.sessions import wake as wake_mod
