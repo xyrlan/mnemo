@@ -59,6 +59,41 @@ def is_proposed_sibling(path: Path) -> bool:
     return path.name.endswith(PROPOSED_SUFFIXES)
 
 
+def iter_staged_pages(vault_root: Path) -> Iterator[Path]:
+    """Every page staged for review under ``shared/_inbox/<type>/``, sorted.
+
+    The staging layout is one level deep and the directory name is the page
+    type: every writer builds exactly that shape
+    (``extract/inbox/paths._inbox_path``, ``extract/promote``,
+    ``share/imports``), and ``rewrites.classify._live_for`` reads it back by
+    mapping ``_inbox/<type>/<slug>`` onto ``shared/<type>/<slug>.md``.
+
+    So this walks those directories rather than ``rglob``-ing ``_inbox``.
+    A real vault had 34 of its 36 ``.proposed.md`` files sitting in
+    ``_inbox/proposals/`` and ``_inbox/rejected-<run>/`` — archive copies an
+    older ``mnemo rewrites`` left behind before it moved them under
+    ``_archive/``. ``rglob`` counted all 34 as waiting for review; ``mnemo
+    rewrites`` listed none of them, because no command can resolve a live rule
+    for a file whose parent is not a page type. Counting them made ``doctor``
+    contradict the only tool that can act on them.
+
+    Proposed siblings are *included* here — unlike :func:`iter_shared_pages`,
+    which skips them because it yields rules. This yields the review queue,
+    and a staged rewrite is part of it; callers split the two populations with
+    :func:`is_proposed_sibling`.
+    """
+    from mnemo.core.extract.scanner import _VALID_TYPES  # lazy: extract imports us
+
+    inbox = Path(vault_root) / "shared" / INBOX_DIR
+    if not inbox.is_dir():
+        return
+    for page_type in sorted(_VALID_TYPES):
+        type_dir = inbox / page_type
+        if not type_dir.is_dir():
+            continue
+        yield from sorted(type_dir.glob("*.md"))
+
+
 def iter_shared_pages(vault_root: Path, *, include_inbox: bool = True) -> Iterator[Path]:
     """Every rule page under ``shared/``, in sorted order.
 
