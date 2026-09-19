@@ -292,14 +292,14 @@ def _warn_about_duplicate_install(vault) -> None:
     migration.mark_notified(state)
 
 
-def _spawn_detached_backfill(cwd: str | None = None) -> None:
-    """Fire-and-forget background install backfill via subprocess.Popen.
+def _spawn_detached(args: list, cwd: str | None = None) -> None:
+    """Fire-and-forget ``mnemo <args>`` via subprocess.Popen.
 
-    Invokes ``mnemo backfill --install-run``. Detach semantics match
-    session_end's briefing spawn — see hooks/session_end.py:139.
+    Detach semantics match session_end's briefing spawn — see
+    hooks/session_end.py:139.
 
-    ``cwd`` is the session's working directory, and it is not decoration:
-    ``backfill --install-run`` picks the repo to sweep with
+    ``cwd`` is the session's working directory, and it is not decoration: a
+    spawned command picks the repo it is about with
     ``resolve_canonical_agent(os.getcwd())``, and Popen otherwise inherits
     whatever directory the hook process was launched in. Passed only when it
     still exists — a stale path would make Popen raise before the child ran.
@@ -322,7 +322,12 @@ def _spawn_detached_backfill(cwd: str | None = None) -> None:
         kwargs["start_new_session"] = True
     kwargs["cwd"] = cwd if cwd and os.path.isdir(cwd) else None
 
-    subprocess.Popen(self_argv("backfill", "--install-run"), **kwargs)
+    subprocess.Popen(self_argv(*args), **kwargs)
+
+
+def _spawn_detached_backfill(cwd: str | None = None) -> None:
+    """Fire-and-forget background install backfill: ``mnemo backfill --install-run``."""
+    _spawn_detached(["backfill", "--install-run"], cwd=cwd)
 
 
 def _maybe_schedule_install_backfill(
@@ -756,6 +761,204 @@ def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
         return ""
 
 
+#: A procedure's command line is transcript text — a value some child typed
+#: into a shell — so it goes into the prompt through the same guard as a
+#: staged page's description, one line and capped.
+_COMMAND_MAX = 110
+
+
+def _procedures_offer_block(
+    vault_root: Path, cfg: dict, repo: str, cwd: str | None, session_id: str | None
+) -> str:
+    """A procedure children of this repo keep rediscovering, and the act that ends it.
+
+    ``mnemo procedures`` (#392) and its ``doctor`` row are both pulls, and #385
+    priced a pull at 5 of 182 children. This is the push, built like #380's:
+    bounded by config, silent when there is nothing, and offering only — the
+    accept is a command the maintainer types, because it writes a line into a
+    file mnemo does not own and every session in that repo then reads.
+
+    Two things this block does that the staged one does not:
+
+    * It never fires inside a dispatch worktree. The offer asks for a decision
+      about the repo's ``CLAUDE.md``, and a dispatched child cannot make one —
+      it is the party that *paid* for the line, not the party that writes it.
+      Without this, a dispatch of eight children would spend the day's single
+      offer on one of them and the maintainer would never see it.
+    * It reads a cache rather than scanning. The scan is ~1.0 s over the
+      transcripts on disk and the hook may not pay it, so
+      :func:`_maybe_refresh_procedures` spawns it detached instead. What the
+      staleness can get wrong is bought back where it would show: the ledger
+      is read live, so a decided candidate is never offered, and ``CLAUDE.md``
+      is re-read live, so a line the maintainer wrote by hand silences it too.
+
+    Fail-silent, like the rest of the session-start path.
+    """
+    try:
+        from mnemo.core import procedures as procedures_mod
+
+        if _is_dispatch_worktree(cwd):
+            return ""
+        candidates, waiting = procedures_mod.pick_offers(vault_root, repo, cfg=cfg)
+        if not candidates:
+            return ""
+
+        lines = [f"[mnemo procedure candidate — repo={repo}, {waiting} undecided]"]
+        lines.append(
+            "Dispatched children of this repo worked this out for themselves more "
+            "than once and its CLAUDE.md does not say it. The decision is the "
+            "maintainer's: relay this, do not edit CLAUDE.md yourself."
+        )
+        for candidate in candidates:
+            # The command is built from values children typed; `_one_line`
+            # stops a newline ending the block early and the replacement stops
+            # a literal `[/mnemo …]` in one of those values from doing it on
+            # one line.
+            command = _one_line(candidate.command, _COMMAND_MAX).replace(
+                "[/mnemo", "[ /mnemo"
+            )
+            key = _one_line(candidate.key, _NAME_MAX)
+            act = (
+                f" · accept: mnemo procedures --accept {key}"
+                if _SLUG_OK.match(key) else ""
+            )
+            paid = len(candidate.rediscovered)
+            lines.append(
+                f"• {key} — `{command}` ({paid} of {candidate.shape_children} "
+                f"children ran it the hard way first){act}"
+            )
+        if waiting > len(candidates):
+            lines.append(
+                f"({waiting - len(candidates)} more — `mnemo procedures` lists them, "
+                "`mnemo procedures --drop KEY` discards one)"
+            )
+        lines.append("[/mnemo procedures]")
+
+        for candidate in candidates:
+            procedures_mod.record(
+                vault_root,
+                event=procedures_mod.OFFERED,
+                repo=candidate.repo,
+                key=candidate.key,
+                session_id=session_id,
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.procedures_offer", exc)
+        except Exception:
+            pass
+        return ""
+
+
+def _is_dispatch_worktree(cwd: str | None) -> bool:
+    """Is this session a dispatched child? Never raises."""
+    try:
+        from mnemo.core.dispatch import issue_for_cwd
+
+        return issue_for_cwd(cwd) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _offer_block(
+    vault_root: Path, cfg: dict, project: str, cwd: str | None, session_id: str | None
+) -> str:
+    """One offer block per session start, alternating between the two queues.
+
+    Two blocks in one prompt is a nag, and the two queues have no shared unit
+    to budget in — a staged page and a proposed ``CLAUDE.md`` line are not
+    comparable — so the budget is the *slot*: at most one block, whichever
+    queue has gone longest without using it. Both ledgers already record when
+    a project was last shown a block, so "longest" is a read, not new state,
+    and a queue that has never been offered wins outright.
+
+    The loser is not merely postponed, it is skipped: it keeps its own
+    interval, so tomorrow it wins the slot and the winner today waits. What
+    stops the alternation from wasting the slot is the fallback — a winner
+    with nothing to say hands it straight back, so a repo with an empty inbox
+    and one candidate is offered the candidate every day it is due, and the
+    behaviour before this existed is exactly what a repo with no candidates
+    still gets.
+
+    Worst case on the prompt is therefore one block: ~190 tokens for the
+    staged one (#380) or ~100–140 for this one — 398 bytes for ``mnemo`` and
+    547 for ``mnemo-desktop`` on the maintainer's vault on 2026-09-19,
+    ``tools/measure_procedure_offer.py`` — against a briefing that costs
+    ~1783 at 90.9% of session starts. Arbitrating costs 0.17 ms more per
+    session start than the staged block alone did, measured the same way.
+    """
+    from mnemo.core import inbox as inbox_mod
+    from mnemo.core import procedures as procedures_mod
+
+    def _staged() -> str:
+        return _staged_offer_block(vault_root, cfg, project)
+
+    def _procedures() -> str:
+        return _procedures_offer_block(vault_root, cfg, project, cwd, session_id)
+
+    builders = [_staged, _procedures]
+    try:
+        staged_at = inbox_mod.last_block_at(vault_root, project)
+        procedures_at = procedures_mod.last_block_at(
+            procedures_mod.ledger_rows(Path(vault_root)), project
+        )
+        # None sorts first: a queue never offered has waited longest.
+        if procedures_at is None and staged_at is not None:
+            builders.reverse()
+        elif (
+            procedures_at is not None
+            and staged_at is not None
+            and procedures_at < staged_at
+        ):
+            builders.reverse()
+    except Exception as exc:  # noqa: BLE001 — the order is not worth a session
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.offer_order", exc)
+        except Exception:
+            pass
+
+    for builder in builders:
+        block = builder()
+        if block:
+            return block
+    return ""
+
+
+def _maybe_refresh_procedures(cfg: dict, vault_root, cwd: str | None = None) -> None:
+    """Spawn the procedure scan detached, at most once per refresh interval.
+
+    The scan reads every dispatch transcript on disk — ~1.0 s over the 184
+    there on 2026-09-19 — and the session-start path must not pay that. So it
+    is spawned, not run: the block this session emits reads the cache the
+    *previous* refresh wrote, and the one this call starts is for tomorrow.
+    The first session in a fresh vault therefore offers nothing and starts the
+    scan, which is the right way round — nothing is offered before it has been
+    measured.
+
+    The marker is stamped before the spawn, so a scan that cannot run (no
+    ``~/.claude/projects``, no transcripts, a crash) costs one interval rather
+    than a spawn on every session start (#229, #234). Two sessions starting
+    within milliseconds of each other can still both spawn; the cost of that
+    race is one redundant background second, and the write is atomic.
+    """
+    try:
+        from mnemo.core import procedures as procedures_mod
+
+        if not procedures_mod.scan_is_due(Path(vault_root), cfg):
+            return
+        procedures_mod.mark_scan(Path(vault_root))
+        _spawn_detached(["procedures", "--refresh"], cwd=cwd)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.procedures_refresh", exc)
+        except Exception:
+            pass
+
+
 def main() -> int:
     # Nothing at all inside a session mnemo launched for itself (#329): the
     # `claude --print` helpers that brief and extract run under the user's own
@@ -885,6 +1088,12 @@ def main() -> int:
         # lock and ledger writes create `.mnemo/` themselves.
         _maybe_schedule_install_backfill(cfg, vault, cwd)
 
+        # The scan behind the procedure offer: detached, at most once per
+        # refresh interval, and for the *next* session's block — never this
+        # one's (#397). Below `errors.should_run` like the backfill spawn, and
+        # silent to a session either way.
+        _maybe_refresh_procedures(cfg, vault, cwd)
+
         source = str(payload.get("source") or "startup")
         if cfg.get("capture", {}).get("sessionStartEnd", True):
             try:
@@ -949,14 +1158,15 @@ def main() -> int:
                         payload_text + "\n\n" + learned_block
                         if payload_text else learned_block
                     )
-                # And the other half: what extraction staged rather than
-                # promoted. Last, because it is the block a session can most
-                # afford to lose if anything above it grows.
-                staged_offer = _staged_offer_block(vault, cfg, canonical_name)
-                if staged_offer:
+                # And the offer: one block, from whichever of the two review
+                # queues has gone longest without the slot (#397). Last,
+                # because it is the block a session can most afford to lose if
+                # anything above it grows.
+                offer = _offer_block(vault, cfg, canonical_name, cwd, reader_sid)
+                if offer:
                     payload_text = (
-                        payload_text + "\n\n" + staged_offer
-                        if payload_text else staged_offer
+                        payload_text + "\n\n" + offer
+                        if payload_text else offer
                     )
                 if payload_text:
                     _emit_injection(payload_text)

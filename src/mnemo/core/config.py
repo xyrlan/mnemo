@@ -47,6 +47,22 @@ DEFAULTS: dict[str, Any] = {
         # repos run is ``git log``, not this repo's way of running work.
         "minChildren": 2,
         "maxShapeRepos": 2,
+        # #397: an undecided candidate reaches the maintainer at session start
+        # instead of only when they run the command. Same three bounds as
+        # `inbox` and for the same reason — a block of at most `offerMax`
+        # bullets, at most one per repo per `offerIntervalHours`, no candidate
+        # repeated inside `offerCooldownDays` — with `offerMax` one rather than
+        # two because accepting writes a permanent CLAUDE.md line that every
+        # session in that repo then pays for. `refreshIntervalHours` is how
+        # stale the scan behind the block may be: the scan costs ~1.0 s over
+        # the transcripts on disk, so it runs detached and the hook reads its
+        # cache. Set `offerOnSessionStart` false to keep it silent; `mnemo
+        # procedures` and its `doctor` row still scan and list as before.
+        "offerOnSessionStart": True,
+        "offerMax": 1,
+        "offerCooldownDays": 7,
+        "offerIntervalHours": 24,
+        "refreshIntervalHours": 24,
     },
     "briefings": {
         "enabled": True,

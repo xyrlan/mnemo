@@ -796,6 +796,27 @@ rejected half rather than leaving the limit to be discovered later. `doctor`
 carries the same count as a row, because a command you have to know about is
 one nobody runs.
 
+And because `doctor` is a command you have to know about too, an undecided
+candidate is put in front of you at session start — one bullet, in the repo it
+is about, carrying the `--accept` that ends it:
+
+```
+[mnemo procedure candidate — repo=mnemo, 1 undecided]
+• claude — `MNEMO_HOOKS_OFF=1 claude` (2 of 18 children ran it the hard way
+  first) · accept: mnemo procedures --accept claude
+[/mnemo procedures]
+```
+
+Nothing is written without you, it never appears inside a dispatch worktree
+(the child paid for the line; it does not get to write it), and it shares one
+slot with the `[mnemo staged for review]` offer so only one of the two can ever
+ride on a prompt. Finding candidates means reading every dispatch transcript,
+which the session-start path must not pay for, so the scan runs detached once a
+day and the block reads its cache — `mnemo procedures --refresh` rebuilds it
+now, and `mnemo procedures --stats` says whether being shown a candidate is
+what gets it decided. The bounds live under `procedures` in the config;
+`offerOnSessionStart: false` silences the block and leaves the command.
+
 Accepting writes one seven-line section to the end of the repo's `CLAUDE.md`,
 and never rewrites a byte you wrote. The reason a line exists is yours to add
 — the tool can only say how many children paid for not having it.

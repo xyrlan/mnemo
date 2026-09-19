@@ -469,6 +469,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--projects", metavar="DIR",
         help="where Claude Code keeps its transcripts (default ~/.claude/projects)",
     )
+    procedures_p.add_argument(
+        "--refresh", action="store_true",
+        help="rebuild the candidate cache the session-start offer reads (writes no repo file)",
+    )
+    procedures_p.add_argument(
+        "--stats", action="store_true",
+        help="undecided candidates, and what the session-start offer drained in 7 days",
+    )
     procedures_p.add_argument("--json", action="store_true", help="machine-readable listing")
     rewrites_p = sub.add_parser(
         "rewrites",

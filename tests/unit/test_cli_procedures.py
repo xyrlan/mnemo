@@ -141,3 +141,80 @@ def test_json_is_machine_readable(tmp_path: Path, monkeypatch) -> None:
     _rc, out = _run(tmp_path / "vault", projects, monkeypatch, json=True)
     rows = json.loads(out)
     assert [(r["repo"], r["key"], r["stated"]) for r in rows] == [("app", "cargo-test", False)]
+
+
+# --- the cache the session-start offer reads (#397) ------------------------
+
+
+def test_refresh_and_stats_are_flags_of_this_command(tmp_path: Path) -> None:
+    ns = _build_parser().parse_args(["procedures", "--refresh"])
+    assert ns.refresh is True and ns.stats is False
+    assert _build_parser().parse_args(["procedures", "--stats"]).stats is True
+
+
+def test_refresh_writes_the_cache_and_no_repo_file(tmp_path: Path, monkeypatch) -> None:
+    from mnemo.core import procedures as P
+
+    projects, repo = _population(tmp_path)
+    vault = tmp_path / "vault"
+
+    rc, out = _run(vault, projects, monkeypatch, refresh=True)
+
+    assert rc == 0 and "1 undecided" in out
+    assert [c.key for c in P.read_cache(vault)[0]] == ["cargo-test"]
+    assert not (repo / "CLAUDE.md").exists(), "a refresh writes nothing to a repo"
+
+
+def test_refresh_stamps_the_marker_so_the_hook_does_not_respawn_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A refresh run by hand is the same work the hook spawns, so it counts."""
+    from mnemo.core import procedures as P
+    from mnemo.core.config import DEFAULTS
+
+    projects, _repo = _population(tmp_path)
+    vault = tmp_path / "vault"
+
+    _run(vault, projects, monkeypatch, refresh=True)
+
+    assert P.scan_is_due(vault, DEFAULTS) is False
+
+
+def test_stats_says_plainly_when_nothing_has_been_offered_and_decided(
+    tmp_path: Path, monkeypatch
+) -> None:
+    projects, _repo = _population(tmp_path)
+
+    rc, out = _run(tmp_path / "vault", projects, monkeypatch, stats=True)
+
+    assert rc == 0
+    assert "1 undecided candidate(s) across 1 repo(s)" in out
+    assert "no candidate has been both offered and decided yet" in out
+
+
+def test_stats_measures_the_offer_from_being_shown_to_being_decided(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The number the offer exists to be judged on (#390's precedent, mirrored)."""
+    from mnemo.core import procedures as P
+
+    projects, _repo = _population(tmp_path)
+    vault = tmp_path / "vault"
+    P.record(vault, event=P.OFFERED, repo="app", key="cargo-test")
+    P.record(vault, event=P.DROPPED, repo="app", key="cargo-test")
+
+    rc, out = _run(vault, projects, monkeypatch, stats=True)
+
+    assert rc == 0
+    assert "1 offered at session start, 0 accepted, 1 dropped (1 resolved)" in out
+    assert "median offer → decision: 0d" in out
+
+
+def test_refresh_and_an_action_at_once_are_refused(tmp_path: Path, monkeypatch) -> None:
+    projects, repo = _population(tmp_path)
+
+    rc, out = _run(tmp_path / "vault", projects, monkeypatch,
+                   refresh=True, accept="cargo-test")
+
+    assert rc == 1 and "pick one action" in out
+    assert not (repo / "CLAUDE.md").exists()

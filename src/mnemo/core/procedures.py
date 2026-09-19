@@ -66,8 +66,8 @@ import json
 import os
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
@@ -82,6 +82,19 @@ MAX_BYTES = 1_048_576
 
 ACCEPTED = "accepted"
 DROPPED = "dropped"
+#: Written by the session-start block, not by a command. Named like
+#: ``inbox-offers.jsonl``'s and for the same reason: without it, "this was
+#: put in front of someone" is not a fact, and :func:`stats` cannot say
+#: whether the offer is what gets a candidate decided.
+OFFERED = "offered"
+
+#: What the session-start block reads instead of scanning. The scan costs
+#: ~1.0 s over the 184 transcripts on disk (2026-09-19); the hook may not
+#: pay that, so a detached refresh writes this and the hook reads it.
+CACHE_REL = ".mnemo/procedure-candidates.json"
+#: Touched *before* the refresh is spawned, so a scan that dies does not
+#: get retried on every session start for ever.
+SCAN_MARKER_REL = ".mnemo/procedure-scan.last"
 
 #: Statement separators. A pipe counts: ``cargo test | tail`` runs one command.
 _STATEMENT = re.compile(r"(?:&&|\|\||;|\n|\|)")
@@ -578,8 +591,25 @@ def _decided(rows: Iterable[Dict[str, Any]]) -> Set[str]:
             if row.get("event") in (ACCEPTED, DROPPED)}
 
 
-def record(vault_root: Path, *, event: str, repo: str, key: str) -> None:
-    """Append one decision. Never raises — a ledger row is not worth a command."""
+def record(
+    vault_root: Path,
+    *,
+    event: str,
+    repo: str,
+    key: str,
+    session_id: Optional[str] = None,
+) -> None:
+    """Append one row. Never raises — a ledger row is not worth a command.
+
+    Three events land here, and only two are decisions: ``accepted`` and
+    ``dropped`` are written by ``mnemo procedures``, ``offered`` by the
+    session-start block. ``session_id`` is carried for the offer, so a row can
+    be traced back to the session that was shown it.
+
+    ``newline=""``: no CRLF translation on Windows. The rotation cap is a byte
+    budget, and a row costing one more byte per line there would rotate the
+    same ledger at a different record.
+    """
     try:
         path = ledger_path(vault_root)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -590,6 +620,8 @@ def record(vault_root: Path, *, event: str, repo: str, key: str) -> None:
             "repo": repo,
             "key": key,
         }
+        if session_id:
+            row["session_id"] = session_id
         with open(path, "a", encoding="utf-8", newline="") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
@@ -637,3 +669,386 @@ def drop(vault_root: Path, candidate: Candidate) -> Result:
     record(Path(vault_root), event=DROPPED, repo=candidate.repo, key=candidate.key)
     return Result(True, f"dropped {candidate.key} — it will not be proposed for "
                         f"{candidate.repo} again")
+
+
+# --------------------------------------------------------------------------
+# the offer: a candidate reaches the maintainer without being asked for (#397)
+# --------------------------------------------------------------------------
+#
+# The command and the ``doctor`` row are both pulls, and #385 priced a pull at
+# 5 of 182 children. #380 built the push for the *other* queue — a bounded
+# block on the session-start prompt — and this is the same push for this one,
+# with one difference that decides the whole shape: a staged page is a file
+# already on disk, and a candidate does not exist until 184 transcripts have
+# been read. That read costs ~1.0 s, which the hook may not pay. So the scan
+# runs detached, writes :data:`CACHE_REL`, and the hook reads that.
+#
+# What the hook then owes the reader is honesty about staleness. The cache may
+# be up to ``refreshIntervalHours`` old, and in that window two things could
+# have made a cached candidate wrong: the maintainer decided it (the ledger
+# says so, and the ledger is read live), or they wrote the line into
+# ``CLAUDE.md`` by hand (:func:`states` is re-run live against the file, which
+# is one small read and only when there is something to offer). Anything else
+# a stale cache gets wrong — a candidate that crossed the bar an hour ago — is
+# a candidate offered a day late, which is the cost this design chose.
+
+
+def offer_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The offer's bounds, resolved from config with the documented defaults.
+
+    Same four names as ``inbox``'s, plus the one this queue needs and that one
+    does not: ``refreshIntervalHours``, how stale the scan behind the offer may
+    be. ``offerOnSessionStart: false`` silences the block and leaves ``mnemo
+    procedures`` working — including ``--refresh``, so the cache a user wants
+    for ``doctor`` is still theirs to rebuild.
+    """
+    raw = (cfg or {}).get("procedures") or {}
+
+    def _int(key: str, default: int) -> int:
+        try:
+            return int(raw.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "enabled": bool(raw.get("offerOnSessionStart", True)),
+        "max": max(0, _int("offerMax", 1)),
+        "cooldown_days": max(0, _int("offerCooldownDays", 7)),
+        "interval_hours": max(0, _int("offerIntervalHours", 24)),
+        "refresh_hours": max(0, _int("refreshIntervalHours", 24)),
+    }
+
+
+# --- the cache -------------------------------------------------------------
+
+
+def cache_path(vault_root: Path) -> Path:
+    return Path(vault_root) / CACHE_REL
+
+
+def _carrier_row(carrier: Carrier) -> Dict[str, Any]:
+    return {
+        "name": carrier.name,
+        "values": [[value, count] for value, count in carrier.values],
+        "rediscovered": list(carrier.rediscovered),
+        "kept": carrier.kept,
+        "never": carrier.never,
+        "stated": carrier.stated,
+    }
+
+
+def _carrier_from_row(row: Dict[str, Any]) -> Carrier:
+    values = tuple(
+        (str(pair[0]), int(pair[1]))
+        for pair in (row.get("values") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    )
+    return Carrier(
+        name=str(row["name"]),
+        values=values,
+        rediscovered=tuple(str(x) for x in (row.get("rediscovered") or [])),
+        kept=int(row.get("kept") or 0),
+        never=int(row.get("never") or 0),
+        stated=bool(row.get("stated")),
+    )
+
+
+def candidate_row(candidate: Candidate) -> Dict[str, Any]:
+    """One candidate as JSON. The round trip is exact, so the block and the
+    command are reading the same object and cannot disagree about it."""
+    return {
+        "repo": candidate.repo,
+        "shape": candidate.shape,
+        "carriers": [_carrier_row(c) for c in candidate.carriers],
+        "shape_children": candidate.shape_children,
+        "first_day": candidate.first_day,
+        "last_day": candidate.last_day,
+        "repo_root": candidate.repo_root,
+    }
+
+
+def candidate_from_row(row: Dict[str, Any]) -> Optional[Candidate]:
+    """Rebuild one candidate, or ``None`` when the row is not one.
+
+    A cache written by an older version, or half-written, must cost the
+    session nothing — so a row that does not parse is dropped, not raised on.
+    """
+    try:
+        return Candidate(
+            repo=str(row["repo"]),
+            shape=str(row["shape"]),
+            carriers=tuple(_carrier_from_row(c) for c in row["carriers"]),
+            shape_children=int(row.get("shape_children") or 0),
+            first_day=str(row.get("first_day") or ""),
+            last_day=str(row.get("last_day") or ""),
+            repo_root=row.get("repo_root") or None,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def write_cache(
+    vault_root: Path,
+    candidates: Sequence[Candidate],
+    *,
+    projects: str = "",
+    now: Optional[datetime] = None,
+) -> bool:
+    """Write what the session-start block will read. Never raises.
+
+    Written whole through a temp file: the reader is a hook, and a half-written
+    JSON file read by one would cost a session its offer for a day.
+    """
+    try:
+        path = cache_path(vault_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at": (now or datetime.now()).isoformat(timespec="seconds"),
+            "projects": projects,
+            "candidates": [candidate_row(c) for c in candidates],
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def read_cache(vault_root: Path) -> Tuple[List[Candidate], Optional[datetime]]:
+    """``(candidates, when they were scanned)``. ``([], None)`` when there is
+    no cache, which is what every vault looks like until the first refresh
+    lands. Never raises."""
+    try:
+        raw = json.loads(cache_path(vault_root).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return [], None
+    if not isinstance(raw, dict):
+        return [], None
+    out: List[Candidate] = []
+    for row in raw.get("candidates") or []:
+        if isinstance(row, dict):
+            candidate = candidate_from_row(row)
+            if candidate is not None:
+                out.append(candidate)
+    stamp = None
+    try:
+        stamp = datetime.fromisoformat(str(raw.get("generated_at")))
+    except ValueError:
+        stamp = None
+    return out, stamp
+
+
+# --- when the scan runs ----------------------------------------------------
+
+
+def scan_marker_path(vault_root: Path) -> Path:
+    return Path(vault_root) / SCAN_MARKER_REL
+
+
+def scan_is_due(vault_root: Path, cfg: Dict[str, Any], *, now: Optional[datetime] = None) -> bool:
+    """Is the cache behind the offer older than its refresh interval?
+
+    Read off the *marker*, not the cache, and the difference is the one #234
+    and #229 both paid for: a scan that dies — no transcripts, a permissions
+    error, a machine without ``~/.claude/projects`` — writes no cache, and a
+    staleness check against the cache would then spawn a fresh scan on every
+    single session start for ever. The marker is stamped before the spawn, so
+    a failure costs one interval, not an unbounded loop.
+    """
+    settings = offer_settings(cfg)
+    if not settings["enabled"] or settings["max"] == 0:
+        return False
+    if settings["refresh_hours"] == 0:
+        return False
+    try:
+        stamp = scan_marker_path(vault_root).stat().st_mtime
+    except OSError:
+        return True
+    ref = (now or datetime.now()).timestamp()
+    return ref - stamp >= settings["refresh_hours"] * 3600
+
+
+def mark_scan(vault_root: Path) -> None:
+    """Stamp the marker. Never raises."""
+    try:
+        path = scan_marker_path(vault_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# --- what to offer ---------------------------------------------------------
+
+
+def _parse_ts(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def last_block_at(rows: Iterable[Dict[str, Any]], repo: str) -> Optional[datetime]:
+    """When this repo was last shown a block, from its newest ``offered`` row."""
+    newest: Optional[datetime] = None
+    for row in rows:
+        if row.get("event") != OFFERED or str(row.get("repo") or "") != repo:
+            continue
+        stamp = _parse_ts(row.get("ts"))
+        if stamp is not None and (newest is None or stamp > newest):
+            newest = stamp
+    return newest
+
+
+def last_offered(rows: Iterable[Dict[str, Any]]) -> Dict[str, datetime]:
+    """Newest ``offered`` timestamp per ``repo:key``."""
+    out: Dict[str, datetime] = {}
+    for row in rows:
+        if row.get("event") != OFFERED:
+            continue
+        stamp = _parse_ts(row.get("ts"))
+        if stamp is None:
+            continue
+        key = f"{row.get('repo', '')}:{row.get('key')}"
+        if key not in out or stamp > out[key]:
+            out[key] = stamp
+    return out
+
+
+def restate(candidate: Candidate) -> Candidate:
+    """The same candidate, with ``stated`` re-read from the repo's file now.
+
+    The cache is up to a day old and ``CLAUDE.md`` is the maintainer's to edit
+    by hand at any moment. Offering a line the file already carries is the one
+    staleness that would look like the tool not reading, so it is the one
+    bought back — for the price of reading one small file, and only when there
+    is something to offer.
+    """
+    text = read_claude_md(candidate.repo_root)
+    carriers = tuple(
+        replace(carrier, stated=states(text, candidate.shape, carrier.name))
+        for carrier in candidate.carriers
+    )
+    return replace(candidate, carriers=carriers)
+
+
+def pick_offers(
+    vault_root: Path,
+    repo: str,
+    *,
+    cfg: Dict[str, Any],
+    now: Optional[datetime] = None,
+) -> Tuple[List[Candidate], int]:
+    """``(candidates to offer, undecided candidates for this repo)``. Never raises.
+
+    The bounds are checked cheapest first, and the order is load-bearing — this
+    runs on every session start, while the block it feeds is emitted at most
+    once a day per repo. The interval gate is a ledger read of a few kilobytes;
+    everything after it touches the cache and then the repo's ``CLAUDE.md``. A
+    silenced call therefore reports ``0`` waiting, the same lie-free shortcut
+    ``inbox.pick_offers`` takes: nobody reads a total that comes with no
+    candidates.
+    """
+    try:
+        settings = offer_settings(cfg)
+        if not settings["enabled"] or settings["max"] == 0 or not repo:
+            return [], 0
+        ref = now or datetime.now()
+        rows = ledger_rows(Path(vault_root))
+        interval = settings["interval_hours"]
+        if interval:
+            previous = last_block_at(rows, repo)
+            if previous is not None and ref - previous < timedelta(hours=interval):
+                return [], 0
+        cached, _stamp = read_cache(Path(vault_root))
+        decided = _decided(rows)
+        mine = [
+            c for c in cached
+            if c.repo == repo and f"{c.repo}:{c.key}" not in decided
+        ]
+        if not mine:
+            return [], 0
+        waiting = [c for c in (restate(c) for c in mine) if not c.stated]
+        if not waiting:
+            return [], 0
+        cooldown = timedelta(days=settings["cooldown_days"])
+        offered = last_offered(rows)
+        fresh = [
+            c for c in waiting
+            if settings["cooldown_days"] == 0
+            or f"{c.repo}:{c.key}" not in offered
+            or ref - offered[f"{c.repo}:{c.key}"] >= cooldown
+        ]
+        return fresh[: settings["max"]], len(waiting)
+    except Exception:  # noqa: BLE001 — runs inside the session-start hook
+        return [], 0
+
+
+# --------------------------------------------------------------------------
+# the numbers
+# --------------------------------------------------------------------------
+
+
+def stats(
+    vault_root: Path,
+    candidates: Sequence[Candidate],
+    *,
+    window_days: int = 7,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """What the queue is doing: depth, and what the offer drained.
+
+    ``candidates`` is passed in rather than scanned for, because the caller
+    already has them and a second scan would cost another second and could
+    disagree with the first.
+
+    ``median_decision_days`` is measured from a candidate's *first* offer to
+    the decision that closed it, and is None until one candidate has been
+    through both. That is the number that answers the question this offer was
+    built to answer — whether being shown a candidate is what gets it decided,
+    rather than someone sitting down with ``mnemo procedures`` again.
+    """
+    ref = now or datetime.now()
+    since = ref - timedelta(days=window_days)
+    first_offer: Dict[str, datetime] = {}
+    latencies: List[float] = []
+    offered = accepted = dropped = 0
+    for row in ledger_rows(Path(vault_root)):
+        stamp = _parse_ts(row.get("ts"))
+        event = row.get("event")
+        key = f"{row.get('repo', '')}:{row.get('key')}"
+        if stamp is None or not row.get("key"):
+            continue
+        if event == OFFERED and key not in first_offer:
+            first_offer[key] = stamp
+        if event in (ACCEPTED, DROPPED) and key in first_offer:
+            latencies.append((stamp - first_offer[key]).total_seconds() / 86400)
+        if stamp < since:
+            continue
+        if event == OFFERED:
+            offered += 1
+        elif event == ACCEPTED:
+            accepted += 1
+        elif event == DROPPED:
+            dropped += 1
+
+    # The inbox's median, not a second one: two review queues that report the
+    # same kind of number differently are two queues nobody compares. Imported
+    # here rather than at module scope because this is the only line of this
+    # module that knows the other queue exists.
+    from mnemo.core.inbox import median
+
+    unstated = [c for c in candidates if not c.stated]
+    return {
+        "window_days": window_days,
+        "candidates": len(unstated),
+        "repos": len({c.repo for c in unstated}),
+        "offered": offered,
+        "accepted": accepted,
+        "dropped": dropped,
+        "resolved": accepted + dropped,
+        "median_decision_days": median(latencies),
+    }

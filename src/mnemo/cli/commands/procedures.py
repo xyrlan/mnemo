@@ -5,6 +5,8 @@
     mnemo procedures --show KEY     # the proposed line, and who paid for it
     mnemo procedures --accept KEY   # append that section to the repo's CLAUDE.md
     mnemo procedures --drop KEY     # take it out of the queue, write nothing
+    mnemo procedures --refresh      # rebuild the cache the session-start offer reads
+    mnemo procedures --stats        # what is undecided, and what the offer drained
 
 ``CLAUDE.md`` is the channel #385 measured as reaching every child, whatever
 the issue says; a ranked rule reaches the child whose prompt happens to match.
@@ -13,9 +15,17 @@ So a *procedure* — how work is run in this repo — belongs in the file, and
 more than once. What it cannot see, it says: read that module's docstring
 before trusting a listing's silence.
 
-Listing writes nothing. ``--accept`` is the one write, it only ever appends,
-and there is no ``--accept-all``: the file is read by every session in that
-repo for ever, so each line is worth one decision.
+Listing writes nothing. ``--accept`` is the one write to a repo, it only ever
+appends, and there is no ``--accept-all``: the file is read by every session in
+that repo for ever, so each line is worth one decision.
+
+``--refresh`` writes one thing that is not a repo's file: the candidate cache
+under the vault's ``.mnemo/``, which the *session-start offer* reads instead of
+paying for this scan (#397). This command and the ``doctor`` row still scan
+every time, because both are run by someone who is waiting for the answer;
+the hook is not. Session start spawns a refresh detached once a day, and this
+is the same work in the foreground for anyone who wants the offer to see
+something now.
 """
 from __future__ import annotations
 
@@ -90,6 +100,32 @@ def _print_listing(candidates: list, *, repo: str | None, other: int) -> None:
         print(f"  ({other} more in other repos — `mnemo procedures --all`)")
 
 
+def _days(value) -> str:
+    """Days, with a decimal only when the number has one. Same spelling as
+    ``mnemo inbox --stats``: two queues that report the same kind of number
+    differently are two queues nobody compares."""
+    if value is None:
+        return "\u2014"
+    return f"{value:g}d"
+
+
+def _print_stats(stats: dict) -> None:
+    repos = stats["repos"]
+    print(f"{stats['candidates']} undecided candidate(s) across {repos} repo(s)")
+    print(f"last {stats['window_days']} days: {stats['offered']} offered at session "
+          f"start, {stats['accepted']} accepted, {stats['dropped']} dropped "
+          f"({stats['resolved']} resolved)")
+    if stats["median_decision_days"] is None:
+        # Said plainly rather than printed as 0: no candidate has been both
+        # offered and decided, which is a different fact from "decisions are
+        # instant" — and it is the number that answers whether the offer is
+        # what gets candidates decided at all.
+        print("median offer → decision: no candidate has been both offered and "
+              "decided yet")
+    else:
+        print(f"median offer → decision: {_days(stats['median_decision_days'])}")
+
+
 def _print_show(candidate) -> None:
     from mnemo.core import procedures as P
 
@@ -117,11 +153,35 @@ def cmd_procedures(args: argparse.Namespace) -> int:
     vault = cli._resolve_vault()
 
     chosen = [name for name in ("show", "accept", "drop") if getattr(args, name, None)]
+    for flag in ("refresh", "stats"):
+        if getattr(args, flag, False):
+            chosen.append(flag)
     if len(chosen) > 1:
         print(f"pick one action, got: {', '.join('--' + c for c in chosen)}")
         return 1
 
     everything, repo = _scan(args, vault)
+
+    if getattr(args, "refresh", False):
+        import os
+
+        projects = getattr(args, "projects", None) or os.path.expanduser(
+            "~/.claude/projects"
+        )
+        ok = P.write_cache(vault, everything, projects=projects)
+        P.mark_scan(vault)
+        if not ok:
+            print(f"could not write {P.cache_path(vault)}")
+            return 1
+        undecided = [c for c in everything if not c.stated]
+        print(f"{len(everything)} candidate(s) cached to "
+              f"{P.cache_path(vault)} — {len(undecided)} undecided, and session "
+              "start reads this instead of scanning")
+        return 0
+
+    if getattr(args, "stats", False):
+        _print_stats(P.stats(vault, everything))
+        return 0
     key = getattr(args, "accept", None) or getattr(args, "drop", None) or getattr(args, "show", None)
     if key:
         candidate, err = _match(everything, key, repo)
