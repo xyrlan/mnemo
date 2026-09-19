@@ -209,7 +209,8 @@ self-fix PRs are opened, no outcomes are polled. Set
 
 At `SessionStart` mnemo hands the agent a block of context. Everything in it
 is disclosure — you can read exactly what mnemo is telling the agent on your
-behalf, and each part can be switched off. At most five pieces appear:
+behalf, and each part can be switched off. At most five pieces appear, and the
+last of them is one of two review offers — never both (see below):
 
 1. **The topic envelope** — the list of memory topics available for this
    project, so the agent knows what it can ask for. Controlled by
@@ -253,6 +254,45 @@ behalf, and each part can be switched off. At most five pieces appear:
    the queue. Every offer and every decision is appended to
    `.mnemo/inbox-offers.jsonl`, which is what makes `mnemo inbox --stats` able
    to say how many pages were resolved this week and how long they took.
+
+6. **The procedure offer** — one `CLAUDE.md` line two or more dispatched
+   children of this repo worked out for themselves and the file does not say,
+   opened by `[mnemo procedure candidate — repo=<name>, N undecided]` and closed
+   by `[/mnemo procedures]`. The bullet names the key, the command as a child
+   would have to type it, how many of the repo's children ran it the hard way
+   first, and the one act that ends it: `mnemo procedures --accept <key>`.
+   Nothing is written to any repo without you.
+
+   Bounded by the same three numbers under `procedures`, with `offerMax` **1**
+   rather than 2: accepting writes a permanent line into a file every session
+   in that repo then reads, so one decision at a time is the right price.
+   `offerOnSessionStart: false` silences it and leaves `mnemo procedures`
+   working. Offers and decisions are appended to
+   `.mnemo/procedure-decisions.jsonl`, which is what `mnemo procedures --stats`
+   reads to say how long a candidate takes to go from shown to decided.
+
+   Two things are particular to this block. It never fires inside a dispatch
+   worktree — a dispatched child is the party that *paid* for the missing line,
+   not the one who writes it, and without that guard a dispatch of eight
+   children would spend the day's one offer on a session no maintainer reads.
+   And it reads a cache rather than scanning: finding candidates means reading
+   every dispatch transcript on disk (~1.0 s over the 184 there on 2026-09-19),
+   which the session-start path must not pay, so session start spawns
+   `mnemo procedures --refresh` detached at most once per
+   `refreshIntervalHours` (24) and the block reads what the last refresh wrote.
+   Run `mnemo procedures --refresh` yourself if you want the offer to see
+   something now. The two staleness cases that would matter are read live, not
+   from the cache: a candidate you already accepted or dropped, and a line you
+   wrote into `CLAUDE.md` by hand, are both silent immediately.
+
+**One offer per session start.** Blocks 5 and 6 are both review queues asking
+for a decision, and two of them in one prompt is a nag — so they share a single
+slot, and it goes to whichever has gone longest without it. Each keeps its own
+`offerIntervalHours`, so they alternate rather than one starving the other; a
+queue that wins the slot with nothing to say hands it straight back, so the
+alternation never costs you an offer. The worst case on the prompt is therefore
+one block: ~190 tokens for the staged one, ~100–140 for the procedure one,
+against a briefing that costs ~1783 tokens at 90.9% of session starts.
 
 A rule mnemo wrote silently is a rule you cannot correct, which is why the
 announcement exists at all: extraction writes into the vault on its own, so
