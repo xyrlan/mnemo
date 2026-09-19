@@ -80,6 +80,25 @@ on disk yet, and 5 that hit the circuit breaker. 26 wrote a briefing, all 26
 under the canonical namespace, 0 lost with a tree. ``tests/unit/
 test_child_briefing.py`` pins the round trip. Giving children a namespace of
 their own is the regression, not the fix.
+
+**An early confidence rating was refused** (#383). The proposal was Devin's:
+before exploring, the child rates its confidence in the issue, and a low
+rating comments and stops instead of building. Measured over the 180 dispatch
+children on disk on 2026-09-19 (``tools/measure_refusal_timing.py``,
+``docs/specs/2026-09-19-dispatch-confidence-timing.md``): 33 recorded a
+refusal, a corrected premise or a re-scope, and only **4** stated it within
+their first ten tool uses — three of those read it straight out of
+``gh issue view --comments``, which ``_PROMPT`` already puts first, and the
+fourth then spent 37 more tool uses measuring before it had anything to say.
+20 of the 33 said nothing until the closing report. The only child that ever
+refused without touching its tree took 29 tool uses to get there, and its
+argument ends at a file it had not opened at tool use 3. A rating placed
+before the exploration is a rating of the issue's prose, which is the unbacked
+claim #306 is about; placed after it, it is the refusal the prompt already
+licenses. The other half — "low confidence asks instead of building" — has no
+reader: of those 180 children, exactly one received a turn typed by the
+maintainer, and it was an instruction at tool use 75, not an answer. That is
+#357 from the child's side, and a rating does not fix it.
 """
 from __future__ import annotations
 
