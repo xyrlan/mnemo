@@ -338,3 +338,105 @@ def test_empty_plan_writes_no_archive(tmp_vault: Path):
     assert report.merged == 0
     assert report.archive_dir is None
     assert not (tmp_vault / "shared" / "_archive").exists()
+
+
+def test_two_runs_in_the_same_second_both_apply(tmp_vault: Path, monkeypatch):
+    """A batch loop must not lose runs to a shared timestamp (#376).
+
+    ``_run_id`` is ``%Y%m%dT%H%M%S`` and a single ``--accept`` finishes well
+    inside a second, so accepting several in a shell loop derived one id for
+    all of them. The first run created ``rewrites-<id>/manifest.json``; every
+    later run hit the re-apply guard and aborted. Observed on the real vault:
+    2 of 7 accepted, the rest printed "already applied; undo it first" while
+    the loop's tail still read like a normal run.
+
+    The clock is pinned to one second here, which is the honest version of
+    that loop — sub-second resolution alone would still collide under it.
+    """
+    monkeypatch.setattr(A, "_run_id", lambda: "20260917T123500")
+
+    _seed(tmp_vault, "a__one")
+    first = A.plan(tmp_vault, include={"project/a__one"})
+    report_one = A.apply(first, tmp_vault)
+
+    _seed(tmp_vault, "a__two")
+    second = A.plan(tmp_vault, include={"project/a__two"})
+    report_two = A.apply(second, tmp_vault)
+
+    # Both landed, neither aborted.
+    assert report_one.merged == 1
+    assert report_two.merged == 1
+
+    # Distinct ids, distinct archives — so each keeps its own originals.
+    assert first.run_id != second.run_id
+    assert first.run_id == "20260917T123500"
+    assert second.run_id == "20260917T123500-2"
+    assert report_one.archive_dir != report_two.archive_dir
+    for run_id in (first.run_id, second.run_id):
+        arch = tmp_vault / "shared" / "_archive" / f"rewrites-{run_id}"
+        manifest = json.loads((arch / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["run_id"] == run_id
+        assert len(manifest["moves"]) == 1
+
+    # And each undo is addressable on its own. Undoing the second must not
+    # disturb the first — the failure mode a shared archive dir would have.
+    assert A.undo(tmp_vault, second.run_id) == 3
+    assert (tmp_vault / "shared" / "project" / "a__one.md").read_text(
+        encoding="utf-8"
+    ).endswith("line one\nline two\n")
+    assert A.undo(tmp_vault, first.run_id) == 3
+    assert (tmp_vault / "shared" / "project" / "a__one.md").read_text(
+        encoding="utf-8"
+    ).endswith("line one\n")
+
+
+def test_a_pinned_clock_keeps_minting_free_ids_past_the_second_run(
+    tmp_vault: Path, monkeypatch
+):
+    """The suffix counts, it does not stop at one spare id.
+
+    The loop that found this had seven calls in it, not two. A fix that only
+    tried ``<id>`` then ``<id>-2`` would have moved the collision from run 2
+    to run 3 and still lost five of seven.
+    """
+    monkeypatch.setattr(A, "_run_id", lambda: "20260917T123500")
+
+    ids = []
+    for n in range(1, 6):
+        slug = f"a__{n}"
+        _seed(tmp_vault, slug)
+        p = A.plan(tmp_vault, include={f"project/{slug}"})
+        assert A.apply(p, tmp_vault).merged == 1
+        ids.append(p.run_id)
+
+    assert ids == [
+        "20260917T123500",
+        "20260917T123500-2",
+        "20260917T123500-3",
+        "20260917T123500-4",
+        "20260917T123500-5",
+    ]
+    assert len(set(ids)) == 5
+
+
+def test_an_archive_without_a_manifest_still_costs_its_id(
+    tmp_vault: Path, monkeypatch
+):
+    """A run killed before its ``finally`` leaves ``originals/`` and no manifest.
+
+    Minting probes the directory rather than the manifest for exactly this
+    case: reusing that id would copy a second run's pristine originals into
+    the first's half-written archive, and the manifest that eventually landed
+    would name moves whose originals belong to someone else.
+    """
+    monkeypatch.setattr(A, "_run_id", lambda: "20260917T123500")
+    orphan = tmp_vault / "shared" / "_archive" / "rewrites-20260917T123500" / "originals"
+    orphan.mkdir(parents=True)
+
+    _seed(tmp_vault)
+    p = A.plan(tmp_vault, include={"project/a__x"})
+
+    assert p.run_id == "20260917T123500-2"
+    assert A.apply(p, tmp_vault).merged == 1
+    # The orphan is left exactly as it was — untouched, not adopted.
+    assert list(orphan.iterdir()) == []

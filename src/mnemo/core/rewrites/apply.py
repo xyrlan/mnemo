@@ -41,6 +41,41 @@ def _run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
 
+def _archive_dir(vault_root: Path, run_id: str) -> Path:
+    return Path(vault_root) / "shared" / "_archive" / f"rewrites-{run_id}"
+
+
+def _fresh_run_id(vault_root: Path) -> str:
+    """Mint a run id no archive on disk already claims.
+
+    ``_run_id`` has one-second resolution and a single ``--accept`` is far
+    faster than that, so a shell loop puts several runs inside one second.
+    They all derived the same id, the re-apply guard in :func:`_apply_locked`
+    fired on every run but the first, and the loop reported a mix of successes
+    and aborts that reads like a normal batch — 2 of 7 applied in the run that
+    found this (#376).
+
+    Widening the stamp to microseconds would only make the collision rarer,
+    and would still lose to a pinned clock. Suffixing until the archive path
+    is free makes it impossible, and keeps the id the opaque, lexically
+    sortable string ``--undo`` already takes unchanged.
+
+    Probes the directory, not its ``manifest.json``. A run killed before its
+    ``finally`` leaves ``originals/`` with no manifest, and reusing that id
+    would mix two runs' pristine copies into one archive — exactly what the
+    guard downstream exists to prevent. The guard itself is untouched: a plan
+    whose id has already landed is still refused, because this runs when the
+    id is minted, not when it is used.
+    """
+    base = _run_id()
+    candidate = base
+    n = 1
+    while _archive_dir(vault_root, candidate).exists():
+        n += 1
+        candidate = f"{base}-{n}"
+    return candidate
+
+
 def _atomic_json(path: Path, payload: dict, run_id: str) -> None:
     """Write *payload* as JSON via a run-scoped ``.tmp`` + ``os.replace``.
 
@@ -54,12 +89,16 @@ def _atomic_json(path: Path, payload: dict, run_id: str) -> None:
 
 
 def plan(vault_root: Path, *, include: set[str]) -> ApplyPlan:
-    """Build a plan covering exactly the rewrites whose ``key`` is in *include*."""
+    """Build a plan covering exactly the rewrites whose ``key`` is in *include*.
+
+    The run id is minted here, against the archive on disk, so two plans built
+    in the same second get different ids — see :func:`_fresh_run_id`.
+    """
     entries: list[tuple[Rewrite, str]] = []
     for r in classify(vault_root):
         if r.key in include:
             entries.append((r, _ACTION_FOR_KIND[r.kind]))
-    return ApplyPlan(run_id=_run_id(), entries=entries)
+    return ApplyPlan(run_id=_fresh_run_id(vault_root), entries=entries)
 
 
 def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
@@ -90,10 +129,14 @@ def apply(plan_obj: ApplyPlan, vault_root: Path) -> ApplyReport:
 
 def _apply_locked(plan_obj: ApplyPlan, vault_root: Path, report: ApplyReport) -> ApplyReport:
     """The body of :func:`apply`, run with the vault lock held."""
-    arch = vault_root / "shared" / "_archive" / f"rewrites-{plan_obj.run_id}"
+    arch = _archive_dir(vault_root, plan_obj.run_id)
     # Re-applying a run would copy already-merged files over the pristine
     # originals and overwrite the manifest, silently destroying undo. Guard on
     # the manifest, not the directory — same as reclassify_apply.
+    #
+    # ``_fresh_run_id`` guarantees a freshly planned run never lands here, so
+    # what this catches is what it was always meant to catch: the same
+    # ``ApplyPlan`` handed to ``apply`` twice.
     if (arch / "manifest.json").exists():
         raise RuntimeError(f"run {plan_obj.run_id} already applied; undo it first")
     originals = arch / "originals"
@@ -262,7 +305,7 @@ def _apply_entries(
 def undo(vault_root: Path, run_id: str) -> int:
     """Restore every file *run_id* touched, byte for byte. Returns files restored."""
     vault_root = Path(vault_root)
-    arch = vault_root / "shared" / "_archive" / f"rewrites-{run_id}"
+    arch = _archive_dir(vault_root, run_id)
     manifest_path = arch / "manifest.json"
     if not manifest_path.exists():
         return 0
