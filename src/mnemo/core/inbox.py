@@ -475,7 +475,7 @@ def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> D
     record(vault_root, event=DROPPED, key=page.key, project=project)
     return DecisionResult(
         ok=True,
-        message=f"dropped {page.key}; archived to {dest.relative_to(vault_root)}",
+        message=f"dropped {page.key}; archived to {dest.relative_to(vault_root).as_posix()}",
         moved_to=dest,
         state_updated=state_updated,
     )
