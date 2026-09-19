@@ -24,7 +24,7 @@ baseline — never synthesised, only observed.
 
 Public surface:
     bootstrap_cases(log_path, pair_window_s=120) -> list[Case]
-    run_case(vault_root, case) -> CaseResult
+    run_case(vault_root, case, reflex_index=None) -> CaseResult
     aggregate(results, log_entries=None) -> Report
     count_log_entries(log_path) -> int
 """
@@ -70,6 +70,12 @@ class CaseResult(TypedDict):
     result_count: int
     elapsed_ms: float
     query: str | None  # what run_case passed to retrieval
+    # Why the rule landed where it did, for queried cases only (#381). None
+    # on an unqueried case, and on a queried one when the reflex index is
+    # missing — both mean "not measured", never "measured as zero".
+    query_tokens: int | None  # distinct tokens the query reduces to
+    query_tokens_matched: int | None  # of those, how many the rule indexes
+    bm25_score: float | None  # the rule's BM25F score against the query
 
 
 class SplitReport(TypedDict):
@@ -95,6 +101,11 @@ class Report(TypedDict):
     buried: list[str]  # returned, but at rank > 5
     absent: list[str]  # not in the returned list at all (rank None)
     buried_rank_max: int | None  # deepest rank among ``buried``; None if empty
+    # #381: of the queried cases outside the top 5, which are a ranking
+    # failure and which are not one at all. Disjoint; cases whose diagnostic
+    # could not be measured are in neither.
+    vocabulary_gap: list[str]  # rule shares no indexed token with the query
+    outranked: list[str]  # rule is scored against the query and still loses
     log_entries: int | None  # size of the access log at measurement time
     phase3_threshold: int  # ranking-change unlock threshold (log entries)
     orphan_dropped: int  # bootstrap pairs whose expect_slug is no longer in the vault
@@ -330,8 +341,76 @@ def bootstrap_cases(
     return cases
 
 
-def run_case(vault_root: Path, case: Case) -> CaseResult:
-    """Execute a live retrieval for the case; record rank + latency."""
+_UNMEASURED: dict = {
+    "query_tokens": None,
+    "query_tokens_matched": None,
+    "bm25_score": None,
+}
+
+
+def _vocabulary_diagnostic(
+    vault_root: Path, case: Case, query: str, reflex_index: dict | None
+) -> dict:
+    """How much of *query* the expected rule actually indexes, and its score.
+
+    A rank alone cannot tell a ranking failure from a vocabulary one, and the
+    two want opposite fixes: re-ranking can only reorder rules the query
+    scores, and a rule sharing no token with the query scores exactly zero no
+    matter what any weight is set to. Measured on the 38 queried cases the log
+    held on 2026-09-19, the rules inside the top 5 matched 27% of their query's
+    tokens and those outside it 5%, with six of twelve matching none at all —
+    so most of the miss list was never a ranking problem (#381, #158).
+
+    Returns every key as ``None`` when the reflex index is missing: that is the
+    same corpus retrieval itself falls back from, and reporting a coverage of
+    zero for it would invent a vocabulary gap out of an absent index.
+    """
+    from mnemo.core.reflex import bm25
+    from mnemo.core.reflex import index as reflex_index_mod
+    from mnemo.core.reflex.tokenizer import tokenize_query
+
+    idx = reflex_index
+    if idx is None:
+        idx = reflex_index_mod.load_index(vault_root)
+    if idx is None:
+        return dict(_UNMEASURED)
+    tokens = list(dict.fromkeys(tokenize_query(query)))
+    if not tokens:
+        return dict(_UNMEASURED)
+
+    slug = case["expect_slug"]
+    postings = idx.get("postings", {})
+    matched = 0
+    for token in tokens:
+        for entry in postings.get(token, []):
+            if entry["slug"] == slug:
+                if sum(entry.get("tf", {}).values()):
+                    matched += 1
+                break
+
+    # Score against the whole doc set, not the topic bucket: the number answers
+    # "does this query reach this rule at all", which is a property of the pair
+    # and not of whichever bucket the case happens to name.
+    scored = dict(bm25.score_docs(idx, query_tokens=tokens, candidate_slugs=[slug]))
+    return {
+        "query_tokens": len(tokens),
+        "query_tokens_matched": matched,
+        "bm25_score": round(scored.get(slug, 0.0), 4),
+    }
+
+
+def run_case(
+    vault_root: Path, case: Case, *, reflex_index: dict | None = None
+) -> CaseResult:
+    """Execute a live retrieval for the case; record rank + latency.
+
+    *reflex_index* is a pre-loaded reflex index for the vocabulary diagnostic
+    to reuse. It is only an optimisation — a caller sweeping every case would
+    otherwise re-read and re-parse the same file once per case — and omitting
+    it changes nothing but wall time. The diagnostic is computed after the
+    timer stops either way, so it never enters ``elapsed_ms`` and cannot move
+    the reported p95.
+    """
     query = case.get("query") or None
     t0 = time.perf_counter()
     rules = list_rules_by_topic(
@@ -347,6 +426,10 @@ def run_case(vault_root: Path, case: Case) -> CaseResult:
         rank: int | None = slugs.index(case["expect_slug"]) + 1
     except ValueError:
         rank = None
+    diagnostic = (
+        _vocabulary_diagnostic(vault_root, case, query, reflex_index)
+        if query else dict(_UNMEASURED)
+    )
     return {
         "id": case["id"],
         "project": case["project"],
@@ -357,6 +440,7 @@ def run_case(vault_root: Path, case: Case) -> CaseResult:
         "result_count": len(rules),
         "elapsed_ms": round(elapsed_ms, 3),
         "query": query,
+        **diagnostic,
     }
 
 
@@ -396,6 +480,12 @@ def aggregate(
 ) -> Report:
     """Roll case results into a Report (primacy-rates, MRR, p95 latency).
 
+    ``vocabulary_gap`` and ``outranked`` split the queried cases that finished
+    outside the top 5 by whether re-ranking could reach them at all; see
+    :func:`_vocabulary_diagnostic`. A queried case whose diagnostic was not
+    measured (no reflex index) falls in neither, so the two need not sum to
+    the queried share of ``buried`` + ``absent``.
+
     ``log_entries``, when provided, is stored alongside the threshold constant
     so consumers can display unlock progress. ``orphan_dropped`` is the count
     of bootstrap pairs filtered out because their ``expect_slug`` no longer
@@ -416,6 +506,9 @@ def aggregate(
     buried_ranks = [r["rank"] for r in results if r["rank"] is not None and r["rank"] > 5]
     queried = [r for r in results if r.get("query")]
     unqueried = [r for r in results if not r.get("query")]
+    outside = [r for r in queried if r["rank"] is None or r["rank"] > 5]
+    vocabulary_gap = [r["id"] for r in outside if r.get("query_tokens_matched") == 0]
+    outranked = [r["id"] for r in outside if (r.get("query_tokens_matched") or 0) > 0]
     return {
         "cases": total,
         "primacy_at_3": hits[3],
@@ -430,6 +523,8 @@ def aggregate(
         "buried": buried,
         "absent": absent,
         "buried_rank_max": max(buried_ranks) if buried_ranks else None,
+        "vocabulary_gap": vocabulary_gap,
+        "outranked": outranked,
         "log_entries": log_entries,
         "phase3_threshold": PHASE3_THRESHOLD,
         "orphan_dropped": orphan_dropped,
@@ -461,6 +556,13 @@ def format_report(report: Report, results: list[CaseResult] | None = None) -> st
     lines.append(
         f"outside top-5      : {len(buried) + len(absent)} = {buried_txt} + absent {len(absent)}"
     )
+    gap = report.get("vocabulary_gap", [])
+    outranked = report.get("outranked", [])
+    if gap or outranked:
+        lines.append(
+            f"  of the queried    : {len(gap)} share no token with their query "
+            f"(unreachable by ranking) + {len(outranked)} scored but outranked"
+        )
     where = {r["id"]: (r["rank"], r["result_count"]) for r in (results or [])}
     queried = report.get("queried")
     if queried and queried["cases"]:

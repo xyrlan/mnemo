@@ -588,3 +588,159 @@ class TestAggregateQuerySplit:
     def test_format_report_hides_split_when_no_queried_cases(self) -> None:
         r = aggregate([self._result("c", 3, None)])
         assert "with query" not in format_report(r)
+
+
+class TestVocabularyDiagnostic:
+    """#381: a rank cannot say whether re-ranking could have reached the rule.
+
+    The diagnostic separates the two: a rule that shares no indexed token with
+    the query scores zero and is unreachable by any weighting, while one that
+    scores and still loses is a genuine ranking failure.
+    """
+
+    def _case(self, slug: str = "rule-one", query: str | None = None) -> dict:
+        case = {
+            "id": f"proj-x:workflow:{slug}",
+            "project": "proj-x",
+            "topic": "workflow",
+            "expect_slug": slug,
+            "rank_at_bootstrap": 1,
+        }
+        if query is not None:
+            case["query"] = query
+        return case
+
+    def _index(self, tf_by_slug: dict[str, dict[str, int]]) -> dict:
+        """A hand-built reflex index: {slug: {term: tf_in_body}}."""
+        postings: dict[str, list[dict]] = {}
+        docs: dict[str, dict] = {}
+        for slug, terms in tf_by_slug.items():
+            docs[slug] = {"field_length": {"body": sum(terms.values()) or 1}}
+            for term, tf in terms.items():
+                postings.setdefault(term, []).append(
+                    {"slug": slug, "tf": {"body": tf}}
+                )
+        return {
+            "schema_version": 1,
+            "doc_count": len(docs),
+            "avg_field_length": {"body": 1.0},
+            "postings": postings,
+            "docs": docs,
+        }
+
+    def test_unqueried_case_is_unmeasured_not_zero(self, tmp_vault: Path) -> None:
+        _seed_rule(tmp_vault, "rule-one", "feedback", ["workflow"], "proj-x")
+        r = run_case(tmp_vault, self._case())
+        assert r["query_tokens"] is None
+        assert r["query_tokens_matched"] is None
+        assert r["bm25_score"] is None
+
+    def test_missing_reflex_index_is_unmeasured_not_zero(self, tmp_vault: Path) -> None:
+        """No index is the corpus retrieval itself falls back from.
+
+        Reporting coverage 0 here would invent a vocabulary gap out of an
+        absent file and put the case in ``vocabulary_gap``, which reads as
+        "no fix can reach this rule".
+        """
+        _seed_rule(tmp_vault, "rule-one", "feedback", ["workflow"], "proj-x")
+        r = run_case(tmp_vault, self._case(query="deploy the release"))
+        assert r["query_tokens"] is None
+        assert r["query_tokens_matched"] is None
+        assert r["bm25_score"] is None
+
+    def test_shared_vocabulary_is_counted_and_scored(self, tmp_vault: Path) -> None:
+        _seed_rule(tmp_vault, "rule-one", "feedback", ["workflow"], "proj-x")
+        idx = self._index({
+            "rule-one": {"deploy": 3, "release": 1},
+            "other": {"unrelated": 1},
+        })
+        r = run_case(
+            tmp_vault,
+            self._case(query="deploy the release pipeline"),
+            reflex_index=idx,
+        )
+        assert r["query_tokens"] == 3  # "the" is a stopword
+        assert r["query_tokens_matched"] == 2
+        assert r["bm25_score"] > 0
+
+    def test_no_shared_vocabulary_scores_zero(self, tmp_vault: Path) -> None:
+        _seed_rule(tmp_vault, "rule-one", "feedback", ["workflow"], "proj-x")
+        idx = self._index({"rule-one": {"kubernetes": 4}})
+        r = run_case(
+            tmp_vault,
+            self._case(query="deploy the release pipeline"),
+            reflex_index=idx,
+        )
+        assert r["query_tokens_matched"] == 0
+        assert r["bm25_score"] == 0.0
+
+    def test_passed_index_is_used_without_touching_disk(self, tmp_vault: Path) -> None:
+        """The sweep loads the vault's largest file once, not once per case."""
+        _seed_rule(tmp_vault, "rule-one", "feedback", ["workflow"], "proj-x")
+        assert not (tmp_vault / ".mnemo" / "reflex-index.json").exists()
+        idx = self._index({"rule-one": {"deploy": 1}})
+        r = run_case(tmp_vault, self._case(query="deploy"), reflex_index=idx)
+        assert r["query_tokens_matched"] == 1
+
+
+class TestOutsideTop5Split:
+    def _result(
+        self,
+        id_: str,
+        rank: int | None,
+        *,
+        query: str | None = "q",
+        matched: int | None = 1,
+    ) -> dict:
+        return {
+            "id": id_,
+            "project": "p",
+            "topic": "t",
+            "expect_slug": "s",
+            "hit": rank is not None and rank <= 10,
+            "rank": rank,
+            "result_count": 0,
+            "elapsed_ms": 1.0,
+            "query": query,
+            "query_tokens": None if matched is None else 5,
+            "query_tokens_matched": matched,
+            "bm25_score": None if matched is None else float(matched),
+        }
+
+    def test_splits_unreachable_from_outranked(self) -> None:
+        r = aggregate([
+            self._result("top", 2),
+            self._result("gap", 20, matched=0),
+            self._result("lost", 9, matched=3),
+            self._result("gone", None, matched=0),
+        ])
+        assert r["vocabulary_gap"] == ["gap", "gone"]
+        assert r["outranked"] == ["lost"]
+
+    def test_unqueried_cases_are_in_neither(self) -> None:
+        """An unqueried case never reaches BM25F, so it has no vocabulary gap."""
+        r = aggregate([self._result("legacy", 30, query=None, matched=None)])
+        assert r["vocabulary_gap"] == []
+        assert r["outranked"] == []
+
+    def test_unmeasured_queried_case_is_in_neither(self) -> None:
+        r = aggregate([self._result("noindex", 30, matched=None)])
+        assert r["vocabulary_gap"] == []
+        assert r["outranked"] == []
+
+    def test_top5_case_is_never_counted(self) -> None:
+        r = aggregate([self._result("fine", 5, matched=0)])
+        assert r["vocabulary_gap"] == []
+        assert r["outranked"] == []
+
+    def test_format_report_names_both_populations(self) -> None:
+        out = format_report(aggregate([
+            self._result("gap", 20, matched=0),
+            self._result("lost", 9, matched=3),
+        ]))
+        assert "1 share no token with their query" in out
+        assert "1 scored but outranked" in out
+
+    def test_format_report_omits_line_when_nothing_outside_top5(self) -> None:
+        out = format_report(aggregate([self._result("fine", 1)]))
+        assert "share no token" not in out
