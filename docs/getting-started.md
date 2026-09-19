@@ -773,6 +773,33 @@ pays for every line, and anything that tells a child *how to solve* the issue
 re-creates the failure `mnemo dispatch` exists to avoid: the #187 child was
 handed an approach, refused it, and was right.
 
+#### `mnemo procedures` — the line you have not written yet
+
+Writing that file by hand only covers what you already know children get
+wrong. `mnemo procedures` reads the transcripts instead and lists what two or
+more children of a repo worked out *for themselves*: a command shape they ran
+bare, then re-ran with an environment variable in front, and kept.
+
+```sh
+mnemo procedures                  # candidates for the repo you are standing in
+mnemo procedures --show cargo-test
+mnemo procedures --accept cargo-test   # appends that section; nothing else is touched
+```
+
+It proposes only environment, never flags, and the reason is a count: on the
+184 children on disk on 2026-09-19 the same bar over flags would have proposed
+`cargo test --nocapture` to twelve children's credit — a way of reading
+output, not a boundary. So a procedure that lives in a flag (clubinho's
+`--runInBand`) is one this cannot find, and
+`tools/measure_rediscovered_procedures.py --rejected` prints the whole
+rejected half rather than leaving the limit to be discovered later. `doctor`
+carries the same count as a row, because a command you have to know about is
+one nobody runs.
+
+Accepting writes one seven-line section to the end of the repo's `CLAUDE.md`,
+and never rewrites a byte you wrote. The reason a line exists is yours to add
+— the tool can only say how many children paid for not having it.
+
 ### Watching, and answering
 
 `mnemo sessions` is the queue; the [next section](#watching-background-sessions)
