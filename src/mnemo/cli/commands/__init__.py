@@ -29,6 +29,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     migrate_plugin,
     migrate_worktree_briefings,
     misc,
+    procedures,
     publish,
     recall,
     recall_sessions,

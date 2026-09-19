@@ -445,6 +445,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "--stats", action="store_true",
         help="queue depth, median age, and what drained in the last 7 days",
     )
+    procedures_p = sub.add_parser(
+        "procedures",
+        help="procedures children keep rediscovering, as a proposed CLAUDE.md line",
+    )
+    procedures_p.add_argument(
+        "--all", action="store_true",
+        help="every repo the transcripts cover, not just the one you are standing in",
+    )
+    procedures_p.add_argument(
+        "--show", metavar="KEY",
+        help="print the proposed line and the children that paid for it (e.g. cargo-test)",
+    )
+    procedures_p.add_argument(
+        "--accept", metavar="KEY",
+        help="append that section to the repo's CLAUDE.md (the only write; appends only)",
+    )
+    procedures_p.add_argument(
+        "--drop", metavar="KEY",
+        help="take one candidate out of the queue, writing nothing",
+    )
+    procedures_p.add_argument(
+        "--projects", metavar="DIR",
+        help="where Claude Code keeps its transcripts (default ~/.claude/projects)",
+    )
+    procedures_p.add_argument("--json", action="store_true", help="machine-readable listing")
     rewrites_p = sub.add_parser(
         "rewrites",
         help="review and accept staged _inbox rewrites of live rules (lists only; writes need a flag)",

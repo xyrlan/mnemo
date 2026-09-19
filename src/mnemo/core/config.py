@@ -39,6 +39,15 @@ DEFAULTS: dict[str, Any] = {
         # Delivery is best-effort: a parent that has exited is not queued for.
         "notifyParent": True,
     },
+    "procedures": {
+        # #392: what counts as a procedure children keep rediscovering.
+        # ``minChildren`` is the bar for "keep" — one child working something
+        # out is a child, two is the repo. ``maxShapeRepos`` is what keeps the
+        # harness's own commands out: a shape children of more than this many
+        # repos run is ``git log``, not this repo's way of running work.
+        "minChildren": 2,
+        "maxShapeRepos": 2,
+    },
     "briefings": {
         "enabled": True,
         "injectLastOnSessionStart": True,
