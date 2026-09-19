@@ -105,6 +105,13 @@ SYNTHETIC_PREFIXES = (
     # imports nothing from here, and a literal keeps it that way. The two are
     # pinned together by a test.
     "<mnemo-child-finished",
+    # mnemo waking a child the account's limit stopped (#393). This one lands
+    # as `origin.kind: "human"` — `--bg --resume` is the opening prompt's own
+    # channel — so without it every wake would be counted as the maintainer
+    # answering a blocked session, and a wake is precisely the case where
+    # nobody answered anything. Literal for the same reason as the line above;
+    # the two are pinned together by a test.
+    "<mnemo-resume",
 )
 
 #: The byte signature of an assistant record, as Claude Code writes it

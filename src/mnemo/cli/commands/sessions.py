@@ -137,6 +137,22 @@ def _explorations(found, cache: dict, *, only_done: bool = True) -> dict:
     return out
 
 
+def _stalls(found) -> dict:
+    """Why each blocked session stopped, by ``short_id`` (#393).
+
+    Only the blocked ones cost a read — ``stalls.read_stall`` refuses the
+    rest — so a queue of working children pays nothing for this. Never
+    raises: a transcript that cannot be read costs the STALLED bucket its
+    reset time, never the queue.
+    """
+    try:
+        from mnemo.core.sessions.stalls import stalls_for
+
+        return stalls_for(found)
+    except Exception:
+        return {}
+
+
 def _activities_once(found) -> dict:
     """Activity per ``short_id`` from a cold read of each transcript's tail.
 
@@ -276,10 +292,16 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         # finished session's transcript says nothing its `detail` does not, so
         # only the unfinished ones pay for the tail read.
         acts = _activities_once([s for s in found if not s.is_done])
+        # Why a blocked session stopped, and whether a clock frees it (#393).
+        # Same reason the derived booleans ride along: a consumer deciding
+        # from `needs` alone cannot tell "waiting on the 5-hour window" from
+        # "waiting on you", and the first must never be offered `claude rm`.
+        stalled = _stalls(found)
         rows = [
             {**asdict(s), **s.derived(),
              "exploration": spent[s.short_id].as_dict() if s.short_id in spent else None,
              "activity": asdict(acts[s.short_id]) if s.short_id in acts else None,
+             "stall": stalled[s.short_id].as_dict() if s.short_id in stalled else None,
              "status_line": status_line(s, acts.get(s.short_id), budget=None)}
             for s in found
         ]
@@ -327,7 +349,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
                 found = _read()
                 acts = _activities(found)
                 print(clear, end="")
-                print(render_queue(found, acts, explorations=_explorations(found, explored_cache)))
+                print(render_queue(found, acts,
+                                   explorations=_explorations(found, explored_cache),
+                                   stalls=_stalls(found)))
                 if hidden[0]:
                     print(_stale_footer(hidden[0]))
                 time.sleep(interval)
@@ -335,7 +359,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
             return 0
 
     found = _read()
-    print(render_queue(found, _activities(found), explorations=_explorations(found, explored_cache)))
+    print(render_queue(found, _activities(found),
+                       explorations=_explorations(found, explored_cache),
+                       stalls=_stalls(found)))
     if hidden[0]:
         print(_stale_footer(hidden[0]))
     if not found and scope is not None:

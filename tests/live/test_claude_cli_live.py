@@ -492,3 +492,72 @@ def _load_user_servers() -> dict:
         return {}
     servers = data.get("mcpServers") if isinstance(data, dict) else None
     return servers if isinstance(servers, dict) else {}
+
+
+# --- api-error-block: the sentences, checked without a spawn -----------------
+
+
+def _claude_binary() -> Path:
+    """The installed executable ``claude`` resolves to, or skip.
+
+    ``~/.local/bin/claude`` is a symlink into ``versions/<x.y.z>``; the
+    versioned file is the one carrying the strings.
+    """
+    found = shutil.which("claude")
+    if not found:  # pragma: no cover - the fixture already skipped
+        pytest.skip("no `claude` on PATH")
+    real = Path(os.path.realpath(found))
+    if not real.is_file():
+        pytest.skip(f"`claude` resolves to {real}, which is not a file")
+    return real
+
+
+def _contains(path: Path, needles: dict) -> set:
+    """Which of *needles*' keys appear in *path*, matched by any of its forms.
+
+    One pass over a 217MB binary (~0.4s), carrying 256 bytes between chunks so
+    a sentence straddling a boundary is still found.
+    """
+    seen: set = set()
+    with path.open("rb") as fh:
+        carry = b""
+        while True:
+            chunk = fh.read(1 << 22)
+            if not chunk:
+                return seen
+            blob = carry + chunk
+            for key, forms in needles.items():
+                if key not in seen and any(form in blob for form in forms):
+                    seen.add(key)
+            carry = blob[-256:]
+
+
+def test_the_api_error_sentences_are_still_the_ones_we_classify() -> None:
+    """``api-error-block``: a rename upstream must not silently reclassify.
+
+    ``stalls.from_needs`` is the fallback for a session whose transcript
+    cannot be read, and it matches Claude Code's sentence exactly. If one is
+    reworded, every such session falls through as "not a stall" and lands
+    back under ABANDONED beside ``claude rm`` — the failure #393 is about,
+    with no symptom anywhere else.
+
+    A grep, not a spawn: the sentences are only produced by an API error, and
+    provoking one is not something a test may do. The binary stores the em
+    dash as the JavaScript escape ``\\u2014``, so both forms are searched.
+    """
+    from mnemo.core.sessions.stalls import NEEDS_BY_ERROR
+
+    sentences = {s for forms in NEEDS_BY_ERROR.values() for s in forms}
+    needles = {
+        s: {s.encode("utf-8"), s.replace("—", "\\u2014").encode("utf-8")}
+        for s in sentences
+    }
+    found = _contains(_claude_binary(), needles)
+    missing = sorted(sentences - found)
+    assert not missing, (
+        "claude CLI assumption `api-error-block` did not hold (installed "
+        f"claude {claude_cli.claude_version()}): these `needs` sentences are "
+        f"no longer in the binary: {missing}. Update "
+        "mnemo.core.sessions.stalls.NEEDS_BY_ERROR from the current switch "
+        "and bump the assumption."
+    )

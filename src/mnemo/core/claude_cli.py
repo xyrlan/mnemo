@@ -360,11 +360,74 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "a copy rather than continuing it (the `--bg` help says as much: "
             "\"starts a copy and says so when the session is already "
             "running\"). `claude attach <id>` and `SendMessage` reach the "
-            "live one. dispatch never resumes a child."
+            "live one. dispatch never resumes a child; `mnemo resume` resumes "
+            "only one the roster proves dead, which is the other half of the "
+            "same rule — see `resume-under-own-id`."
         ),
-        used_by="dispatch (routed around, not depended on)",
+        used_by="dispatch (routed around, not depended on); "
+                "sessions.wake (guarded against, not depended on)",
         verified="2.1.269 on 2026-09-12",
         how="hand measurement (#197); not exercised by the live test",
+    ),
+    Assumption(
+        key="resume-under-own-id",
+        claim=(
+            "`claude --bg --resume <FULL session id> '<prompt>'` on a session "
+            "whose process is gone wakes it **in place**: same short id, same "
+            "`~/.claude/jobs/<id>/`, same transcript (the prompt is appended "
+            "to it), same `cwd`, conversation intact. stdout is the ordinary "
+            "`--bg` block preceded by `note: woke session <short id> with its "
+            "saved options (...)`, and those options are *every* flag the "
+            "session was spawned with, not just the model: a probe spawned "
+            "with `--disallowedTools Edit Write NotebookEdit "
+            "--setting-sources project,local --strict-mcp-config "
+            "--mcp-config <f> --settings <f> --model haiku` came back "
+            "carrying all seven in `respawnFlags`, so a read-only child does "
+            "not regain `Edit` and a lean child does not lose mnemo's hooks. "
+            "`SessionStart` fires again on the wake (a marker hook wrote two "
+            "files for one spawn plus one wake). The woken turn lands in the "
+            "transcript as `origin.kind: \"human\"`, `promptSource: "
+            "\"typed\"` — the opening prompt's own shape, which is why "
+            "`sessions.wake` sends a constant and takes no message. Passing "
+            "the **short** id instead does not fail: it prints `note: started "
+            "a copy of that conversation as <new id>` and runs a SECOND "
+            "session in the same worktree."
+        ),
+        used_by="sessions.wake.wake, cli resume",
+        verified="2.1.278 on 2026-09-19",
+        how=("hand measurement (#393): two throwaway `--bg` haiku children, "
+             "stopped and then woken, `respawnFlags` and transcript read back "
+             "on each side; not exercised by the live test, which would have "
+             "to spawn and wake"),
+    ),
+    Assumption(
+        key="api-error-block",
+        claim=(
+            "An API error that stops a turn is written to the transcript as "
+            "an `assistant` record with `isApiErrorMessage: true`, `message."
+            "model: \"<synthetic>\"`, zero usage, `error` (Claude Code's own "
+            "code: rate_limit, server_error, invalid_request, "
+            "authentication_failed, unknown) and, for a 429, `apiErrorStatus: "
+            "429` plus `quotaLimits` with `status`, `rateLimitType` "
+            "(`five_hour` / `seven_day`) and `resetsAt`, a unix epoch. The "
+            "session's `state.json` then reads `state: blocked, tempo: "
+            "blocked` with `needs` set to Claude Code's rendered sentence for "
+            "that code — `rate limited — wait and retry` and the rest of "
+            "`sessions.stalls.NEEDS_BY_ERROR`, transcribed from the binary's "
+            "own switch. Measured over the 79 API-error records in the 404 "
+            "transcripts on this machine (2026-09-19): 23 "
+            "authentication_failed, 18 rate_limit, 17 invalid_request, 13 "
+            "server_error, 8 unknown; 14 of the 18 rate limits carry "
+            "`resetsAt` and the 4 that do not are a per-model credit cap "
+            "(\"You've reached your Fable limit\"), not a window."
+        ),
+        used_by="sessions.stalls (the STALLED bucket and what `mnemo resume` "
+                "will wake)",
+        verified="2.1.278 on 2026-09-19",
+        how=("hand measurement (#393) over ~/.claude/projects plus the "
+             "installed binary's own switch; the sentences are re-checked "
+             "against the binary by tests/live/test_claude_cli_live.py, "
+             "which needs no spawn for that one"),
     ),
 )
 

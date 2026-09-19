@@ -256,6 +256,7 @@ to ask ([details](docs/getting-started.md#backfill)).
 mnemo inbox     pages extraction staged for review: promote one, or drop it
 mnemo sessions  the queue: blocked first, then what each running child is doing
 mnemo deliver   push a finished child's branch and open its PR
+mnemo resume    wake the children the account's limit stopped, once it has reset
 mnemo land      a dispatched contract's pieces in landing order; --merge lands them
 mnemo replay    your transcripts against your vault: what would have come back, and from when
 mnemo stale     live rules citing a file this repo no longer has, and where it moved to
