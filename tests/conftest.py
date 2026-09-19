@@ -67,6 +67,12 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     # `mnemo dispatch` spawns `claude --bg`, which is an LLM session per issue.
     # Tests that exercise the spawn contract itself patch this back.
     monkeypatch.setattr("mnemo.core.dispatch.spawn_child", lambda *a, **k: None)
+    # #396: session_start starts a `mnemo resume --watch` watcher, which is a
+    # process designed to outlive whatever started it — the one shape of stray
+    # child this fixture exists to prevent. `tmp_jobs_dir` already empties the
+    # roster so the hook decides not to spawn, but that is an accident of
+    # another fixture, and this guarantee should not rest on one.
+    monkeypatch.setattr("mnemo.core.sessions.rewake._spawn_watcher", lambda *a, **k: None)
 
 
 @pytest.fixture

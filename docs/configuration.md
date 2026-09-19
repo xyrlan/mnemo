@@ -180,6 +180,33 @@ inbox.
 | `enrichment.maxEmissionsPerSession` | `15` | Cap per session; each rule is surfaced at most once per session |
 | `enrichment.log.maxBytes` | `1048576` | Log rotation threshold |
 
+### `resume` — waking a child the account's limit stopped
+
+A dispatched child that hits the five-hour window stops mid-turn and its
+process dies. `mnemo resume` wakes it by hand; with `resume.auto` on, mnemo
+wakes it itself once the reset its own transcript recorded has passed, and
+nobody has to be at the keyboard for it.
+
+The trigger is a small watcher process (`mnemo resume --watch`) that
+`SessionStart` starts while there is something to watch and that exits when
+there is not. It is not a hook, because the limit stops every Claude session
+on the machine — measured on 2026-09-19, no mnemo hook fired at all between
+the stall and four hours past the reset — so the thing that waits out the
+clock has to be something that needs no API of its own. `tools/measure_wake_latency.py`
+is that measurement, re-runnable.
+
+Only a rate limit that named its own reset epoch is ever woken automatically,
+and each child at most once per reset window: a child that stalls again waits
+for the next boundary rather than being woken in a loop. A stall that needs a
+person — a login, a billing decision, a question — is never touched. Every
+wake lands in `.mnemo/resume-wakes.json`, in the day log of the repo the child
+was working in, and in a `mnemo sessions` footer.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `resume.auto` | `true` | Wake a rate-limited child once its reset has passed, with no command typed. `false` leaves it to `mnemo resume`. |
+| `resume.maxPerPass` | `5` | Children one pass wakes; the rest wait for the next check, a minute later. |
+
 ### `scoping`, `install` and `doctor`
 
 | Key | Default | Meaning |
