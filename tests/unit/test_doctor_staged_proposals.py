@@ -35,7 +35,9 @@ def _page(
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(f"---\n{frontmatter}---\n\nbody\n", encoding="utf-8")
     if age_days:
-        ts = time.time() - age_days * 86400
+        # A minute past the day boundary: ages floor, and Windows' coarse clock can
+        # read `now` a tick before the `time.time()` this was computed from.
+        ts = time.time() - age_days * 86400 - 60
         os.utime(p, (ts, ts))
     return p
 
@@ -171,7 +173,8 @@ def test_plain_line_names_oldest_and_the_force_risk(tmp_path: Path, capsys) -> N
     out = capsys.readouterr().out
     assert "2 staged pages awaiting review in shared/_inbox/" in out
     assert "oldest old.md, 9 days" in out
-    assert "manual `mv`" in out
+    # #380 replaced the manual `mv` with a command; doctor points at it.
+    assert "`mnemo inbox`" in out
     assert "`mnemo extract --force` deletes" in out
 
 

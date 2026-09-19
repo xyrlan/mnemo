@@ -161,17 +161,19 @@ the usual culprit is a single enormous transcript timing out twice at
 
 That's backfill, working as intended. Pages reconstructed from old transcripts
 are stamped `origin: backfill` and always stage for review — they are never
-auto-promoted into `shared/`, whatever their source count. `mnemo doctor` lists
-them:
+auto-promoted into `shared/`, whatever their source count. `mnemo inbox` lists
+them, and mnemo names the oldest of them at session start so the queue reaches
+you without your having to ask:
 
 ```
-2 backfill rule(s) staged in _inbox/ awaiting review
-  • shared/_inbox/project/mnemo.md
+3 staged pages for mnemo in shared/_inbox/ (median 5d, oldest 16d)
+
+  reference/mnemo__briefing-cost  backfill     16d  what a briefing costs
 ```
 
-Read each one. Move the keepers into the matching directory
-(`shared/_inbox/feedback/x.md` → `shared/feedback/x.md`) and delete the rest —
-nothing under `_inbox/` takes part in injection. Expect to delete most of them:
+Read each one (`mnemo inbox --show <key>`), keep it with `mnemo inbox
+--promote <key>` or throw it away with `mnemo inbox --drop <key>` — nothing
+under `_inbox/` takes part in injection. Expect to delete most of them:
 even rules extracted from *live* sessions get archived far more often than
 they're kept, and a reconstruction of a session nobody watched is a weaker
 signal than that.

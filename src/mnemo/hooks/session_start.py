@@ -600,6 +600,13 @@ _LEARNED_MAX = 5
 _QUOTE_MAX = 80
 _NAME_MAX = 80
 _SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+#: A staged page's key is ``<type>/<slug>``, and it is advertised inside a
+#: command the user may paste into a shell — same guard as ``_SLUG_OK``, one
+#: separator wider.
+_KEY_OK = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
+#: A staged page's description is the whole basis for judging it from the
+#: prompt, and a long one would cost more than the page is worth.
+_DESC_MAX = 100
 
 
 def _one_line(value: object, limit: int) -> str:
@@ -669,6 +676,81 @@ def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
         try:
             from mnemo.core import errors as _e
             _e.log_error(vault_root, "session_start.learned", exc)
+        except Exception:
+            pass
+        return ""
+
+
+def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
+    """What waits in ``shared/_inbox/`` for this project, with the act that clears it.
+
+    The other half of :func:`_learned_block`. That one discloses what
+    extraction *promoted* and hands over the veto; this one discloses what it
+    *staged* and hands over the decision, because a staged page is invisible to
+    recall and carries nothing while it waits. 194 of them on the real vault on
+    2026-09-19, median age 5.3 days, drained only when someone thought to run
+    ``mnemo doctor`` (#380).
+
+    Bounded by three numbers under ``inbox`` in the config, not by a
+    once-ever marker (#229's once-ever warning went silent for three days): at
+    most ``offerMax`` bullets, one block per project per ``offerIntervalHours``,
+    and no page repeated inside ``offerCooldownDays``. On the maintainer's own
+    vault that is ~2 bullets a day against a briefing that costs ~1783 tokens
+    at 90.9% of starts, and the block disappears entirely once the queue is
+    empty.
+
+    Offering marks offered, so the next session moves down the queue instead of
+    repeating its head — and the ledger row is what makes drain measurable
+    (``mnemo inbox --stats``).
+
+    Reads and records; it never promotes. Fail-silent, like the rest of the
+    session-start path.
+    """
+    try:
+        from mnemo.core import inbox as inbox_mod
+
+        pages, waiting = inbox_mod.pick_offers(vault_root, project, cfg=cfg)
+        if not pages:
+            return ""
+
+        lines = [f"[mnemo staged for review — project={project}, {waiting} waiting]"]
+        lines.append(
+            "Extraction staged these in shared/_inbox/, where nothing reads them. "
+            "The decision is the maintainer's: relay this, do not promote anything "
+            "yourself."
+        )
+        for page in pages:
+            # A description is LLM-written text going into the agent's context
+            # between a fence it must not be able to close. ``_one_line`` stops
+            # a newline from ending the block early; the replacement stops a
+            # literal ``[/mnemo …]`` in the prose from doing it on one line,
+            # which is the half a line-based frontmatter parser still lets
+            # through.
+            desc = _one_line(page.description, _DESC_MAX) or _one_line(page.name, _NAME_MAX)
+            desc = desc.replace("[/mnemo", "[ /mnemo")
+            act = (
+                f" · promote: mnemo inbox --promote {page.key}"
+                if _KEY_OK.match(page.key) else ""
+            )
+            lines.append(
+                f"• {page.key} — {desc} ({page.age_days()}d, {page.reason}){act}"
+            )
+        if waiting > len(pages):
+            lines.append(
+                f"({waiting - len(pages)} more — `mnemo inbox` lists them, "
+                "`mnemo inbox --drop KEY` discards one)"
+            )
+        lines.append("[/mnemo staged]")
+
+        for page in pages:
+            inbox_mod.record(
+                vault_root, event=inbox_mod.OFFERED, key=page.key, project=project,
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        try:
+            from mnemo.core import errors as _e
+            _e.log_error(vault_root, "session_start.staged_offer", exc)
         except Exception:
             pass
         return ""
@@ -866,6 +948,15 @@ def main() -> int:
                     payload_text = (
                         payload_text + "\n\n" + learned_block
                         if payload_text else learned_block
+                    )
+                # And the other half: what extraction staged rather than
+                # promoted. Last, because it is the block a session can most
+                # afford to lose if anything above it grows.
+                staged_offer = _staged_offer_block(vault, cfg, canonical_name)
+                if staged_offer:
+                    payload_text = (
+                        payload_text + "\n\n" + staged_offer
+                        if payload_text else staged_offer
                     )
                 if payload_text:
                     _emit_injection(payload_text)

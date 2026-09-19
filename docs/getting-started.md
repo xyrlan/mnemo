@@ -268,12 +268,15 @@ count, and the stamp survives across extraction runs.
 Review them the way you'd review a pull request:
 
 ```bash
-mnemo doctor        # lists what's staged and waiting
+mnemo inbox                      # what's staged for this project, oldest first
+mnemo inbox --show <key>         # read one before deciding
+mnemo inbox --promote <key>      # keep it: into shared/<type>/, live at once
+mnemo inbox --drop <key>         # throw it away: archived, out of the queue
 ```
 
-Read each file under `shared/_inbox/`. Move the keepers into the matching
-directory (`shared/_inbox/project/foo.md` → `shared/project/foo.md`) and delete
-the rest. Only then do they take part in injection.
+Only a promoted page takes part in injection. You do not have to remember to
+run this: when pages are staged for the project you just opened, mnemo names
+the oldest of them at session start, with the command beside each one.
 
 Backfill also never overwrites an existing memory file — a page you or a live
 session wrote always wins over a reconstruction of it.
@@ -353,11 +356,13 @@ $0 on a Claude subscription.
   editorial call) land in `shared/_inbox/<type>/<slug>.md` tagged
   `needs-review`. Review before promoting.
 
-**Promoting is a plain move.** `mv shared/_inbox/feedback/x.md
-shared/feedback/x.md` and you're done — the rule goes live at your next
-session, when the activation index is rebuilt. Leave the `needs-review` tag
-alone if you like; **location** is what decides whether a rule is a draft, not
-the tag. (Before v0.18 the tag also hid the page, which quietly made promotion
+**Promoting is a move, and `mnemo inbox --promote <key>` is the move.** It
+puts the page in `shared/<type>/`, rebuilds the indexes so the rule is live
+now rather than at your next session, and tells the extractor it was promoted
+— which a hand `mv` does not, leaving the next extraction to stage an update
+proposal for a source that never changed. The plain `mv` still works. Leave
+the `needs-review` tag alone if you like; **location** is what decides whether
+a rule is a draft, not the tag. (Before v0.18 the tag also hid the page, which quietly made promotion
 a no-op. See [troubleshooting.md](troubleshooting.md).)
 
 **Your edits win.** If you edit an auto-promoted page and its source later

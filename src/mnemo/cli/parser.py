@@ -406,6 +406,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "--apply", action="store_true",
         help="execute the plan (default: dry-run)",
     )
+    inbox_p = sub.add_parser(
+        "inbox",
+        help="the review queue: staged pages for this project, and the two acts that clear it",
+    )
+    inbox_p.add_argument(
+        "--all", action="store_true",
+        help="every project, not just the one you are standing in",
+    )
+    inbox_p.add_argument(
+        "--show", metavar="KEY",
+        help="print one staged page (e.g. reference/mnemo__briefing-is-the-channel)",
+    )
+    inbox_p.add_argument(
+        "--promote", metavar="KEY",
+        help="move one staged page into shared/<type>/, where recall reaches it",
+    )
+    inbox_p.add_argument(
+        "--drop", metavar="KEY",
+        help="archive one staged page and take it out of the queue",
+    )
+    inbox_p.add_argument(
+        "--stats", action="store_true",
+        help="queue depth, median age, and what drained in the last 7 days",
+    )
     rewrites_p = sub.add_parser(
         "rewrites",
         help="review and accept staged _inbox rewrites of live rules (lists only; writes need a flag)",

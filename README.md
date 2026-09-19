@@ -238,7 +238,10 @@ mnemo backfill --all        # every project
 
 Backfilled pages are reconstructed rather than observed, so every rule from
 them lands in `shared/_inbox/` for you to read — **never auto-promoted into
-`shared/`**. `/mnemo:doctor` lists what's waiting ([details](docs/getting-started.md#backfill)).
+`shared/`**. `mnemo inbox` lists what's waiting and takes the decision in one
+command — `--promote <key>` to keep a page, `--drop <key>` to throw it away —
+and mnemo names the oldest of them at session start rather than waiting for you
+to ask ([details](docs/getting-started.md#backfill)).
 
 ## Commands
 
@@ -250,6 +253,7 @@ them lands in `shared/_inbox/` for you to read — **never auto-promoted into
 /mnemo:dispatch spawn a background child per issue, or per piece of a contract
 /mnemo:help     list commands
 
+mnemo inbox     pages extraction staged for review: promote one, or drop it
 mnemo sessions  the queue: blocked first, then what each running child is doing
 mnemo deliver   push a finished child's branch and open its PR
 mnemo land      a dispatched contract's pieces in landing order; --merge lands them
