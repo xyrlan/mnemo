@@ -729,6 +729,45 @@ It publishes nothing and approves nothing, so it is not an `--all` in
 disguise; naming ids or `--review` alongside it is refused, because each of
 those is a different command.
 
+### What a child already knows about your repo
+
+A child is handed the issue, a worktree and its scope limits — never an
+approach. But there is a third thing it needs and the issue never says: how
+work is *run* here. Run the suite how? Where do changelog entries go? That is
+not an approach, it is a boundary, and a child that has to work it out pays
+for it every time.
+
+mnemo adds no file format for this, because Claude Code already has one.
+**Put it in the repo's `CLAUDE.md`.** A child opens in a worktree of your
+repo, so it gets that file exactly as you do, lean profile and all.
+
+The difference that makes is measurable, and
+`tools/measure_child_procedures.py` counts it over every dispatch child on
+disk (182 of them on 2026-09-19, across four real repos — plus a
+rehearsal fixture and a nested tree the table leaves out):
+
+| repo | channel | what happened |
+| --- | --- | --- |
+| clubinho | `CLAUDE.md`, 20/20 children | the flag it states was on **24 of 24** suite runs |
+| clubinho | nothing states the heap size | **13 of 14** children ran out of it |
+| mnemo | no `CLAUDE.md` at the time | 12 children rediscovered `PYTHONPATH=src` mid-run, **2 never did** |
+| mnemo-desktop | no `CLAUDE.md`, no memory | **33 of 35** children missed the build's environment; 10 hit `Text file busy` |
+
+The first two rows are the same repo, the same children, often the *same
+command*: `npm test -- --runInBand` carries the flag `CLAUDE.md` names and
+omits the one it does not. Only the channel differs.
+
+The failure is quiet, which is why it is worth the file. A bare `pytest` in a
+mnemo worktree imports the *main* checkout's `src` and prints `83 passed` —
+a green suite that proves nothing about the change under test. Nothing in the
+transcript looks wrong, so no child goes looking for a skill or a rule to
+correct it.
+
+Keep it to boundaries and keep it short. Every session that opens in the repo
+pays for every line, and anything that tells a child *how to solve* the issue
+re-creates the failure `mnemo dispatch` exists to avoid: the #187 child was
+handed an approach, refused it, and was right.
+
 ### Watching, and answering
 
 `mnemo sessions` is the queue; the [next section](#watching-background-sessions)
@@ -1088,6 +1127,11 @@ purpose. What Claude Code does surface is the count, in the status line
 (`N esperando`), if you installed it.
 
 ## Working on mnemo itself
+
+`CLAUDE.md` at the repo root is the short version: how to run the suite from
+a worktree, the Python floor CI still builds, where changelog entries go. It
+is what a dispatched child reads too — see [what a child already knows about
+your repo](#what-a-child-already-knows-about-your-repo).
 
 The repo is also the plugin, so it ships a `.mcp.json`. Under a plugin
 install Claude Code sets `CLAUDE_PLUGIN_ROOT` and the entry resolves to the
