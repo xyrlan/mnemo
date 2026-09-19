@@ -4,10 +4,13 @@ State lives at ``<vault>/.mnemo/mcp-call-counter.json`` with shape::
 
     {"date": "2026-04-15", "count": 7}
 
-When ``increment`` is called and the stored date is not today, the counter
-resets to 1 (today's first call). ``read_today`` returns 0 when the stored
-date is anything other than today, so a status line query never has to know
-when the day rolled over.
+The state is day-scoped: every read and every write goes through
+:func:`_load`, which rolls the file over the moment it sees a date that is
+not today. So the first caller of the new day — hook, statusline or MCP
+tool, reader or writer — starts from an empty cache, and no later caller
+can wipe what today already wrote (#374). ``read_today`` returns 0 when the
+stored date is anything other than today, so a status line query never has
+to know when the day rolled over.
 
 Atomic write via tmp + os.replace so partial writes never corrupt the file.
 Rare lost increments under heavy concurrency are acceptable — this counter
@@ -28,43 +31,25 @@ def _path(vault_root: Path) -> Path:
 
 
 def increment(vault_root: Path) -> None:
-    """Bump today's counter by 1, preserving unknown top-level keys.
+    """Bump today's counter by 1, preserving the rest of the state.
 
-    v0.8: the file now stores additional runtime state (``injected_cache``,
+    v0.8: the file stores additional runtime state (``injected_cache``,
     ``session_emissions``) alongside ``count``. A naive rewrite of
-    ``{date, count}`` would silently wipe those keys on every MCP call.
+    ``{date, count}`` would silently wipe those keys on every MCP call, so
+    this reads through :func:`_load` and writes the whole dict back.
+
+    The day rollover lives in :func:`_load` and not here (#374): when it
+    lived here, this call was the *only* one that noticed the new day, so
+    it both let yesterday's cache keep suppressing until an MCP tool ran
+    and then wiped whatever the hooks had written earlier that morning.
     """
-    path = _path(vault_root)
+    data = _load(vault_root)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return  # decorative — never block the caller
-    today = date.today().isoformat()
-    data: dict = {}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = loaded
-    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
-        data = {}
-    if data.get("date") != today:
-        # Day rollover wipes count AND runtime state.
-        data = {
-            "date": today,
-            "count": 0,
-            "injected_cache": {},
-            "session_emissions": {},
-        }
-    data["count"] = int(data.get("count", 0)) + 1
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        count = int(data.get("count", 0))
+    except (TypeError, ValueError):
+        count = 0  # decorative — a corrupt count restarts, it never raises
+    data["count"] = count + 1
+    _write(vault_root, data)
 
 
 def read_today(vault_root: Path) -> int:
@@ -86,8 +71,33 @@ def read_today(vault_root: Path) -> int:
 
 # --- v0.8 helpers: injected_cache + session_emissions ---
 
+def _roll_over(data: dict, today: str) -> dict:
+    """Reset the day-scoped state in *data* when it was written on another day.
+
+    The whole file is scoped to one calendar day. Before #374 only
+    :func:`increment` compared the stored date with today, so the rollover
+    happened on the first MCP tool call rather than on the first call of any
+    kind — yesterday's entries went on suppressing all morning, and that MCP
+    call then discarded everything the hooks had written since midnight.
+
+    Unknown top-level keys are left alone: they belong to a version of mnemo
+    this one does not know, and guessing at their lifetime is worse than
+    keeping them.
+    """
+    if data.get("date") == today:
+        return data
+    data["date"] = today
+    data["count"] = 0
+    data["injected_cache"] = {}
+    data["session_emissions"] = {}
+    return data
+
+
 def _load(vault_root: Path) -> dict:
-    """Load state dict with all v0.8 keys present. Never raises."""
+    """Load state dict with all v0.8 keys present, rolled over to today.
+
+    Never raises.
+    """
     path = _path(vault_root)
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -95,7 +105,7 @@ def _load(vault_root: Path) -> dict:
             loaded = {}
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         loaded = {}
-    loaded.setdefault("date", date.today().isoformat())
+    loaded = _roll_over(loaded, date.today().isoformat())
     loaded.setdefault("count", 0)
     loaded.setdefault("injected_cache", {})
     loaded.setdefault("session_emissions", {})
@@ -140,11 +150,13 @@ def read_injected_cache(vault_root: Path, sid: str) -> dict:
     """Return the slugs already injected into session *sid* today (slug -> unix_ts).
 
     Lifetime: day-scoped, per-session. The file stores
-    ``injected_cache = {sid: {slug: ts}}`` and the next day rollover via
-    ``increment()`` wipes it. Two concurrent sessions of the same vault do
-    NOT share entries: a rule one session was told is still news to another
-    (#361 — two thirds of the old vault-wide dedupe silenced a session that
-    had never seen the rule). ``SessionEnd`` leaves the entries in place, so
+    ``injected_cache = {sid: {slug: ts}}`` and the first access on a new
+    calendar day wipes it (:func:`_roll_over`, called from :func:`_load`, so
+    this read is itself enough to retire yesterday's entries — #374). Two
+    concurrent sessions of the same vault do NOT share entries: a rule one
+    session was told is still news to another (#361 — two thirds of the old
+    vault-wide dedupe silenced a session that had never seen the rule).
+    ``SessionEnd`` leaves the entries in place, so
     a ``--resume``d session, whose context still holds them, is not told
     again.
 
@@ -258,13 +270,11 @@ def evict_session(vault_root: Path, sid: str) -> None:
 def read_today_emissions(vault_root: Path) -> int:
     """Return today's reflex emission count (sum across sessions). Never raises.
 
-    Used by the statusline ⚡ segment. Returns 0 when the stored date is not
-    today (mirroring :func:`read_today`'s behaviour) so the day rollover is
-    invisible to callers.
+    Used by the statusline ⚡ segment. The day rollover is invisible to
+    callers: :func:`_load` empties ``session_emissions`` when the stored
+    date is not today, so a stale file sums to 0 without a date check here.
     """
     data = _load(vault_root)
-    if data.get("date") != date.today().isoformat():
-        return 0
     total = 0
     for entry in (data.get("session_emissions") or {}).values():
         try:
