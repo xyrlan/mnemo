@@ -201,6 +201,21 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="stop every finished child in this repo's dispatch "
                                 "worktrees, delivered or not — a stopped child is "
                                 "the one that writes its briefing")
+    resume_p = sub.add_parser(
+        "resume",
+        help="wake the dispatched children the account's limit stopped, once it has reset")
+    # Ids are optional, unlike `deliver`'s: waking publishes nothing and grants
+    # nothing, so naming one narrows the sweep rather than approving it. See
+    # cli/commands/resume.py for why "one command for all of them" is the
+    # feature and not a `--all` in disguise.
+    resume_p.add_argument("ids", nargs="*", metavar="ID",
+                          help="session short id (a unique prefix is enough) or "
+                               "issue number; omitted, every stalled child in "
+                               "this repo whose reset has passed")
+    resume_p.add_argument("--all", action="store_true",
+                          help="every repo, not just this one")
+    resume_p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                          help="print what would be woken and spend nothing")
     land_p = sub.add_parser(
         "land",
         help="a delivered contract's pieces in landing order with their PRs and "

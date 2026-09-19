@@ -396,8 +396,32 @@ def _exploration_total(done: list[Session], explorations) -> str:
             f"+{_thousands(tokens)} across {plural(count, 'done session')}")
 
 
+def _stall_line(stall) -> str:
+    """What a STALLED row says instead of ``needs``: the stall and its clock.
+
+    ``needs`` is already in the bucket heading — every row under STALLED is
+    there for the same reason — so the column spends itself on the one thing
+    that differs between them, which is whether this one can be woken now.
+
+    Claude Code's own sentence carries a local wall-clock ("resets 2:40am")
+    and this repeats it rather than an age, because the maintainer reading
+    the row is deciding whether to wait, not how long it has been waiting.
+    """
+    from mnemo.core.sessions.stalls import Kind, free_at
+
+    if stall is None:
+        return "—"
+    if stall.kind == Kind.TRANSIENT:
+        return "the API asked for a retry — ready"
+    at = free_at(stall)
+    window = (stall.limit or "").replace("_", "-") or "limit"
+    if stall.is_free():
+        return f"{window} spent — free since {at}" if at else f"{window} spent — ready"
+    return f"{window} spent — frees at {at}" if at else f"{window} spent"
+
+
 def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
-                 explorations=None) -> str:
+                 explorations=None, stalls=None) -> str:
     """Render the whole queue, blocked first.
 
     *pr_lookup* maps a :class:`Session` to the PR it produced, or ``None``.
@@ -427,15 +451,30 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     Both WORKING and DONE rows end with ``Bash 46%`` when one tool's
     results fill at least :data:`NOTABLE_SHARE` of the context, read off
     ``Session.context_breakdown`` (#308); every other row is unchanged.
+
+    *stalls* maps ``short_id`` to :class:`~mnemo.core.sessions.stalls.Stall`
+    (#393) and splits the ABANDONED bucket. A session whose process is gone
+    because the account's limit stopped it is not abandoned — it is waiting on
+    a clock, and it is the one row that must never be shown beside ``remove:
+    claude rm``, which deletes the worktree. Those move to STALLED with the
+    reset time and a ``resume`` hint; everything else stays where it was.
+    Omitted, nothing changes and the bucket is what it always was.
     """
     if not sessions:
         return EMPTY
 
     acts = activities or {}
     explored = explorations or {}
+    stalled_by_id = stalls or {}
+
+    def _waiting_on_a_clock(s: Session) -> bool:
+        found = stalled_by_id.get(s.short_id)
+        return found is not None and found.clock_freed
 
     waiting = sorted((s for s in sessions if s.is_waiting), key=_freshest_first, reverse=True)
-    abandoned = sorted((s for s in sessions if s.is_abandoned), key=_sort_key)
+    dead = [s for s in sessions if s.is_abandoned]
+    stalled = sorted((s for s in dead if _waiting_on_a_clock(s)), key=_sort_key)
+    abandoned = sorted((s for s in dead if not _waiting_on_a_clock(s)), key=_sort_key)
     done = [s for s in sessions if s.is_done and not s.is_blocked]
     working = [s for s in sessions if not s.is_blocked and not s.is_done]
 
@@ -467,6 +506,18 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
             lines.append(f"{row}  {suffix}" if suffix else row)
         lines.append("")
 
+    if stalled:
+        # Not abandoned and not waiting on the maintainer: the account's limit
+        # stopped the turn and the process died with it. Its own bucket
+        # because the two hints are opposites — one deletes the tree, the
+        # other puts the child back to work in it (#393).
+        lines.append(f"STALLED ({len(stalled)})")
+        for s in stalled:
+            age = _age(s.updated_at)
+            lines.append(f"  {s.short_id}  {_label(s):<{LABEL_WIDTH}} {age:>5}  "
+                         f"{_stall_line(stalled_by_id.get(s.short_id))}")
+        lines.append("")
+
     if abandoned:
         # Listed, not hidden. These asked for a human and their process died
         # before getting one; the user decides whether that still matters.
@@ -490,6 +541,14 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         lines.append(spent_total)
     if waiting:
         lines.append(f"  attach: claude attach {waiting[0].short_id}")
+    if stalled:
+        # No id: the whole point is that it takes one command for all of them,
+        # and `mnemo resume` wakes only the ones whose reset has passed. A
+        # per-id hint here would be the two-commands-per-child recovery again.
+        # Every row in this bucket has a stall — `_waiting_on_a_clock` is what
+        # put it here — so the lookup cannot miss.
+        ready = sum(1 for s in stalled if stalled_by_id[s.short_id].is_free())
+        lines.append(f"  resume: mnemo resume  ({ready} of {len(stalled)} free now)")
     if abandoned:
         lines.append(f"  remove: claude rm {abandoned[0].short_id}")
 
