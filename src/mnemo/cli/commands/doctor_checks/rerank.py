@@ -20,26 +20,42 @@ from pathlib import Path
 def check_rerank(cfg: dict | None = None) -> list[str] | None:
     """Return finding lines, or None when there is nothing to report.
 
+    Both stages that can call the provider are covered: ``recall.rerank`` on
+    the MCP path and ``reflex.judge`` on the prompt path (#412). They share a
+    key but not a process, and either one can be set with nothing to run on.
+
     ``cfg`` is injectable so a test does not have to own the config file.
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core import secrets
     from mnemo.core.mcp import rerank as mcp_rerank
+    from mnemo.core.reflex import judge as reflex_judge
 
-    chosen = mcp_rerank.settings(cfg if cfg is not None else cfg_mod.load_config())
-    if chosen["provider"] == "none":
-        return None
-    if mcp_rerank.key_source(chosen) != "none":
-        return None
-    return [
-        "rerank: recall.rerank.provider is %r but no key resolves, so every "
-        "list_rules_by_topic call is falling back to the local BM25F order "
-        "(access log: rerank.status = no_key)." % chosen["provider"],
-        "    → run `mnemo rerank --setup` — it asks for the key, tests it once, "
-        "and stores it in %s, which the MCP server reads whatever started it "
-        "(%s only reaches the server when `claude` was launched from the shell "
-        "that exported it)" % (secrets.path(), chosen["keyEnv"]),
-    ]
+    loaded = cfg if cfg is not None else cfg_mod.load_config()
+    findings: list[str] = []
+
+    chosen = mcp_rerank.settings(loaded)
+    if chosen["provider"] != "none" and mcp_rerank.key_source(chosen) == "none":
+        findings += [
+            "rerank: recall.rerank.provider is %r but no key resolves, so every "
+            "list_rules_by_topic call is falling back to the local BM25F order "
+            "(access log: rerank.status = no_key)." % chosen["provider"],
+            "    → run `mnemo rerank --setup` — it asks for the key, tests it once, "
+            "and stores it in %s, which the MCP server reads whatever started it "
+            "(%s only reaches the server when `claude` was launched from the shell "
+            "that exported it)" % (secrets.path(), chosen["keyEnv"]),
+        ]
+
+    judge = reflex_judge.settings(loaded)
+    if judge["provider"] != "none" and reflex_judge.key_source(judge) == "none":
+        findings += [
+            "rerank: reflex.judge.provider is %r but no key resolves, so every "
+            "prompt is falling back to the lexical gates "
+            "(reflex log: judge.status = no_key)." % judge["provider"],
+            "    → run `mnemo rerank --setup` — one key serves both stages, and "
+            "it is stored in %s where the hook reads it" % secrets.path(),
+        ]
+    return findings or None
 
 
 def _doctor_check_rerank(vault: Path) -> bool:

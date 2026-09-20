@@ -246,6 +246,42 @@ ever runs on the ones that do.
 After `--setup`, restart Claude Code: the MCP server reads the config once, at
 spawn.
 
+## I turned on `reflex.judge` and the reflex behaves exactly as before
+
+Same silence, a different log. The per-prompt judge falls back to the lexical
+gates' own decision on every gap — no key, a timeout, an HTTP error, an answer
+it cannot read — and says nothing to the session, because a provider being
+down must not change what a prompt does.
+
+Ask:
+
+```sh
+mnemo doctor     # fails a `rerank` row when reflex.judge.provider is set and no key resolves
+mnemo rerank     # a `reflex judge` block: prompts judged, status counts, rules asked/injected, ms
+```
+
+`no_key` on every prompt is the usual answer, and it has the same cause as the
+list stage's: the key has to be on the machine, not only in one shell. `mnemo
+rerank --setup` stores it; one key serves both stages, and `mnemo rerank
+--reflex on` only sets the switch.
+
+`timeout` on every prompt means the round trip does not fit
+`reflex.judge.timeoutSeconds` (2.5 s by default, a hard wall). Raise it if you
+would rather wait, but it is paid before every prompt you type.
+
+`0 prompts judged` with the provider set means retrieval never found
+candidates to ask about — the prompt was too short (`minQueryTokens`), the
+index is missing, or the session cap is spent. None of those costs a request.
+
+If it is judging and injecting nothing, that is the stage working: the rows
+say `judge_none_relevant`, and the bar is `reflex.judge.injectAt`. Lower it to
+0.4 for roughly twice the injections at 15% noise instead of 10% — the table
+in [configuration](configuration.md#reflexjudge--an-opt-in-judge-as-the-gate)
+is the trade.
+
+Unlike the list stage, this one takes effect on the next prompt: the hook
+reads the config every time, so there is nothing to restart.
+
 ## `doctor` warns about statusLine drift
 
 You hand-edited `~/.claude/settings.json` after installing. Re-run `mnemo init`

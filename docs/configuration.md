@@ -151,6 +151,99 @@ the overlap check), injected inline before Claude answers.
 grid-searches them against your own recall hit/miss log and will overwrite
 hand-tuned values with measured ones.
 
+#### `reflex.judge` — an opt-in judge as the gate
+
+Everything above is lexical: BM25F says a prompt and a rule share vocabulary,
+never that the rule bears on what the prompt asks for. Since `relativeGap`
+went to `1.0` the reflex fires on roughly every second prompt, and of what it
+injects about 11% is about the prompt and 56% is noise — while half the
+on-point rules sitting in its own top 3 are dropped. No BM25F bar and no
+minimum prompt length fixes that (a 40-character floor moves noise from 56% to
+54%).
+
+`reflex.judge` is a model that reads the (prompt, rule) pair and decides.
+**Off by default, and it is the only thing on the prompt path that can leave
+the machine.**
+
+```json
+{ "reflex": { "judge": { "provider": "typesafe" } } }
+```
+
+| key | default | |
+|---|---|---|
+| `reflex.judge.provider` | `"none"` | `"typesafe"` turns the stage on. Anything else is read as `"none"`. |
+| `reflex.judge.model` | `"jev-1.13.0"` | Pinned. Never an alias: the table below is of this model. |
+| `reflex.judge.keyEnv` | `"TYPESAFE_API_KEY"` | The environment variable holding the key — the same one `recall.rerank` uses. One key per machine serves both. |
+| `reflex.judge.timeoutSeconds` | `2.5` | The whole budget a prompt may spend waiting. It is a hard wall, not a socket timeout: past it the request is abandoned. |
+| `reflex.judge.candidates` | `3` | How deep into the BM25F ranking the pool goes. |
+| `reflex.judge.injectAt` | `0.6` | The probability a rule has to clear to be injected. |
+
+**When it is on, it replaces the accept step — it does not stack on it.** The
+pool is the top `candidates` of the *ranking*, including the prompts the
+lexical gates would have silenced for `term_overlap_fail` or
+`absolute_floor_fail`, and the judge alone decides what is injected. What does
+not change: the session cap, the `minQueryTokens` pre-gate and a missing index
+still silence the prompt and cost no request, and a rule already exported into
+the repo's rules file or already injected into this session is dropped from
+the pool *before* anything is asked. When nothing clears the bar the prompt is
+silent with `judge_none_relevant`.
+
+What leaves the machine when the reflex judge is on: the text of each prompt
+you type (first 1,200 characters) whenever lexical retrieval finds candidates,
+plus the first 800 characters of up to three candidate rules, to
+`api.typesafe.ai`, inside the UserPromptSubmit hook. That is your own prompt,
+on up to every second prompt, which is why this is a separate switch from
+`--setup`. No slug, path, project name or transcript is sent. Any failure
+falls back to the lexical gates' own decision.
+
+A missing key, a timeout, an HTTP error or a malformed answer all fall back
+silently to what the lexical gates decided; `.mnemo/reflex-log.jsonl` records
+which, in a `judge` object on the row (`status`, `asked`, `injected`, `ms`,
+and the probability per slug). The log still holds no prompt text — the row's
+`prompt_hash` is what it has always been.
+
+**Turning it on.** `mnemo rerank --reflex on` prints the paragraph above, asks
+for a `y`, and needs a key `mnemo rerank --setup` has already proved and
+stored — it makes no request of its own. `mnemo rerank --reflex off` sets the
+provider back to `"none"` and leaves the list stage alone; `mnemo rerank
+--off` turns both off and takes the key off the machine. `mnemo rerank` then
+reports this stage next to the list one, from the reflex log: prompts judged,
+status counts, rules asked and injected, median and p90 milliseconds. `mnemo
+doctor` fails its `rerank` row when either provider is set and no key
+resolves.
+
+**How sure this is.** `tools/measure_reflex_gate.py` replayed every prompt
+typed on one machine through `core.reflex.decide`, took the top three rules *the
+vault already held at the time*, sampled 300 prompts (220 the shipped gate
+fired on, 80 it silenced), and had every one of the 891 pairs blind-labelled
+0 noise / 1 marginal / 2 on-point. Over all 300:
+
+| gate | rules injected | prompts fired on | noise | on-point | on-point kept (of 64) |
+|---|---|---|---|---|---|
+| shipped (today) | 298 | 220 | 56% | 11% | 32 |
+| every top 3 | 891 | 300 | 65% | 7% | 64 |
+| BM25F ≥ 4.07 | 550 | 206 | 51% | 10% | 56 |
+| judge ≥ 0.4 | 209 | 129 | 15% | 27% | 57 |
+| **judge ≥ 0.6 (shipped)** | **111** | **76** | **10%** | **42%** | **47** |
+| judge ≥ 0.7 | 69 | 55 | 4% | 52% | 36 |
+
+With the bar fixed on the dev two thirds (0.40, the loosest keeping 90% of the
+dev on-point pairs) and applied unchanged to the held-out third: the shipped
+gate leaves 44% noise / 12% on-point and keeps 12 of 25, the judge 17% / 23%
+and 21 of 25. AUC for on-point against the rest is 0.941 on dev and 0.922 on
+test; BM25F has no bar that separates them (0.726 and 0.593).
+
+Four limits. The labels are a model's (`claude-fable-5-1`, blind, one 0/1/2
+per pair), never the developer whose prompt it was. There are 64 on-point
+pairs in the whole sample and 25 in the test third, so "21 of 25" is a small
+number kept, not a rate with a tight interval. One question wording was tried,
+and it is pinned in `judge.question` rather than improved. And the cost is of
+a different kind from `recall.rerank`'s: about 1 s inside a hook that runs
+before every prompt, and the prompts themselves. The report is
+`PYTHONPATH=src python3 tools/measure_reflex_gate.py`, and only its `--score
+--send` flag reaches the provider. `mnemo replay` stays local and does not
+simulate this stage at all.
+
 ### Rule frontmatter written by extraction
 
 Every extracted page carries these keys; they are written by mnemo, not
@@ -213,8 +306,10 @@ this task.
 call that carries a `query`, that query and the first 800 characters of every
 rule in the topic (link section removed) are posted to
 `api.typesafe.ai`. No slug, path, project name or transcript is sent. Nothing
-is sent by the per-prompt reflex, by `mnemo recall`, or by any hook — the MCP
-server is the stage's only caller. A missing key, a timeout, an HTTP error or
+else is sent on this stage's account: `mnemo recall` and every hook are
+silent, and the MCP server is its only caller. The per-prompt reflex has a
+switch of its own (`reflex.judge`, `mnemo rerank --reflex on`), off until you
+turn it on. A missing key, a timeout, an HTTP error or
 a malformed answer all return the BM25F order, silently to the agent; the
 access log records which (`rerank.status` in `.mnemo/mcp-access-log.jsonl`).
 
