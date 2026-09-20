@@ -355,3 +355,80 @@ def test_the_signal_is_the_judge_with_bm25f_as_a_tie_break():
     assert rerank.marks(fused, 0.7) == {"a": True, "b": True, "c": False}
     # A rule the judge never scored is not a key at all.
     assert "d" not in rerank.fuse(judged, {"d": 9.0})
+
+
+# --- TLS: a Python with no CA bundle must still verify, not give up (#406) ---
+
+
+class _Store:
+    """Stands in for ``ssl.SSLContext``: counts roots, records what was loaded."""
+
+    def __init__(self, roots):
+        self.roots, self.loaded = roots, []
+
+    def cert_store_stats(self):
+        return {"x509_ca": self.roots}
+
+    def load_verify_locations(self, cafile=None):
+        self.loaded.append(cafile)
+
+
+def _tls(monkeypatch, tmp_path, roots, bundles):
+    import ssl
+    store = _Store(roots)
+    monkeypatch.setattr(ssl, "create_default_context", lambda: store)
+    monkeypatch.setattr(rerank, "SYSTEM_CA_BUNDLES", tuple(str(tmp_path / b) for b in bundles))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    return store
+
+
+def test_a_python_that_has_its_roots_is_left_alone(monkeypatch, tmp_path):
+    (tmp_path / "os.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=140, bundles=["os.pem"])
+    assert rerank.tls_context() is store and store.loaded == []
+
+
+def test_a_python_with_no_roots_borrows_the_operating_systems(monkeypatch, tmp_path):
+    (tmp_path / "second.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["missing.pem", "second.pem"])
+    rerank.tls_context()
+    assert store.loaded == [str(tmp_path / "second.pem")]
+
+
+def test_an_explicit_ssl_cert_file_is_the_users_choice(monkeypatch, tmp_path):
+    (tmp_path / "os.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["os.pem"])
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "theirs.pem"))
+    rerank.tls_context()
+    assert store.loaded == []
+
+
+def test_no_bundle_anywhere_still_hands_back_a_verifying_context(monkeypatch, tmp_path):
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["missing.pem"])
+    assert rerank.tls_context() is store and store.loaded == []
+
+
+def test_verification_is_never_switched_off():
+    import ssl
+    context = rerank.tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname is True
+
+
+def test_the_client_sends_its_request_through_that_context(monkeypatch):
+    seen = {}
+
+    class _Reply:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"answers": {}}'
+
+    def fake_urlopen(request, timeout=None, context=None):
+        seen["context"], seen["auth"] = context, request.get_header("Authorization")
+        return _Reply()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sentinel = object()
+    monkeypatch.setattr(rerank, "tls_context", lambda: sentinel)
+    rerank.typesafe_client("k", model="m", timeout=1.0)({}, {})
+    assert seen["context"] is sentinel and seen["auth"] == "Bearer k"
