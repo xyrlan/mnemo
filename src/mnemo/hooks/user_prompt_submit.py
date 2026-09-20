@@ -81,36 +81,84 @@ def main() -> int:
         # See `core.reflex.receipts`.
         receipt = _receipt(decision.scores)
         gate_thresholds = decision.thresholds
-        if not decision.accepted:
-            _log_silence(vault, sid, project, prompt_raw,
-                         reason=decision.silence_reason or "index_missing",
-                         candidates=receipt, thresholds=gate_thresholds)
-            return 0
 
-        # Rules already exported into this tree's rules file are loaded by
-        # Claude Code itself; injecting them again is a repeat. Checked only
-        # against what the gates actually accepted — export suppresses
-        # output, it does not re-rank input (subtracting before scoring
-        # could let a weaker rule win a comparison the un-exported vault
-        # would have refused).
-        from mnemo.core.export.manifest import exported_slugs_for
-        exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
-                          & set(decision.accepted))
-        accepted = [s for s in decision.accepted if s not in exported]
-        if not accepted:
-            _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
-                         candidates=receipt, thresholds=gate_thresholds,
-                         exported=exported)
-            return 0
+        # #412: with `reflex.judge` on, a judge that reads the (prompt, rule)
+        # pair replaces the accept step — the pool is the top of the *ranking*,
+        # including the prompts the gates silenced, and the judge alone
+        # decides. Every failure returns None and the shipped path below runs
+        # exactly as it does today. `judge_row` is the log's receipt for the
+        # stage and is written on whichever branch ends up answering.
+        survivors: list | None = None
+        judge_row = None
+        exported: list = []
+        if decision.scores and _judge_configured(reflex_cfg):
+            from mnemo.core.reflex import judge as judge_stage
 
-        # Dedupe against what this session was already told today (#361)
-        cache = session_state.read_injected_cache(vault, sid)
-        survivors = [s for s in accepted if s not in cache]
-        if not survivors:
-            _log_silence(vault, sid, project, prompt_raw, reason="deduped",
-                         candidates=receipt, thresholds=gate_thresholds,
-                         exported=exported)
-            return 0
+            chosen = judge_stage.settings(cfg)
+            if chosen["provider"] != "none":
+                from mnemo.core.export.manifest import exported_slugs_for
+
+                pool = [slug for slug, _score in decision.scores[:chosen["candidates"]]]
+                exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
+                                  & set(pool))
+                pool = [s for s in pool if s not in exported]
+                if not pool:
+                    _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
+                                 candidates=receipt, thresholds=gate_thresholds,
+                                 exported=exported)
+                    return 0
+                cache = session_state.read_injected_cache(vault, sid)
+                pool = [s for s in pool if s not in cache]
+                if not pool:
+                    _log_silence(vault, sid, project, prompt_raw, reason="deduped",
+                                 candidates=receipt, thresholds=gate_thresholds,
+                                 exported=exported)
+                    return 0
+                picks, judge_row = judge_stage.ask(
+                    vault, prompt=prompt_raw, slugs=pool, chosen_settings=chosen,
+                    project=project)
+                if picks is not None:
+                    if not picks:
+                        _log_silence(vault, sid, project, prompt_raw,
+                                     reason=judge_stage.SILENCE_REASON,
+                                     candidates=receipt, thresholds=gate_thresholds,
+                                     exported=exported, judge=judge_row)
+                        return 0
+                    survivors = picks
+
+        if survivors is None:
+            if not decision.accepted:
+                _log_silence(vault, sid, project, prompt_raw,
+                             reason=decision.silence_reason or "index_missing",
+                             candidates=receipt, thresholds=gate_thresholds,
+                             judge=judge_row)
+                return 0
+
+            # Rules already exported into this tree's rules file are loaded by
+            # Claude Code itself; injecting them again is a repeat. Checked only
+            # against what the gates actually accepted — export suppresses
+            # output, it does not re-rank input (subtracting before scoring
+            # could let a weaker rule win a comparison the un-exported vault
+            # would have refused).
+            from mnemo.core.export.manifest import exported_slugs_for
+
+            exported = sorted(exported_slugs_for(vault, project, repo_root=tree_root)
+                              & set(decision.accepted))
+            accepted = [s for s in decision.accepted if s not in exported]
+            if not accepted:
+                _log_silence(vault, sid, project, prompt_raw, reason="all_exported",
+                             candidates=receipt, thresholds=gate_thresholds,
+                             exported=exported, judge=judge_row)
+                return 0
+
+            # Dedupe against what this session was already told today (#361)
+            cache = session_state.read_injected_cache(vault, sid)
+            survivors = [s for s in accepted if s not in cache]
+            if not survivors:
+                _log_silence(vault, sid, project, prompt_raw, reason="deduped",
+                             candidates=receipt, thresholds=gate_thresholds,
+                             exported=exported, judge=judge_row)
+                return 0
 
         _emit_reflex_context(decision.index, survivors)
         for slug in survivors:
@@ -121,7 +169,7 @@ def main() -> int:
         _log_emission(vault, sid, project, prompt_raw, survivors,
                       scores=[score_map.get(s, 0.0) for s in survivors],
                       candidates=receipt, thresholds=gate_thresholds,
-                      exported=exported)
+                      exported=exported, judge=judge_row)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -129,6 +177,19 @@ def main() -> int:
         except Exception:
             pass
     return 0
+
+
+def _judge_configured(reflex_cfg: dict) -> bool:
+    """Is `reflex.judge` on? Read straight off the config, on purpose.
+
+    This is :func:`mnemo.core.reflex.judge.enabled` spelled out here so that a
+    vault with the stage off — the default — never imports that module, and
+    with it :mod:`ssl` and :mod:`urllib.request`, on a hook that runs before
+    every prompt. ``tests/unit/test_reflex_judge.py`` pins the two answers
+    equal over every shape of the block.
+    """
+    provider = ((reflex_cfg or {}).get("judge") or {}).get("provider")
+    return bool(provider) and str(provider).lower() != "none"
 
 
 def _emit_reflex_context(index: dict, slugs: list[str]) -> None:
@@ -174,7 +235,8 @@ def _receipt(scores: list[tuple[str, float]]) -> list[list]:
 def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str,
                  candidates: list | None = None,
                  thresholds: dict | None = None,
-                 exported: list | None = None) -> None:
+                 exported: list | None = None,
+                 judge: dict | None = None) -> None:
     try:
         from mnemo.core.reflex.tokenizer import tokenize_query as _tq
         prompt_tokens_len = len(set(_tq(prompt)))
@@ -198,6 +260,11 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
         entry["thresholds"] = thresholds
     if exported:
         entry["exported"] = exported
+    # Only when the judge stage ran (#412). With `reflex.judge` off — the
+    # default — a row here is byte-identical to the one this hook wrote before
+    # the stage existed, which `test_hook_user_prompt_submit.py` pins.
+    if judge:
+        entry["judge"] = judge
     _record_log(vault_root, entry)
 
 
@@ -205,7 +272,8 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
                   emitted: list[str], *, scores: list[float],
                   candidates: list | None = None,
                   thresholds: dict | None = None,
-                  exported: list | None = None) -> None:
+                  exported: list | None = None,
+                  judge: dict | None = None) -> None:
     entry = {
         "session_id": sid,
         "project": project,
@@ -222,6 +290,11 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
         entry["thresholds"] = thresholds
     if exported:
         entry["exported"] = exported
+    # Only when the judge stage ran (#412). With `reflex.judge` off — the
+    # default — a row here is byte-identical to the one this hook wrote before
+    # the stage existed, which `test_hook_user_prompt_submit.py` pins.
+    if judge:
+        entry["judge"] = judge
     _record_log(vault_root, entry)
 
 

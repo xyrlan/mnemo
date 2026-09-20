@@ -3,9 +3,11 @@
 **Off by default, and the only part of recall that can leave the machine.**
 With ``recall.rerank.provider`` set, every ``list_rules_by_topic`` call that
 carries a ``query`` posts that query and the first 800 characters of each
-rule in the bucket to the provider — a third party. Nothing else is sent, and
-nothing is sent on the prompt path (reflex), by ``mnemo recall`` or by any
-hook: :func:`apply` has one caller, the MCP server.
+rule in the bucket to the provider — a third party. Nothing else is sent by
+this stage, and nothing at all by ``mnemo recall`` or by any hook on its
+account: :func:`apply` has one caller, the MCP server. (The prompt path has a
+sender of its own since #412 — :mod:`mnemo.core.reflex.judge`, off by default
+and behind its own consent — which shares this module's client and key.)
 
 Why it exists, and why it *marks* before it reorders (#404). The list an
 agent is handed is 15 rules of which three quarters are about something else,

@@ -1,8 +1,9 @@
 """``mnemo rerank`` — turn the opt-in recall rerank on, off, or just look at it (#406).
 
-    mnemo rerank             # is it on, where does the key come from, what has it done
-    mnemo rerank --setup     # consent, key, one test request, then write
-    mnemo rerank --off       # provider back to "none", key off the machine
+    mnemo rerank                 # is it on, where does the key come from, what has it done
+    mnemo rerank --setup         # consent, key, one test request, then write
+    mnemo rerank --reflex on     # the second stage: the per-prompt judge (#412)
+    mnemo rerank --off           # both stages back to "none", key off the machine
 
 #405 shipped the stage with one way to give it a key: an environment variable
 read by the MCP server. Claude Code spawns that server, so the variable
@@ -36,8 +37,25 @@ WHAT_IT_SENDS = (
     "call that carries a `query`, that query and the first 800 characters of "
     "every rule in the topic (link section removed) are posted to "
     "`api.typesafe.ai`. No slug, path, project name or transcript is sent. "
-    "Nothing is sent by the per-prompt reflex, by `mnemo recall`, or by any "
-    "hook — the MCP server is the stage's only caller."
+    "Nothing else is sent on this stage's account: `mnemo recall` and every "
+    "hook are silent, and the MCP server is its only caller. The per-prompt "
+    "reflex has a switch of its own (`reflex.judge`, `mnemo rerank --reflex "
+    "on`), off until you turn it on."
+)
+
+#: The second stage's own paragraph, because it sends something the first one
+#: never does: the text of the prompt itself. Quoted from the `reflex.judge`
+#: subsection of ``docs/configuration.md`` and pinned against it by
+#: ``tests/unit/test_cli_rerank_reflex.py``, so consent and the documented
+#: behaviour cannot drift apart.
+REFLEX_SENDS = (
+    "What leaves the machine when the reflex judge is on: the text of each "
+    "prompt you type (first 1,200 characters) whenever lexical retrieval finds "
+    "candidates, plus the first 800 characters of up to three candidate rules, "
+    "to `api.typesafe.ai`, inside the UserPromptSubmit hook. That is your own "
+    "prompt, on up to every second prompt, which is why this is a separate "
+    "switch from `--setup`. No slug, path, project name or transcript is sent. "
+    "Any failure falls back to the lexical gates' own decision."
 )
 
 #: The one request ``--setup`` makes. Neither line comes from the vault: the
@@ -164,6 +182,56 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _judge_settings():
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.reflex import judge as reflex_judge
+
+    return reflex_judge.settings(cfg_mod.load_config())
+
+
+def _reflex(args: argparse.Namespace) -> int:
+    """``--reflex on|off`` — the per-prompt stage, on its own consent (#412).
+
+    It makes no request of its own. The key it needs is the one ``--setup``
+    already proved and stored, so a machine with no key is sent there rather
+    than asked for a second one: there is only ever one TypeSafe key here.
+    """
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.reflex import judge as reflex_judge
+
+    if args.reflex == "off":
+        cfg_path = cfg_mod.set_config_value("reflex.judge.provider", "none")
+        print("reflex.judge.provider = 'none' in %s" % cfg_path)
+        print("The per-prompt reflex is back to its local gates. "
+              "`recall.rerank` is unchanged; `mnemo rerank --off` turns both off.")
+        return 0
+
+    print(textwrap.fill(REFLEX_SENDS, 78))
+    print()
+    if not getattr(args, "yes", False):
+        if not sys.stdin.isatty():
+            print("Refusing to turn this on without a tty. Re-run with --yes "
+                  "if you meant to consent from a script.", file=sys.stderr)
+            return 2
+        if input("Turn it on? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Nothing written.")
+            return 1
+
+    chosen = dict(_judge_settings(), provider=args.provider)
+    if reflex_judge.key_source(chosen) == "none":
+        print("No key resolves for %s, and this command does not ask for one: "
+              "run `mnemo rerank --setup` first — it reads the key, tests it "
+              "with one request and stores it where both stages find it."
+              % args.provider, file=sys.stderr)
+        return 2
+
+    cfg_path = cfg_mod.set_config_value("reflex.judge.provider", args.provider)
+    print("reflex.judge.provider = %r in %s" % (args.provider, cfg_path))
+    print("It takes effect on the next prompt — the hook reads the config "
+          "each time. `mnemo rerank` shows what it has done.")
+    return 0
+
+
 def _off(_args: argparse.Namespace) -> int:
     import os
 
@@ -172,11 +240,15 @@ def _off(_args: argparse.Namespace) -> int:
     from mnemo.core.mcp import rerank as mcp_rerank
 
     cfg_path = cfg_mod.set_config_value("recall.rerank.provider", "none")
+    # Both stages: "off" that left the per-prompt one sending prompt text
+    # would be the opposite of what this command is for.
+    cfg_mod.set_config_value("reflex.judge.provider", "none")
     # Every provider, not only the one that was configured: "off" should leave
     # no key on the machine, and a stale entry under a provider nobody set
     # would be read again the moment someone set it.
     dropped = [p for p in mcp_rerank.PROVIDERS if p != "none" and secrets.remove(p)]
     print("recall.rerank.provider = 'none' in %s" % cfg_path)
+    print("reflex.judge.provider = 'none' in %s" % cfg_path)
     if dropped:
         print("Removed the stored key for: %s (%s)" % (", ".join(dropped), secrets.path()))
     else:
@@ -189,6 +261,11 @@ def _off(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _ms(value) -> str:
+    """A millisecond figure, or a dash when no row carried one."""
+    return "—" if value is None else "%d" % round(float(value))
+
+
 def _report(args: argparse.Namespace) -> int:
     import json
 
@@ -196,12 +273,15 @@ def _report(args: argparse.Namespace) -> int:
     from mnemo.core import secrets
     from mnemo.core.mcp import rerank as mcp_rerank
     from mnemo.core.mcp import rerank_stats
+    from mnemo.core.reflex import judge_stats
 
     vault = cli._resolve_vault()
     chosen = _settings()
     source = mcp_rerank.key_source(chosen)
     days = int(getattr(args, "days", rerank_stats.DEFAULT_DAYS))
     summary = rerank_stats.summarize(vault, days=days)
+    reflex_chosen = _judge_settings()
+    reflex_summary = judge_stats.summarize(vault, days=days)
 
     if getattr(args, "json", False):
         print(json.dumps({
@@ -212,6 +292,14 @@ def _report(args: argparse.Namespace) -> int:
             "keySource": source,
             "secretsPath": str(secrets.path()),
             **summary,
+            "reflex": {
+                "provider": reflex_chosen["provider"],
+                "model": reflex_chosen["model"],
+                "injectAt": reflex_chosen["injectAt"],
+                "candidates": reflex_chosen["candidates"],
+                "keySource": mcp_rerank.key_source(reflex_chosen),
+                **reflex_summary,
+            },
         }, indent=2))
         return 0
 
@@ -237,6 +325,35 @@ def _report(args: argparse.Namespace) -> int:
     if chosen["provider"] == "none":
         print("  turn it on: `mnemo rerank --setup` (docs/configuration.md, "
               "`recall`, says what it sends)")
+
+    # The second stage, from the reflex log rather than the access log: the
+    # two run in different processes on different paths and neither one's
+    # health says anything about the other's.
+    print()
+    if reflex_chosen["provider"] == "none":
+        print("reflex judge: off — reflex.judge.provider is \"none\", the "
+              "per-prompt gates decide locally.")
+    else:
+        print("reflex judge: on — %s, model %s, inject at %g over the top %d"
+              % (reflex_chosen["provider"], reflex_chosen["model"],
+                 reflex_chosen["injectAt"], reflex_chosen["candidates"]))
+        print("  key: %s" % _source_line(reflex_chosen))
+        if mcp_rerank.key_source(reflex_chosen) == "none":
+            print("  → no key anywhere, so every prompt falls back to the "
+                  "lexical gates. `mnemo rerank --setup` fixes that.")
+    if not reflex_summary["prompts"]:
+        print("  last %d days: no prompt reached the judge." % days)
+    else:
+        print("  last %d days: %d prompts judged — %s" % (
+            days, reflex_summary["prompts"],
+            ", ".join(judge_stats.status_terms(reflex_summary["by_status"]))
+            or "no status recorded"))
+        print("    %d rules asked, %d injected; %s ms median, %s ms p90"
+              % (reflex_summary["asked"], reflex_summary["injected"],
+                 _ms(reflex_summary["median_ms"]), _ms(reflex_summary["p90_ms"])))
+    if reflex_chosen["provider"] == "none":
+        print("  turn it on: `mnemo rerank --reflex on` (docs/configuration.md, "
+              "`reflex.judge`, says what it sends — your own prompt text)")
     return 0
 
 
@@ -244,6 +361,8 @@ def _report(args: argparse.Namespace) -> int:
 def cmd_rerank(args: argparse.Namespace) -> int:
     if getattr(args, "off", False):
         return _off(args)
+    if getattr(args, "reflex", None):
+        return _reflex(args)
     if getattr(args, "setup", False):
         return _setup(args)
     return _report(args)

@@ -184,6 +184,30 @@ DEFAULTS: dict[str, Any] = {
     "reflex": {
         "enabled": True,  # v0.8.0 stable — flip to False in mnemo.config.json to disable
         "maxEmissionsPerSession": 10,
+        # #412: an opt-in judge that reads the (prompt, rule) pair and decides
+        # what is injected, *replacing* the accept step rather than stacking on
+        # it. Off by default, and with its own switch rather than
+        # `recall.rerank`'s, because it sends something that one never does:
+        # the text of the prompt the user typed, on up to every second prompt,
+        # from inside the UserPromptSubmit hook. `model` is pinned, never an
+        # alias. The key is the same one `recall.rerank` uses — one TypeSafe
+        # key per machine — and is never read from this file. Any failure, a
+        # missing key included, falls back to the lexical gates' own decision.
+        #
+        # `candidates` is how deep into the BM25F ranking the pool goes and
+        # `injectAt` the probability a rule has to clear to be injected; both
+        # were fixed on a dev split of 300 sampled prompts and read once on the
+        # held-out third (tools/measure_reflex_gate.py): at 0.6, 111 injections
+        # instead of 298, 10% noise instead of 56%, 42% on-point instead of
+        # 11%. Turn it on with `mnemo rerank --reflex on`.
+        "judge": {
+            "provider": "none",
+            "model": "jev-1.13.0",
+            "keyEnv": "TYPESAFE_API_KEY",
+            "timeoutSeconds": 2.5,
+            "candidates": 3,
+            "injectAt": 0.6,
+        },
         "thresholds": {
             "termOverlapMin": 2,
             "relativeGap": 1.0,

@@ -389,7 +389,7 @@ def _build_parser() -> argparse.ArgumentParser:
     why.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     replay = sub.add_parser(
         "replay",
-        help="replay your own transcripts against your vault: how often a rule from an earlier session would have come back",
+        help="replay your own transcripts against your vault: how often a rule from an earlier session would have come back (local, lexical gates only — it does not simulate reflex.judge)",
     )
     replay.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     replay.add_argument("--project", default=None, help="only prompts typed in this project (default: every project)")
@@ -418,7 +418,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rerank_mode.add_argument(
         "--off", action="store_true",
-        help="set recall.rerank.provider back to \"none\" and take the stored key off this machine",
+        help="turn both stages off: recall.rerank.provider and reflex.judge.provider back to \"none\", and the stored key off this machine",
+    )
+    rerank_mode.add_argument(
+        "--reflex", choices=("on", "off"), default=None,
+        help="the per-prompt judge (#412): `on` says what it sends, asks for consent and needs a key already set up; `off` sets reflex.judge.provider to \"none\"",
     )
     rerank_p.add_argument(
         "--provider", choices=[p for p in _RERANK_PROVIDERS if p != "none"],

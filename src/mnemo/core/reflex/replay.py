@@ -32,6 +32,13 @@ cannot re-check, chiefly the 2026-09-02 ``mnemo reclassify`` keep verdicts,
 which cite briefings written before the ``## Corrections`` section existed.
 Both are printed; the gate-verified number is the one to quote.
 
+This stays local and makes no network call. It replays the *lexical*
+decision only: with ``reflex.judge`` on (#412) the hook's real gate is a
+model reading the (prompt, rule) pair, and nothing here simulates it — a
+replay of that would mean sending every prompt on disk to a third party.
+``tools/measure_reflex_gate.py`` is where that stage is measured, over a
+sample and behind its own ``--send``.
+
 Composed from what already exists: transcript discovery and the
 ``sources:`` → session map are :mod:`mnemo.core.mcp.recall_sessions`'s; the
 decision is the hook's. What could *not* be composed: ``mnemo recall`` scores
