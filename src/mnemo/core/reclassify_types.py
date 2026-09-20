@@ -39,6 +39,12 @@ class Verdict:
     # (``derive_rule_slug``) and on the real vault 97% of rules have a slug that
     # differs from their filename — ``shared/feedback/{slug}.md`` is not a path.
     path: Optional[str] = None
+    # Same, for a ``merge`` verdict's ``target``. ``plan()`` leaves it unset:
+    # it only grades ``shared/feedback/``, and ``apply`` finds a target there by
+    # slug. ``mnemo dedup-rules --merge`` (#409) may name a target in any type
+    # directory, which that lookup would not find — and a merge whose target is
+    # not found silently becomes a demotion of the other page.
+    target_path: Optional[str] = None
 
 
 @dataclass

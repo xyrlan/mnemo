@@ -461,6 +461,7 @@ def load_plan(vault_root: Path) -> Optional[Plan]:
             reason=str(d.get("reason") or ""),
             link=(str(d["link"]).strip() or None) if d.get("link") else None,
             path=_check_path(d.get("path")),
+            target_path=_check_path(d.get("target_path")),
         )
         for d in payload.get("verdicts") or []
         if isinstance(d, dict)

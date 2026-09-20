@@ -31,6 +31,18 @@ duplicates in a vault, so ``--list`` prints the top pairs with both openings
 for a person to read. A count from this tool is a queue for a curator, never
 a merge list.
 
+Since #409 that queue is a command — ``mnemo dedup-rules --judge`` — and the
+question, the tokenisation, the pair enumeration, the cost arithmetic and the
+shape of one request are imported from :mod:`mnemo.core.dedup_judge` rather
+than defined here, so what is measured is what ships. Two things moved with
+them. The body judged is now ``rule_text``: the link section is dropped, the
+way the recall stage drops it, because rules in one cluster link to each other
+and those shared ``[[wikilinks]]`` are token overlap that says nothing about
+what a page claims (on ``mnemo``/``measurement``, 435 pairs, keeping it moves
+the Jaccard p90 from 0.117 to 0.142 and changes 5 of the top 20 pairs by
+ratio). And a pair whose answer is not a number is unmeasured here too,
+instead of carrying a non-numeric score into the summary.
+
 On a python.org macOS build ``urllib`` has no CA bundle and the call fails
 with ``CERTIFICATE_VERIFY_FAILED``; ``SSL_CERT_FILE=/etc/ssl/cert.pem`` fixes
 it. Do not disable verification.
@@ -38,14 +50,30 @@ it. Do not disable verification.
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import os
 import sys
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+# What the command ships (#409). The question, the tokenisation, the pair
+# enumeration, the cost arithmetic and the shape of one request live in
+# ``src/`` so the measurement and ``mnemo dedup-rules --judge`` cannot drift
+# apart; ``tests/unit/test_measure_jev_dedupe.py`` pins them equal.
+from mnemo.core.dedup_judge import (  # noqa: F401 — re-exported for callers and tests
+    DUPLICATE_SCORE,
+    JACCARD_GATE,
+    QUESTION,
+    USD_PER_MTOK,
+    Client,
+    ask,
+    estimate,
+    jaccard,
+    pairs_of,
+    rule_text,
+)
 
 URL = "https://api.typesafe.ai/v1/systemone"
 
@@ -53,64 +81,9 @@ URL = "https://api.typesafe.ai/v1/systemone"
 #: under a number somebody wrote down.
 MODEL = "jev-1.13.0"
 
-#: USD per million input tokens; output is free (docs.typesafe.ai/models,
-#: read 2026-09-19).
-USD_PER_MTOK = 0.042
-
-#: The gate the inbox dedupe applies today (``dedup._bodies_similar``).
-JACCARD_GATE = 0.6
-
-#: Halfway between "related" and "same lesson": rounds to a duplicate.
-DUPLICATE_SCORE = 1.5
-
-QUESTION = {
-    "same": {
-        "type": "score",
-        "instructions": (
-            "Do these two stored engineering rules state the same lesson, "
-            "so that keeping both is redundant?"
-        ),
-        "criteria": [
-            "Different lessons: a developer needs both",
-            "Related: overlapping theme but each adds something the other lacks",
-            "Same lesson in different words: one can be deleted with no loss",
-        ],
-    }
-}
-
-Client = Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
-
-
-def jaccard(a: str, b: str) -> float:
-    """The ratio ``dedup._bodies_similar`` thresholds, same tokenisation."""
-    tokens_a = set(a.lower().split())
-    tokens_b = set(b.lower().split())
-    if not tokens_a or not tokens_b:
-        return 0.0
-    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
-
-
-def pairs_of(bodies: Dict[str, str]) -> List[Tuple[str, str]]:
-    """Every unordered pair of slugs with a body; an empty body judges nothing."""
-    return list(itertools.combinations(sorted(s for s, b in bodies.items() if b), 2))
-
-
-def estimate(bodies: Dict[str, str]) -> Dict[str, Any]:
-    """Pairs, tokens and cost of a ``--send``, from characters / 4.
-
-    A rough bound so the price is known before the call, not a bill: the
-    question's own text rides along with every pair and is counted too.
-    """
-    pairs = pairs_of(bodies)
-    overhead = len(json.dumps(QUESTION))
-    chars = sum(len(bodies[a]) + len(bodies[b]) + overhead for a, b in pairs)
-    tokens = chars // 4
-    return {"pairs": len(pairs), "tokens": tokens,
-            "usd": round(tokens * USD_PER_MTOK / 1e6, 4)}
-
 
 def http_client(key: str, *, model: str = MODEL, timeout: float = 60.0) -> Client:
-    def ask(state: Dict[str, Any], questions: Dict[str, Any]) -> Dict[str, Any]:
+    def post(state: Dict[str, Any], questions: Dict[str, Any]) -> Dict[str, Any]:
         body = json.dumps({"state": state, "model": model, "questions": questions})
         request = urllib.request.Request(URL, data=body.encode("utf-8"), headers={
             "Authorization": "Bearer " + key,
@@ -122,7 +95,7 @@ def http_client(key: str, *, model: str = MODEL, timeout: float = 60.0) -> Clien
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             return {"error": exc.code}
-    return ask
+    return post
 
 
 def judge(bodies: Dict[str, str], client: Client, *, workers: int = 8) -> List[Dict[str, Any]]:
@@ -138,16 +111,9 @@ def judge(bodies: Dict[str, str], client: Client, *, workers: int = 8) -> List[D
     rank = {p: i + 1 for i, p in enumerate(by_ratio)}
 
     def one(pair: Tuple[str, str]) -> Dict[str, Any]:
-        out = client({"rule_a": bodies[pair[0]], "rule_b": bodies[pair[1]]}, QUESTION)
-        answer = (out.get("answers") or {}).get("same") or {}
-        return {
-            "a": pair[0], "b": pair[1],
-            "score": answer.get("score"),
-            "confidence": answer.get("confidence"),
-            "jaccard": round(ratios[pair], 4),
-            "jaccard_rank": rank[pair],
-            "input_tokens": (out.get("usage") or {}).get("input_tokens", 0),
-        }
+        answer = ask(client, bodies[pair[0]], bodies[pair[1]])
+        return dict(answer, a=pair[0], b=pair[1],
+                    jaccard=round(ratios[pair], 4), jaccard_rank=rank[pair])
 
     with ThreadPoolExecutor(max(1, workers)) as pool:
         return list(pool.map(one, pairs))
@@ -203,7 +169,7 @@ def load_bodies(project: str, topic: str, max_chars: int) -> Dict[str, str]:
     bodies = {}
     for rule in tools.list_rules_by_topic(vault, topic, scope="project", project=project):
         page = tools.read_mnemo_rule(vault, rule["slug"], project=project) or {}
-        bodies[rule["slug"]] = " ".join((page.get("body") or "").split())[:max_chars]
+        bodies[rule["slug"]] = rule_text(page.get("body") or "", max_chars)
     return bodies
 
 

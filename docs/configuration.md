@@ -472,6 +472,73 @@ becomes `dismissed`, so it does not come back unless you run `mnemo extract
 --force`. `mnemo rewrites` is the sibling command for the other half of that
 directory — the `.proposed.md` rewrites of rules that are already live.
 
+### `mnemo dedup-rules`
+
+Two dedupes, because there are two kinds of duplicate.
+
+```bash
+mnemo dedup-rules                 # pages sharing a `name:` — dry-run
+mnemo dedup-rules --apply         # fold them: sources unioned, duplicates deleted
+mnemo dedup-rules --judge         # the other kind: a queue, dry-run, nothing sent
+mnemo dedup-rules --judge --project mnemo --topic measurement --send
+mnemo dedup-rules --merge KEEP DROP   # act on one pair, by hand
+```
+
+The default folds `shared/<type>/*.md` files that share a `name:` — the same
+logical rule under a slug that drifted between extraction runs.
+
+`--judge` is for the duplicate no token gate can see: two rules that state one
+lesson in different words. #187 measured why a threshold cannot find them —
+the inbox gate is Jaccard ≥ 0.6 on word tokens, a real duplicate scored 0.136,
+and the p90 of 79,800 unrelated pairs was 0.131. So this asks a model that
+reads the pair, for every pair of live rules inside one topic bucket of one
+project — the list `list_rules_by_topic` actually answers with, which is where
+a near-copy costs something: since #404 that list is 15 rules of which three
+quarters are about something else, and two copies of one rule take two of the
+slots that are not. A pair is asked about once however many topics or projects
+hold both rules.
+
+It is a **dry run unless `--send`**, and the dry run is the budget: buckets,
+pairs, estimated input tokens and cost, and how many of those pairs the
+Jaccard gate catches on its own (on this machine's vault, 1 of 48,090).
+`--max-pairs` (default 5,000) is a spend guard — over it, `--send` refuses and
+names the largest buckets, so `--project`/`--topic` is the way in.
+
+**What `--send` sends:** for every pair, both rule bodies — the first
+`--max-chars` characters (1,200) of each, link section removed — posted to
+`api.typesafe.ai`, a third party, with the question and nothing else. No slug,
+no name, no path, no project name, no transcript. It happens once per run and
+only when the flag is there. It uses the same provider, model, key and
+verifying TLS context as `recall.rerank` but **does not need that stage to be
+on**: the key comes from `recall.rerank.keyEnv` and then `~/.mnemo/secrets.json`,
+and with neither the command says `mnemo rerank --setup` and exits non-zero.
+Answers are written to `<vault>/.mnemo/dedupe-answers.json` as they arrive, so
+an interrupted run keeps what it paid for and a re-run asks only for what is
+missing. A pair the provider could not answer is not an answer of zero: it is
+left out, counted apart, and asked again.
+
+The result is `<vault>/.mnemo/dedupe-queue.json` (also printed; `--json`): the
+pairs scored at or over `--at` (default 1.5, halfway between "related" and
+"same lesson"), best first, each with both slugs, both names, the opening 200
+characters of both bodies, the score, the pair's Jaccard ratio and its rank by
+Jaccard inside its bucket. That last column is the point — a pair the judge
+calls a duplicate that Jaccard ranks 41st of 435 is a duplicate no gate would
+ever have surfaced.
+
+**It is a queue for a curator, never a merge list.** There is no labelled set
+of duplicates in a vault, so this has no precision and no recall to quote, and
+nothing in `--judge` deletes, merges or stages anything. `--merge KEEP DROP`
+is the only part that changes a rule and it takes both slugs from you: it
+executes `reclassify`'s own `merge` verdict, so `DROP`'s sources are unioned
+onto `KEEP`, `DROP` is archived under `shared/_archive/reclassify-<RUN_ID>/`
+with a byte-exact original, and `mnemo reclassify --undo <RUN_ID>` restores
+both. `DROP`'s body is not appended to `KEEP` — read both openings before
+choosing which slug is which.
+
+`tools/measure_jev_dedupe.py` is the measurement this came from (#400) and
+imports the question, the tokenisation and the cost arithmetic from the same
+module the command uses, so what is measured is what ships.
+
 ### `mnemo reclassify`
 
 Grades every live rule in `shared/feedback/` under the evidence rules above,
