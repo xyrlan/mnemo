@@ -219,6 +219,33 @@ subscription, there's no per-token charge for those calls anyway.
 
 `mnemo backfill --dry-run` prints the estimate and writes nothing.
 
+## I set `recall.rerank.provider` and nothing changed
+
+Almost certainly no key reached the MCP server. The stage falls back to the
+local BM25F order on every gap and says nothing to the agent — a provider being
+down must not break a tool call — so a missing key and a working stage that
+found nothing worth marking look identical in the list.
+
+Ask:
+
+```sh
+mnemo doctor     # fails a `rerank` row when the provider is set and no key resolves
+mnemo rerank     # provider, where the key comes from, and the last 14 days by status
+```
+
+`no_key` on every call is the answer this is usually about. The cause is that
+Claude Code spawns the MCP server, so `export TYPESAFE_API_KEY=…` in `.zshrc`
+reaches it only when `claude` itself was started from that shell — never from
+an app opened from the Dock. `mnemo rerank --setup` stores the key on the
+machine instead, where the server finds it however it was started.
+
+`error` on every call is a provider or network problem, not a configuration
+one; `no_query` means the calls are not carrying a `query`, and the stage only
+ever runs on the ones that do.
+
+After `--setup`, restart Claude Code: the MCP server reads the config once, at
+spawn.
+
 ## `doctor` warns about statusLine drift
 
 You hand-edited `~/.claude/settings.json` after installing. Re-run `mnemo init`

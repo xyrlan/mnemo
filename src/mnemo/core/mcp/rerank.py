@@ -24,6 +24,12 @@ signal and the order with :func:`fuse` and :func:`ranked` from here, so what
 was measured is what ships. It asks :func:`question` of :func:`rule_text`,
 the same two this module sends.
 
+The key is resolved by :func:`resolve_key`: the environment variable
+``keyEnv`` names, then :mod:`mnemo.core.secrets` — because Claude Code spawns
+this server and an ``export`` in a shell profile reaches it only when
+``claude`` was started from that shell (#406). ``mnemo rerank --setup`` writes
+the second source; with the provider at ``none`` neither is ever read.
+
 Every gap degrades to the order that came in — no provider, no key, a bucket
 too small to reorder, a timeout, an HTTP error, a malformed answer. A
 ``query`` must never break the tool, and a provider being down must not
@@ -34,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -114,7 +121,89 @@ def settings(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
 
 
+#: Where a key was found, in the order they are tried. ``"none"`` is an
+#: answer, not a failure: the stage falls back to the BM25F order.
+KEY_SOURCES = ("env", "secrets", "none")
+
+
+def resolve_key(chosen: Mapping[str, Any]) -> Tuple[Optional[str], str]:
+    """The provider's key and where it came from, environment first (#406).
+
+    The environment variable keeps priority: a key exported for one shell
+    session must still beat what is stored on the machine, so a maintainer can
+    try a second key without editing anything. The secrets file exists because
+    the process that reads this is the MCP server, which Claude Code spawns —
+    it inherits the shell's environment only when ``claude`` was started from
+    that shell, and never when the desktop app was opened from the Dock.
+
+    Callers that must not see the key use :func:`key_source`.
+    """
+    from mnemo.core import secrets
+
+    key = os.environ.get(str(chosen.get("keyEnv") or DEFAULT_KEY_ENV))
+    if key:
+        return key, "env"
+    try:
+        stored = secrets.read(str(chosen.get("provider") or ""))
+    except Exception:  # noqa: BLE001 — a secrets file must never break a tool call
+        stored = None
+    if stored:
+        return stored, "secrets"
+    return None, "none"
+
+
+def key_source(chosen: Mapping[str, Any]) -> str:
+    """Which of :data:`KEY_SOURCES` would answer, without handing the key over.
+
+    ``mnemo rerank``, ``mnemo status`` and ``mnemo doctor`` all report where
+    the key comes from and none of them may hold one, so the only value that
+    leaves here is the label.
+    """
+    return resolve_key(chosen)[1]
+
+
+#: Where a system keeps its CA bundle, tried in order. macOS, Debian/Ubuntu,
+#: RHEL/Fedora.
+SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+)
+
+
+def tls_context() -> ssl.SSLContext:
+    """A verifying context that also works on a Python with no CA bundle.
+
+    The python.org macOS build ships without one until the user runs its
+    ``Install Certificates.command``: the default context then holds zero
+    roots and every request dies with ``CERTIFICATE_VERIFY_FAILED`` — which
+    here would mean a key that ``mnemo rerank --setup`` can never validate and
+    a stage that reports ``error`` on every call. When the default store is
+    empty, the operating system's own bundle is loaded instead.
+
+    Verification is never relaxed: hostname checking and ``CERT_REQUIRED``
+    stay on, and the only roots added are the ones the OS already trusts.
+    ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` are honoured by the default context
+    and win when set.
+    """
+    context = ssl.create_default_context()
+    if context.cert_store_stats().get("x509_ca", 0):
+        return context
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return context
+    for bundle in SYSTEM_CA_BUNDLES:
+        if os.path.isfile(bundle):
+            try:
+                context.load_verify_locations(cafile=bundle)
+            except (OSError, ssl.SSLError):
+                continue
+            break
+    return context
+
+
 def typesafe_client(key: str, *, model: str, timeout: float) -> Client:
+    context = tls_context()
+
     def ask(state: Dict[str, Any], questions: Dict[str, Any]) -> Dict[str, Any]:
         body = json.dumps({"state": state, "model": model, "questions": questions})
         request = urllib.request.Request(TYPESAFE_URL, data=body.encode("utf-8"), headers={
@@ -122,7 +211,7 @@ def typesafe_client(key: str, *, model: str, timeout: float) -> Client:
             "Content-Type": "application/json",
             "User-Agent": "mnemo-recall-rerank",
         })
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             return json.loads(response.read().decode("utf-8"))
     return ask
 
@@ -232,7 +321,7 @@ def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
     if len(matches) < 2:
         return matches, dict(info, status="small")
     if client is None:
-        key = os.environ.get(chosen["keyEnv"])
+        key, _source = resolve_key(chosen)
         if not key:
             return matches, dict(info, status="no_key")
         client = typesafe_client(key, model=chosen["model"], timeout=chosen["timeoutSeconds"])

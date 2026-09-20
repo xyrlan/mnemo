@@ -127,6 +127,69 @@ def test_without_a_key_the_order_stands_and_no_request_is_built(vault):
     assert [m["slug"] for m in out] == ["often-seen", "the-one-that-matters", "unrelated"]
 
 
+# ── where the key comes from (#406) ───────────────────────────────────────
+#
+# Claude Code spawns this server, so the environment variable reaches it only
+# when `claude` was started from the shell that exported it. The secrets file
+# is the second source; `mnemo rerank --setup` writes it.
+
+
+def test_the_secrets_file_is_used_when_the_environment_has_nothing(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-from-file")
+    key, source = rerank.resolve_key(rerank.settings(ON))
+    assert (key, source) == ("sk-from-file", "secrets")
+
+
+def test_the_environment_wins_over_the_file(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-from-file")
+    monkeypatch.setenv(rerank.DEFAULT_KEY_ENV, "sk-from-env")
+    assert rerank.resolve_key(rerank.settings(ON)) == ("sk-from-env", "env")
+
+
+def test_a_key_stored_for_another_provider_is_not_used(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("someone-else", "sk-theirs")
+    assert rerank.resolve_key(rerank.settings(ON)) == (None, "none")
+
+
+def test_an_unreadable_secrets_file_is_no_key_not_an_error(vault, monkeypatch, tmp_path):
+    broken = tmp_path / "s.json"
+    broken.write_text("{ truncated", encoding="utf-8")
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(broken))
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON)
+    assert info["status"] == "no_key"
+    assert [m["slug"] for m in out] == ["often-seen", "the-one-that-matters", "unrelated"]
+
+
+def test_key_source_never_returns_the_key(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-secret")
+    assert rerank.key_source(rerank.settings(ON)) == "secrets"
+    assert rerank.key_source(rerank.settings(None)) == "none"
+
+
+def test_with_the_provider_off_the_secrets_file_is_never_opened(vault, monkeypatch, tmp_path):
+    """The default must not read a file that may not exist on this machine."""
+    from mnemo.core import secrets
+
+    def refuse():
+        raise AssertionError("the stage read the secrets file while off")
+
+    monkeypatch.setattr(secrets, "path", refuse)
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=None)
+    assert info is None
+
+
 @pytest.mark.parametrize("answer", [TimeoutError("slow"), {"answers": {}}, {"error": 429}, "not a dict"])
 def test_a_provider_that_fails_leaves_the_order_that_came_in(vault, answer):
     def broken(state, questions):
@@ -292,3 +355,80 @@ def test_the_signal_is_the_judge_with_bm25f_as_a_tie_break():
     assert rerank.marks(fused, 0.7) == {"a": True, "b": True, "c": False}
     # A rule the judge never scored is not a key at all.
     assert "d" not in rerank.fuse(judged, {"d": 9.0})
+
+
+# --- TLS: a Python with no CA bundle must still verify, not give up (#406) ---
+
+
+class _Store:
+    """Stands in for ``ssl.SSLContext``: counts roots, records what was loaded."""
+
+    def __init__(self, roots):
+        self.roots, self.loaded = roots, []
+
+    def cert_store_stats(self):
+        return {"x509_ca": self.roots}
+
+    def load_verify_locations(self, cafile=None):
+        self.loaded.append(cafile)
+
+
+def _tls(monkeypatch, tmp_path, roots, bundles):
+    import ssl
+    store = _Store(roots)
+    monkeypatch.setattr(ssl, "create_default_context", lambda: store)
+    monkeypatch.setattr(rerank, "SYSTEM_CA_BUNDLES", tuple(str(tmp_path / b) for b in bundles))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    return store
+
+
+def test_a_python_that_has_its_roots_is_left_alone(monkeypatch, tmp_path):
+    (tmp_path / "os.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=140, bundles=["os.pem"])
+    assert rerank.tls_context() is store and store.loaded == []
+
+
+def test_a_python_with_no_roots_borrows_the_operating_systems(monkeypatch, tmp_path):
+    (tmp_path / "second.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["missing.pem", "second.pem"])
+    rerank.tls_context()
+    assert store.loaded == [str(tmp_path / "second.pem")]
+
+
+def test_an_explicit_ssl_cert_file_is_the_users_choice(monkeypatch, tmp_path):
+    (tmp_path / "os.pem").write_text("x", encoding="utf-8")
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["os.pem"])
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "theirs.pem"))
+    rerank.tls_context()
+    assert store.loaded == []
+
+
+def test_no_bundle_anywhere_still_hands_back_a_verifying_context(monkeypatch, tmp_path):
+    store = _tls(monkeypatch, tmp_path, roots=0, bundles=["missing.pem"])
+    assert rerank.tls_context() is store and store.loaded == []
+
+
+def test_verification_is_never_switched_off():
+    import ssl
+    context = rerank.tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname is True
+
+
+def test_the_client_sends_its_request_through_that_context(monkeypatch):
+    seen = {}
+
+    class _Reply:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"answers": {}}'
+
+    def fake_urlopen(request, timeout=None, context=None):
+        seen["context"], seen["auth"] = context, request.get_header("Authorization")
+        return _Reply()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sentinel = object()
+    monkeypatch.setattr(rerank, "tls_context", lambda: sentinel)
+    rerank.typesafe_client("k", model="m", timeout=1.0)({}, {})
+    assert seen["context"] is sentinel and seen["auth"] == "Bearer k"

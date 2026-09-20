@@ -263,35 +263,64 @@ def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
+def _read_raw(cfg_path: Path) -> dict[str, Any]:
+    """The config file as it sits on disk — defaults never merged in.
+
+    ``load_config`` returns ``DEFAULTS`` deep-merged with the file, so writing
+    its result back freezes today's defaults into the user's file and silently
+    pins every one of them against future versions. #303 was that damage:
+    re-running ``mnemo init`` to repair a hook reset
+    ``extraction.subprocessTimeout`` and ``doctor.skipStatuslineDrift``. Every
+    writer of a single key starts here instead.
+
+    A file that is not a JSON object cannot be merged; its bytes are kept in a
+    ``.bak.<stamp>`` sibling before the caller replaces it.
+    """
+    from datetime import datetime
+
+    try:
+        data = cfg_path.read_bytes()
+    except (FileNotFoundError, OSError):
+        return {}
+    if not data.strip():
+        return {}
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    cfg_path.with_name(f"{cfg_path.name}.bak.{stamp}").write_bytes(data)
+    return {}
+
+
+def set_config_value(dotted: str, value: Any, path: Path | None = None) -> Path:
+    """Set one dotted key in the user's config, keeping every other key.
+
+    Missing parent objects are created, and a parent that holds something
+    other than an object is replaced — there is nowhere else to put the key.
+    Returns the path written so a caller can name it in its output.
+    """
+    cfg_path = path or default_config_path()
+    raw = _read_raw(cfg_path)
+    node = raw
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[parts[-1]] = value
+    save_config(raw, path=cfg_path)
+    return cfg_path
+
+
 def set_vault_root(vault_root: Path, path: Path | None = None) -> None:
     """Point the config at *vault_root*, keeping every other key the file holds.
 
     ``mnemo init`` used to ``save_config({"vaultRoot": ...})``, which replaced
-    the whole file: re-running it to repair a hook reset
-    ``extraction.subprocessTimeout`` and ``doctor.skipStatuslineDrift`` to their
-    defaults with no warning (#303). Only the raw file is merged — never
-    ``load_config``'s defaults, which would freeze today's defaults into it.
-
-    A file that is not a JSON object cannot be merged; its bytes are kept in a
-    ``.bak.<stamp>`` sibling before it is replaced.
+    the whole file (#303); see :func:`_read_raw` for what that cost.
     """
-    from datetime import datetime
-
-    cfg_path = path or default_config_path()
-    raw: dict[str, Any] = {}
-    try:
-        data = cfg_path.read_bytes()
-    except FileNotFoundError:
-        data = None
-    if data is not None and data.strip():
-        try:
-            parsed = json.loads(data.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            parsed = None
-        if isinstance(parsed, dict):
-            raw = parsed
-        else:
-            stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-            cfg_path.with_name(f"{cfg_path.name}.bak.{stamp}").write_bytes(data)
-    raw["vaultRoot"] = str(vault_root)
-    save_config(raw, path=cfg_path)
+    set_config_value("vaultRoot", str(vault_root), path)

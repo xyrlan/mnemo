@@ -53,6 +53,7 @@ def command(name: str) -> Callable:
 def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
     from mnemo.core.claude_cli import EFFORT_LEVELS
+    from mnemo.core.mcp.rerank import PROVIDERS as _RERANK_PROVIDERS
     # ``friction`` registers itself here rather than in ``cli/commands/__init__``:
     # the friction-loop contract left that file outside the piece that owns the
     # command. Every entry point builds the parser before it looks a handler up.
@@ -399,6 +400,30 @@ def _build_parser() -> argparse.ArgumentParser:
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")
     recall.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall.add_argument("--no-bootstrap", action="store_true", help="reuse existing cases.json instead of regenerating")
+    rerank_p = sub.add_parser(
+        "rerank",
+        help="the opt-in rerank of list_rules_by_topic: whether it is on, where its key comes from, what it has done",
+    )
+    rerank_mode = rerank_p.add_mutually_exclusive_group()
+    rerank_mode.add_argument(
+        "--setup", action="store_true",
+        help="consent, then read a key (never echoed, never an argument), test it with one request, and turn the stage on",
+    )
+    rerank_mode.add_argument(
+        "--off", action="store_true",
+        help="set recall.rerank.provider back to \"none\" and take the stored key off this machine",
+    )
+    rerank_p.add_argument(
+        "--provider", choices=[p for p in _RERANK_PROVIDERS if p != "none"],
+        default="typesafe", help="which provider --setup configures (default: typesafe)",
+    )
+    rerank_p.add_argument(
+        "--key-stdin", dest="key_stdin", action="store_true",
+        help="read the key from stdin instead of prompting (for scripts; implies you also pass --yes)",
+    )
+    rerank_p.add_argument("--yes", "-y", action="store_true", help="consent without a prompt (required off a tty)")
+    rerank_p.add_argument("--days", type=int, default=14, help="window for the access-log summary (default: 14)")
+    rerank_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall_sessions = sub.add_parser("recall-sessions", help="recall harness built from extraction sessions (delta detector, not comparable to `recall`)")
     recall_sessions.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")

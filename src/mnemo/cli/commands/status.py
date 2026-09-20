@@ -171,6 +171,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _print_auto_brain_status(vault)
     _print_activation_status(vault)
     _print_reflex_status(vault)
+    _print_rerank_status(vault)
     _print_numbers_status(vault)
     _print_learned_status(vault)
     _print_export_status(vault)
@@ -325,6 +326,28 @@ def _print_reflex_status(vault: Path) -> None:
     emissions = read_today_emissions(vault)
     suffix = "emission" if emissions == 1 else "emissions"
     print(f"\nReflex: enabled ({emissions} {suffix} today)")
+
+
+def _print_rerank_status(vault: Path) -> None:
+    """One line when the rerank stage is configured — and nothing when it is not.
+
+    Only when the provider is set: the stage is off by default, and a line
+    saying so on every ``mnemo status`` would be noise about a feature nobody
+    turned on. When it *is* on, the whole point of #406 is that it fails
+    silently, so this is where a maintainer sees that it has been falling back
+    on every call for a fortnight.
+    """
+    from mnemo.core.config import load_config
+    from mnemo.core.mcp import rerank as mcp_rerank
+    from mnemo.core.mcp import rerank_stats
+
+    chosen = mcp_rerank.settings(load_config())
+    if chosen["provider"] == "none":
+        return
+    line = rerank_stats.one_line(rerank_stats.summarize(vault))
+    print("\nRecall rerank: %s, key from %s" % (
+        chosen["provider"], mcp_rerank.key_source(chosen)))
+    print("  " + (line or "no list_rules_by_topic call has reached the stage yet"))
 
 
 def _print_numbers_status(vault: Path) -> None:
