@@ -251,7 +251,8 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
 
         target_path: Optional[Path] = None
         if verdict == "merge":
-            target_path = _resolve(v.target, None) if v.target else None
+            target_path = (_resolve(v.target, getattr(v, "target_path", None))
+                           if v.target else None)
             if target_path is None:
                 report.notes.append(f"{v.slug}: merge target missing → demoted")
                 verdict = "demote"
@@ -300,8 +301,14 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             )
             dest = merged_dir / f"{v.slug}.md"
             shutil.move(str(src_path), str(dest))
-            _entry_for(state, f"feedback/{v.slug}", fm_sources)["status"] = "dismissed"
-            tgt_entry = _entry_for(state, f"feedback/{v.target}", [])
+            # Keyed by the page's own type, not always ``feedback/``: an
+            # extraction-state key that names a type the page never had leaves
+            # the real entry live, and the next ``mnemo extract`` writes the
+            # merged-away page back. ``reclassify`` only ever grades
+            # ``shared/feedback/``, so for it both lines read as they did.
+            _entry_for(state, f"{src_path.parent.name}/{v.slug}",
+                       fm_sources)["status"] = "dismissed"
+            tgt_entry = _entry_for(state, f"{target_path.parent.name}/{v.target}", [])
             existing = tgt_entry.get("source_files") or []
             tgt_entry["source_files"] = existing + [s for s in fm_sources if s not in existing]
             to_path = dest

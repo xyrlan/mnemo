@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from mnemo.core import dedup_judge
 from mnemo.core.extract.inbox.dedup import _bodies_similar
 
 _TOOL = Path(__file__).resolve().parents[2] / "tools" / "measure_jev_dedupe.py"
@@ -137,6 +138,37 @@ def test_send_without_a_key_refuses(monkeypatch, capsys):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     assert mjd.main(["--project", "p", "--topic", "t", "--send"]) == 1
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err
+
+
+def test_the_tool_asks_what_the_command_ships():
+    """#409 moved the question into ``src/``; what is measured is what ships.
+
+    Not a copy that happens to read the same: the same objects, so a change to
+    one is a change to the other. ``mnemo dedup-rules --judge`` sends
+    ``dedup_judge.ask``'s request, and so does this tool.
+    """
+    assert mjd.QUESTION is dedup_judge.QUESTION
+    assert mjd.jaccard is dedup_judge.jaccard
+    assert mjd.pairs_of is dedup_judge.pairs_of
+    assert mjd.estimate is dedup_judge.estimate
+    assert mjd.ask is dedup_judge.ask
+    assert (mjd.JACCARD_GATE, mjd.DUPLICATE_SCORE, mjd.USD_PER_MTOK) == (
+        dedup_judge.JACCARD_GATE, dedup_judge.DUPLICATE_SCORE, dedup_judge.USD_PER_MTOK)
+    assert mjd.MODEL == dedup_judge.provider_settings(None)["model"]
+
+    calls = []
+    mjd.judge({"a": "body a", "b": "body b"}, _judge({}, calls), workers=1)
+    (state, questions), = calls
+    assert (state, questions) == ({"rule_a": "body a", "rule_b": "body b"},
+                                  dedup_judge.QUESTION)
+
+
+def test_a_body_is_judged_without_its_link_section():
+    """The tool reads what the command reads: shared ``[[wikilinks]]`` are token
+    overlap between neighbours that says nothing about what a page claims."""
+    from mnemo.core.mcp.rerank import GRAPH_SECTION
+
+    assert mjd.rule_text("a rule.\n" + GRAPH_SECTION + "\n[[x]]") == "a rule."
 
 
 def test_the_model_is_pinned_not_an_alias():

@@ -54,6 +54,13 @@ def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
     from mnemo.core.claude_cli import EFFORT_LEVELS
     from mnemo.core.mcp.rerank import PROVIDERS as _RERANK_PROVIDERS
+    from mnemo.core.dedup_judge import (
+        DEFAULT_MAX_CHARS as _DEDUP_MAX_CHARS,
+        DEFAULT_MAX_PAIRS as _DEDUP_MAX_PAIRS,
+        DEFAULT_TIMEOUT_S as _DEDUP_TIMEOUT_S,
+        DEFAULT_WORKERS as _DEDUP_WORKERS,
+        DUPLICATE_SCORE as _DEDUP_DUPLICATE_SCORE,
+    )
     # ``friction`` registers itself here rather than in ``cli/commands/__init__``:
     # the friction-loop contract left that file outside the piece that owns the
     # command. Every entry point builds the parser before it looks a handler up.
@@ -446,12 +453,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     dedup = sub.add_parser(
         "dedup-rules",
-        help="merge shared rule files that share the same name (dry-run default)",
+        help="merge shared rule files that share the same name, or queue the ones a judge says say the same thing (dry-run default)",
+    )
+    dedup_mode = dedup.add_mutually_exclusive_group()
+    dedup_mode.add_argument(
+        "--apply", action="store_true",
+        help="execute the name-keyed plan (default: dry-run)",
+    )
+    dedup_mode.add_argument(
+        "--judge", action="store_true",
+        help="the other dedupe: ask a judge that reads each pair which live rules state the same lesson (dry-run unless --send)",
+    )
+    dedup_mode.add_argument(
+        "--merge", nargs=2, metavar=("KEEP", "DROP"),
+        help="fold DROP into KEEP the way `reclassify --apply` executes a merge: sources unioned, DROP archived, undoable",
+    )
+    dedup.add_argument("--project", help="--judge: only this project's buckets (default: every project)")
+    dedup.add_argument("--topic", help="--judge: only this topic (default: every topic)")
+    dedup.add_argument(
+        "--send", action="store_true",
+        help="--judge: post both rule bodies of every pair to the provider (a third party). Without it nothing leaves the machine",
     )
     dedup.add_argument(
-        "--apply", action="store_true",
-        help="execute the plan (default: dry-run)",
+        "--at", type=float, default=_DEDUP_DUPLICATE_SCORE,
+        help="--judge: the score a pair needs to enter the queue (default: %(default)s, halfway between \"related\" and \"same lesson\")",
     )
+    dedup.add_argument(
+        "--max-pairs", dest="max_pairs", type=int, default=_DEDUP_MAX_PAIRS,
+        help="--judge: refuse to send more than this many pairs (default: %(default)s)",
+    )
+    dedup.add_argument(
+        "--max-chars", dest="max_chars", type=int, default=_DEDUP_MAX_CHARS,
+        help="--judge: body prefix judged per rule (default: %(default)s)",
+    )
+    dedup.add_argument("--workers", type=int, default=_DEDUP_WORKERS, help="--judge: requests in flight (default: %(default)s)")
+    dedup.add_argument("--timeout", type=float, default=_DEDUP_TIMEOUT_S, help="--judge: seconds per request (default: %(default)s)")
+    dedup.add_argument("--json", action="store_true", help="--judge: emit machine-readable JSON")
     inbox_p = sub.add_parser(
         "inbox",
         help="the review queue: staged pages for this project, and the two acts that clear it",
