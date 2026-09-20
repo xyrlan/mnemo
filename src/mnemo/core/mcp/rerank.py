@@ -24,6 +24,12 @@ signal and the order with :func:`fuse` and :func:`ranked` from here, so what
 was measured is what ships. It asks :func:`question` of :func:`rule_text`,
 the same two this module sends.
 
+The key is resolved by :func:`resolve_key`: the environment variable
+``keyEnv`` names, then :mod:`mnemo.core.secrets` — because Claude Code spawns
+this server and an ``export`` in a shell profile reaches it only when
+``claude`` was started from that shell (#406). ``mnemo rerank --setup`` writes
+the second source; with the provider at ``none`` neither is ever read.
+
 Every gap degrades to the order that came in — no provider, no key, a bucket
 too small to reorder, a timeout, an HTTP error, a malformed answer. A
 ``query`` must never break the tool, and a provider being down must not
@@ -112,6 +118,47 @@ def settings(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         "bm25Weight": _number(block.get("bm25Weight"), DEFAULT_BM25_WEIGHT),
         "relevantAt": _number(block.get("relevantAt"), DEFAULT_RELEVANT_AT),
     }
+
+
+#: Where a key was found, in the order they are tried. ``"none"`` is an
+#: answer, not a failure: the stage falls back to the BM25F order.
+KEY_SOURCES = ("env", "secrets", "none")
+
+
+def resolve_key(chosen: Mapping[str, Any]) -> Tuple[Optional[str], str]:
+    """The provider's key and where it came from, environment first (#406).
+
+    The environment variable keeps priority: a key exported for one shell
+    session must still beat what is stored on the machine, so a maintainer can
+    try a second key without editing anything. The secrets file exists because
+    the process that reads this is the MCP server, which Claude Code spawns —
+    it inherits the shell's environment only when ``claude`` was started from
+    that shell, and never when the desktop app was opened from the Dock.
+
+    Callers that must not see the key use :func:`key_source`.
+    """
+    from mnemo.core import secrets
+
+    key = os.environ.get(str(chosen.get("keyEnv") or DEFAULT_KEY_ENV))
+    if key:
+        return key, "env"
+    try:
+        stored = secrets.read(str(chosen.get("provider") or ""))
+    except Exception:  # noqa: BLE001 — a secrets file must never break a tool call
+        stored = None
+    if stored:
+        return stored, "secrets"
+    return None, "none"
+
+
+def key_source(chosen: Mapping[str, Any]) -> str:
+    """Which of :data:`KEY_SOURCES` would answer, without handing the key over.
+
+    ``mnemo rerank``, ``mnemo status`` and ``mnemo doctor`` all report where
+    the key comes from and none of them may hold one, so the only value that
+    leaves here is the label.
+    """
+    return resolve_key(chosen)[1]
 
 
 def typesafe_client(key: str, *, model: str, timeout: float) -> Client:
@@ -232,7 +279,7 @@ def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
     if len(matches) < 2:
         return matches, dict(info, status="small")
     if client is None:
-        key = os.environ.get(chosen["keyEnv"])
+        key, _source = resolve_key(chosen)
         if not key:
             return matches, dict(info, status="no_key")
         client = typesafe_client(key, model=chosen["model"], timeout=chosen["timeoutSeconds"])

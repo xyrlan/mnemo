@@ -218,6 +218,45 @@ server is the stage's only caller. A missing key, a timeout, an HTTP error or
 a malformed answer all return the BM25F order, silently to the agent; the
 access log records which (`rerank.status` in `.mnemo/mcp-access-log.jsonl`).
 
+**Turning it on.** `mnemo rerank --setup` prints the paragraph above, asks for
+a `y`, reads the key without echoing it — never as a command-line argument,
+which would land in shell history and in `ps` — makes one test request with a
+fixed harmless task and rule of its own, and writes nothing at all if that
+request fails.
+
+**Where the key lives, and why not here.** Not in this file and not in the
+vault: `mnemo.config.json` sits *inside* the vault, which may be a git repo or
+a synced folder, and a repo-local config is committed. It goes in
+`~/.mnemo/secrets.json` instead, shaped `{"recall.rerank": {"typesafe": "…"}}`
+so a second provider is a second entry rather than a second file, and created
+owner-only — `0600`, inside a `0700` directory — on the platforms that have
+file modes. Windows has none, and there the file gets whatever that filesystem
+gives it. `MNEMO_SECRETS_PATH` overrides the location.
+
+The environment variable still wins: `recall.rerank.keyEnv` is read first, so
+a key exported for one shell beats the stored one and a second key can be
+tried without editing anything. The file exists because the process that reads
+it is the MCP server, which **Claude Code spawns, not your shell** — an
+`export` in `.zshrc` reaches it only when `claude` itself was started from that
+shell, and never when the app was opened from the Dock.
+
+**Turning it off.** `mnemo rerank --off` sets the provider back to `"none"`
+and takes the stored key off the machine. Both halves are idempotent.
+
+**Seeing whether it is actually running.** Every failure is silent to the
+agent by design, so three commands say otherwise, none of them making a
+network call and none of them able to print the key:
+
+- `mnemo rerank` — the provider, the model, whether the key comes from the
+  environment, the secrets file or nowhere, and the last 14 days of `rerank`
+  rows from the access log by status, with how many rules were judged and
+  marked. `--json` for the same as data, `--days N` for a different window.
+- `mnemo doctor` — a `rerank` row that fails when the provider is set and no
+  key resolves, which is exactly the state where the list looks unchanged
+  because every call fell back.
+- `mnemo status` — the same summary in one line, printed only when the
+  provider is set.
+
 **Why it marks instead of reordering, and how sure that is.** The list an
 agent is handed is 15 rules of which three quarters are about something else,
 and it picks from slugs alone. Reordering cannot fix that: ordering those lists

@@ -127,6 +127,69 @@ def test_without_a_key_the_order_stands_and_no_request_is_built(vault):
     assert [m["slug"] for m in out] == ["often-seen", "the-one-that-matters", "unrelated"]
 
 
+# ── where the key comes from (#406) ───────────────────────────────────────
+#
+# Claude Code spawns this server, so the environment variable reaches it only
+# when `claude` was started from the shell that exported it. The secrets file
+# is the second source; `mnemo rerank --setup` writes it.
+
+
+def test_the_secrets_file_is_used_when_the_environment_has_nothing(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-from-file")
+    key, source = rerank.resolve_key(rerank.settings(ON))
+    assert (key, source) == ("sk-from-file", "secrets")
+
+
+def test_the_environment_wins_over_the_file(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-from-file")
+    monkeypatch.setenv(rerank.DEFAULT_KEY_ENV, "sk-from-env")
+    assert rerank.resolve_key(rerank.settings(ON)) == ("sk-from-env", "env")
+
+
+def test_a_key_stored_for_another_provider_is_not_used(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("someone-else", "sk-theirs")
+    assert rerank.resolve_key(rerank.settings(ON)) == (None, "none")
+
+
+def test_an_unreadable_secrets_file_is_no_key_not_an_error(vault, monkeypatch, tmp_path):
+    broken = tmp_path / "s.json"
+    broken.write_text("{ truncated", encoding="utf-8")
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(broken))
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON)
+    assert info["status"] == "no_key"
+    assert [m["slug"] for m in out] == ["often-seen", "the-one-that-matters", "unrelated"]
+
+
+def test_key_source_never_returns_the_key(vault, monkeypatch, tmp_path):
+    from mnemo.core import secrets
+
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(tmp_path / "s.json"))
+    secrets.write("typesafe", "sk-secret")
+    assert rerank.key_source(rerank.settings(ON)) == "secrets"
+    assert rerank.key_source(rerank.settings(None)) == "none"
+
+
+def test_with_the_provider_off_the_secrets_file_is_never_opened(vault, monkeypatch, tmp_path):
+    """The default must not read a file that may not exist on this machine."""
+    from mnemo.core import secrets
+
+    def refuse():
+        raise AssertionError("the stage read the secrets file while off")
+
+    monkeypatch.setattr(secrets, "path", refuse)
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=None)
+    assert info is None
+
+
 @pytest.mark.parametrize("answer", [TimeoutError("slow"), {"answers": {}}, {"error": 429}, "not a dict"])
 def test_a_provider_that_fails_leaves_the_order_that_came_in(vault, answer):
     def broken(state, questions):

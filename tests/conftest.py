@@ -134,6 +134,11 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(home / "mnemo" / "mnemo.config.json"))
+    # #406: the secrets file is the one thing mnemo writes outside the vault.
+    # `~` already resolves under the temp home on both platforms, but a file
+    # that may hold the developer's real API key gets the explicit override
+    # rather than an inference about `expanduser`.
+    monkeypatch.setenv("MNEMO_SECRETS_PATH", str(home / ".mnemo" / "secrets.json"))
     return home
 
 
