@@ -23,6 +23,7 @@ from typing import IO, Any
 
 from mnemo._version import resolve_version
 from mnemo.core.mcp import access_log as mcp_access_log
+from mnemo.core.mcp import rerank as mcp_rerank
 from mnemo.core.mcp import session_state as mcp_session_state
 from mnemo.core.mcp import tools as mcp_tools
 
@@ -103,8 +104,16 @@ _TOOL_DEFS: list[dict[str, Any]] = [
 ]
 
 
-def handle_request(req: dict[str, Any], vault_root: Path | None) -> dict[str, Any] | None:
-    """Dispatch a single JSON-RPC request. Returns ``None`` for notifications."""
+def handle_request(
+    req: dict[str, Any],
+    vault_root: Path | None,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Dispatch a single JSON-RPC request. Returns ``None`` for notifications.
+
+    ``cfg`` carries the one setting a tool call reads, ``recall.rerank``;
+    without it the opt-in rerank stage is off.
+    """
     method = req.get("method")
     req_id = req.get("id")
     is_notification = "id" not in req
@@ -120,7 +129,7 @@ def handle_request(req: dict[str, Any], vault_root: Path | None) -> dict[str, An
     if method == "tools/list":
         return _ok(req_id, {"tools": _TOOL_DEFS})
     if method == "tools/call":
-        return _handle_tool_call(req_id, req.get("params") or {}, vault_root)
+        return _handle_tool_call(req_id, req.get("params") or {}, vault_root, cfg)
 
     if is_notification:
         return None
@@ -136,6 +145,7 @@ def _handle_tool_call(
     req_id: Any,
     params: dict[str, Any],
     vault_root: Path | None,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = params.get("name")
     args = params.get("arguments") or {}
@@ -149,6 +159,7 @@ def _handle_tool_call(
     result = None
     hit_slugs: list[str] = []
     result_count = 0
+    rerank_info = None
 
     if name == "list_rules_by_topic":
         query = args.get("query")
@@ -156,6 +167,12 @@ def _handle_tool_call(
             vault_root, str(args.get("topic", "")),
             scope=scope, project=project,
             query=str(query) if query else None,
+        )
+        # #401: opt-in, off by default, and the only caller — the prompt path
+        # and `mnemo recall` never reach a provider.
+        result, rerank_info = mcp_rerank.apply(
+            vault_root, result, str(query) if query else None,
+            project=project, cfg=cfg,
         )
         result_count = len(result)
         hit_slugs = [r["slug"] for r in result]
@@ -189,6 +206,7 @@ def _handle_tool_call(
             "result_count": result_count,
             "hit_slugs": hit_slugs,
             "elapsed_ms": round(elapsed_ms, 2),
+            **({"rerank": rerank_info} if rerank_info else {}),
         })
     except Exception:
         pass
@@ -221,6 +239,7 @@ def serve(stdin: IO[str] | None = None, stdout: IO[str] | None = None) -> int:
         cfg = load_config()
         vault = resolve_vault_root(cfg)
     except Exception:
+        cfg = None
         vault = None
 
     for line in in_stream:
@@ -233,7 +252,7 @@ def serve(stdin: IO[str] | None = None, stdout: IO[str] | None = None) -> int:
             continue
         if not isinstance(req, dict):
             continue
-        resp = handle_request(req, vault_root=vault)
+        resp = handle_request(req, vault_root=vault, cfg=cfg)
         if resp is None:
             continue
         out_stream.write(json.dumps(resp) + "\n")

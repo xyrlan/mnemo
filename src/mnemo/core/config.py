@@ -39,6 +39,24 @@ DEFAULTS: dict[str, Any] = {
         # Delivery is best-effort: a parent that has exited is not queued for.
         "notifyParent": True,
     },
+    "recall": {
+        # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads
+        # the (task, rule) pair. Off by default because turning it on is the
+        # one thing in recall that leaves the machine: each list call carrying
+        # a `query` posts that query and the first 800 characters of every
+        # rule in the bucket to the provider. `model` is pinned, never an
+        # alias — an ordering measured on one model says nothing about the
+        # next. The key is read from the environment variable `keyEnv` names
+        # and never from this file. Any failure, a missing key included, falls
+        # back to the BM25F order.
+        "rerank": {
+            "provider": "none",
+            "model": "jev-1.13.0",
+            "keyEnv": "TYPESAFE_API_KEY",
+            "timeoutSeconds": 4,
+            "maxRules": 64,
+        },
+    },
     "resume": {
         # #396: wake a rate-limited child once its own reset has passed,
         # without anyone typing `mnemo resume`. On by default because it

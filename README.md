@@ -296,7 +296,11 @@ Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 
 ## Privacy
 
-100% local. No network calls unless you turn `autopilot.network.enabled` on.
+Local by default. Two switches can make a network call, both off until you
+turn them on: `autopilot.network.enabled`, and `recall.rerank.provider`, which
+sends the query of a `list_rules_by_topic` call and the first 800 characters
+of each rule in that topic to a third-party ranking model
+([what is sent, and why](docs/configuration.md#recall--ordering-what-the-agent-is-offered)).
 No third-party Python dependencies. Every piece of telemetry
 (`.mnemo/*.jsonl`) stays on disk. LLM calls go through the `claude` CLI you
 already have — one per session for the briefing, one per ten new files at

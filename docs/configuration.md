@@ -180,6 +180,43 @@ inbox.
 | `enrichment.maxEmissionsPerSession` | `15` | Cap per session; each rule is surfaced at most once per session |
 | `enrichment.log.maxBytes` | `1048576` | Log rotation threshold |
 
+### `recall` — ordering what the agent is offered
+
+`list_rules_by_topic(topic, query=...)` orders a topic with BM25F, locally.
+`recall.rerank` is an opt-in second stage: a model that reads each (task, rule)
+pair reorders the list before the agent sees it.
+
+```json
+{ "recall": { "rerank": { "provider": "typesafe" } } }
+```
+
+| key | default | |
+|---|---|---|
+| `recall.rerank.provider` | `"none"` | `"typesafe"` turns the stage on. Anything else is read as `"none"`. |
+| `recall.rerank.model` | `"jev-1.13.0"` | Pinned. Never an alias such as `jev-latest`: the measurement below is of this model. |
+| `recall.rerank.keyEnv` | `"TYPESAFE_API_KEY"` | The environment variable holding the key. The key is never read from the config file. |
+| `recall.rerank.timeoutSeconds` | `4` | One request per list call; past this the BM25F order is returned. |
+| `recall.rerank.maxRules` | `64` | A larger topic sends its first 64 rules in BM25F order and leaves the rest where they were. |
+
+**What leaves the machine when it is on:** for each `list_rules_by_topic`
+call that carries a `query`, that query and the first 800 characters of every
+rule in the topic (link section removed) are posted to
+`api.typesafe.ai`. No slug, path, project name or transcript is sent. Nothing
+is sent by the per-prompt reflex, by `mnemo recall`, or by any hook — the MCP
+server is the stage's only caller. A missing key, a timeout, an HTTP error or
+a malformed answer all return the BM25F order, silently to the agent; the
+access log records which (`rerank.status` in `.mnemo/mcp-access-log.jsonl`).
+
+**Why it exists, and how sure that is.** BM25F is on a plateau: 23 local
+variants and three local embedding models moved nDCG@5 by nothing a confidence
+interval could tell from zero. Ordering by this judge and grading with labels a
+*different* model made lifted nDCG@5 from 0.820 to 0.897, +0.077 [+0.029,
++0.124], over 38 logged queries (`tools/measure_rerank_judges.py`). What it did
+not move is the only label that comes from real use — rules the agent went on
+to read, in the top 5: 31 of 49 either way. It costs about 1 s per list call
+and about $0.00004. Treat it as an experiment you can measure on your own
+vault, not as a settled improvement.
+
 ### `resume` — waking a child the account's limit stopped
 
 A dispatched child that hits the five-hour window stops mid-turn and its
