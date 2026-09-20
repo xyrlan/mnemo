@@ -39,6 +39,36 @@ DEFAULTS: dict[str, Any] = {
         # Delivery is best-effort: a parent that has exited is not queued for.
         "notifyParent": True,
     },
+    "recall": {
+        # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads
+        # the (task, rule) pair. Off by default because turning it on is the
+        # one thing in recall that leaves the machine: each list call carrying
+        # a `query` posts that query and the first 800 characters of every
+        # rule in the bucket to the provider. `model` is pinned, never an
+        # alias — an ordering measured on one model says nothing about the
+        # next. The key is read from the environment variable `keyEnv` names
+        # and never from this file. Any failure, a missing key included, falls
+        # back to the BM25F order.
+        #
+        # #404: the stage marks before it reorders. Every rule the judge scored
+        # gets `relevant: true|false` on it — `bm25Weight` is how much the
+        # local BM25F score, normalised by the best one in that list, is added
+        # to the judge's probability, and `relevantAt` is the bar the sum has
+        # to clear. Both were fixed on a dev split and measured once on a
+        # locked test split (tools/measure_rerank_filter.py): 15.0 rules per
+        # query become 2.3, the irrelevant share 75% -> 13%, and all 24
+        # should-read rules survive. Nothing is ever dropped, so a wrong mark
+        # costs a line of scrolling.
+        "rerank": {
+            "provider": "none",
+            "model": "jev-1.13.0",
+            "keyEnv": "TYPESAFE_API_KEY",
+            "timeoutSeconds": 4,
+            "maxRules": 64,
+            "bm25Weight": 0.5,
+            "relevantAt": 0.69,
+        },
+    },
     "resume": {
         # #396: wake a rate-limited child once its own reset has passed,
         # without anyone typing `mnemo resume`. On by default because it

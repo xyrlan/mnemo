@@ -205,3 +205,11 @@ def test_judgments_for_an_older_question_are_refused(monkeypatch, tmp_path, caps
         "judged_at": "x", "units": []}), encoding="utf-8")
     assert mrj.main([]) == 1
     assert "older question" in capsys.readouterr().err
+
+
+def test_the_tool_and_the_stage_ask_the_same_thing():
+    """#401: the ordering measured here is the one ``recall.rerank`` ships."""
+    from mnemo.core.mcp import rerank
+    assert mrj.question("body") == rerank.question("body")
+    assert (mrj.BODY_CHARS, mrj.GRAPH_SECTION, mrj.MODEL) == (
+        rerank.BODY_CHARS, rerank.GRAPH_SECTION, rerank.DEFAULT_MODEL)

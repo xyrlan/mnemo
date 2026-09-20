@@ -10,7 +10,9 @@ Usage:
 and the bodies of the rules in its topic bucket to TypeSafe's
 ``/v1/systemone``, a third party, and needs ``TYPESAFE_API_KEY``. The answers
 are written to ``<vault>/.mnemo/recall-qrels.json``; every later evaluation
-reads that file and calls nothing. Nothing in ``src/`` uses this tool.
+reads that file and calls nothing. Nothing in ``src/`` uses this tool; the
+question and the rule text are ``mnemo.core.mcp.rerank``'s, so a judgment here
+is what the opt-in rerank stage would be told.
 
 ``mnemo recall`` takes its ground truth from behaviour: a rule is "expected"
 when the agent read it within 120 s of a list call that returned it. Measured
@@ -83,6 +85,8 @@ RELEVANT = 0.5
 #: so chunk boundaries do not change an answer.
 CHUNK = 40
 
+#: Mirrors of ``mnemo.core.mcp.rerank``'s, kept for the tests that read them
+#: here; ``test_the_tool_and_the_stage_ask_the_same_thing`` pins them equal.
 BODY_CHARS = 800
 GRAPH_SECTION = "<!-- mnemo:graph-section -->"
 QRELS_NAME = "recall-qrels.json"
@@ -91,23 +95,16 @@ Client = Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
 
 
 def question(body: str) -> Dict[str, Any]:
-    return {
-        "type": "noul",
-        "instructions": (
-            "A developer about to do the task in the state should read this stored "
-            "engineering rule first, because it addresses the same problem, component "
-            "or pitfall the task involves. Rule: " + body
-        ),
-        "criteria": {
-            "true": "The rule is about what this task touches and would change how the developer does it",
-            "false": "The rule is about something else, or is too general to change anything in this task",
-        },
-    }
+    """The shipped rerank stage's question (#401), so the ordering this tool
+    measures is the one ``recall.rerank`` produces."""
+    from mnemo.core.mcp import rerank
+    return rerank.question(body)
 
 
 def rule_text(body: str) -> str:
     """What the judge reads: the rule without its link section, bounded."""
-    return " ".join(body.split(GRAPH_SECTION)[0].split())[:BODY_CHARS]
+    from mnemo.core.mcp import rerank
+    return rerank.rule_text(body)
 
 
 def units_from_log(entries: Iterable[Dict[str, Any]], *, window_s: float,

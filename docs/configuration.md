@@ -180,6 +180,80 @@ inbox.
 | `enrichment.maxEmissionsPerSession` | `15` | Cap per session; each rule is surfaced at most once per session |
 | `enrichment.log.maxBytes` | `1048576` | Log rotation threshold |
 
+### `recall` — ordering what the agent is offered
+
+`list_rules_by_topic(topic, query=...)` orders a topic with BM25F, locally.
+`recall.rerank` is an opt-in second stage: a model that reads each (task, rule)
+pair **marks** the rules worth reading and puts them first.
+
+Marking, not filtering, and never dropping: every rule the judge scored comes
+back with `relevant: true` or `relevant: false`, the marked ones at the top of
+the list, and every other rule still in it. A rule the judge did not score —
+one past `maxRules`, one with an empty body, one the judge skipped — carries no
+`relevant` key at all: absent means "not judged", which is not the same answer
+as `false`. The tool description tells the agent to read the true ones first,
+and an empty set of true ones is a real answer: nothing in this topic is about
+this task.
+
+```json
+{ "recall": { "rerank": { "provider": "typesafe" } } }
+```
+
+| key | default | |
+|---|---|---|
+| `recall.rerank.provider` | `"none"` | `"typesafe"` turns the stage on. Anything else is read as `"none"`. |
+| `recall.rerank.model` | `"jev-1.13.0"` | Pinned. Never an alias such as `jev-latest`: the measurement below is of this model. |
+| `recall.rerank.keyEnv` | `"TYPESAFE_API_KEY"` | The environment variable holding the key. The key is never read from the config file. |
+| `recall.rerank.timeoutSeconds` | `4` | One request per list call; past this the BM25F order is returned. |
+| `recall.rerank.maxRules` | `64` | A larger topic sends its first 64 rules in BM25F order and leaves the rest where they were, unmarked. |
+| `recall.rerank.bm25Weight` | `0.5` | How much of the local BM25F score, divided by the best one in that list, is added to the judge's probability. `0` is the judge alone. |
+| `recall.rerank.relevantAt` | `0.69` | The bar that sum has to clear to be marked `relevant: true`. |
+
+**What leaves the machine when it is on:** for each `list_rules_by_topic`
+call that carries a `query`, that query and the first 800 characters of every
+rule in the topic (link section removed) are posted to
+`api.typesafe.ai`. No slug, path, project name or transcript is sent. Nothing
+is sent by the per-prompt reflex, by `mnemo recall`, or by any hook — the MCP
+server is the stage's only caller. A missing key, a timeout, an HTTP error or
+a malformed answer all return the BM25F order, silently to the agent; the
+access log records which (`rerank.status` in `.mnemo/mcp-access-log.jsonl`).
+
+**Why it marks instead of reordering, and how sure that is.** The list an
+agent is handed is 15 rules of which three quarters are about something else,
+and it picks from slugs alone. Reordering cannot fix that: ordering those lists
+by the labels themselves — the best order there is — still leaves 19 of 85
+top-5 slots on irrelevant rules, because most topics do not hold five rules
+worth reading. The report prints that ceiling as its `oracle` row. `tools/measure_rerank_filter.py` measured both uses of
+the same signal over 85 real queried `list_rules_by_topic` calls from this
+machine's session transcripts (1,536 (query, rule) pairs, every pair labelled
+0/1/2), with the thresholds fixed on a dev split of 55 queries and the
+remaining 30 opened once:
+
+| what the list offers | rules / query | junk | should-read kept | queries left empty (that had a should-read) |
+|---|---|---|---|---|
+| whole list (today) | 15.0 | 75% | 24/24 | 0 |
+| BM25F score ≥ 1.94 | 5.1 | 47% | 23/24 | 10 (0) |
+| judge's `noul` ≥ 0.42 | 2.8 | 26% | 24/24 | 14 (0) |
+| fused: `noul` + 0.5 × BM25F/max ≥ 0.69 (shipped) | 2.3 | 13% | 24/24 | 11 (0) |
+
+As a *reranker* the same signal moved nDCG@5 by +0.081, 95% paired bootstrap
+interval [−0.024, +0.185] — not established. As a *filter* it turns 15 rules
+into 2.3 and 75% junk into 13% while keeping every rule the labels call "should
+read". It costs about 1 s per list call and about $0.00004.
+
+Four limits on that. The labels are a model's (`claude-fable-5-1`, blind, one
+0/1/2 per pair), never the developer whose task it was — and they are not
+stable: of the 107 pairs this rater was asked about twice, in a different
+context, 84 came back with the same label, which the same report prints. There
+are only 24 "should read" rules in the test split, so "24/24" is a small number
+kept, not a rate with a tight interval. On the dev split, where the thresholds
+were fitted, the shipped bar keeps 43 of 47 and leaves one query holding a
+should-read rule empty — that is the honest spread. And whether an agent
+offered two marked rules actually reads them is not measured at all. Treat it
+as an experiment you can re-run on your own vault: the report above is
+`PYTHONPATH=src python3 tools/measure_rerank_filter.py`, and only its
+`--score --send` flag reaches the provider.
+
 ### `resume` — waking a child the account's limit stopped
 
 A dispatched child that hits the five-hour window stops mid-turn and its
