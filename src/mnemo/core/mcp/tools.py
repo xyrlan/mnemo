@@ -40,10 +40,17 @@ from mnemo.core.filters import (
 _RETRIEVAL_TYPES: tuple[str, ...] = ("feedback", "user", "reference")
 
 
-class RuleRef(TypedDict):
+class _RuleRefBase(TypedDict):
     slug: str
     type: str
     source_count: int
+
+
+class RuleRef(_RuleRefBase, total=False):
+    #: #404: written by the opt-in ``recall.rerank`` stage on every rule its
+    #: judge scored. Absent means "not judged", which is not the same answer
+    #: as ``False``.
+    relevant: bool
 
 
 class _RuleBodyBase(TypedDict):

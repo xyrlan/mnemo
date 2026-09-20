@@ -49,12 +49,24 @@ DEFAULTS: dict[str, Any] = {
         # next. The key is read from the environment variable `keyEnv` names
         # and never from this file. Any failure, a missing key included, falls
         # back to the BM25F order.
+        #
+        # #404: the stage marks before it reorders. Every rule the judge scored
+        # gets `relevant: true|false` on it — `bm25Weight` is how much the
+        # local BM25F score, normalised by the best one in that list, is added
+        # to the judge's probability, and `relevantAt` is the bar the sum has
+        # to clear. Both were fixed on a dev split and measured once on a
+        # locked test split (tools/measure_rerank_filter.py): 15.0 rules per
+        # query become 2.3, the irrelevant share 75% -> 13%, and all 24
+        # should-read rules survive. Nothing is ever dropped, so a wrong mark
+        # costs a line of scrolling.
         "rerank": {
             "provider": "none",
             "model": "jev-1.13.0",
             "keyEnv": "TYPESAFE_API_KEY",
             "timeoutSeconds": 4,
             "maxRules": 64,
+            "bm25Weight": 0.5,
+            "relevantAt": 0.69,
         },
     },
     "resume": {

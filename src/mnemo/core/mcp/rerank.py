@@ -1,4 +1,4 @@
-"""Opt-in rerank of a ``list_rules_by_topic`` result by a judge that reads the pair (#401).
+"""Opt-in marking and rerank of a ``list_rules_by_topic`` result by a judge that reads the pair (#401, #404).
 
 **Off by default, and the only part of recall that can leave the machine.**
 With ``recall.rerank.provider`` set, every ``list_rules_by_topic`` call that
@@ -7,13 +7,22 @@ rule in the bucket to the provider — a third party. Nothing else is sent, and
 nothing is sent on the prompt path (reflex), by ``mnemo recall`` or by any
 hook: :func:`apply` has one caller, the MCP server.
 
-Why it exists: BM25F is on a plateau no lexical knob moves (23 variants, none
-with a CI excluding zero), and of the rules a judge marks "should read" that
-sit outside the top 5, 20 of 22 are scored and outranked rather than missed.
-A judge that reads the (task, rule) pair orders them better under labels it
-did not make. ``tools/measure_rerank_judges.py`` is the number; it asks
-:func:`question` of :func:`rule_text`, the same two this module sends, so the
-measured ordering is the shipped one.
+Why it exists, and why it *marks* before it reorders (#404). The list an
+agent is handed is 15 rules of which three quarters are about something else,
+and the agent picks from slugs alone. Reordering that is worth little — on a
+locked test split of 30 real queried calls the fused signal below moves
+nDCG@5 by +0.081 [-0.024, +0.185], an interval that includes zero — because
+most topics do not hold five rules worth reading in the first place. Used as
+a filter the same signal is decisive: 15.0 rules per query become 2.3, the
+irrelevant share falls from 75% to 13%, and all 24 rules the labels call
+"should read" survive. So :func:`apply` writes ``relevant`` on each rule it
+judged and leaves every rule in the list — the agent is told what to read
+first, and a wrong mark costs one line of scrolling, not a rule.
+
+``tools/measure_rerank_filter.py`` is that measurement, and it computes the
+signal and the order with :func:`fuse` and :func:`ranked` from here, so what
+was measured is what ships. It asks :func:`question` of :func:`rule_text`,
+the same two this module sends.
 
 Every gap degrades to the order that came in — no provider, no key, a bucket
 too small to reorder, a timeout, an HTTP error, a malformed answer. A
@@ -41,6 +50,13 @@ DEFAULT_TIMEOUT_S = 4.0
 #: 64k-token request; a larger bucket sends its first ``maxRules`` in BM25F
 #: order and leaves the tail where it was.
 DEFAULT_MAX_RULES = 64
+
+#: #404: the signal is the judge's probability with BM25F as a tie-breaker,
+#: and a rule at or over ``relevantAt`` is marked worth reading. Both were
+#: fixed on a dev split of real queried calls and measured once on a locked
+#: test split (``tools/measure_rerank_filter.py``).
+DEFAULT_BM25_WEIGHT = 0.5
+DEFAULT_RELEVANT_AT = 0.69
 
 BODY_CHARS = 800
 GRAPH_SECTION = "<!-- mnemo:graph-section -->"
@@ -71,6 +87,17 @@ def rule_text(body: str) -> str:
     return " ".join(body.split(GRAPH_SECTION)[0].split())[:BODY_CHARS]
 
 
+def _number(value: Any, fallback: float) -> float:
+    """A configured number, or the default. An explicit ``0`` is a value, not a
+    missing one, and a string nobody meant must not move a threshold."""
+    if value is None or isinstance(value, bool):
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def settings(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """The ``recall.rerank`` block with its defaults. An unknown provider is
     ``none``: a typo must not start sending rule bodies somewhere."""
@@ -82,6 +109,8 @@ def settings(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         "keyEnv": str(block.get("keyEnv") or DEFAULT_KEY_ENV),
         "timeoutSeconds": float(block.get("timeoutSeconds") or DEFAULT_TIMEOUT_S),
         "maxRules": int(block.get("maxRules") or DEFAULT_MAX_RULES),
+        "bm25Weight": _number(block.get("bm25Weight"), DEFAULT_BM25_WEIGHT),
+        "relevantAt": _number(block.get("relevantAt"), DEFAULT_RELEVANT_AT),
     }
 
 
@@ -118,28 +147,86 @@ def scores(query: str, texts: Mapping[str, str], slugs: Sequence[str], client: C
     return found
 
 
+def fuse(judged: Mapping[str, float], bm25f: Mapping[str, float], *,
+         weight: float = DEFAULT_BM25_WEIGHT) -> Dict[str, float]:
+    """``noul + weight * bm25f / max(bm25f here)``, for every rule the judge scored.
+
+    The judge's number is the signal; BM25F only separates the rules it puts
+    close together, which is why it is normalised by the best score *in this
+    list* rather than by an absolute scale. The term is 0 when there is no
+    reflex index, when the query tokenizes to nothing, or when nothing scored
+    — then the signal is the judge's probability alone.
+    """
+    top = max(bm25f.values()) if bm25f else 0.0
+    if not top > 0:
+        return {slug: float(value) for slug, value in judged.items()}
+    return {slug: float(value) + weight * float(bm25f.get(slug, 0.0)) / top
+            for slug, value in judged.items()}
+
+
+def marks(signal: Mapping[str, float], at: float) -> Dict[str, bool]:
+    """Which judged rules are worth reading. A rule that is not a key here was
+    not judged, which is not the same answer as ``False``."""
+    return {slug: value >= at for slug, value in signal.items()}
+
+
+def ranked(slugs: Sequence[str], signal: Mapping[str, float]) -> List[str]:
+    """Judged slugs first, best first, ties in the incoming order; a slug the
+    judge never scored keeps its place below every slug it did."""
+    position = {slug: i for i, slug in enumerate(slugs)}
+    return sorted(slugs, key=lambda s: (
+        -signal[s] if s in signal else float("inf"), position[s]))
+
+
 def order(matches: Sequence[Any], signal: Mapping[str, float]) -> List[Any]:
-    """Judged rules first, best first, ties in the incoming order; a rule the
-    judge never scored keeps its place below every rule it did."""
-    position = {m["slug"]: i for i, m in enumerate(matches)}
-    return sorted(matches, key=lambda m: (
-        -signal[m["slug"]] if m["slug"] in signal else float("inf"), position[m["slug"]]))
+    """:func:`ranked`, applied to a list of ``RuleRef``."""
+    place = {slug: i for i, slug in enumerate(ranked([m["slug"] for m in matches], signal))}
+    return sorted(matches, key=lambda m: place[m["slug"]])
+
+
+def bm25f_scores(vault_root: Path, query: str, slugs: Sequence[str]) -> Dict[str, float]:
+    """BM25F over the rules the judge is sent, the way ``tools._rerank_by_query``
+    gets them — and ``{}`` on every gap that one degrades on."""
+    from mnemo.core.reflex import bm25
+    from mnemo.core.reflex import index as reflex_index
+    from mnemo.core.reflex.tokenizer import tokenize_query
+
+    index = reflex_index.load_index(vault_root)
+    if index is None:
+        return {}
+    tokens = tokenize_query(query)
+    if not tokens:
+        return {}
+    return dict(bm25.score_docs(index, query_tokens=tokens,
+                                candidate_slugs=list(slugs)) or [])
 
 
 def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
           project: Optional[str], cfg: Optional[Mapping[str, Any]],
           client: Optional[Client] = None) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
-    """Reorder ``matches`` when a provider is configured; otherwise hand them back.
+    """Mark and reorder ``matches`` when a provider is configured; otherwise hand
+    them back untouched, with no ``relevant`` key on anything.
+
+    Nothing is ever dropped. Every rule the judge scored gets ``relevant``
+    (:func:`marks`), the judged rules move to the front in :func:`fuse` order,
+    and a rule the judge never saw — one past ``maxRules``, one with an empty
+    body, one the judge skipped — carries no ``relevant`` key at all: absent
+    means "not judged", never "irrelevant".
+
+    An empty relevant set is an answer, not a failure: 11 of 30 real queries
+    had nothing in their topic about the task, and none of those 11 held a
+    rule the labels call "should read". The status is ``ok``.
 
     Returns the list and what happened — ``None`` when the stage is off (the
     default, and then nothing here ran), else ``{"provider", "status",
-    "judged"}`` with status ``ok``, ``no_query``, ``small``, ``no_key`` or
-    ``error``.
+    "judged", "relevant"}`` with status ``ok``, ``no_query``, ``small``,
+    ``no_key`` or ``error``.
     """
     chosen = settings(cfg)
     if chosen["provider"] == "none":
         return matches, None
-    info: Dict[str, Any] = {"provider": chosen["provider"], "status": "ok", "judged": 0}
+    info: Dict[str, Any] = {"provider": chosen["provider"], "status": "ok",
+                            "judged": 0, "relevant": 0}
     if not query:
         return matches, dict(info, status="no_query")
     if len(matches) < 2:
@@ -158,11 +245,22 @@ def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
         for match in head:
             page = tools.read_mnemo_rule(vault_root, match["slug"], project=project) or {}
             texts[match["slug"]] = rule_text(page.get("body") or "")
-        signal = scores(query, texts, [m["slug"] for m in head], client)
+        judged = scores(query, texts, [m["slug"] for m in head], client)
     except Exception:
         return matches, dict(info, status="error")
-    if not signal:
+    if not judged:
         return matches, dict(info, status="error")
+    # Local, and after the judge: a broken index costs the tie-break, not the
+    # answer already paid for.
+    try:
+        local = bm25f_scores(vault_root, query, [m["slug"] for m in head])
+    except Exception:
+        local = {}
+    signal = fuse(judged, local, weight=chosen["bm25Weight"])
+    flags = marks(signal, chosen["relevantAt"])
+    for match in head:
+        if match["slug"] in flags:
+            match["relevant"] = flags[match["slug"]]
     # Same object back, reordered: a ``RuleRefs`` keeps what it withheld.
     matches[:] = order(head, signal) + list(matches[chosen["maxRules"]:])
-    return matches, dict(info, judged=len(signal))
+    return matches, dict(info, judged=len(judged), relevant=sum(flags.values()))

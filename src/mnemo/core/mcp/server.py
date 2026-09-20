@@ -42,7 +42,9 @@ _TOOL_DEFS: list[dict[str, Any]] = [
             "large topics. Results are scoped to the current project by "
             "default. Pass scope=\"vault\" to include rules from all "
             "projects. Call this BEFORE writing code when the task matches a "
-            "known topic."
+            "known topic. When items carry a `relevant` flag, read the ones "
+            "marked true first; none marked true means nothing in this topic "
+            "was judged to be about the task."
         ),
         "inputSchema": {
             "type": "object",

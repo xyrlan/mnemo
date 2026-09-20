@@ -1,4 +1,4 @@
-"""The opt-in rerank stage of ``list_rules_by_topic`` (#401).
+"""The opt-in mark-and-rerank stage of ``list_rules_by_topic`` (#401, #404).
 
 No test here opens a socket: the provider is a function the test hands in,
 and the one test that lets ``apply`` build its own client proves it never
@@ -6,6 +6,11 @@ gets that far. What is pinned is the promise the README makes about the
 stage — off unless configured, one request per list call, nothing sent
 without a query, and every failure invisible to the agent but counted in the
 access log.
+
+Since #404 the stage marks before it orders, and the marking has promises of
+its own: nothing is ever dropped, a rule the judge did not score carries no
+``relevant`` key at all, an empty relevant set is ``ok`` rather than an error,
+and with the stage off no item carries the key.
 """
 from __future__ import annotations
 
@@ -94,7 +99,7 @@ def test_the_pair_reading_judge_reorders_the_bucket_in_one_request(vault):
     given.retired_withheld = 2
     out, info = rerank.apply(vault, given, "run a script on prod", project=None, cfg=ON, client=judge)
     assert [m["slug"] for m in out] == ["the-one-that-matters", "often-seen", "unrelated"]
-    assert info == {"provider": "typesafe", "status": "ok", "judged": 3}
+    assert info == {"provider": "typesafe", "status": "ok", "judged": 3, "relevant": 1}
     assert len(judge.calls) == 1
     assert out.retired_withheld == 2
 
@@ -175,10 +180,115 @@ def test_the_server_reorders_only_when_configured_and_logs_what_happened(vault, 
     assert not judge.calls and "rerank" not in _log(vault)[-1]
 
     assert _call(vault, ON, args)[0] == "the-one-that-matters"
-    assert _log(vault)[-1]["rerank"] == {"provider": "typesafe", "status": "ok", "judged": 3}
+    assert _log(vault)[-1]["rerank"] == {"provider": "typesafe", "status": "ok",
+                                        "judged": 3, "relevant": 1}
     assert _log(vault)[-1]["hit_slugs"][0] == "the-one-that-matters"
 
 
 def test_a_configured_server_without_a_key_answers_as_before(vault):
     assert _call(vault, ON, {"topic": "workflow", "query": "q"})[0] == "often-seen"
     assert _log(vault)[-1]["rerank"]["status"] == "no_key"
+
+
+# --- #404: mark first, order second -----------------------------------------
+
+
+def test_every_judged_rule_is_marked_and_nothing_is_dropped(vault):
+    out, info = rerank.apply(vault, _matches(), "run a script on prod", project=None,
+                             cfg=ON, client=Judge())
+    assert [m["slug"] for m in out] == ["the-one-that-matters", "often-seen", "unrelated"]
+    assert [m["relevant"] for m in out] == [True, False, False]
+    assert info["relevant"] == 1
+
+
+def test_with_the_stage_off_no_item_carries_a_relevant_key(vault):
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=DEFAULTS, client=Judge())
+    assert info is None
+    assert all("relevant" not in m for m in out)
+    # And through the server, which is the stage's only caller.
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "list_rules_by_topic",
+                          "arguments": {"topic": "workflow", "query": "q"}}}
+    response = handle_request(request, vault_root=vault, cfg=None)
+    items = json.loads(response["result"]["content"][0]["text"])
+    assert items and all("relevant" not in item for item in items)
+
+
+@pytest.mark.parametrize("query,client,status", [
+    ("q", None, "no_key"),
+    (None, Judge(), "no_query"),
+    ("q", lambda state, questions: {"answers": {}}, "error"),
+])
+def test_a_stage_that_did_not_run_marks_nothing(vault, query, client, status):
+    out, info = rerank.apply(vault, _matches(), query, project=None, cfg=ON, client=client)
+    assert info["status"] == status
+    assert all("relevant" not in m for m in out)
+
+
+def test_a_rule_the_judge_skipped_carries_no_mark_at_all(vault):
+    judge = Judge(favourite="Name branches", skip=("Squash",))
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=judge)
+    marked = {m["slug"]: m.get("relevant", "absent") for m in out}
+    assert marked == {"unrelated": True, "the-one-that-matters": False, "often-seen": "absent"}
+    assert info == {"provider": "typesafe", "status": "ok", "judged": 2, "relevant": 1}
+
+
+def test_a_rule_past_the_cap_is_neither_judged_nor_marked(vault):
+    cfg = {"recall": {"rerank": {"provider": "typesafe", "maxRules": 2}}}
+    out, _ = rerank.apply(vault, _matches(), "q", project=None, cfg=cfg, client=Judge())
+    assert [m.get("relevant", "absent") for m in out] == [True, False, "absent"]
+
+
+def test_nothing_relevant_is_an_answer_not_an_error(vault):
+    """11 of 30 real queries had nothing in their topic about the task."""
+    judge = Judge(favourite="nothing matches this")
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=judge)
+    assert info["status"] == "ok" and info["judged"] == 3 and info["relevant"] == 0
+    assert len(out) == 3 and all(m["relevant"] is False for m in out)
+
+
+def test_bm25f_breaks_the_judges_ties_and_a_missing_index_costs_only_that(vault, monkeypatch):
+    judge = Judge(favourite="this favours nobody")  # every rule 0.1
+    monkeypatch.setattr(rerank, "bm25f_scores",
+                        lambda root, query, slugs: {"unrelated": 4.0, "often-seen": 1.0})
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=judge)
+    # 0.1 + 0.5 * 4/4 = 0.6, 0.1 + 0.5 * 1/4 = 0.225, 0.1 + 0 = 0.1.
+    assert [m["slug"] for m in out] == ["unrelated", "often-seen", "the-one-that-matters"]
+    assert info["relevant"] == 0
+
+    monkeypatch.setattr(rerank, "bm25f_scores", lambda root, query, slugs: {})
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=Judge())
+    assert [m["slug"] for m in out] == ["the-one-that-matters", "often-seen", "unrelated"]
+    assert info["status"] == "ok"
+
+
+def test_a_broken_index_does_not_throw_away_the_answer_already_paid_for(vault, monkeypatch):
+    def broken(root, query, slugs):
+        raise RuntimeError("index is a directory")
+    monkeypatch.setattr(rerank, "bm25f_scores", broken)
+    out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=Judge())
+    assert info["status"] == "ok" and info["relevant"] == 1
+    assert [m["slug"] for m in out] == ["the-one-that-matters", "often-seen", "unrelated"]
+
+
+def test_the_two_new_knobs_have_defaults_a_typo_cannot_move():
+    assert DEFAULTS["recall"]["rerank"]["bm25Weight"] == rerank.DEFAULT_BM25_WEIGHT
+    assert DEFAULTS["recall"]["rerank"]["relevantAt"] == rerank.DEFAULT_RELEVANT_AT
+    chosen = rerank.settings({"recall": {"rerank": {"bm25Weight": "half", "relevantAt": None}}})
+    assert chosen["bm25Weight"] == rerank.DEFAULT_BM25_WEIGHT
+    assert chosen["relevantAt"] == rerank.DEFAULT_RELEVANT_AT
+    # An explicit zero is a value, not a missing one: BM25F off, everything marked.
+    off = rerank.settings({"recall": {"rerank": {"bm25Weight": 0, "relevantAt": 0.0}}})
+    assert off == dict(rerank.settings(None), bm25Weight=0.0, relevantAt=0.0)
+
+
+def test_the_signal_is_the_judge_with_bm25f_as_a_tie_break():
+    judged = {"a": 0.8, "b": 0.2, "c": 0.2}
+    assert rerank.fuse(judged, {}) == judged
+    assert rerank.fuse(judged, {"a": 0.0, "b": 0.0}) == judged
+    fused = rerank.fuse(judged, {"b": 2.0, "c": 1.0}, weight=0.5)
+    assert fused == {"a": 0.8, "b": 0.7, "c": 0.45}
+    assert rerank.ranked(["c", "b", "a", "d"], fused) == ["a", "b", "c", "d"]
+    assert rerank.marks(fused, 0.7) == {"a": True, "b": True, "c": False}
+    # A rule the judge never scored is not a key at all.
+    assert "d" not in rerank.fuse(judged, {"d": 9.0})
