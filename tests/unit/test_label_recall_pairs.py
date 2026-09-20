@@ -129,3 +129,9 @@ def test_an_unlabelled_sample_reports_without_dividing_by_nothing():
     r = lrp.report([{"id": 0, "unit": "u", "slug": "a", "first": 0.9, "label": None}], {})
     assert r["first"]["auc_any"] is None
     assert "n/a" in lrp.format_report(r)
+
+
+def test_each_rater_has_a_file_and_a_model_never_writes_the_humans():
+    assert lrp.labels_name("human") == lrp.HUMAN_NAME
+    assert lrp.labels_name("Claude Fable/5.1") == "recall-labels-claudefable51.json"
+    assert lrp.labels_name("../..") == lrp.HUMAN_NAME

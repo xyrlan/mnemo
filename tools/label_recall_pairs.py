@@ -53,6 +53,13 @@ mrj = mrk.mrj
 
 HUMAN_NAME = "recall-labels-human.json"
 
+
+def labels_name(rater: str) -> str:
+    """One file per rater, and the rater's name in it: a model's labels are
+    a third judge, never to be read as a person's."""
+    safe = "".join(c for c in rater.lower() if c.isalnum() or c in "-_") or "human"
+    return "recall-labels-%s.json" % safe
+
 #: Upper edges of the first judge's score strata; the last one is closed.
 STRATA = (0.2, 0.4, 0.6, 0.8, 1.0)
 PER_STRATUM = 12
@@ -266,12 +273,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--sample", action="store_true", help="draw the pairs to label (once)")
     parser.add_argument("--serve", action="store_true", help="serve the form on 127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--rater", default="human",
+                        help="whose labels: one file per rater (default: human)")
+    parser.add_argument("--per-stratum", type=int, default=PER_STRATUM)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--export-blind", metavar="PATH",
+                        help="write the unlabelled pairs, blind, for a rater that is not at the form")
+    parser.add_argument("--import-labels", metavar="PATH",
+                        help='read {"<pair id>": 0|1|2} and record it')
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     from mnemo import cli
     vault = cli._resolve_vault()
-    human_path = vault / ".mnemo" / HUMAN_NAME
+    human_path = vault / ".mnemo" / labels_name(args.rater)
     qrels_path = vault / ".mnemo" / mrj.QRELS_NAME
 
     if args.sample:
@@ -283,9 +298,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         qrels = json.loads(qrels_path.read_text(encoding="utf-8"))
         units = qrels["units"]
-        pairs = draw(units, [mrj._bodies(vault, u) for u in units])
-        save(human_path, {"first_model": qrels["model"], "first_judged_at": qrels["judged_at"],
-                          "seed": SEED, "per_stratum": PER_STRATUM,
+        pairs = draw(units, [mrj._bodies(vault, u) for u in units],
+                     per_stratum=args.per_stratum, seed=args.seed)
+        save(human_path, {"rater": args.rater, "first_model": qrels["model"], "first_judged_at": qrels["judged_at"],
+                          "seed": args.seed, "per_stratum": args.per_stratum,
                           "sampled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                           "pairs": pairs})
         print(f"drew {len(pairs)} pairs -> {human_path}")
@@ -295,6 +311,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: no sample at {human_path}; run with --sample first", file=sys.stderr)
         return 1
     data = json.loads(human_path.read_text(encoding="utf-8"))
+
+    if args.export_blind:
+        todo = [blind(p) for p in data["pairs"] if p.get("label") is None]
+        Path(args.export_blind).write_text(json.dumps(todo, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"{len(todo)} blind pairs -> {args.export_blind}")
+        return 0
+
+    if args.import_labels:
+        given = json.loads(Path(args.import_labels).read_text(encoding="utf-8"))
+        took = sum(1 for pair_id, label in given.items()
+                   if str(pair_id).isdigit() and record(data["pairs"], int(pair_id), label))
+        save(human_path, data)
+        print(f"recorded {took} of {len(given)} labels -> {human_path}")
+        return 0
 
     if args.serve:
         server = HTTPServer(("127.0.0.1", args.port), make_handler(human_path, data))
