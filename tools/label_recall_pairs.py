@@ -189,7 +189,7 @@ def format_report(r: Dict[str, Any]) -> str:
         f"{f['high_but_irrelevant']}  scored < 0.2 but labelled 2: {f['low_but_should_read']}",
         f"second judge  {s['pairs']} pairs  AUC should-read {_fmt(s['auc_should_read'])}  "
         f"AUC any {_fmt(s['auc_any'])}  exact {s['exact']}/{s['pairs']}",
-        "  human->second  " + "  ".join(f"{k}: {v}" for k, v in s["confusion"].items() if v),
+        "  rater->second  " + "  ".join(f"{k}: {v}" for k, v in s["confusion"].items() if v),
     ])
 
 
