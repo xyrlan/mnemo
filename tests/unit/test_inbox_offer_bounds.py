@@ -48,6 +48,8 @@ def test_defaults_are_two_bullets_a_day_a_week_apart():
         "offerMax": 2,
         "offerCooldownDays": 7,
         "offerIntervalHours": 24,
+        # Not an offer bound: how long a judge-held page may wait (#429).
+        "heldExpiryDays": 14,
     }
 
 

@@ -29,8 +29,14 @@ that a page had ever been put in front of anyone, so "pages resolved per week"
 and "how long from being shown to being judged" were not answerable questions.
 :func:`stats` answers them from it.
 
-The decision stays human throughout. Nothing here promotes, drops or edits a
-page on its own; the offer only reads.
+The decision stays human, with one exception. A page the reference judge held
+(#417 — it carries ``reference_gate: generic|narrative``) is archived by
+:func:`expire_held` once it has sat ``inbox.heldExpiryDays`` untouched (#429):
+44 offers over four days produced 0 decisions, so without an exit "held"
+meant "kept forever, invisible". It rests on the judge's measurement, which is
+why nothing else expires — a demotion or a multi-source page waits for a human
+however old. The expiry is logged as ``expired``, never as a decision, and
+:func:`restore` undoes it (or a drop).
 """
 from __future__ import annotations
 
@@ -48,13 +54,20 @@ LEDGER_REL = ".mnemo/inbox-offers.jsonl"
 MAX_BYTES = 1_048_576
 
 #: Ledger event names. ``offered`` is written by the session-start block,
-#: the other two by ``mnemo inbox``.
+#: ``expired`` by the extraction run, the rest by ``mnemo inbox``.
 OFFERED = "offered"
 PROMOTED = "promoted"
 DROPPED = "dropped"
+EXPIRED = "expired"
+RESTORED = "restored"
 
 #: Where a dropped page is archived before it is unlinked.
 DROPPED_ARCHIVE_PREFIX = "dropped-"
+#: Where an expired page is archived. Its own prefix, so an archive listing
+#: says which pages a human threw away and which ran out of time.
+EXPIRED_ARCHIVE_PREFIX = "expired-"
+#: ``inbox.heldExpiryDays`` when config does not say (#429).
+HELD_EXPIRY_DAYS = 14
 
 
 @dataclass(frozen=True)
@@ -74,6 +87,9 @@ class StagedPage:
     projects: tuple[str, ...]
     reason: str
     mtime: float
+    #: Staged on the reference judge's G/N verdict (#429) — the only pages
+    #: :func:`expire_held` may archive.
+    gate_held: bool = False
 
     def age_days(self, now: float | None = None) -> int:
         import time
@@ -141,6 +157,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
     ``project``/``projects`` key). A page with no attributable project — 2 of
     194 on the real vault — is returned only when ``project`` is None.
     """
+    from mnemo.core.extract.reference_gate import is_held_frontmatter
     from mnemo.core.filters import is_proposed_sibling, iter_staged_pages, parse_frontmatter
     from mnemo.core.rule_activation.index import projects_for_rule
 
@@ -167,6 +184,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             projects=projects,
             reason=_reason_for(fm),
             mtime=_mtime(path),
+            gate_held=is_held_frontmatter(fm),
         ))
     out.sort(key=lambda p: (p.mtime, p.key))
     return out
@@ -452,17 +470,19 @@ def promote(vault_root: Path, page: StagedPage, *, project: str | None = None) -
     )
 
 
-def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> DecisionResult:
-    """Archive a staged page, then delete it from the queue.
+def _archive_out(
+    vault_root: Path, page: StagedPage, *, prefix: str, event: str,
+    project: str | None, verb: str,
+) -> DecisionResult:
+    """Copy *page* under ``shared/_archive/<prefix><stamp>/``, then unlink it.
 
-    Archived first, always. Extraction re-derives a page from its source, so a
-    drop is reversible only while that source still says the same thing — which
-    makes "reject is not permanent" true of the decision and false of the text.
-    ``mnemo rewrites --reject`` archives for the same reason.
+    Shared by :func:`drop` and :func:`expire_held`, which differ only in who
+    decided: the entry goes ``dismissed`` either way, so a later extraction
+    does not stage the same slug again from an unchanged source.
     """
     vault_root = Path(vault_root)
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    arch = vault_root / "shared" / "_archive" / f"{DROPPED_ARCHIVE_PREFIX}{stamp}" / page.type
+    arch = vault_root / "shared" / "_archive" / f"{prefix}{stamp}" / page.type
     try:
         arch.mkdir(parents=True, exist_ok=True)
         dest = arch / page.path.name
@@ -472,10 +492,115 @@ def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> D
         return DecisionResult(ok=False, message=f"could not archive {page.key}: {exc}")
 
     state_updated = _update_state_entry(vault_root, page.key, status="dismissed", page=None)
-    record(vault_root, event=DROPPED, key=page.key, project=project)
+    record(vault_root, event=event, key=page.key, project=project)
     return DecisionResult(
         ok=True,
-        message=f"dropped {page.key}; archived to {dest.relative_to(vault_root).as_posix()}",
+        message=f"{verb} {page.key}; archived to {dest.relative_to(vault_root).as_posix()}",
+        moved_to=dest,
+        state_updated=state_updated,
+    )
+
+
+def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> DecisionResult:
+    """Archive a staged page, then delete it from the queue.
+
+    Archived first, always. Extraction re-derives a page from its source, so a
+    drop is reversible only while that source still says the same thing — which
+    makes "reject is not permanent" true of the decision and false of the text.
+    ``mnemo rewrites --reject`` archives for the same reason, and
+    :func:`restore` brings the archived copy back.
+    """
+    return _archive_out(vault_root, page, prefix=DROPPED_ARCHIVE_PREFIX,
+                        event=DROPPED, project=project, verb="dropped")
+
+
+def held_expiry_days(cfg: dict) -> int:
+    """``inbox.heldExpiryDays``, or :data:`HELD_EXPIRY_DAYS`. ``0`` turns expiry off."""
+    raw = ((cfg or {}).get("inbox") or {}).get("heldExpiryDays", HELD_EXPIRY_DAYS)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return HELD_EXPIRY_DAYS
+
+
+def expire_held(
+    vault_root: Path, *, days: int, now: datetime | None = None,
+) -> list[DecisionResult]:
+    """Archive every judge-held page untouched for *days* or more. Never raises.
+
+    "Untouched" is the file's mtime, the same age ``mnemo inbox`` lists: a
+    page the extractor rewrites because its source changed starts its window
+    again, since that is new evidence the judge has just looked at.
+
+    Only :attr:`StagedPage.gate_held` pages, and never one a human restored —
+    pulling a page back out of the archive is a decision to keep it waiting.
+    Offered or not makes no difference: at ``inbox.offerMax`` = 2 offers a
+    day per project, most held pages would never be shown, and an exit gated
+    on being shown would not bound the queue.
+    """
+    if days <= 0:
+        return []
+    try:
+        ref = (now or datetime.now()).timestamp()
+        restored = {str(r["key"]) for r in read_ledger(vault_root) if r.get("event") == RESTORED}
+        out: list[DecisionResult] = []
+        for page in staged_pages(vault_root):
+            if not page.gate_held or page.key in restored or page.age_days(ref) < days:
+                continue
+            project = page.projects[0] if page.projects else None
+            out.append(_archive_out(vault_root, page, prefix=EXPIRED_ARCHIVE_PREFIX,
+                                    event=EXPIRED, project=project, verb="expired"))
+        return out
+    except Exception:  # noqa: BLE001 — runs at the end of every extraction
+        return []
+
+
+def _archived_copies(vault_root: Path, key: str) -> list[Path]:
+    """Every archived copy of *key* a drop or an expiry left, newest first."""
+    page_type, _, slug = key.partition("/")
+    archive = Path(vault_root) / "shared" / "_archive"
+    found = []
+    for prefix in (DROPPED_ARCHIVE_PREFIX, EXPIRED_ARCHIVE_PREFIX):
+        for path in archive.glob(f"{prefix}*/{page_type}/{slug}.md"):
+            # The stamp, not the prefix, orders them: a page dropped after it
+            # was restored from an expiry is newer than the expiry.
+            found.append((path.parent.parent.name[len(prefix):], path))
+    return [p for _, p in sorted(found, reverse=True)]
+
+
+def restore(vault_root: Path, key: str, *, project: str | None = None) -> DecisionResult:
+    """Put the newest archived copy of *key* back in ``shared/_inbox/``.
+
+    Undoes an expiry or a drop. The state entry goes back to ``inbox`` so the
+    extractor treats the page as staged again, and the ``restored`` row keeps
+    :func:`expire_held` off it for good. Refuses when the slug is staged or
+    live again already: two texts, one identity, same as :func:`promote`.
+    """
+    vault_root = Path(vault_root)
+    page_type, _, slug = key.partition("/")
+    if not page_type or not slug:
+        return DecisionResult(ok=False, message=f"{key}: expected <type>/<slug>")
+    copies = _archived_copies(vault_root, key)
+    if not copies:
+        return DecisionResult(ok=False, message=f"no dropped or expired copy of {key} in shared/_archive/")
+    for where in (f"_inbox/{page_type}", page_type):
+        if (vault_root / "shared" / where / f"{slug}.md").exists():
+            return DecisionResult(
+                ok=False,
+                message=f"shared/{where}/{slug}.md already exists — {key} is back; nothing restored",
+            )
+    dest = vault_root / "shared" / "_inbox" / page_type / f"{slug}.md"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(copies[0]), str(dest))
+    except OSError as exc:
+        return DecisionResult(ok=False, message=f"could not restore {key}: {exc}")
+
+    state_updated = _update_state_entry(vault_root, key, status="inbox", page=dest)
+    record(vault_root, event=RESTORED, key=key, project=project)
+    return DecisionResult(
+        ok=True,
+        message=f"restored {key} → shared/_inbox/{page_type}/{slug}.md",
         moved_to=dest,
         state_updated=state_updated,
     )
@@ -491,7 +616,8 @@ def stats(vault_root: Path, *, window_days: int = 7, now: datetime | None = None
 
     ``resolved`` counts promotions and drops — both take a page out of the
     queue, and a reviewer who reads a page and throws it away has done the work
-    this issue is about just as much as one who keeps it.
+    this issue is about just as much as one who keeps it. ``expired`` is kept
+    apart: nobody decided those (#429).
 
     ``median_decision_days`` is measured from a page's *first* offer to the
     decision that closed it, and is None until a page has been through both.
@@ -505,7 +631,7 @@ def stats(vault_root: Path, *, window_days: int = 7, now: datetime | None = None
 
     first_offer: dict[str, datetime] = {}
     latencies: list[float] = []
-    offered = promoted = dropped = 0
+    offered = promoted = dropped = expired = restored = 0
     for row in read_ledger(vault_root):
         ts = _parse_ts(row.get("ts"))
         event = row.get("event")
@@ -524,6 +650,10 @@ def stats(vault_root: Path, *, window_days: int = 7, now: datetime | None = None
             promoted += 1
         elif event == DROPPED:
             dropped += 1
+        elif event == EXPIRED:
+            expired += 1
+        elif event == RESTORED:
+            restored += 1
 
     return {
         "window_days": window_days,
@@ -534,5 +664,7 @@ def stats(vault_root: Path, *, window_days: int = 7, now: datetime | None = None
         "promoted": promoted,
         "dropped": dropped,
         "resolved": promoted + dropped,
+        "expired": expired,
+        "restored": restored,
         "median_decision_days": median(latencies),
     }

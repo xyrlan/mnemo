@@ -198,6 +198,8 @@ class ExtractionSummary:
     demoted_unverified: int = 0
     # #417: inferred reference pages the reference gate staged for review.
     reference_held: int = 0
+    # #429: held pages archived this run for sitting unreviewed too long.
+    reference_expired: int = 0
     mode: str = "manual"
 
 
@@ -947,6 +949,15 @@ def run_extraction(
                 raise
 
         if not dry_run:
+            # #429: after the state is saved and still under the lock, so the
+            # `dismissed` this writes cannot be overwritten by the run's own
+            # save. Vault-wide housekeeping, so not on a one-file `only` run.
+            if only is None:
+                from mnemo.core import inbox as inbox_queue
+                expired = inbox_queue.expire_held(
+                    vault_root, days=inbox_queue.held_expiry_days(cfg),
+                )
+                summary.reference_expired = sum(1 for r in expired if r.ok)
             try:
                 _cleanup_legacy_wiki_dirs(vault_root)
             except OSError as exc:

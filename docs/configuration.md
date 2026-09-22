@@ -502,7 +502,8 @@ last of them is one of two review offers — never both (see below):
    --promote <key>`. A staged page is invisible to recall, so whatever it holds
    carries nothing while it waits; this is what puts it in front of you while
    you are already working on the project it came from. It only reads: nothing
-   promotes, accepts or drops a page without you.
+   promotes, accepts or drops a page without you — except the expiry of pages
+   the reference judge held, below under `mnemo inbox`.
 
    Three numbers under `inbox` bound it, because it rides on the same prompt as
    the briefing: `offerMax` (2) bullets per block, at most one block per project
@@ -571,7 +572,8 @@ Two files under the vault's `.mnemo/` back the fourth block:
 The review queue for `shared/_inbox/`. Extraction stages a page there whenever
 it will not promote it on its own — a feedback page whose quote failed the
 evidence gate, a reconstruction from an old transcript, a page whose sources
-span two projects — and a staged page is served to nobody until you move it.
+span two projects, a reference page the judge called generic or narrative
+(#417) — and a staged page is served to nobody until you move it.
 
 ```bash
 mnemo inbox                       # staged for the project you are standing in
@@ -579,6 +581,7 @@ mnemo inbox --all                 # every project
 mnemo inbox --show KEY            # print one page before deciding
 mnemo inbox --promote KEY         # into shared/<type>/, where recall reaches it
 mnemo inbox --drop KEY            # archived under shared/_archive/dropped-<run>/
+mnemo inbox --restore KEY         # undo a drop or an expiry: back into the queue
 mnemo inbox --stats               # depth, median age, what drained this week
 ```
 
@@ -589,6 +592,19 @@ stage an update proposal for a source that never changed, and a dropped page's
 becomes `dismissed`, so it does not come back unless you run `mnemo extract
 --force`. `mnemo rewrites` is the sibling command for the other half of that
 directory — the `.proposed.md` rewrites of rules that are already live.
+
+**Pages the judge held expire.** A reference page staged on the judge's
+verdict carries `reference_gate: generic` or `reference_gate: narrative` in its
+frontmatter, and the extraction run archives it under
+`shared/_archive/expired-<run>/` once it has sat `inbox.heldExpiryDays` (14)
+days untouched, whether or not it was ever offered — at two offers a day per
+project, most would never be shown (#429). The entry becomes `dismissed`, as
+with a drop, and the ledger records `expired` rather than `dropped`, so
+`--stats` keeps human decisions and expiries apart. `mnemo inbox --restore KEY`
+puts the page back, and a restored page never expires again. Nothing else in
+the queue expires: the judge's verdict is the measured one (it stages 30 of 31
+junk pages and 3 of 41 good ones), and the other reasons for staging have no
+such number yet. `heldExpiryDays: 0` turns it off.
 
 ### `mnemo dedup-rules`
 

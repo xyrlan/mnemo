@@ -102,6 +102,10 @@ def _print_stats(stats: dict) -> None:
     print(f"last {stats['window_days']} days: {stats['offered']} offered at session start, "
           f"{stats['promoted']} promoted, {stats['dropped']} dropped "
           f"({stats['resolved']} resolved)")
+    if stats.get("expired") or stats.get("restored"):
+        # Apart from `resolved`: nobody decided these (#429).
+        print(f"  held pages expired unreviewed: {stats['expired']}, "
+              f"restored: {stats['restored']} (`mnemo inbox --restore KEY`)")
     if stats["median_decision_days"] is None:
         # Said plainly rather than printed as 0: no page has yet been offered
         # *and* decided, so there is no latency to report — which is a
@@ -122,7 +126,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     # conflict by precedence silently picks a winner, which is tolerable for
     # flags that print and not for two that write.
     chosen = [
-        name for name in ("show", "promote", "drop")
+        name for name in ("show", "promote", "drop", "restore")
         if getattr(args, name, None)
     ]
     if getattr(args, "stats", False):
@@ -134,6 +138,13 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     if getattr(args, "stats", False):
         _print_stats(I.stats(vault))
         return 0
+
+    if getattr(args, "restore", None):
+        # Not matched against the queue: a page to restore is, by definition,
+        # not in it. The key is looked up in the archive instead.
+        result = I.restore(vault, args.restore)
+        print(result.message)
+        return 0 if result.ok else 1
 
     everything = I.staged_pages(vault)
     key = getattr(args, "promote", None) or getattr(args, "drop", None) or getattr(args, "show", None)
