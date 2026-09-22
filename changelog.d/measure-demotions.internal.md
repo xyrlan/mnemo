@@ -8,6 +8,6 @@
   resuming from `scores.json`, and reports verdict counts, what would be held,
   a per-project split, and the pages the judge would keep. Run on 2026-09-22
   over 130 demotions with `claude-sonnet-5`: G 69, N 3, S 41, T 17. That is
-  72 (55%) held and 58 (45%) kept. None were 14+ days old yet. 13 calls,
-  $0.95. The verdict is not the truth: on the audit's held-out half the same
+  72 (55%) held and 58 (45%) kept. None were 14+ days old yet. 13 calls on a Max plan,
+  so no charge: $0.95 is the CLI's API-price equivalent (#441). The verdict is not the truth: on the audit's held-out half the same
   judge staged 30 of 31 junk pages and 3 of 41 good ones.

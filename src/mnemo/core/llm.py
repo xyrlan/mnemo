@@ -264,6 +264,11 @@ def call(
         api_key_source = init_event.get("apiKeySource")
     if api_key_source is None:
         api_key_source = result_event.get("apiKeySource")
+    if api_key_source is None:
+        # Claude Code 2.1.280 sends neither the init event nor the field
+        # (#441). Answer from the login instead, in the field's own
+        # vocabulary, so every reader of ``api_key_source`` keeps working.
+        api_key_source = _login_api_key_source()
 
     # Sum non-cached + cache_creation + cache_read so cached prompts don't
     # report ~0 input tokens. Claude CLI splits usage across three buckets;
@@ -286,6 +291,88 @@ def call(
         api_key_source=api_key_source,
         raw={"events": events, "result": result_event, "init": init_event},
     )
+
+
+# --------------------------------------------------------------- billing
+#
+# #441: whether a call ran on the user's subscription used to come from one
+# field, ``apiKeySource`` (``"none"`` = no API key = the subscription). Claude
+# Code 2.1.280 stopped sending it, and every consumer read the absence as a
+# paid call. ``total_cost_usd`` is no help: the CLI prices every call at API
+# rates, subscription or not, so on a subscription it is a notional
+# API-price equivalent, never a charge.
+
+# Environment variables that make ``claude --print`` authenticate with
+# something other than the claude.ai login. ``claude auth status`` keeps
+# answering ``"authMethod": "claude.ai"`` while ANTHROPIC_API_KEY is set
+# (verified on 2.1.280), so the login alone cannot clear these.
+_API_AUTH_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
+
+# Seam for test monkey-patching, separate from ``_subprocess_run`` so a test
+# that queues model envelopes never has one consumed by the login lookup.
+_auth_status_run = subprocess.run
+
+# The login does not change under a running process; ask once. ``_UNSET``
+# until asked, then the answer — ``None`` included, so a failed lookup is not
+# retried on every call of an extraction run.
+_UNSET: Any = object()
+_login_cache: Any = _UNSET
+
+
+def _ask_login() -> str | None:
+    """``api_key_source`` as the login implies it, or ``None`` when unknown."""
+    for name in _API_AUTH_ENV:
+        if os.environ.get(name):
+            return name
+    try:
+        result = _auth_status_run(
+            [_resolve_claude(), "auth", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=_build_env(),
+            cwd=_working_dir(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        status = json.loads(result.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(status, dict) or status.get("loggedIn") is False:
+        return None
+    method = status.get("authMethod")
+    if method == "claude.ai":
+        return "none"
+    if isinstance(method, str) and method:
+        return method
+    return None
+
+
+def _login_api_key_source() -> str | None:
+    global _login_cache
+    if _login_cache is _UNSET:
+        _login_cache = _ask_login()
+    return _login_cache
+
+
+def billing(resp: LLMResponse) -> str:
+    """``"subscription"``, ``"api"`` or ``"unknown"`` for one response.
+
+    Only ``"api"`` means money was charged. On ``"subscription"`` and
+    ``"unknown"`` alike, ``total_cost_usd`` is the CLI's API-price
+    equivalent and must never be printed as a charge.
+    """
+    source = resp.api_key_source
+    if source is None:
+        return "unknown"
+    return "subscription" if source == "none" else "api"
 
 
 # --------------------------------------------------------------- providers

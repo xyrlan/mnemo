@@ -188,6 +188,11 @@ class ExtractionSummary:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     all_calls_subscription: bool = True
+    # #441: of the calls that were not on the subscription, how many were
+    # billed to an API key and how many could not be told apart. Only the
+    # first kind makes ``total_cost_usd`` money charged.
+    api_calls: int = 0
+    unknown_billing_calls: int = 0
     conflicts: list[tuple[str, str]] = field(default_factory=list)
     auto_promoted: int = 0
     sibling_bounced: int = 0
@@ -201,6 +206,17 @@ class ExtractionSummary:
     # #429: held pages archived this run for sitting unreviewed too long.
     reference_expired: int = 0
     mode: str = "manual"
+
+
+def _count_billing(summary: ExtractionSummary, response: llm.LLMResponse) -> None:
+    kind = llm.billing(response)
+    if kind == "subscription":
+        return
+    summary.all_calls_subscription = False
+    if kind == "api":
+        summary.api_calls += 1
+    else:
+        summary.unknown_billing_calls += 1
 
 
 def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
@@ -580,8 +596,7 @@ def _run_extraction_body(
         summary.total_cost_usd += response.total_cost_usd or 0.0
         summary.total_input_tokens += response.input_tokens or 0
         summary.total_output_tokens += response.output_tokens or 0
-        if response.api_key_source != "none":
-            summary.all_calls_subscription = False
+        _count_billing(summary, response)
         return response.text
 
     for type_name, builder, system_prompt in type_plan:
@@ -633,8 +648,7 @@ def _run_extraction_body(
             summary.total_cost_usd += response.total_cost_usd or 0.0
             summary.total_input_tokens += response.input_tokens or 0
             summary.total_output_tokens += response.output_tokens or 0
-            if response.api_key_source != "none":
-                summary.all_calls_subscription = False
+            _count_billing(summary, response)
 
             try:
                 # Harvest nests the stamp under ``metadata:`` and

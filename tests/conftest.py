@@ -323,6 +323,25 @@ def mock_subprocess_run(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_auth_status(monkeypatch: pytest.MonkeyPatch):
+    """No test asks the real ``claude auth status`` (#441).
+
+    An envelope without ``apiKeySource`` makes ``llm.call`` ask the login; here
+    that lookup fails, so billing reads "unknown" unless a test stubs it. The
+    per-process cache is reset so one test's answer never leaks into the next.
+    """
+    from mnemo.core import llm as _llm
+
+    def _no_claude(*_a, **_k):
+        raise FileNotFoundError("claude auth status is stubbed in tests")
+
+    monkeypatch.setattr(_llm, "_auth_status_run", _no_claude)
+    monkeypatch.setattr(_llm, "_login_cache", _llm._UNSET)
+    for name in _llm._API_AUTH_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _fast_sleep(monkeypatch: pytest.MonkeyPatch):
     """Make time.sleep a no-op during tests so retry backoffs don't slow the suite."""
     import time as _time
