@@ -1201,6 +1201,15 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.rewake", e)
 
+        # #436: a watcher following finished children's PRs that died (a
+        # reboot, a kill) while follows were still open is started again. A
+        # ledger read and a stat; the watcher does the `gh` calls.
+        try:
+            from mnemo.core.sessions import pr_follow
+            pr_follow.on_session_start(cfg, vault_root=vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.pr_follow", e)
+
         # autopilot — fire any due hook-driven operations. Always best-effort:
         # any failure here is logged + swallowed, must never block the session.
         try:

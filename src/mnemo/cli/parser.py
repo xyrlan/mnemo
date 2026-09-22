@@ -40,6 +40,7 @@ INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "child-report",
     "hook",
     "mcp-server",
+    "pr-follow",
     "statusline",
     "statusline-compose",
 })
@@ -358,6 +359,10 @@ def _build_parser() -> argparse.ArgumentParser:
     child_report.add_argument("--parent", type=str, required=True)
     child_report.add_argument("--cwd", type=str, default=None)
     child_report.add_argument("--transcript", type=str, default=None)
+
+    # #436: spawned detached by a dispatched child's SessionEnd (and restarted
+    # by SessionStart); never typed. Takes no arguments: its work is the ledger.
+    sub.add_parser("pr-follow")
 
     briefing = sub.add_parser("briefing")
     # Positionals are optional so `mnemo briefing --prune` parses; the

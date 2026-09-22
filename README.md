@@ -69,7 +69,9 @@ treats it as one: the `SessionEnd` hook runs `mnemo sessions
 `mnemo learn` does, so the next child to hit the same fork already has your
 answer. A child ends itself: it reports, opens its own pull request when git
 says there is something to publish, and stops — and only a stopped child fires
-`SessionEnd`, which is where its briefing is written. Dispatch it with
+`SessionEnd`, which is where its briefing is written. If that PR then goes
+red, gets a review or conflicts with its base, mnemo wakes the child to deal
+with it, a bounded number of times, and hands it back to you after that. Dispatch it with
 `--may none` and it publishes nothing; then it is delivered by name —
 `mnemo deliver 7c1e` pushes its branch and opens the pull request,
 `Closes #205` included — and naming it is the approval; no flag approves them

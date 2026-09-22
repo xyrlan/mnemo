@@ -112,6 +112,10 @@ SYNTHETIC_PREFIXES = (
     # nobody answered anything. Literal for the same reason as the line above;
     # the two are pinned together by a test.
     "<mnemo-resume",
+    # mnemo waking a finished child because its PR went red, got a review or
+    # conflicts with its base (#436). Same channel as the line above, same
+    # reason; pinned together with ``wake.PR_NUDGE_PREFIX`` by a test.
+    "<mnemo-pr-follow",
 )
 
 #: The byte signature of an assistant record, as Claude Code writes it

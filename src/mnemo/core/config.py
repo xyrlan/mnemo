@@ -55,6 +55,19 @@ DEFAULTS: dict[str, Any] = {
         # minutes; 0 sends the card alone. It runs `gh` every 30 s and stops
         # early the moment the parent exits.
         "watchChecksMinutes": 30,
+        # #436: when a finished child's PR goes red, gets a review comment
+        # from an owner, member or collaborator, or conflicts with its base,
+        # wake that child in its own session to deal with it. Only a child
+        # granted `push` is followed, and its opening prompt still says what it
+        # may publish. At most `attempts` wakes per PR within `hours` of the
+        # child's first stop; after that the PR goes back to the parent's
+        # notice. Turn `enabled` off if a child spending the account while you
+        # are not watching is worse than fixing its PR by hand.
+        "followPR": {
+            "enabled": True,
+            "attempts": 2,
+            "hours": 24,
+        },
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads

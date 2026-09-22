@@ -249,3 +249,44 @@ def test_notify_parent_is_switchable_off(hook_env: Path, monkeypatch: pytest.Mon
         sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
     )
     assert session_end.main() == 0
+
+
+def test_session_end_follows_the_pr_of_a_child_that_may_push(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#436: the stop is on the ledger the watcher reads; the watcher itself
+    goes through `session_start._spawn_detached`, which the suite stubs."""
+    from mnemo.core.sessions import grants, inbox, pr_follow
+    from mnemo.hooks import session_start
+
+    parent = "0ff9d810-e54d-41f3-a045-b0ccff6c5186"
+    child = _dispatched_child(hook_env, parent=parent)
+    grants.record(child[:8], ("push", "pr"), vault_root=hook_env)
+    monkeypatch.setattr(inbox, "is_live", lambda a: False)
+    spawned = []
+    monkeypatch.setattr(session_start, "_spawn_detached",
+                        lambda args, cwd=None: spawned.append(args))
+    payload = {"session_id": child, "reason": "other", "cwd": "/x/app-wt-7"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+    assert session_end.main() == 0
+
+    entry = pr_follow.load_ledger(hook_env)["children"][child[:8]]
+    assert entry["session_id"] == child and entry["parent"] == parent
+    assert entry["cwd"] == "/x/app-wt-7" and not entry["closed"]
+    assert spawned == [["pr-follow"]]
+
+
+def test_session_end_does_not_follow_a_child_granted_nothing(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#436: `--may none` publishes nothing, so nothing wakes it to publish."""
+    from mnemo.core.sessions import inbox, pr_follow
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    monkeypatch.setattr(inbox, "is_live", lambda a: False)
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+    assert pr_follow.load_ledger(hook_env)["children"] == {}
