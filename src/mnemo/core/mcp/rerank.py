@@ -310,14 +310,23 @@ def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
 
     Returns the list and what happened — ``None`` when the stage is off (the
     default, and then nothing here ran), else ``{"provider", "status",
-    "judged", "relevant"}`` with status ``ok``, ``no_query``, ``small``,
-    ``no_key`` or ``error``.
+    "judged", "relevant", "relevant_slugs", "scores"}`` with status ``ok``,
+    ``no_query``, ``small``, ``no_key`` or ``error``.
+
+    ``relevant`` is the count and ``relevant_slugs`` the rules it counts, in
+    the order they were handed back; ``scores`` is ``[[slug, signal], ...]``
+    for every rule judged, best first — the reflex log's shape (#416). The
+    server writes this object to the access log, so the log can say which of
+    the rules an agent went on to read had been marked, not only how many
+    were. Slugs and numbers only: no query, no rule text. Both lists are empty
+    on every status but ``ok``.
     """
     chosen = settings(cfg)
     if chosen["provider"] == "none":
         return matches, None
     info: Dict[str, Any] = {"provider": chosen["provider"], "status": "ok",
-                            "judged": 0, "relevant": 0}
+                            "judged": 0, "relevant": 0,
+                            "relevant_slugs": [], "scores": []}
     if not query:
         return matches, dict(info, status="no_query")
     if len(matches) < 2:
@@ -354,4 +363,8 @@ def apply(vault_root: Path, matches: List[Any], query: Optional[str], *,
             match["relevant"] = flags[match["slug"]]
     # Same object back, reordered: a ``RuleRefs`` keeps what it withheld.
     matches[:] = order(head, signal) + list(matches[chosen["maxRules"]:])
-    return matches, dict(info, judged=len(judged), relevant=sum(flags.values()))
+    best_first = [slug for slug in ranked([m["slug"] for m in head], signal) if slug in signal]
+    return matches, dict(
+        info, judged=len(judged), relevant=sum(flags.values()),
+        relevant_slugs=[slug for slug in best_first if flags[slug]],
+        scores=[[slug, round(float(signal[slug]), 4)] for slug in best_first])

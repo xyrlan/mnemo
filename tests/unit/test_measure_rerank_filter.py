@@ -99,6 +99,18 @@ def test_only_a_real_list_result_yields_slugs(content, expected):
     assert mrf.result_slugs(content) == expected
 
 
+@pytest.mark.parametrize("items,expected", [
+    ([{"slug": "a", "relevant": True}, {"slug": "b", "relevant": False}, {"slug": "c"}],
+     {"a": True, "b": False}),
+    # Not judged is not False, and a truthy non-boolean is not a mark either.
+    ([{"slug": "a"}, {"slug": "b", "relevant": None}, {"slug": "c", "relevant": 1}], {}),
+])
+def test_only_a_boolean_relevant_is_a_mark(items, expected):
+    assert mrf.result_marks([{"type": "text", "text": json.dumps(items)}]) == expected
+    assert mrf.result_slugs([{"type": "text", "text": json.dumps(items)}]) == [
+        item["slug"] for item in items]
+
+
 def test_a_rule_with_no_text_is_dropped_and_a_short_list_with_it():
     call = {"cwd": "/w/repo", "topic": "workflow", "query": "q", "ts": "t",
             "shown": ["a", "gone", "b", "a"], "reads": ["gone", "b"]}

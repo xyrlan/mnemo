@@ -352,6 +352,18 @@ network call and none of them able to print the key:
 - `mnemo status` — the same summary in one line, printed only when the
   provider is set.
 
+Each judged row's `rerank` object also names what was decided, not only how
+much: `relevant_slugs` (the rules marked, in the order they were handed back)
+and `scores` (`[slug, signal]` for every rule judged, best first — the same
+shape `reflex-log.jsonl` uses). Slugs and numbers only; the object carries no
+query and no rule text. Every `list_rules_by_topic`, `read_mnemo_rule` and
+`get_mnemo_topics` row carries the `session_id` it ran in (`null` outside
+Claude Code), read per call from Claude Code's own record of its process
+rather than from the environment the server was spawned with, which still
+names the old session after a `/clear`. So a list and the reads that followed
+it join on the session, and `tools/measure_rerank_reads.py` counts what an
+agent read against what was marked — see the last limit below.
+
 **Why it marks instead of reordering, and how sure that is.** The list an
 agent is handed is 15 rules of which three quarters are about something else,
 and it picks from slugs alone. Reordering cannot fix that: ordering those lists
@@ -383,8 +395,17 @@ are only 24 "should read" rules in the test split, so "24/24" is a small number
 kept, not a rate with a tight interval. On the dev split, where the thresholds
 were fitted, the shipped bar keeps 43 of 47 and leaves one query holding a
 should-read rule empty — that is the honest spread. And whether an agent
-offered two marked rules actually reads them is not measured at all. Treat it
-as an experiment you can re-run on your own vault: the report above is
+offered marked rules reads them is a separate measurement,
+`PYTHONPATH=src python3 tools/measure_rerank_reads.py` (from the access log,
+or `--transcripts` for calls logged before the slugs were). Its first run,
+over the 13 judged lists in 8 sessions of 2026-09-20 and 2026-09-22
+(`--transcripts --days 7`): 10 of 39 marked rules were read (26%, Wilson 95%
+[15%, 41%]), 2 of 165 judged-but-unmarked ones (1%), and in the 17 queried
+lists of that week that carried no marks, 3 of the 50 rules in the top three
+(6%). The marked rules sit at the top, so position and mark are not
+separated there, and one of the 8 sessions is the one that built the report
+(4 of the 10 reads; without it, 6 of 22). Treat all of it as an experiment you
+can re-run on your own vault: the table above is
 `PYTHONPATH=src python3 tools/measure_rerank_filter.py`, and only its
 `--score --send` flag reaches the provider.
 
