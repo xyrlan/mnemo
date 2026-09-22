@@ -16,10 +16,11 @@ JSON-RPC 2.0 §4.1. Unknown methods return -32601, unknown tools return -32602.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Mapping
 
 from mnemo._version import resolve_version
 from mnemo.core.mcp import access_log as mcp_access_log
@@ -143,6 +144,44 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+#: What Claude Code exports into the server's environment when it spawns it
+#: (``mcp-server-session`` in :mod:`mnemo.core.claude_cli`).
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+SOCKET_ENV = "CLAUDE_CODE_MESSAGING_SOCKET"
+
+
+def session_id(env: Mapping[str, str] | None = None) -> str | None:
+    """The Claude Code session a tool call belongs to, or ``None`` outside one.
+
+    The environment says which session the server was *spawned* for, and one
+    server outlives that session: ``/clear`` starts a new one in the same
+    process and the environment keeps the old id. So the live id is read per
+    call from ``~/.claude/sessions/<pid>.json``, the file Claude Code keeps
+    for its own process — found through the messaging socket it exported,
+    ``/tmp/cc-socks/<pid>.sock``, and trusted only when that file names the
+    same socket. Without a socket or a matching file the spawn id is the
+    answer, which is right until the first ``/clear``.
+
+    Never raises: an id that cannot be read costs the row a ``null``, never
+    the call.
+    """
+    env = os.environ if env is None else env
+    spawned = str(env.get(SESSION_ENV) or "").strip() or None
+    socket = str(env.get(SOCKET_ENV) or "").strip()
+    pid = Path(socket).stem if socket else ""
+    if not pid.isdigit():
+        return spawned
+    try:
+        data = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return spawned
+    if not isinstance(data, dict) or data.get("messagingSocketPath") != socket:
+        return spawned
+    live = data.get("sessionId")
+    return live.strip() if isinstance(live, str) and live.strip() else spawned
+
+
 def _handle_tool_call(
     req_id: Any,
     params: dict[str, Any],
@@ -205,6 +244,9 @@ def _handle_tool_call(
             "scope_requested": scope,
             "scope_effective": scope if project is not None else "vault",
             "project": project,
+            # #416: so a list and the reads that followed it join on the
+            # session rather than on project + a time window.
+            "session_id": session_id(),
             "result_count": result_count,
             "hit_slugs": hit_slugs,
             "elapsed_ms": round(elapsed_ms, 2),

@@ -153,13 +153,7 @@ def part_of(uid: str) -> str:
     return "test" if int(uid, 16) % 3 == 0 else "dev"
 
 
-def result_slugs(content: Any) -> List[str]:
-    """The slugs a ``list_rules_by_topic`` result block returned, in its order.
-
-    The block holds the tool's JSON either as a string or inside text blocks,
-    and anything that is not a list of ``{"slug": ...}`` returns nothing —
-    a truncated or errored result must drop the call, not invent one.
-    """
+def _result_items(content: Any) -> List[Dict[str, Any]]:
     texts: List[str] = []
     if isinstance(content, str):
         texts.append(content)
@@ -167,7 +161,7 @@ def result_slugs(content: Any) -> List[str]:
         for block in content:
             if isinstance(block, dict) and isinstance(block.get("text"), str):
                 texts.append(block["text"])
-    out: List[str] = []
+    out: List[Dict[str, Any]] = []
     for text in texts:
         try:
             parsed = json.loads(text)
@@ -177,8 +171,29 @@ def result_slugs(content: Any) -> List[str]:
             continue
         for item in parsed:
             if isinstance(item, dict) and isinstance(item.get("slug"), str):
-                out.append(item["slug"])
+                out.append(item)
     return out
+
+
+def result_slugs(content: Any) -> List[str]:
+    """The slugs a ``list_rules_by_topic`` result block returned, in its order.
+
+    The block holds the tool's JSON either as a string or inside text blocks,
+    and anything that is not a list of ``{"slug": ...}`` returns nothing —
+    a truncated or errored result must drop the call, not invent one.
+    """
+    return [item["slug"] for item in _result_items(content)]
+
+
+def result_marks(content: Any) -> Dict[str, bool]:
+    """The ``relevant`` flag of every rule in a result that carries one (#404).
+
+    Only a boolean counts: a rule the stage did not judge has no key, and that
+    is "not judged", which must not read as ``False``. A list from before the
+    stage, or with it off, has no marks at all and returns ``{}``.
+    """
+    return {item["slug"]: item["relevant"] for item in _result_items(content)
+            if isinstance(item.get("relevant"), bool)}
 
 
 def calls_from_records(records: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

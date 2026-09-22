@@ -309,6 +309,31 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         how="hand measurement (#288); not exercised by the live test",
     ),
     Assumption(
+        key="mcp-server-session",
+        claim=(
+            "A stdio MCP server Claude Code spawns has `CLAUDE_CODE_SESSION_ID` "
+            "and `CLAUDE_CODE_MESSAGING_SOCKET` (`/tmp/cc-socks/<pid>.sock`, "
+            "the pid of the `claude` process) in its environment, but the "
+            "session id is the one it was spawned for: the server outlives a "
+            "`/clear`, and its environment keeps the old id. "
+            "`~/.claude/sessions/<pid>.json` follows the session — its "
+            "`sessionId` is the live one and its `messagingSocketPath` is the "
+            "exported socket. The `_meta` the binary builds for a stdio "
+            "server's `tools/call` adds `claudecode/toolUseId`, not a session "
+            "id, so the request cannot say either. Measured on the eight "
+            "mnemo servers running on 2026-09-22: all eight exported a socket "
+            "whose sessions file named it back; in two (interactive, up since "
+            "00:53) the environment id was no longer that file's `sessionId`; "
+            "and in two the server's parent was a wrapper, not `claude`, so "
+            "`getppid()` would have found no sessions file."
+        ),
+        used_by="mcp.server.session_id (the access log's `session_id`, #416)",
+        verified="2.1.280 on 2026-09-22",
+        how=("hand measurement (#416): `ps eww` on the live servers against "
+             "their parent's sessions file, and the `_meta` keys in the "
+             "installed binary; not exercised by the live test"),
+    ),
+    Assumption(
         key="context-from-transcript-usage",
         claim=(
             "The context size `/context` prints is the last non-synthetic "

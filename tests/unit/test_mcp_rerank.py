@@ -99,7 +99,10 @@ def test_the_pair_reading_judge_reorders_the_bucket_in_one_request(vault):
     given.retired_withheld = 2
     out, info = rerank.apply(vault, given, "run a script on prod", project=None, cfg=ON, client=judge)
     assert [m["slug"] for m in out] == ["the-one-that-matters", "often-seen", "unrelated"]
-    assert info == {"provider": "typesafe", "status": "ok", "judged": 3, "relevant": 1}
+    assert info == {"provider": "typesafe", "status": "ok", "judged": 3, "relevant": 1,
+                    "relevant_slugs": ["the-one-that-matters"],
+                    "scores": [["the-one-that-matters", 0.9], ["often-seen", 0.1],
+                               ["unrelated", 0.1]]}
     assert len(judge.calls) == 1
     assert out.retired_withheld == 2
 
@@ -243,8 +246,10 @@ def test_the_server_reorders_only_when_configured_and_logs_what_happened(vault, 
     assert not judge.calls and "rerank" not in _log(vault)[-1]
 
     assert _call(vault, ON, args)[0] == "the-one-that-matters"
-    assert _log(vault)[-1]["rerank"] == {"provider": "typesafe", "status": "ok",
-                                        "judged": 3, "relevant": 1}
+    assert _log(vault)[-1]["rerank"] == {
+        "provider": "typesafe", "status": "ok", "judged": 3, "relevant": 1,
+        "relevant_slugs": ["the-one-that-matters"],
+        "scores": [["the-one-that-matters", 0.9], ["often-seen", 0.1], ["unrelated", 0.1]]}
     assert _log(vault)[-1]["hit_slugs"][0] == "the-one-that-matters"
 
 
@@ -293,7 +298,10 @@ def test_a_rule_the_judge_skipped_carries_no_mark_at_all(vault):
     out, info = rerank.apply(vault, _matches(), "q", project=None, cfg=ON, client=judge)
     marked = {m["slug"]: m.get("relevant", "absent") for m in out}
     assert marked == {"unrelated": True, "the-one-that-matters": False, "often-seen": "absent"}
-    assert info == {"provider": "typesafe", "status": "ok", "judged": 2, "relevant": 1}
+    # A rule the judge skipped is in neither list: not judged is not a score.
+    assert info == {"provider": "typesafe", "status": "ok", "judged": 2, "relevant": 1,
+                    "relevant_slugs": ["unrelated"],
+                    "scores": [["unrelated", 0.9], ["the-one-that-matters", 0.1]]}
 
 
 def test_a_rule_past_the_cap_is_neither_judged_nor_marked(vault):
@@ -355,6 +363,54 @@ def test_the_signal_is_the_judge_with_bm25f_as_a_tie_break():
     assert rerank.marks(fused, 0.7) == {"a": True, "b": True, "c": False}
     # A rule the judge never scored is not a key at all.
     assert "d" not in rerank.fuse(judged, {"d": 9.0})
+
+
+# --- #416: which rules were marked, not only how many ------------------------
+
+
+def test_the_info_names_the_marked_rules_and_the_signal_the_order_used(vault, monkeypatch):
+    monkeypatch.setattr(rerank, "bm25f_scores",
+                        lambda root, query, slugs: {"unrelated": 4.0, "often-seen": 1.0})
+    out, info = rerank.apply(vault, _matches(), "run a script on prod", project=None,
+                             cfg=ON, client=Judge())
+    # 0.9 + 0, 0.1 + 0.5 * 4/4, 0.1 + 0.5 * 1/4: the fused number, not the judge's.
+    assert info["scores"] == [["the-one-that-matters", 0.9], ["unrelated", 0.6],
+                              ["often-seen", 0.225]]
+    assert [slug for slug, _ in info["scores"]] == [m["slug"] for m in out]
+    assert info["relevant_slugs"] == [m["slug"] for m in out if m.get("relevant")]
+    assert info["relevant"] == len(info["relevant_slugs"])
+
+
+def test_a_rule_past_the_cap_is_in_neither_list(vault):
+    cfg = {"recall": {"rerank": {"provider": "typesafe", "maxRules": 2}}}
+    _, info = rerank.apply(vault, _matches(), "q", project=None, cfg=cfg, client=Judge())
+    assert [slug for slug, _ in info["scores"]] == ["the-one-that-matters", "often-seen"]
+    assert "unrelated" not in info["relevant_slugs"]
+
+
+@pytest.mark.parametrize("query,client,status", [
+    ("q", None, "no_key"),
+    (None, Judge(), "no_query"),
+    ("q", lambda state, questions: {"answers": {}}, "error"),
+])
+def test_a_stage_that_did_not_run_logs_empty_lists_not_missing_ones(vault, query, client, status):
+    _, info = rerank.apply(vault, _matches(), query, project=None, cfg=ON, client=client)
+    assert info["status"] == status
+    assert info["relevant_slugs"] == [] and info["scores"] == []
+
+
+def test_the_logged_object_holds_slugs_and_numbers_and_no_text(vault, monkeypatch):
+    judge = Judge()
+    real = rerank.apply
+    monkeypatch.setattr(rerank, "apply", lambda *a, **k: real(*a, client=judge, **k))
+    _call(vault, ON, {"topic": "workflow", "query": "run a script on prod"})
+    row = _log(vault)[-1]
+    logged = row["rerank"]
+    assert set(logged) == {"provider", "status", "judged", "relevant",
+                           "relevant_slugs", "scores"}
+    assert all(isinstance(s, str) and isinstance(p, float) for s, p in logged["scores"])
+    assert "run a script" not in json.dumps(logged)
+    assert "Commit a script" not in json.dumps(row)
 
 
 # --- TLS: a Python with no CA bundle must still verify, not give up (#406) ---
