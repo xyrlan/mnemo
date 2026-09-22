@@ -457,13 +457,50 @@ def _notice_text(short_id: str, detail: str | None = None) -> str:
     )
 
 
-def _maybe_notify_parent(cfg, vault, *, session_id: str) -> None:
+def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transcript) -> None:
+    """Fire-and-forget ``mnemo child-report`` (#426). Detach semantics match
+    :func:`_spawn_detached_briefing`; raises when the process cannot start, so
+    the caller can fall back to the one-line notice."""
+    import subprocess
+
+    from mnemo._selfexec import self_argv
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if sys.platform == "win32":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    argv = self_argv("child-report", short_id, "--parent", parent)
+    if cwd:
+        argv += ["--cwd", cwd]
+    if transcript:
+        argv += ["--transcript", str(transcript)]
+    subprocess.Popen(argv, **kwargs)
+
+
+def _maybe_notify_parent(
+    cfg, vault, *, session_id: str, cwd: str = "", transcript=None,
+) -> None:
     """Tell the dispatching session that this child finished (#357).
 
     Only runs for a child that ``mnemo dispatch`` spawned: the parent link is
     the routing table, and a session nobody dispatched has nobody to tell.
     Delivery is best-effort by design — if the parent has exited, the notice
     is dropped rather than queued. This is a convenience, not a mailbox.
+
+    Since #426 the notice is a report card — the child's PR, its checks, its
+    closing report — built by a detached ``mnemo child-report``, because the
+    ``gh`` calls behind it (and the wait for checks that follows) must not hold
+    this hook open. If that process cannot start, the one-line notice goes out
+    here instead, as before.
     """
     if not bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
         return
@@ -475,7 +512,20 @@ def _maybe_notify_parent(cfg, vault, *, session_id: str) -> None:
     parent = parents.read(vault).get(short_id)
     if not parent:
         return
+    # A parent that has exited cannot be told anything; spawning a reporter
+    # (and a half-hour watch) for it would be work with no reader.
+    if not inbox.is_live(inbox.lookup(vault, parent)):
+        return
 
+    try:
+        _spawn_detached_child_report(
+            short_id, parent=parent, cwd=cwd, transcript=transcript,
+        )
+        return
+    except Exception as exc:
+        from mnemo.core import errors
+
+        errors.log_error(vault, "session_end.child_report_spawn", exc)
     inbox.notify(vault, parent, _notice_text(short_id))
 
 
@@ -551,7 +601,11 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_end.sweep_sessions_wrap", e)
         try:
-            _maybe_notify_parent(cfg, vault, session_id=sid)
+            cwd = str(payload.get("cwd") or os.getcwd())
+            transcript = payload.get("transcript_path") or _resolve_session_jsonl_path(sid, cwd)
+            _maybe_notify_parent(
+                cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
+            )
         except Exception as e:
             errors.log_error(vault, "session_end.notify_parent", e)
         try:

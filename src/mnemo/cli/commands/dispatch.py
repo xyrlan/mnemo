@@ -37,6 +37,31 @@ AGENT_NOTE = (
     "  asked you to. The queue and attach lines above are for the maintainer.",
 )
 
+#: The same note when ``dispatch.notifyParent`` is on, the default (#426). The
+#: finish notice is a mechanism, so the note can name it — but only for what
+#: it does: it reaches this session while it is open, it says the child
+#: finished, and it does not say when one blocks. "No need to poll" is the
+#: point: the polling it replaces cost a lookup after 56 of 58 notices.
+AGENT_NOTE_NOTIFIED = (
+    "  note to the session that ran this: the children run detached. When one exits,",
+    "  mnemo posts a notice into this session while it is still open: the child's PR,",
+    "  its checks and its closing report, and once more when running checks settle.",
+    "  Nothing tells this session when a child blocks. Report the ids above and stop;",
+    "  there is no need to poll. The queue and attach lines above are for the maintainer.",
+)
+
+
+def _agent_note() -> tuple:
+    """The note that matches what this machine will actually do."""
+    try:
+        from mnemo.core import config as cfg_mod
+
+        cfg = cfg_mod.load_config()
+    except Exception:  # noqa: BLE001 — the note must never fail a dispatch
+        return AGENT_NOTE
+    notify = bool((cfg.get("dispatch") or {}).get("notifyParent", False))
+    return AGENT_NOTE_NOTIFIED if notify else AGENT_NOTE
+
 
 def _repo_root() -> Path | None:
     """The git toplevel of the cwd, or ``None`` when there is not one."""
@@ -372,7 +397,7 @@ def _report(results: list, *, lean: bool = True) -> int:
         # plain terminal has no such reader, so it keeps the footer as it was.
         if parents.parent_from_env() is not None:
             print()
-            for line in AGENT_NOTE:
+            for line in _agent_note():
                 print(line)
 
     return 1 if failed else 0

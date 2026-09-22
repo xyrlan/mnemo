@@ -116,3 +116,11 @@ def test_reports_that_saw_the_note_are_counted_apart(tmp_path: Path) -> None:
 
     assert report["before_note"]["reports"] == 0
     assert report["with_note"] == {"reports": 1, "mentions": 1, "unbacked": 1}
+
+
+def test_the_note_that_names_the_finish_notice_also_dates_a_report() -> None:
+    """#426 reworded the note for `notifyParent: true`; both wordings mean the
+    session saw a note, so the #306 split must read either."""
+    from mnemo.cli.commands.dispatch import AGENT_NOTE_NOTIFIED
+
+    assert tool.NOTE_NOTIFIED in " ".join(line.strip() for line in AGENT_NOTE_NOTIFIED)

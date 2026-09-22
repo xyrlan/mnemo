@@ -8,6 +8,7 @@ exit code distinguishes "all started" from "some did not".
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from mnemo.cli.commands import dispatch as dispatch_cmd
@@ -286,6 +287,7 @@ def test_inside_a_session_the_footer_tells_the_model_not_to_promise_to_watch(
     ``queue:`` line as its own plan — "Acompanho com `mnemo sessions`… te
     aviso quando terminarem" — with nothing that would wake it (#306)."""
     _one_child(monkeypatch, tmp_path)
+    _notify_parent(monkeypatch, tmp_path, False)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555555555555")
 
     assert dispatch_cmd.cmd_dispatch(_args()) == 0
@@ -294,6 +296,34 @@ def test_inside_a_session_the_footer_tells_the_model_not_to_promise_to_watch(
     assert "a1b2c3d4" in out                         # the ids are still reported
     assert "nothing" in out and "tells this session" in out
     assert "do not poll them or promise to watch" in out
+    assert out.rstrip().endswith("The queue and attach lines above are for the maintainer.")
+
+
+def _notify_parent(monkeypatch, tmp_path: Path, on: bool) -> None:
+    cfg = tmp_path / "mnemo.config.json"
+    cfg.write_text(json.dumps({
+        "vaultRoot": str(tmp_path / "vault"), "dispatch": {"notifyParent": on},
+    }), encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg))
+
+
+def test_with_finish_notices_on_the_footer_names_them_and_nothing_more(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    """#426: with `notifyParent` on (the default) a child's exit does reach
+    this session, so the note says what arrives — and still says that a
+    blocked child reaches nobody, which no notice covers."""
+    _one_child(monkeypatch, tmp_path)
+    _notify_parent(monkeypatch, tmp_path, True)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+
+    assert dispatch_cmd.cmd_dispatch(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "mnemo posts a notice into this session while it is still open" in out
+    assert "Nothing tells this session when a child blocks" in out
+    assert "there is no need to poll" in out
+    assert "promise to watch" not in out
     assert out.rstrip().endswith("The queue and attach lines above are for the maintainer.")
 
 

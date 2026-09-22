@@ -37,6 +37,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
 # only by hooks, MCP server, statusLine composer, briefing pipeline).
 INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "briefing",
+    "child-report",
     "hook",
     "mcp-server",
     "statusline",
@@ -351,6 +352,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # documented way to hide a subparser, but Python 3.14 regressed it: the
     # listing still appears with the literal "==SUPPRESS==" string as the help
     # column. Skipping ``help=`` works on every supported Python version.
+    # #426: spawned detached by a dispatched child's SessionEnd; never typed.
+    child_report = sub.add_parser("child-report")
+    child_report.add_argument("short_id", type=str)
+    child_report.add_argument("--parent", type=str, required=True)
+    child_report.add_argument("--cwd", type=str, default=None)
+    child_report.add_argument("--transcript", type=str, default=None)
+
     briefing = sub.add_parser("briefing")
     # Positionals are optional so `mnemo briefing --prune` parses; the
     # command itself rejects a call that has neither (#116).

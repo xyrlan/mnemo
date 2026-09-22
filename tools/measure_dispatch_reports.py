@@ -58,6 +58,9 @@ DISPATCH_COMMAND = re.compile(r"\bmnemo dispatch\b")
 
 #: The note #306 added; its presence dates a report as after the change.
 NOTE = "tells this session when they block or finish"
+#: The note's wording once the finish notice carries a report card (#426).
+#: Either phrase dates a report as after #306.
+NOTE_NOTIFIED = "mnemo posts a notice into this session"
 
 #: The queue, run by the session itself: naming a command it just ran is a
 #: report of what it saw, not a promise.
@@ -122,7 +125,7 @@ def reports_in(path: str) -> List[Dict[str, Any]]:
                     current = {
                         "transcript": path,
                         "timestamp": record.get("timestamp", ""),
-                        "note_shown": NOTE in output,
+                        "note_shown": NOTE in output or NOTE_NOTIFIED in output,
                         "text": "",
                         "watcher": False,
                         "ran_queue": False,
