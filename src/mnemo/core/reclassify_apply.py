@@ -317,7 +317,11 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
         else:  # archive
             dest = archived_dir / f"{v.slug}.md"
             shutil.move(str(src_path), str(dest))
-            _entry_for(state, f"feedback/{v.slug}", fm_sources)["status"] = "dismissed"
+            # Keyed by the page's own type, as for merge: a bulk archive of
+            # ``reference`` pages must dismiss ``reference/<slug>``, or the
+            # real entry stays live and the next extraction writes it back.
+            _entry_for(state, f"{src_path.parent.name}/{v.slug}",
+                       fm_sources)["status"] = "dismissed"
             to_path = dest
             report.archived += 1
 
