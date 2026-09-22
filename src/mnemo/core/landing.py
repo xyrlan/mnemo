@@ -141,10 +141,23 @@ def _definition_re(name: str) -> re.Pattern:
     # `name = ...` is a local, not a boundary anyone can import. A class
     # attribute is indented too, and is a boundary — that case is answered
     # by `_class_members`, which can tell the two apart; this regex cannot.
+    #
+    # Contracts land TypeScript and Rust too (mnemo-desktop), so their
+    # declaration keywords count as well (#446): `export function`,
+    # `export const`, `interface`, `type` in TS; `pub fn`, `struct`, `trait`
+    # in Rust. Every form starts with a keyword before the name, which is
+    # what keeps an import (`import { name }`) and a call (`name(x)`) out.
+    n = re.escape(name)
+    ts = (r"(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?"
+          r"(?:function\s*\*?|const|let|var|class|interface|type|enum)")
+    rust = (r"(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
+            r'(?:extern\s+"[^"]*"\s+)?(?:fn|struct|enum|trait|type|static|mod|const)')
     return re.compile(
-        rf"^(?:\s*(?:async\s+)?def\s+{re.escape(name)}\s*\("
-        rf"|\s*class\s+{re.escape(name)}\b"
-        rf"|{re.escape(name)}\s*(?::|=(?!=)))",
+        rf"^(?:\s*(?:async\s+)?def\s+{n}\s*\("
+        rf"|\s*class\s+{n}\b"
+        rf"|{n}\s*(?::|=(?!=))"
+        rf"|\s*{ts}\s+{n}\b"
+        rf"|\s*{rust}\s+{n}\b)",
         re.MULTILINE,
     )
 

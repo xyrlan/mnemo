@@ -173,6 +173,47 @@ def test_a_method_counts_when_defined_indented(repo: Path) -> None:
                            repo_root=repo) is True
 
 
+def _defined_in(repo: Path, path: str, source: str, signature: str) -> bool | None:
+    _branch(repo, "feat/f/lang", {path: source})
+    piece = Piece("lang", files=[path], exposes=[signature])
+    return landing.present(signature, piece=piece, ref="feat/f/lang", repo_root=repo)
+
+
+@pytest.mark.parametrize("path, source", [
+    # mnemo-desktop round 18, the two definitions `land` could not see (#446).
+    ("src/actions.ts", "import type { Pr } from './types'\n\n"
+                       "export function mergePr(root: string, pr: Pr) {\n  run(root, pr)\n}\n"),
+    ("src/actions.ts", "export async function mergePr(root: string, pr: Pr): Promise<void> {}\n"),
+    ("src/actions.ts", "function mergePr(root, pr) {}\n"),
+    ("src/actions.ts", "export default function mergePr(root: string) {}\n"),
+    ("src/actions.ts", "export const mergePr = (root: string, pr: Pr): void => {}\n"),
+    ("src/actions.tsx", "export let mergePr: (root: string) => void\n"),
+    ("src/actions.ts", "export class mergePr {}\n"),
+    ("src/actions.ts", "export interface mergePr { root: string }\n"),
+    ("src/actions.ts", "export type mergePr = (root: string) => void\n"),
+    ("src-tauri/src/merge.rs", "pub fn mergePr(root: &str) -> Result<(), String> {\n    Ok(())\n}\n"),
+    ("src-tauri/src/merge.rs", "pub(crate) async fn mergePr(root: &str) {}\n"),
+    ("src-tauri/src/merge.rs", "impl Lens {\n    pub fn mergePr(&self) {}\n}\n"),
+    ("src-tauri/src/merge.rs", "pub struct mergePr {\n    root: String,\n}\n"),
+])
+def test_a_typescript_or_rust_definition_is_present(repo: Path, path: str, source: str) -> None:
+    assert _defined_in(repo, path, source, "`mergePr(root: string, pr: Pr): void`") is True
+
+
+@pytest.mark.parametrize("path, source", [
+    ("src/board.ts", "import { mergePr } from './actions'\n"),
+    ("src/board.ts", "export { mergePr } from './actions'\n"),
+    ("src/board.ts", "function go() {\n  mergePr(root, pr)\n}\n"),
+    ("src/board.ts", "const x = mergePr(root, pr)\n"),
+    ("src/board.ts", "// export function mergePr(root: string) {}\n"),
+    ("src-tauri/src/board.rs", "fn go() {\n    mergePr(root);\n}\n"),
+    ("src-tauri/src/board.rs", "use crate::merge::mergePr;\n"),
+])
+def test_an_import_or_a_call_is_not_a_definition(repo: Path, path: str, source: str) -> None:
+    """The contract's promise is that this piece *defines* it; using it is the consumer's side."""
+    assert _defined_in(repo, path, source, "`mergePr(root: string, pr: Pr): void`") is False
+
+
 def _present_in(repo: Path, signature: str, source: str) -> bool | None:
     branch = "feat/f/attr"
     _branch(repo, branch, {"src/m.py": source})
