@@ -20,6 +20,7 @@ from mnemo.core import errors as errors_mod
 from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
 from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
+from mnemo.core.redact import redact_secrets
 from mnemo.core.transcript import flatten_transcript_events, user_turns
 # Re-exported: the injector records a read through the briefing API it picks
 # with, while the row itself is written beside the rest of mnemo's telemetry.
@@ -236,6 +237,12 @@ def generate_session_briefing(
         except Exception:
             pass  # leave the body as-is rather than lose the briefing
         errors_mod.log_error(vault_root, "briefing.corrections", exc)
+
+    # Last, after the corrections were checked against the raw transcript: a
+    # briefing is injected at SessionStart, mined by extraction and cited as
+    # evidence, so a password the session typed stops here (#418). Secrets
+    # only — the evidence gate compares quotes under the same function.
+    body = redact_secrets(body)[0]
 
     duration_minutes = _compute_duration_minutes(events)
 

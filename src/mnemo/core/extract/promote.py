@@ -25,6 +25,7 @@ from mnemo.core.extract.scanner import (
 )
 from mnemo.core.extract.inbox.paths import _sibling_path
 from mnemo.core.extract.source_paths import vault_relative_source
+from mnemo.core.redact import redact_secrets
 
 
 def _project_slug(file: MemoryFile) -> str:
@@ -92,14 +93,21 @@ def _render_project_page(
     # parser-level assertion cannot tell the two spellings apart.
     is_backfill = _is_backfill(file) if backfill is None else backfill
     origin_line = ORIGIN_LINE if is_backfill else ""
+    # The source is the user's own auto-memory, which mnemo mirrors and never
+    # rewrites; this page is the first thing mnemo *derives* from it, so it is
+    # where a password in that memory stops (#418). Secrets only: a
+    # test-account address is the identifier the page exists to carry.
+    name = redact_secrets(str(file.frontmatter.get('name', file.slug)))[0]
+    description = redact_secrets(str(file.frontmatter.get('description', '')))[0]
+    body = redact_secrets(file.body)[0]
     return (
         "---\n"
-        f"name: {file.frontmatter.get('name', file.slug)}\n"
+        f"name: {name}\n"
         # #114: the composite is the state key, the ledger slug and the file
         # stem; writing it here keeps derive_rule_slug from falling through
         # to the display name for the reflex/activation indexes.
         f"slug: {_project_slug(file)}\n"
-        f"description: {file.frontmatter.get('description', '')}\n"
+        f"description: {description}\n"
         "type: project\n"
         "runtime: false\n"
         f"{origin_line}"
@@ -109,7 +117,7 @@ def _render_project_page(
         "sources:\n"
         f"  - {file.path}\n"
         "---\n\n"
-        f"{file.body}"
+        f"{body}"
     )
 
 
