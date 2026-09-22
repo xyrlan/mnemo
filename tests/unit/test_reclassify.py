@@ -315,3 +315,35 @@ def test_undo_restores_merge_target_at_its_real_path_not_its_slug(vault):
     assert target.read_bytes() == original
     assert not (d / "use-yarn.md").exists(), "undo must not write a stray slug-named file"
     assert dup.exists()
+
+
+def test_archive_dismisses_the_entry_under_the_pages_own_type(vault):
+    """#419: archiving a ``reference`` page dismisses ``reference/<slug>``, not
+    a ``feedback/<slug>`` it never had — else the next extract writes it back."""
+    d = vault / "shared" / "reference"
+    d.mkdir(parents=True)
+    page = d / "Deploy Notes.md"
+    page.write_text("---\nname: Deploy notes\ndescription: Deploy notes\ntype: reference\n"
+                    "sources:\n  - bots/proj/briefings/sessions/s1.md\n---\nBody.\n", encoding="utf-8")
+    original = page.read_bytes()
+    state_path = vault / ".mnemo" / "extraction-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["entries"]["reference/deploy-notes"] = {
+        "source_files": ["bots/proj/briefings/sessions/s1.md"], "source_hash": "h",
+        "written_hash": "w", "written_at": "r", "status": "auto_promoted"}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    state_before = state_path.read_bytes()
+
+    plan = R.Plan(run_id="20260922T000000", llm_calls=0, verdicts=[
+        R.Verdict(slug="deploy-notes", verdict="archive", path="shared/reference/Deploy Notes.md"),
+    ])
+    assert R.apply(vault, plan, rebuild_indexes=False).archived == 1
+
+    entries = json.loads(state_path.read_text(encoding="utf-8"))["entries"]
+    assert entries["reference/deploy-notes"]["status"] == "dismissed"
+    assert "feedback/deploy-notes" not in entries
+    assert not page.exists()
+
+    R.undo(vault, "20260922T000000")
+    assert page.read_bytes() == original
+    assert state_path.read_bytes() == state_before
