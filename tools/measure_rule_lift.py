@@ -58,6 +58,18 @@ gives a wide CI — it can say "none" or "large", not "+4 pp"; and the
 subprocess still carries the user's own non-mnemo plugin hooks, identically
 in both arms.
 
+First run, 2026-09-22, 1 sample per arm, arms and judge ``claude-sonnet-5``:
+the judge answered all 128 answers, and 7 pairs were "na" in both arms. Over
+the other 57 pairs the follow rate went from 45.6% (A) to 75.4% (B): lift
+**+29.8 pp, 95% CI [+12.3, +47.4]**, 25 pairs gained and 8 lost. That is the
+"rules carry" branch. 45.6% of pairs were redundant (A already followed the
+rule). Dropping the 20 pairs whose B answer was masked or still named the
+reflex or "memory" gives +28.9 pp [+5.3, +50.0]. The 8 lost pairs show how
+much one sample moves on its own. So a one-pair rule at −100 pp is not yet
+evidence to retire it: per-rule pruning needs ``--samples 2`` or more first.
+Cost: 128 arm calls at $3.53 plus 13 judge calls at $0.90, the API-price
+equivalent of subscription usage. The dry run had predicted $4.14.
+
 Files, under ``<vault>/.mnemo/rule-lift/``: ``pairs.json``, ``answers.json``
 (per arm column — model and :data:`ARM_SYSTEM` hash — per pair, per arm, a
 list of samples; saved after every call) and ``verdicts.json`` (per arm column
