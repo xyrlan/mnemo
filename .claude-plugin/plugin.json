@@ -1,7 +1,7 @@
 {
   "name": "mnemo",
   "version": "1.6.0",
-  "description": "The Obsidian that populates itself so your Claude never forgets.",
+  "description": "Claude Code forgets your corrections. mnemo doesn't — and the sessions it fans out for you start out knowing them.",
   "author": {
     "name": "xyrlan",
     "url": "https://github.com/xyrlan"

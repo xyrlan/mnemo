@@ -14,6 +14,16 @@ from typing import Callable
 
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {}
 
+# The one sentence mnemo is described by everywhere a human reads it before
+# using it: this --help, ``pyproject.toml``'s ``description``, the plugin
+# manifest, and the README's opening line (#437). Keep the four in sync —
+# ``tests/unit/test_cli_help.py`` pins it so they can't drift again the way
+# "The Obsidian that populates itself" did from the README's actual pitch.
+TAGLINE = (
+    "Claude Code forgets your corrections. mnemo doesn't — and the "
+    "sessions it fans out for you start out knowing them."
+)
+
 
 # Commands that are real but advanced/maintenance — hidden from
 # ``mnemo help`` by default; surfaced via ``mnemo help --all``.
@@ -52,6 +62,66 @@ def command(name: str) -> Callable:
     return deco
 
 
+def filter_subparsers(parser: argparse.ArgumentParser, *, show_all: bool) -> None:
+    """Strip internal (and optionally advanced) subparsers from help output.
+
+    Both the `{a,b,c}` choices header and the per-command listing are derived
+    from the subparsers action. We mutate that action in-place so the only
+    visible commands are the curated user-facing set.
+    """
+    sub = next(
+        (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)),
+        None,
+    )
+    if sub is None:
+        return
+    hidden = set(INTERNAL_COMMANDS)
+    if not show_all:
+        hidden |= ADVANCED_COMMANDS
+    sub._choices_actions = [ca for ca in sub._choices_actions if ca.dest not in hidden]
+    visible = [n for n in sub.choices.keys() if n not in hidden]
+    sub.metavar = "{" + ",".join(visible) + "}"
+
+
+def print_curated_help(parser: argparse.ArgumentParser, *, show_all: bool) -> None:
+    """``mnemo help`` and (curated) ``mnemo --help`` share this render.
+
+    Before #437, ``-h``/``--help`` was argparse's own default action, which
+    dumps every subparser — the raw 47-verb listing the issue is about.
+    ``mnemo help`` already curated that list; this makes ``--help`` agree
+    with it instead of bypassing it.
+    """
+    filter_subparsers(parser, show_all=show_all)
+    parser.print_help()
+    if not show_all and ADVANCED_COMMANDS:
+        print()
+        print(
+            f"({len(ADVANCED_COMMANDS)} advanced commands hidden — "
+            "`mnemo help --all` to see them.)"
+        )
+
+
+class _CuratedHelpAction(argparse.Action):
+    """Top-level ``-h``/``--help``, wired in place of argparse's default.
+
+    argparse's own help action prints every subparser regardless of
+    ``ADVANCED_COMMANDS``/``INTERNAL_COMMANDS``; this renders the same
+    curated view ``mnemo help`` does, so asking for help either way says the
+    same thing.
+    """
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS,
+                 default=argparse.SUPPRESS, help=None) -> None:
+        super().__init__(
+            option_strings=option_strings, dest=dest, default=default,
+            nargs=0, help=help,
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:
+        print_curated_help(parser, show_all=False)
+        parser.exit()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
     from mnemo.core.claude_cli import EFFORT_LEVELS
@@ -68,7 +138,14 @@ def _build_parser() -> argparse.ArgumentParser:
     # command. Every entry point builds the parser before it looks a handler up.
     from mnemo.cli.commands import friction as _friction  # noqa: F401
     _v = resolve_version()
-    p = argparse.ArgumentParser(prog="mnemo", description="The Obsidian that populates itself.")
+    # add_help=False: the default -h/--help would dump every subparser
+    # unfiltered. _CuratedHelpAction below replaces it with the same curated
+    # view `mnemo help` prints (#437).
+    p = argparse.ArgumentParser(prog="mnemo", description=TAGLINE, add_help=False)
+    p.add_argument(
+        "-h", "--help", action=_CuratedHelpAction,
+        help="show this help message and exit",
+    )
     p.add_argument("--version", "-V", action="version", version=f"mnemo {_v}")
     sub = p.add_subparsers(dest="command")
 
