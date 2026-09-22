@@ -84,6 +84,20 @@ def _python_copy(src: Path, dst: Path) -> None:
             shutil.copy2(Path(root) / f, target_dir / f)
 
 
+def _has_files(src: Path) -> bool:
+    """True when *src* holds at least one file, at any depth.
+
+    Claude Code creates ``~/.claude/projects/<cwd>/memory/`` for every cwd a
+    session runs in, pytest tmp dirs and job probes included, and leaves it
+    empty unless something is saved. Mirroring an empty one made an agent
+    directory out of nothing: 48 of them on the maintainer's machine (#420).
+    """
+    for _root, _dirs, files in os.walk(src):
+        if files:
+            return True
+    return False
+
+
 def mirror_all(cfg: dict[str, Any]) -> None:
     vault = paths.vault_root(cfg)
     paths.bots_dir(cfg).mkdir(parents=True, exist_ok=True)
@@ -96,7 +110,7 @@ def mirror_all(cfg: dict[str, Any]) -> None:
             return
         for project_dir in projects_root.iterdir():
             memory_src = project_dir / "memory"
-            if not memory_src.is_dir():
+            if not memory_src.is_dir() or not _has_files(memory_src):
                 continue
             agent = _agent_from_project_dir(project_dir.name)
             target = paths.memory_dir(cfg, agent)

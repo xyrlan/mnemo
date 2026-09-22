@@ -15,6 +15,7 @@ stdout. This hook MUST NEVER block Claude Code from running.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 _ENFORCE_TOOL = "Bash"
@@ -26,7 +27,7 @@ def main() -> int:
     # `claude --print` helpers that brief and extract run under the user's own
     # settings, mnemo's hooks included, so an unguarded hook here schedules the
     # work whose helper is running it. See :mod:`mnemo.core.hook_guard`.
-    from mnemo.core.hook_guard import hooks_off
+    from mnemo.core.hook_guard import hooks_off, throwaway_session
 
     if hooks_off():
         return 0
@@ -44,6 +45,10 @@ def main() -> int:
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
+        # A session in a temp, pytest or job-scratch dir writes nothing into
+        # a vault that outlives it (#420). See hook_guard.throwaway_session.
+        if throwaway_session(payload.get("cwd") or os.getcwd(), vault):
+            return 0
 
         enf_cfg = cfg.get("enforcement", {}) or {}
         enr_cfg = cfg.get("enrichment", {}) or {}
