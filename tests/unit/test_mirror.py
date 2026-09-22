@@ -123,3 +123,15 @@ def test_decode_walks_up_to_git_root_when_subdir_passed(tmp_path: Path):
     sub.mkdir(parents=True)
     encoded = "-" + str(sub).lstrip("/").replace("/", "-")
     assert mirror._agent_from_project_dir(encoded) == "myrepo"
+
+
+def test_mirror_skips_an_empty_memory_dir(tmp_home: Path, tmp_vault: Path):
+    """#420: Claude Code makes `memory/` for every cwd a session ran in, and
+    leaves it empty. An empty source must not become a `bots/` directory."""
+    empty = _make_claude_project(tmp_home, "-private-var-folders-T-pytest-of-x-pytest-881-live", {})
+    (empty / "sub").mkdir()  # a directory tree with no file is still empty
+    _make_claude_project(tmp_home, "-home-x-myrepo", {"a.md": "kept"})
+
+    mirror.mirror_all({"vaultRoot": str(tmp_vault)})
+
+    assert sorted(p.name for p in (tmp_vault / "bots").iterdir()) == ["myrepo"]
