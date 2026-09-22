@@ -119,9 +119,12 @@ def test_stamp_apply_writes_exactly_the_missing_lines(tmp_vault: Path):
     assert md.apply_stamps(todo) == 2
 
     # One line, right after demoted_from:, every other byte where it was.
+    # `write_text` writes the platform's line ending, so expect that one.
+    eol = b"\r\n" if b"\r\n" in before_a else b"\n"
     assert a.read_bytes() == before_a.replace(
-        b"demoted_from: feedback\n", b"demoted_from: feedback\nreference_gate: narrative\n")
-    assert b"reference_gate: technique\n" in b.read_bytes()
+        b"demoted_from: feedback" + eol,
+        b"demoted_from: feedback" + eol + b"reference_gate: narrative" + eol)
+    assert b"reference_gate: technique" + eol in b.read_bytes()
     assert all(p.read_bytes() == raw for p, raw in untouched.items())
     assert skipped == {"gone": 1, "no answer": 1, "not a demotion or already stamped": 1}
     # What the stamp means is what the expiry reads.
@@ -140,3 +143,18 @@ def test_stamp_keeps_a_crlf_file_crlf():
 def test_stamp_leaves_a_page_that_is_no_longer_a_demotion():
     assert md._stamped(b"---\nname: x\n---\n\ndemoted_from: in the body\n", "generic") is None
     assert md._stamped(b"no frontmatter\n", "generic") is None
+
+
+def test_the_stamp_takes_the_files_own_line_ending(tmp_vault: Path):
+    """CRLF on every platform, not only on Windows: a vault edited there keeps
+    CRLF when synced back, and a bare LF line would be the one odd byte."""
+    path = tmp_vault / "shared" / "_inbox" / "reference" / "crlf.md"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"---\r\nname: crlf\r\ndemoted_from: feedback\r\nsources:\r\n---\r\n\r\nbody\r\n")
+
+    todo, _ = md.plan_stamps(tmp_vault, _sample("crlf"), {"reference/crlf": "S"}, gate.LABELS)
+    assert md.apply_stamps(todo) == 1
+
+    assert path.read_bytes() == (
+        b"---\r\nname: crlf\r\ndemoted_from: feedback\r\nreference_gate: system\r\n"
+        b"sources:\r\n---\r\n\r\nbody\r\n")
