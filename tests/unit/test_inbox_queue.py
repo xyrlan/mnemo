@@ -205,7 +205,19 @@ def test_drop_archives_before_it_deletes(tmp_vault: Path):
 # --- the numbers -----------------------------------------------------------
 
 
+class _OneInstant(datetime):
+    """Every ``datetime.now()`` in the inbox module reads the same second."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 9, 20, 12, 0, 0)
+
+
 def test_stats_reports_depth_age_and_what_drained(tmp_vault: Path, monkeypatch):
+    # The ledger stamps to the second, so an offer and a decision made in the
+    # same instant straddle a second boundary now and then and the median
+    # reads one second (1.157e-05 days) instead of zero: #408, seen on CI.
+    monkeypatch.setattr(I, "datetime", _OneInstant)
     monkeypatch.setattr(I, "_rebuild_indexes", lambda _v: None)
     _page(tmp_vault, "shared/_inbox/reference/a.md", sources=["bots/demo/x.md"], age_days=10)
     _page(tmp_vault, "shared/_inbox/reference/b.md", sources=["bots/demo/x.md"], age_days=2)

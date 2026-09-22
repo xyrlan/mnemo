@@ -34,7 +34,9 @@ from mnemo.hooks import session_start
 
 # conftest's autouse guard replaces the module attribute so no test ever really
 # spawns a sweep. The tests below that exercise the spawn itself need the real
-# function, so bind it here — at import, before any fixture runs.
+# function, so bind it here — at import, before any fixture runs. They are also
+# marked ``real_spawn``: the real function goes through ``_spawn_detached``,
+# which the same guard stubs, and each of them patches ``Popen`` instead.
 _REAL_SPAWN = session_start._spawn_detached_backfill
 
 
@@ -90,6 +92,35 @@ def test_the_suite_wide_spawn_guard_is_active():
     is a background process, not a failure.
     """
     assert session_start._spawn_detached_backfill is not _REAL_SPAWN
+
+
+def test_the_hook_launches_no_detached_process_under_the_suite(
+    monkeypatch, tmp_path, tmp_home
+):
+    """Pin the guard by what it prevents, not by which names it replaced.
+
+    The name pin above stayed green while #397 added a second detached spawn,
+    the procedure scan, that no stub covered: 93 tests launched a real
+    ``mnemo procedures --refresh`` on every run, with its cwd in a directory
+    the test was about to delete. Windows cannot remove a directory that is a
+    live process's cwd, so the worktree test in ``test_child_briefing.py``
+    failed on 13 of the 16 Windows runs since (#408).
+    """
+    repo = tmp_path / "theproject"
+    repo.mkdir()
+    detached: list = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(argv, *args, **kwargs):
+        if kwargs.get("start_new_session") or kwargs.get("creationflags"):
+            detached.append(argv)
+            return object()
+        return real_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    _run_hook(monkeypatch, tmp_path / "vault", repo)
+
+    assert detached == []
 
 
 # --- scheduling ------------------------------------------------------------
@@ -259,6 +290,7 @@ def test_the_scheduled_spawn_carries_the_session_cwd(vault, monkeypatch):
     assert spawned[0]["cwd"] == "/Users/me/github/theproject"
 
 
+@pytest.mark.real_spawn
 def test_popen_is_given_the_cwd_not_the_hooks_own(monkeypatch, tmp_path):
     """`backfill --install-run` resolves its project from os.getcwd().
 
@@ -284,6 +316,7 @@ def test_popen_is_given_the_cwd_not_the_hooks_own(monkeypatch, tmp_path):
     assert seen["kwargs"]["cwd"] != str(tmp_path)
 
 
+@pytest.mark.real_spawn
 def test_a_missing_cwd_falls_back_to_inheriting(monkeypatch):
     """No cwd known → don't pass one; inheriting beats guessing."""
     seen: dict = {}
@@ -297,6 +330,7 @@ def test_a_missing_cwd_falls_back_to_inheriting(monkeypatch):
     assert seen["kwargs"].get("cwd") is None
 
 
+@pytest.mark.real_spawn
 def test_a_vanished_cwd_is_not_passed_through(monkeypatch, tmp_path):
     """A cwd that no longer exists would make Popen raise before the child ran."""
     seen: dict = {}
@@ -312,6 +346,7 @@ def test_a_vanished_cwd_is_not_passed_through(monkeypatch, tmp_path):
 
 # --- the spawn itself ------------------------------------------------------
 
+@pytest.mark.real_spawn
 def test_the_child_is_the_capped_install_run(monkeypatch):
     seen: dict = {}
 
@@ -329,6 +364,7 @@ def test_the_child_is_the_capped_install_run(monkeypatch):
     assert seen["kwargs"]["stderr"] is subprocess.DEVNULL
 
 
+@pytest.mark.real_spawn
 def test_posix_detaches_with_a_new_session(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(subprocess, "Popen",
@@ -341,6 +377,7 @@ def test_posix_detaches_with_a_new_session(monkeypatch):
     assert "creationflags" not in seen
 
 
+@pytest.mark.real_spawn
 def test_windows_detaches_with_creationflags(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(subprocess, "Popen",

@@ -76,6 +76,11 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     # roster so the hook decides not to spawn, but that is an accident of
     # another fixture, and this guarantee should not rest on one.
     monkeypatch.setattr("mnemo.core.sessions.rewake._spawn_watcher", lambda *a, **k: None)
+    # Every detached `mnemo` the SessionStart hook starts goes through this one
+    # function, so stub it rather than each caller: #397's procedure scan was a
+    # new caller no stub named, and its child held the test's worktree open as
+    # its cwd — which Windows refuses to delete (#408).
+    monkeypatch.setattr("mnemo.hooks.session_start._spawn_detached", lambda *a, **k: None)
 
 
 @pytest.fixture
