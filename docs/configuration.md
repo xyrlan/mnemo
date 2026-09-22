@@ -514,6 +514,21 @@ last of them is one of two review offers — never both (see below):
    `.mnemo/inbox-offers.jsonl`, which is what makes `mnemo inbox --stats` able
    to say how many pages were resolved this week and how long they took.
 
+   **Which pages it offers first.** A staged page the reference judge rated
+   carries `reference_gate: technique|system|generic|narrative` in its
+   frontmatter. The offer puts the judge's keeps (`technique`, `system`)
+   first, unjudged pages next, and its let-gos (`generic`, `narrative`) last,
+   oldest first within each group. The let-gos expire on their own after
+   `inbox.heldExpiryDays` (below under `mnemo inbox`), while a kept page stays
+   invisible to recall until you promote it — so offering by age alone would
+   spend most of the two daily slots on pages the queue sheds anyway: of the
+   130 evidence-gate demotions the judge rated on 2026-09-22
+   (`tools/measure_demotions.py`), 72 were generic or narrative and 58 worth
+   keeping. The bullet says the verdict beside the age and reason — e.g.
+   `(5d, demotion, judge: system knowledge)` — and `mnemo inbox` shows it as
+   `[judge: …]` before the description; an unjudged page shows nothing extra.
+   The three bounds are unchanged.
+
 6. **The procedure offer** — one `CLAUDE.md` line two or more dispatched
    children of this repo worked out for themselves and the file does not say,
    opened by `[mnemo procedure candidate — repo=<name>, N undecided]` and closed
