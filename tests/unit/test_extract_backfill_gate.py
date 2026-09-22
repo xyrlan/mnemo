@@ -128,6 +128,9 @@ def _cfg(vault_root: Path) -> dict:
             "preferAPI": False,
             "subprocessTimeout": 60,
             "costSoftCap": None,
+            # This file is about the backfill gate; the reference gate
+            # (#417) has tests of its own.
+            "referenceGate": {"enabled": False},
         },
         "backfill": {"minFileMutations": 1},
     }

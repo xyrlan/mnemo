@@ -52,6 +52,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     print(f"  cost:       {cost_line}")
     print(
         f"  staged unverified: {summary.demoted_unverified} · "
+        f"reference held: {summary.reference_held} · "
         f"echo rejected: {summary.echo_rejected} · redactions: {summary.redactions}"
     )
 

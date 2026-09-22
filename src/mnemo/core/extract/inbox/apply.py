@@ -29,6 +29,7 @@ from mnemo.core.extract.demotion import (
     is_demoted_markdown,
     is_demoted_page,
 )
+from mnemo.core.extract import reference_gate
 from mnemo.core.extract.inbox.branches.auto_promoted import _apply_auto_promoted
 from mnemo.core.extract.inbox.branches.inbox_flow import _apply_inbox
 from mnemo.core.extract.inbox.branches.universal_promotion import (
@@ -89,6 +90,10 @@ def _is_universal_promotion(
     if is_backfill_page(page):
         return False
     if page.unverified_feedback:
+        return False
+    # #417: a page the reference gate did not clear stages for review; two
+    # projects' worth of sources does not make a generic aphorism a rule.
+    if not reference_gate.cleared(page):
         return False
     if entry is not None and entry.status == "auto_promoted":
         return False
@@ -433,6 +438,8 @@ def apply_pages(
             result.unchanged_skipped.append(key)
             continue
 
+        if reference_gate.held(page, vault_root):
+            result.reference_held.append(key)
         dismissed_before = len(result.dismissed_skipped)
         for predicate, handler in _DISPATCH:
             if predicate(page, entry, target, is_auto):

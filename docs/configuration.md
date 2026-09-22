@@ -48,6 +48,8 @@ turn off:
 | `extraction.chunkSize` | `10` | Source files per LLM call |
 | `extraction.subprocessTimeout` | `60` | Seconds before an extraction call is abandoned |
 | `extraction.costSoftCap` | `null` | Warn past this spend, in dollars. `null` = no cap |
+| `extraction.referenceGate.enabled` | `true` | Judge every inferred `reference` page before it goes live: only system knowledge or a transferable technique reaches `shared/reference/`; a generic aphorism or a session narrative stages in `shared/_inbox/reference/`. One extra model call per extraction chunk that yields reference pages. `false` = the pre-#417 behaviour, every single-source page live |
+| `extraction.referenceGate.model` | `claude-sonnet-5` | Model that judges. On the 2026-09-22 audit sample's held-out half Sonnet staged 30 of 31 junk pages and 3 of 41 good ones; Haiku 26 of 31 and 7 of 41 (`tools/measure_reference_gate.py`) |
 | `extraction.auto.enabled` | `true` | Run extraction automatically at `SessionEnd` |
 | `extraction.auto.minNewMemories` | `1` | New source files required before a run |
 | `extraction.auto.minIntervalMinutes` | `60` | Minimum gap between automatic runs |

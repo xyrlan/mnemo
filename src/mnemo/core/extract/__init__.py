@@ -15,7 +15,15 @@ from mnemo.core.backfill.origin import (
     is_backfill_frontmatter,
     is_backfill_markdown,
 )
-from mnemo.core.extract import evidence, inbox, promote, prompts, scanner, source_paths
+from mnemo.core.extract import (
+    evidence,
+    inbox,
+    promote,
+    prompts,
+    reference_gate,
+    scanner,
+    source_paths,
+)
 from mnemo.core.extract.demotion import is_demoted_entry, is_demoted_frontmatter
 from mnemo.core.extract.guards import is_prompt_echo
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
@@ -188,6 +196,8 @@ class ExtractionSummary:
     echo_rejected: int = 0
     redactions: int = 0
     demoted_unverified: int = 0
+    # #417: inferred reference pages the reference gate staged for review.
+    reference_held: int = 0
     mode: str = "manual"
 
 
@@ -206,6 +216,7 @@ def _merge_apply(result: inbox.ApplyResult, summary: ExtractionSummary) -> None:
     summary.sibling_bounced += len(result.sibling_bounced)
     summary.upgrade_proposed += len(result.upgrade_proposed)
     summary.universal_promoted += len(result.universal_promoted)
+    summary.reference_held += len(result.reference_held)
     summary.conflicts.extend(result.sibling_proposed)
     summary.conflicts.extend(result.sibling_bounced)
     summary.conflicts.extend(result.upgrade_proposed)
@@ -255,9 +266,17 @@ def _parse_pages_from_response(
         # it would carry origin_backfill=False, span two projects, and be
         # universally promoted into the sacred dir unreviewed.
         origin_backfill = any(s in backfill_sources for s in source_files)
+        # #417: the type becomes a directory name (``shared/<type>/``), so a
+        # type the model made up — one live page landed as
+        # ``type: measurement-before-design`` — would mint a new top-level
+        # directory. Fall back to the kind this prompt was asked for, which
+        # then meets that kind's gate like any other page.
+        page_type = str(rp.get("type") or "").strip()
+        if page_type not in scanner._VALID_TYPES:
+            page_type = default_type
         out.append(inbox.ExtractedPage(
             slug=slug,
-            type=str(rp.get("type") or default_type),
+            type=page_type,
             name=str(rp.get("name") or slug),
             description=str(rp.get("description") or ""),
             body=body,
@@ -544,6 +563,24 @@ def _run_extraction_body(
     chunk_size = cfg["extraction"]["chunkSize"]
     timeout = cfg["extraction"]["subprocessTimeout"]
     model = cfg["extraction"]["model"]
+    # #417: the reference gate's own model — see ``reference_gate``.
+    gate_cfg = cfg["extraction"].get("referenceGate") or {}
+    gate_on = bool(gate_cfg.get("enabled", True))
+    gate_model = str(gate_cfg.get("model") or model)
+
+    def _ask_gate(prompt_text: str) -> str:
+        response = provider(
+            prompt_text,
+            system=reference_gate.SYSTEM_PROMPT,
+            model=gate_model,
+            timeout=timeout,
+        )
+        summary.total_cost_usd += response.total_cost_usd or 0.0
+        summary.total_input_tokens += response.input_tokens or 0
+        summary.total_output_tokens += response.output_tokens or 0
+        if response.api_key_source != "none":
+            summary.all_calls_subscription = False
+        return response.text
 
     for type_name, builder, system_prompt in type_plan:
         files = scan_result.by_type.get(type_name, [])
@@ -653,6 +690,9 @@ def _run_extraction_body(
                 p = replace(p, name=new_name, description=new_desc, body=new_body,
                             evidence=new_evidence)
                 kept.append(p)
+            if gate_on:
+                kept = reference_gate.judge_pages(kept, _ask_gate)
+                summary.llm_calls += 1 if any(p.judged is not None for p in kept) else 0
             all_pages.extend(kept)
             processed_files.extend(chunk)
 

@@ -63,6 +63,11 @@ class ExtractedPage:
     # ``type: reference`` — such pages always stage in ``_inbox`` and never
     # universally promote (see inbox/paths.py and inbox/apply.py).
     unverified_feedback: bool = False
+    # The reference gate's category for an inferred ``reference`` page
+    # (``extract/reference_gate``, #417): one of G/T/S/N, or ``""`` when the
+    # judge gave no answer. ``None`` means the page was never judged — not a
+    # reference page, or the gate is off — and nothing holds it back.
+    judged: str | None = None
 
 
 @dataclass
@@ -76,6 +81,8 @@ class ApplyResult:
     auto_promoted: list[str] = field(default_factory=list)
     sibling_bounced: list[tuple[str, str]] = field(default_factory=list)
     upgrade_proposed: list[tuple[str, str]] = field(default_factory=list)
+    # Keys the reference gate (#417) sent to ``shared/_inbox/`` this run.
+    reference_held: list[str] = field(default_factory=list)
     # Slugs that crossed ``scoping.universalThreshold`` and were moved from
     # ``shared/_inbox/<type>/`` into ``shared/<type>/`` during this run.
     # Distinct from ``auto_promoted`` (single-source direct writes) so the

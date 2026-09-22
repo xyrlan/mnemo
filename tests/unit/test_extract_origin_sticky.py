@@ -40,7 +40,9 @@ def _resp(pages):
 def _cfg(root: Path) -> dict:
     return {"vaultRoot": str(root), "extraction": {
         "model": "m", "chunkSize": 10, "hintThreshold": 5,
-        "preferAPI": False, "subprocessTimeout": 60, "costSoftCap": None}}
+        "preferAPI": False, "subprocessTimeout": 60, "costSoftCap": None,
+        # The reference gate (#417) has tests of its own.
+        "referenceGate": {"enabled": False}}}
 
 
 def _vault(tmp_path: Path) -> Path:
