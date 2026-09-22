@@ -175,6 +175,10 @@ DEFAULTS: dict[str, Any] = {
         "offerMax": 2,
         "offerCooldownDays": 7,
         "offerIntervalHours": 24,
+        # #429: a page the reference judge held (#417) is archived after this
+        # many days untouched, offered or not; `mnemo inbox --restore KEY`
+        # brings it back. Nothing else in the queue expires. 0 turns it off.
+        "heldExpiryDays": 14,
     },
     "install": {
         # #337: a matcher this version widened reaches an install that already

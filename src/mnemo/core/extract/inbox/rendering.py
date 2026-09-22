@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mnemo.core.backfill.origin import ORIGIN_LINE, is_backfill_page
 from mnemo.core.extract.demotion import DEMOTED_LINE
+from mnemo.core.extract.reference_gate import held_line
 from mnemo.core.extract.inbox.types import ExtractedPage
 from mnemo.core.text_utils import GRAPH_SECTION_MARKER
 
@@ -162,6 +163,9 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
             "source": str(page.evidence["source"]),
         })
     demoted_line = DEMOTED_LINE if page.unverified_feedback else ""
+    # #429: the judge's G/N verdict, on staged pages only — the stamp an
+    # expiry reads. A live rewrite is never held, so it never carries one.
+    gate_line = "" if auto_promoted else held_line(page)
 
     # Maintainer-facing note, written AFTER the rule text so the preview
     # (first 300 chars of the body) and the export start at the rule, not at
@@ -208,6 +212,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"stability: {stability}\n"
         f"confidence: {confidence}\n"
         f"{demoted_line}"
+        f"{gate_line}"
         f"{origin_line}"
         f"{extras}"
         "sources:\n"

@@ -529,6 +529,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="archive one staged page and take it out of the queue",
     )
     inbox_p.add_argument(
+        "--restore", metavar="KEY",
+        help="put a dropped or expired page back in the queue from shared/_archive/",
+    )
+    inbox_p.add_argument(
         "--stats", action="store_true",
         help="queue depth, median age, and what drained in the last 7 days",
     )

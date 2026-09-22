@@ -13,7 +13,10 @@ This module asks a second question of every such page before it is written:
 what is it? One call per extraction chunk, all of that chunk's reference pages
 judged together, each answered with one of :data:`CATEGORIES` — the same four
 the raters used. Only :data:`KEEP` goes live; the rest stages in
-``shared/_inbox/reference/`` for review, never dropped.
+``shared/_inbox/reference/`` for review. A page staged on a G or N verdict
+carries it in its frontmatter (:func:`held_line`), and that stamp is what lets
+``core/inbox.expire_held`` archive it once nobody has reviewed it in
+``inbox.heldExpiryDays`` (#429) — undoably, with ``mnemo inbox --restore``.
 
 ``tools/measure_reference_gate.py`` runs :func:`build_prompt` and
 :func:`parse_verdicts` — these, not a copy — over the rater-labelled sample,
@@ -51,6 +54,13 @@ CATEGORIES = {
 
 #: What goes live. G and N are what both raters called junk.
 KEEP = frozenset({"T", "S"})
+
+#: Frontmatter key a held page carries, and the word it says for each
+#: category that holds. Words rather than letters: the maintainer reads this
+#: line in the staged file. A page the judge gave no answer for gets none —
+#: nobody judged it, so nothing may expire it on the judge's word (#429).
+HELD_KEY = "reference_gate"
+HELD_LABELS = {"G": "generic", "N": "narrative"}
 
 #: How much of a page the judge reads — the raters' view, name + body, cut
 #: where the audit sample cut it.
@@ -174,6 +184,22 @@ def held(page, vault_root: Path) -> bool:
     if (vault_root / "shared" / "_inbox" / page.type / f"{page.slug}.md").exists():
         return True
     return not cleared(page)
+
+
+def held_line(page) -> str:
+    """The frontmatter line for a page staged on a G or N verdict, else ``""``.
+
+    Written by ``extract.inbox.rendering._render_page`` into staged pages
+    only. The verdict otherwise lives for one run, and a page nothing marks
+    cannot be told apart from a demotion or a multi-source staging later.
+    """
+    label = HELD_LABELS.get(getattr(page, "judged", None) or "")
+    return f"{HELD_KEY}: {label}\n" if label else ""
+
+
+def is_held_frontmatter(fm) -> bool:
+    """True when parsed frontmatter carries :func:`held_line`'s stamp."""
+    return isinstance(fm, dict) and str(fm.get(HELD_KEY) or "") in HELD_LABELS.values()
 
 
 def counts(pages: list) -> Dict[str, int]:
