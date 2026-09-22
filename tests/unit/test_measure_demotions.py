@@ -84,3 +84,59 @@ def test_the_report_counts_held_old_and_kept_from_answered_rows_only():
 def test_the_report_says_so_when_nothing_is_answered():
     assert md.report_lines([{"id": "x", "text": "", "projects": [], "mtime": 0}], {},
                            gate.KEEP, days=14, now=0) == ["no answers yet — run with --score"]
+
+
+# --- --stamp (#432) ----------------------------------------------------------
+
+def _sample(*slugs: str) -> list:
+    return [{"id": "reference/" + s, "text": s, "projects": [], "mtime": 0} for s in slugs]
+
+
+def test_stamp_without_apply_writes_nothing(tmp_vault: Path):
+    page = _staged(tmp_vault, "a", extra="demoted_from: feedback\n")
+    before, mtime = page.read_bytes(), page.stat().st_mtime
+
+    todo, skipped = md.plan_stamps(tmp_vault, _sample("a"), {"reference/a": "G"}, gate.LABELS)
+    text = "\n".join(md.stamp_lines(todo, skipped, applied=None))
+
+    assert "would stamp 1 staged demotions: generic 1" in text
+    assert "dry run" in text
+    assert page.read_bytes() == before and page.stat().st_mtime == mtime
+
+
+def test_stamp_apply_writes_exactly_the_missing_lines(tmp_vault: Path):
+    a = _staged(tmp_vault, "a", extra="demoted_from: feedback\n")
+    b = _staged(tmp_vault, "b", extra="demoted_from: feedback\n")
+    done = _staged(tmp_vault, "done", extra="demoted_from: feedback\nreference_gate: system\n")
+    unanswered = _staged(tmp_vault, "unanswered", extra="demoted_from: feedback\n")
+    untouched = {p: p.read_bytes() for p in (done, unanswered)}
+    before_a = a.read_bytes()
+    verdicts = {"reference/a": "N", "reference/b": "T", "reference/done": "G",
+                "reference/gone": "G", "reference/unanswered": None}
+
+    todo, skipped = md.plan_stamps(
+        tmp_vault, _sample("a", "b", "done", "gone", "unanswered"), verdicts, gate.LABELS)
+    assert md.apply_stamps(todo) == 2
+
+    # One line, right after demoted_from:, every other byte where it was.
+    assert a.read_bytes() == before_a.replace(
+        b"demoted_from: feedback\n", b"demoted_from: feedback\nreference_gate: narrative\n")
+    assert b"reference_gate: technique\n" in b.read_bytes()
+    assert all(p.read_bytes() == raw for p, raw in untouched.items())
+    assert skipped == {"gone": 1, "no answer": 1, "not a demotion or already stamped": 1}
+    # What the stamp means is what the expiry reads.
+    from mnemo.core import inbox
+    assert [p.slug for p in inbox.staged_pages(tmp_vault) if p.gate_held] == ["a"]
+    # Idempotent: a second run finds nothing missing.
+    assert md.plan_stamps(tmp_vault, _sample("a", "b"), verdicts, gate.LABELS)[0] == []
+
+
+def test_stamp_keeps_a_crlf_file_crlf():
+    raw = b"---\r\nname: x\r\ndemoted_from: feedback\r\n---\r\n\r\nbody\r\n"
+    assert md._stamped(raw, "generic") == raw.replace(
+        b"feedback\r\n", b"feedback\r\nreference_gate: generic\r\n")
+
+
+def test_stamp_leaves_a_page_that_is_no_longer_a_demotion():
+    assert md._stamped(b"---\nname: x\n---\n\ndemoted_from: in the body\n", "generic") is None
+    assert md._stamped(b"no frontmatter\n", "generic") is None

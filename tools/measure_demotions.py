@@ -3,6 +3,8 @@
 Usage:
     PYTHONPATH=src python3 tools/measure_demotions.py --score     # ask the judge (model calls)
     PYTHONPATH=src python3 tools/measure_demotions.py             # report, local
+    PYTHONPATH=src python3 tools/measure_demotions.py --stamp     # what --apply would write
+    PYTHONPATH=src python3 tools/measure_demotions.py --stamp --apply
 
 #429 lets a page the reference judge held (G/N) expire from ``shared/_inbox/``
 after ``inbox.heldExpiryDays``, and left the evidence-gate demotions out: they
@@ -20,6 +22,16 @@ it); later runs read that file, not the moving queue. Answers land in
 already answered is not asked again. ``--resample`` refuses once any answer
 exists, so the report never mixes two samples.
 
+``--stamp`` is the one-time backfill for #432, which made extraction judge
+demotions and stamp them: it writes the ``reference_gate:`` line each staged
+demotion of the frozen sample would have been rendered with, from the answers
+already in ``scores.json`` (no model calls). Dry run unless ``--apply``. Only
+a page that still exists, still says ``demoted_from:`` and has no
+``reference_gate:`` line yet is touched, and only by inserting that one line
+after ``demoted_from:`` — every other byte stays. The mtime moves on purpose:
+it starts the page's ``inbox.heldExpiryDays`` at the stamp, not at a verdict
+nobody could see.
+
 The judge's verdict is not the truth. On the 2026-09-22 audit's held-out half
 it staged 30 of 31 pages both raters called junk and 3 of 41 they called good
 (``tools/measure_reference_gate.py``); read "would hold" with that error bar.
@@ -32,7 +44,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _SIBLINGS = Path(__file__).resolve().parent
 
@@ -126,6 +138,91 @@ def report_lines(sample: List[Dict[str, Any]], verdicts: Dict[str, Optional[str]
     return lines
 
 
+_FENCE = b"---"
+_DEMOTED = b"demoted_from:"
+_GATE = b"reference_gate:"
+
+
+def _stamped(raw: bytes, label: str) -> Optional[bytes]:
+    """*raw* with ``reference_gate: <label>`` after ``demoted_from:``, or None.
+
+    None when the file is not a demotion's frontmatter or already carries a
+    stamp. Works on bytes, line by line, so the line ending the file uses is
+    the one the new line gets and nothing else moves.
+    """
+    lines = raw.splitlines(keepends=True)
+    if not lines or lines[0].rstrip(b"\r\n") != _FENCE:
+        return None
+    at = None
+    for i, line in enumerate(lines[1:], 1):
+        if line.rstrip(b"\r\n") == _FENCE:
+            break
+        if line.startswith(_GATE):
+            return None
+        if line.startswith(_DEMOTED):
+            at = i
+    else:
+        return None  # no closing fence
+    if at is None:
+        return None
+    eol = lines[at][len(lines[at].rstrip(b"\r\n")):] or b"\n"
+    new = b"%s %s%s" % (_GATE, label.encode("ascii"), eol)
+    return b"".join(lines[: at + 1] + [new] + lines[at + 1:])
+
+
+def plan_stamps(vault: Path, sample: List[Dict[str, Any]], verdicts: Dict[str, Optional[str]],
+                labels: Dict[str, str]) -> Tuple[List[Tuple[Path, str]], Dict[str, int]]:
+    """Which sampled pages get which label, and why the rest do not.
+
+    Skips: ``no answer`` (the judge gave none, so nothing may expire it on the
+    judge's word — the extractor's own rule), ``gone`` (promoted, dropped or
+    expired since the sample froze), ``not a demotion or already stamped``.
+    """
+    todo: List[Tuple[Path, str]] = []
+    skipped: Dict[str, int] = {}
+    for row in sample:
+        label = labels.get(verdicts.get(row["id"]) or "")
+        page_type, _, slug = row["id"].partition("/")
+        path = vault / "shared" / "_inbox" / page_type / (slug + ".md")
+        if label is None:
+            why = "no answer"
+        elif not path.is_file():
+            why = "gone"
+        elif _stamped(path.read_bytes(), label) is None:
+            why = "not a demotion or already stamped"
+        else:
+            todo.append((path, label))
+            continue
+        skipped[why] = skipped.get(why, 0) + 1
+    return todo, skipped
+
+
+def apply_stamps(todo: List[Tuple[Path, str]]) -> int:
+    """Write each planned line; a page that changed since the plan is skipped."""
+    done = 0
+    for path, label in todo:
+        new = _stamped(path.read_bytes(), label)
+        if new is not None:
+            path.write_bytes(new)
+            done += 1
+    return done
+
+
+def stamp_lines(todo: List[Tuple[Path, str]], skipped: Dict[str, int], *,
+                applied: Optional[int]) -> List[str]:
+    per: Dict[str, int] = {}
+    for _, label in todo:
+        per[label] = per.get(label, 0) + 1
+    verb = "would stamp" if applied is None else "stamped"
+    n = len(todo) if applied is None else applied
+    lines = ["%s %d staged demotions: %s" % (
+        verb, n, ", ".join("%s %d" % kv for kv in sorted(per.items())) or "none")]
+    lines += ["skipped %d: %s" % (v, k) for k, v in sorted(skipped.items())]
+    if applied is None and todo:
+        lines.append("dry run — nothing written; add --apply to write")
+    return lines
+
+
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -139,7 +236,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--model", default=None, help="model to score with (default: config)")
     ap.add_argument("--resample", action="store_true",
                     help="freeze a new sample from the current queue (refused once answers exist)")
+    ap.add_argument("--stamp", action="store_true",
+                    help="write each staged demotion's verdict on it (#432); dry run without --apply")
+    ap.add_argument("--apply", action="store_true", help="with --stamp: write the lines")
     args = ap.parse_args(argv)
+    if args.apply and not args.stamp:
+        ap.error("--apply only goes with --stamp")
 
     cfg = config.load_config()
     vault = paths.vault_root(cfg)
@@ -149,6 +251,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _read_json(scores_path) if scores_path.exists() else {}
     )
 
+    if args.stamp and not sample_path.exists():
+        print("nothing to stamp: no frozen sample at %s — run --score first" % sample_path)
+        return 1
     if args.resample and any(scores.values()):
         print("refusing --resample: %s already holds answers for the frozen sample" % scores_path)
         return 1
@@ -183,6 +288,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             len(answered), col, spent["calls"], spent["usd"],
             " (subscription)" if spent["subscription"] and spent["calls"] else "",
             scores_path))
+
+    if args.stamp:
+        todo, skipped = plan_stamps(vault, sample, scores.get(col, {}), gate.LABELS)
+        applied = apply_stamps(todo) if args.apply else None
+        print("judge %s, sample %s\n" % (col, sample_path))
+        for line in stamp_lines(todo, skipped, applied=applied):
+            print(line)
+        return 0
 
     print("judge %s, sample %s\n" % (col, sample_path))
     for line in report_lines(sample, scores.get(col, {}), gate.KEEP,
