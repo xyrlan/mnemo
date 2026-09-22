@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from mnemo.core.atomic import atomic_write_bytes
 from mnemo.core.extract.inbox.rendering import _render_nested_block, _yaml_scalar
 from mnemo.core.filters import derive_rule_slug, parse_frontmatter, topic_tags
+from mnemo.core.redact import redact_secrets
 from mnemo.core.text_utils import retrieval_body
 
 #: Root of the published tree, relative to the repo. Not ``.mnemo/`` and not
@@ -388,7 +389,12 @@ def to_vault_page(rule: PortableRule, *, project: str, today: object) -> str:
       :func:`to_portable` carries through on a re-publish.
     * never ``enforce`` and never ``activates_on``: a rule that can block a
       tool call is not something another vault gets to install.
+    * secrets redacted (#418): the tree is someone else's text, and a
+      ``shared/`` page is what the judges send off the machine.
     """
+    def clean(text: str) -> str:
+        return redact_secrets(text)[0]
+
     tags = ["needs-review"] + [t for t in rule.tags if t and t != "needs-review"]
     confidence = VERIFIED_ELSEWHERE if rule.confidence == "verified" else "inferred"
     imported = {
@@ -400,9 +406,9 @@ def to_vault_page(rule: PortableRule, *, project: str, today: object) -> str:
     }
     return (
         "---\n"
-        f"name: {_yaml_scalar(rule.name)}\n"
+        f"name: {_yaml_scalar(clean(rule.name))}\n"
         f"slug: {_yaml_scalar(rule.slug)}\n"
-        f"description: {_yaml_scalar(rule.description)}\n"
+        f"description: {_yaml_scalar(clean(rule.description))}\n"
         f"type: {rule.type}\n"
         f"stability: {rule.stability}\n"
         f"confidence: {confidence}\n"
@@ -410,10 +416,10 @@ def to_vault_page(rule: PortableRule, *, project: str, today: object) -> str:
         f"{_block_list('projects', [project])}"
         "sources: []\n"
         f"{_block_list('tags', tags)}"
-        f"{_evidence_block(rule.quote, rule.evidence_source)}"
+        f"{_evidence_block(clean(rule.quote) if rule.quote else rule.quote, rule.evidence_source)}"
         f"{_render_nested_block(IMPORTED_KEY, imported)}"
         "---\n\n"
-        f"{rule.body}"
+        f"{clean(rule.body)}"
     )
 
 

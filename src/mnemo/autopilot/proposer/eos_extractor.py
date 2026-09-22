@@ -22,6 +22,7 @@ from mnemo.autopilot.proposer._patterns import (
     find_repeated_patterns,
     scan_for_keywords,
 )
+from mnemo.core.redact import redact_secrets
 
 # Confidence weights (spec-mandated, immutable)
 _W_REPEATED = 0.3   # pattern occurs 2+ times
@@ -165,9 +166,13 @@ def _write_rule_stub(vault_root: Path, candidate: RuleCandidate, session_id: str
     slug = candidate.slug_hint
     path = inbox / f"{slug}.md"
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Built from commit messages and denied commands, either of which can
+    # carry a credential the user typed (#418).
+    title = redact_secrets(candidate.title)[0]
+    description = redact_secrets(candidate.description)[0]
     content = f"""---
 slug: {slug}
-title: {candidate.title}
+title: {title}
 type: reference
 source: tier3.eos_extractor
 confidence: {candidate.confidence:.2f}
@@ -176,7 +181,7 @@ date: {now}
 runtime: true
 ---
 
-{candidate.description}
+{description}
 
 <!-- auto-proposed by mnemo autopilot tier3; requires human review before merge -->
 """

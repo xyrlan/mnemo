@@ -30,6 +30,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "regen-graph-edges",
     "rewrites",
     "stale",
+    "redact",
 })
 
 # Internal subparsers that should never appear in user-facing help (wired
@@ -402,6 +403,12 @@ def _build_parser() -> argparse.ArgumentParser:
     stale.add_argument("--repo", default=None, help="check against this repo instead of the current one")
     stale.add_argument("--ref", default=None, help="git ref to check against (default HEAD)")
     stale.add_argument("--why", action="store_true", help="why cited symbols are counted, not checked")
+    redact_p = sub.add_parser(
+        "redact",
+        help="find passwords and API keys already written into pages and briefings (values never shown)",
+    )
+    redact_p.add_argument("--apply", action="store_true", help="replace them with [redacted] in place")
+    redact_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     telemetry = sub.add_parser("telemetry", help="summarize MCP access log (calls + zero-hit per project)")
     telemetry.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall = sub.add_parser("recall", help="measure retrieval ranking vs historical access-log queries")

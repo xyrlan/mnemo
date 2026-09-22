@@ -21,7 +21,7 @@ from mnemo.core.extract.guards import is_prompt_echo
 from mnemo.core.extract.inbox import ExtractionIOError  # re-export
 from mnemo.core.extract.scanner import ExtractionState
 from mnemo.core.filters import MANAGED_TAGS
-from mnemo.core.redact import redact
+from mnemo.core.redact import redact, redact_secrets
 
 
 def _sanitize_llm_tags(raw: object) -> list[str]:
@@ -155,6 +155,14 @@ def _sanitize_llm_evidence(raw: object) -> dict | None:
     if not quote:
         return None
     return {"quote": quote, "source": source.strip()}
+
+
+def _redact_quote(ev: dict | None) -> tuple[dict | None, int]:
+    """Secrets out of an evidence quote; a new dict, so the input is untouched."""
+    if not isinstance(ev, dict) or not isinstance(ev.get("quote"), str):
+        return ev, 0
+    quote, n = redact_secrets(ev["quote"])
+    return ({**ev, "quote": quote} if n else ev), n
 
 
 @dataclass
@@ -628,16 +636,22 @@ def _run_extraction_body(
                     if p.unverified_feedback:
                         summary.demoted_unverified += 1
                 # Redaction runs AFTER verification on purpose: the evidence
-                # quote is left untouched so it still matches the briefing (a
-                # quote containing PII is the user's own words). Rebuilt with
+                # quote keeps its e-mail addresses so it still matches the
+                # briefing (a quote containing PII is the user's own words).
+                # A *secret* in it is different (#418): the quote is written
+                # into the page's frontmatter, which the judges send off the
+                # machine, and the gate compares quote and briefing under
+                # this same secrets pass, so it still verifies. Rebuilt with
                 # ``replace`` rather than assigned in place — verify_page
                 # returns the *same* instance for a non-feedback page, so a
                 # field write would reach through to the caller's object.
                 new_name, n_name = redact(p.name)
                 new_desc, n_desc = redact(p.description)
                 new_body, n_body = redact(p.body)
-                summary.redactions += n_name + n_desc + n_body
-                p = replace(p, name=new_name, description=new_desc, body=new_body)
+                new_evidence, n_quote = _redact_quote(p.evidence)
+                summary.redactions += n_name + n_desc + n_body + n_quote
+                p = replace(p, name=new_name, description=new_desc, body=new_body,
+                            evidence=new_evidence)
                 kept.append(p)
             all_pages.extend(kept)
             processed_files.extend(chunk)

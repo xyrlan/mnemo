@@ -15,6 +15,7 @@ from pathlib import Path
 from mnemo.core import corrections
 from mnemo.core.extract.inbox.rendering import _extract_body
 from mnemo.core.extract.inbox.types import ExtractedPage
+from mnemo.core.redact import redact_secrets
 
 
 def _source_path(vault_root: Path, rel: str) -> Path | None:
@@ -46,7 +47,15 @@ def quote_verified(evidence: dict | None, vault_root: Path) -> bool:
     except OSError:
         return False
     items = corrections.parse_section(_extract_body(text))
-    return any(corrections.quote_matches_turn(quote, it.quote) for it in items)
+    # Both sides under the same secrets pass: a briefing written since #418
+    # carries ``[redacted]`` where the session typed a password, and so does
+    # the quote the page stores. Idempotent, so an older unredacted briefing
+    # and an older unredacted quote still meet in the middle.
+    quote = redact_secrets(quote)[0]
+    return any(
+        corrections.quote_matches_turn(quote, redact_secrets(it.quote)[0])
+        for it in items
+    )
 
 
 def page_verifies(evidence: dict | None, source_files, vault_root: Path) -> bool:
