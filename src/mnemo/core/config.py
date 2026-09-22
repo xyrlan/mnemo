@@ -49,6 +49,12 @@ DEFAULTS: dict[str, Any] = {
         # poked mid-thought by an unrelated child is worse than waiting.
         # Delivery is best-effort: a parent that has exited is not queued for.
         "notifyParent": True,
+        # #426: the notice carries the child's PR, its checks and its closing
+        # report, and when the checks are still running a detached reporter
+        # waits for them and posts once more. This bounds that wait, in
+        # minutes; 0 sends the card alone. It runs `gh` every 30 s and stops
+        # early the moment the parent exits.
+        "watchChecksMinutes": 30,
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads

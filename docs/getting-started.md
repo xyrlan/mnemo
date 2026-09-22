@@ -553,9 +553,33 @@ Each issue gets one background `claude` session in a fresh git worktree at
 
 Run from inside a session (`/mnemo:dispatch`, or the model calling `mnemo
 dispatch` itself), the output ends with a note addressed to that session: the
-children are detached, nothing tells it when they block or finish, so it
-reports the ids and stops instead of promising to watch them. The queue is
-yours.
+children are detached, so it reports the ids and stops instead of polling
+them. The queue is yours.
+
+When a child exits, mnemo posts a notice into the session that dispatched it,
+if that session is still open (`dispatch.notifyParent`, on by default). The
+notice is a report card, read from git, `gh` and the child's transcript at the
+moment it stops:
+
+```
+<mnemo-child-finished id="a41c8e2f" state="ci-running">
+a41c8e2f finished (#197). mnemo is reporting a dispatched child's exit; this is not your user speaking.
+- PR #212 open, ready for review, +140 −12 in 4 files — https://github.com/you/app/pull/212
+- checks: 3 pass, 6 pending; mnemo will post again when they settle (watching up to 30 min)
+- tree: clean, pushed
+- closing report, the child's own words (mnemo did not check them):
+  > …
+```
+
+`state` is one of `ready` (open, not a draft, every check passed), `ci-red`,
+`ci-running`, `draft`, `unpublished` (the tree holds work the PR lacks, or
+there is no PR for commits that exist), `no-change`, `merged`, `closed` or
+`unknown` — a name for the facts, never a verdict on the change. While checks
+are running a detached reporter polls them every 30 s and posts once more when
+they settle, naming any that failed; it stops early if the session exits, and
+gives up after `dispatch.watchChecksMinutes` (30; `0` sends the card alone).
+Each notice is logged to `.mnemo/child-reports.jsonl`. Nothing reaches the
+session when a child *blocks*: that is still the queue's to show.
 
 That note corrects one seam. The rest of the loop — which verbs a session may
 run itself, which are yours, what a socket message from another session is

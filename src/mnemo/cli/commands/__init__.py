@@ -12,6 +12,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     autopilot,
     backfill,
     briefing,
+    child_report,
     dedup_rules,
     deliver,
     disable_rule,

@@ -126,14 +126,11 @@ def test_session_end_briefing_keeps_the_cached_name_after_the_tree_is_removed(
 
 # --- #357: the child tells the session that dispatched it --------------
 
-def test_session_end_notifies_the_dispatching_parent(
-    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
-):
-    """A child with a recorded parent gets a notice delivered on exit."""
+def _dispatched_child(hook_env: Path, *, parent: str) -> str:
+    """Record *parent* as the dispatcher of a child and give it an address."""
     from mnemo.core.sessions import inbox, parents
 
     child = "c0da0f55-1111-2222-3333-444455556666"
-    parent = "0ff9d810-e54d-41f3-a045-b0ccff6c5186"
     parents.log_path(hook_env).parent.mkdir(parents=True, exist_ok=True)
     parents.log_path(hook_env).write_text(
         json.dumps({"short_id": child[:8], "parent_session": parent}) + "\n",
@@ -143,12 +140,54 @@ def test_session_end_notifies_the_dispatching_parent(
         "session_id": parent, "socket": "/tmp/x.sock", "token": None,
         "pid": 1, "pid_start": "now",
     })
+    session.save(child, {"name": "myrepo", "repo_root": "/x", "has_git": True})
+    return child
 
+
+def test_session_end_hands_the_report_card_to_a_detached_reporter(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#426: the hook starts `mnemo child-report` for a live parent and posts
+    nothing itself — the card's `gh` calls must not hold SessionEnd open."""
+    from mnemo.core.sessions import inbox
+
+    parent = "0ff9d810-e54d-41f3-a045-b0ccff6c5186"
+    child = _dispatched_child(hook_env, parent=parent)
+    spawned = []
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("the reporter posts, not the hook"))
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda short_id, **kw: spawned.append((short_id, kw)),
+    )
+    payload = {
+        "session_id": child, "reason": "other", "cwd": "/x/app-wt-7",
+        "transcript_path": "/t/c0da0f55.jsonl",
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+    assert session_end.main() == 0
+
+    assert spawned == [(child[:8], {
+        "parent": parent, "cwd": "/x/app-wt-7", "transcript": "/t/c0da0f55.jsonl",
+    })]
+
+
+def test_session_end_falls_back_to_the_one_line_notice_when_the_reporter_cannot_start(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A child with a recorded parent still gets a notice delivered on exit."""
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
     sent = []
     monkeypatch.setattr(inbox, "is_live", lambda a: True)
     monkeypatch.setattr(inbox, "post", lambda a, t: sent.append(t) or True)
 
-    session.save(child, {"name": "myrepo", "repo_root": "/x", "has_git": True})
+    def _cannot_start(*a, **k):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(session_end, "_spawn_detached_child_report", _cannot_start)
     monkeypatch.setattr(
         sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
     )
@@ -159,6 +198,24 @@ def test_session_end_notifies_the_dispatching_parent(
     # It must announce itself as mnemo, not as the user (#309).
     assert sent[0].startswith(inbox.NOTICE_PREFIX)
     assert "not your user speaking" in sent[0]
+
+
+def test_session_end_starts_no_reporter_for_a_parent_that_has_exited(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    monkeypatch.setattr(inbox, "is_live", lambda a: False)
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda *a, **k: pytest.fail("nobody is left to read it"),
+    )
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("must not send"))
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
 
 
 def test_session_end_says_nothing_for_a_session_nobody_dispatched(
