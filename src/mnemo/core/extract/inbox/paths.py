@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mnemo.core.backfill.origin import is_backfill_page
+from mnemo.core.extract import reference_gate
 
 if TYPE_CHECKING:
     from mnemo.core.extract.inbox.types import ExtractedPage
@@ -37,12 +38,16 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
     reach the sacred dir.
     Feedback pages that failed evidence verification stage as reference pages,
     whatever their source count.
+    Reference pages the reference gate did not clear stage too (#417) — see
+    ``extract/reference_gate.held`` for what it leaves alone.
 
     Routes through ``_promoted_path`` / ``_inbox_path`` so the shared
     ``shared/<type>/<slug>.md`` shape lives in exactly one place
     (kills D1 inline target construction in PR I).
     """
     if page.unverified_feedback or is_backfill_page(page):
+        return _inbox_path(vault_root, page)
+    if reference_gate.held(page, vault_root):
         return _inbox_path(vault_root, page)
     if len(page.source_files) == 1:
         return _promoted_path(vault_root, page)

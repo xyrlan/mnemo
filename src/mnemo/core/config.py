@@ -23,6 +23,17 @@ DEFAULTS: dict[str, Any] = {
         "chunkSize": 10,
         "subprocessTimeout": 60,
         "costSoftCap": None,
+        # #417: a reference page the model inferred goes live only when a
+        # judge calls it system knowledge or a transferable technique; a
+        # generic aphorism or a session narrative stages in shared/_inbox/.
+        # One extra call per extraction chunk that yields reference pages.
+        # Sonnet because it stages 3 of 41 good pages where Haiku stages 7
+        # (tools/measure_reference_gate.py, held-out half of the 2026-09-22
+        # audit sample). ``enabled: false`` restores the old door.
+        "referenceGate": {
+            "enabled": True,
+            "model": "claude-sonnet-5",
+        },
         "auto": {
             "enabled": True,
             "minNewMemories": 1,

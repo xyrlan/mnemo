@@ -20,6 +20,9 @@ def _make_cfg(vault_root: Path) -> dict:
             "preferAPI": False,
             "subprocessTimeout": 60,
             "costSoftCap": None,
+            # The queued stub answers the consolidation calls only; the
+            # reference gate (#417) has tests of its own.
+            "referenceGate": {"enabled": False},
         },
     }
 

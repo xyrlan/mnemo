@@ -78,8 +78,9 @@ class LearnReport:
     #: Ledger entries new since this run started: slug, name, type,
     #: confidence, quote.
     learned: list = field(default_factory=list)
-    #: ``summary.demoted_unverified`` — feedback pages staged for review
-    #: because their evidence did not verify.
+    #: ``summary.demoted_unverified`` + ``summary.reference_held`` — feedback
+    #: pages whose evidence did not verify, and reference pages the reference
+    #: gate did not clear (#417), both staged for review.
     staged: int = 0
     hint: str = ""
     error: str = ""
@@ -186,7 +187,9 @@ def learn(
         )
         return report
 
-    report.staged = getattr(summary, "demoted_unverified", 0) or 0
+    report.staged = (getattr(summary, "demoted_unverified", 0) or 0) + (
+        getattr(summary, "reference_held", 0) or 0
+    )
 
     threshold = int((cfg.get("scoping") or {}).get("universalThreshold", 2))
     report.learned = [
