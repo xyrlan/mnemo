@@ -438,7 +438,9 @@ def apply_pages(
             result.unchanged_skipped.append(key)
             continue
 
-        if reference_gate.held(page, vault_root):
+        # Demotions are judged for their stamp (#432) but stage on the
+        # evidence gate's word; `staged unverified` already counts them.
+        if not page.unverified_feedback and reference_gate.held(page, vault_root):
             result.reference_held.append(key)
         dismissed_before = len(result.dismissed_skipped)
         for predicate, handler in _DISPATCH:

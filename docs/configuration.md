@@ -608,18 +608,23 @@ becomes `dismissed`, so it does not come back unless you run `mnemo extract
 --force`. `mnemo rewrites` is the sibling command for the other half of that
 directory — the `.proposed.md` rewrites of rules that are already live.
 
-**Pages the judge held expire.** A reference page staged on the judge's
-verdict carries `reference_gate: generic` or `reference_gate: narrative` in its
-frontmatter, and the extraction run archives it under
+**Pages the judge held expire.** Every staged page the reference judge
+answered carries its verdict in its frontmatter: `reference_gate: generic`,
+`narrative`, `technique` or `system`. That includes the evidence gate's
+demotions (#432): they are judged in the same call, and they stage whatever
+the answer, because their "the user said X" quote was never found. A page
+stamped `generic` or `narrative` is archived by the extraction run under
 `shared/_archive/expired-<run>/` once it has sat `inbox.heldExpiryDays` (14)
-days untouched, whether or not it was ever offered — at two offers a day per
+days untouched, whether or not it was ever offered. At two offers a day per
 project, most would never be shown (#429). The entry becomes `dismissed`, as
 with a drop, and the ledger records `expired` rather than `dropped`, so
 `--stats` keeps human decisions and expiries apart. `mnemo inbox --restore KEY`
-puts the page back, and a restored page never expires again. Nothing else in
-the queue expires: the judge's verdict is the measured one (it stages 30 of 31
-junk pages and 3 of 41 good ones), and the other reasons for staging have no
-such number yet. `heldExpiryDays: 0` turns it off.
+puts the page back, and a restored page never expires again. A `technique` or
+`system` page is one the judge would keep, so it waits for a human, and so does
+any page with no stamp (the judge gave no answer, or it staged before the
+judge saw it). The judge's verdict is the measured one: it stages 30 of 31
+junk pages and 3 of 41 good ones. The other reasons for staging have no such
+number yet. `heldExpiryDays: 0` turns it off.
 
 ### `mnemo dedup-rules`
 

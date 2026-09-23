@@ -163,8 +163,9 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
             "source": str(page.evidence["source"]),
         })
     demoted_line = DEMOTED_LINE if page.unverified_feedback else ""
-    # #429: the judge's G/N verdict, on staged pages only — the stamp an
-    # expiry reads. A live rewrite is never held, so it never carries one.
+    # #429/#432: the judge's verdict, on staged pages only — G/N is the stamp
+    # an expiry reads, T/S says the judge would keep it. A live rewrite is
+    # never held, so it never carries one.
     gate_line = "" if auto_promoted else held_line(page)
 
     # Maintainer-facing note, written AFTER the rule text so the preview

@@ -59,7 +59,7 @@ def test_view_is_name_and_body_on_one_line_cut_at_the_audit_length():
 # which pages are judged, and what a failure means
 # --------------------------------------------------------------------------
 
-def test_only_inferred_reference_pages_are_judged():
+def test_inferred_reference_pages_and_demotions_are_judged_in_one_call():
     pages = [
         _page("ref"),
         _page("fb", type_="feedback", confidence="verified"),
@@ -70,11 +70,22 @@ def test_only_inferred_reference_pages_are_judged():
 
     def ask(prompt):
         prompts.append(prompt)
-        return json.dumps({"verdicts": [{"i": 1, "cat": "S"}]})
+        return json.dumps({"verdicts": [{"i": 1, "cat": "S"}, {"i": 2, "cat": "G"}]})
 
     out = rg.judge_pages(pages, ask)
-    assert [p.judged for p in out] == ["S", None, None, None]
-    assert len(prompts) == 1 and "[2]" not in prompts[0]
+    assert [p.judged for p in out] == ["S", None, "G", None]
+    assert len(prompts) == 1 and "[2]" in prompts[0] and "[3]" not in prompts[0]
+
+
+def test_a_demotion_is_held_but_not_by_this_gate(tmp_path):
+    """Routing reads ``unverified_feedback`` first, so a T/S demotion stages
+    anyway; ``held`` still answers for the verdict, and the apply loop is what
+    keeps demotions out of ``reference_held``."""
+    from mnemo.core.extract.inbox.paths import _target_path_for_page
+
+    kept = _page(judged="T", unverified_feedback=True)
+    assert rg.cleared(kept) and not rg.held(kept, tmp_path)
+    assert "_inbox" in _target_path_for_page(kept, tmp_path).parts
 
 
 def test_no_call_when_nothing_needs_judging():
@@ -251,6 +262,50 @@ def test_a_live_page_reemitted_is_reinforced_not_staged(tmp_path, monkeypatch):
     assert live.exists()
     assert "always" in live.read_text(encoding="utf-8")
     assert not (root / "shared" / "_inbox" / "reference" / "dependency-injection.md").exists()
+    assert summary.reference_held == 0
+
+
+_DEMOTED = {"slug": "write-clean-code", "type": "feedback", "name": "Write clean code",
+            "description": "d", "body": "Keep functions small.",
+            "source_files": ["bots/agent/memory/one.md"]}  # no quote: demoted
+
+
+def test_a_demotion_is_judged_staged_and_stamped(tmp_path, monkeypatch):
+    """#432: the demotion rides the chunk's one judge call, stages as before,
+    carries its label, and is not counted as a page the judge held."""
+    from mnemo.core import inbox as I
+    from mnemo.core.extract.scanner import parse_frontmatter
+
+    root = _vault(tmp_path)
+    calls = _stub(monkeypatch, [_DEMOTED, _PAGES[1]], ["G", "T"])
+
+    summary = run_extraction(_cfg(root))
+
+    staged = root / "shared" / "_inbox" / "reference" / "write-clean-code.md"
+    fm, _ = parse_frontmatter(staged.read_text(encoding="utf-8"))
+    assert fm["demoted_from"] == "feedback"
+    assert fm["reference_gate"] == "generic"
+    assert (root / "shared" / "reference" / "wda-exclude.md").exists()
+    assert sum(1 for s, _ in calls if s == rg.SYSTEM_PROMPT) == 1
+    assert summary.demoted_unverified == 1
+    assert summary.reference_held == 0
+    assert [p.key for p in I.staged_pages(root) if p.gate_held] == ["reference/write-clean-code"]
+
+
+def test_a_demotion_the_judge_would_keep_still_stages_and_says_so(tmp_path, monkeypatch):
+    from mnemo.core.extract.scanner import parse_frontmatter
+
+    root = _vault(tmp_path)
+    calls = _stub(monkeypatch, [_DEMOTED], ["S"])
+
+    summary = run_extraction(_cfg(root))
+
+    staged = root / "shared" / "_inbox" / "reference" / "write-clean-code.md"
+    assert parse_frontmatter(staged.read_text(encoding="utf-8"))[0]["reference_gate"] == "system"
+    assert not (root / "shared" / "reference" / "write-clean-code.md").exists()
+    assert not (root / "shared" / "feedback" / "write-clean-code.md").exists()
+    # A chunk of demotions alone costs one judge call.
+    assert sum(1 for s, _ in calls if s == rg.SYSTEM_PROMPT) == 1
     assert summary.reference_held == 0
 
 

@@ -50,6 +50,9 @@ def _make_cfg(vault_root: Path) -> dict:
             "preferAPI": False,
             "subprocessTimeout": 60,
             "costSoftCap": None,
+            # Demotions are judged (#432); these stubs answer only the
+            # consolidation calls, and the gate has its own tests.
+            "referenceGate": {"enabled": False},
         },
     }
 

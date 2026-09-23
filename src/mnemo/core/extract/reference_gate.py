@@ -13,10 +13,16 @@ This module asks a second question of every such page before it is written:
 what is it? One call per extraction chunk, all of that chunk's reference pages
 judged together, each answered with one of :data:`CATEGORIES` — the same four
 the raters used. Only :data:`KEEP` goes live; the rest stages in
-``shared/_inbox/reference/`` for review. A page staged on a G or N verdict
-carries it in its frontmatter (:func:`held_line`), and that stamp is what lets
-``core/inbox.expire_held`` archive it once nobody has reviewed it in
+``shared/_inbox/reference/`` for review. Every staged page the judge answered
+carries its verdict in its frontmatter (:func:`held_line`); a G or N stamp is
+what lets ``core/inbox.expire_held`` archive it once nobody has reviewed it in
 ``inbox.heldExpiryDays`` (#429) — undoably, with ``mnemo inbox --restore``.
+
+The evidence gate's demotions are judged too (#432), in the same call: they
+stage whatever the answer, since their "the user said X" quote was never
+found, but the stamp decides whether one may expire (G/N) or waits for a
+human (T/S). ``tools/measure_demotions.py`` measured them first: 72 of 130
+G/N on the maintainer's vault.
 
 ``tools/measure_reference_gate.py`` runs :func:`build_prompt` and
 :func:`parse_verdicts` — these, not a copy — over the rater-labelled sample,
@@ -55,12 +61,15 @@ CATEGORIES = {
 #: What goes live. G and N are what both raters called junk.
 KEEP = frozenset({"T", "S"})
 
-#: Frontmatter key a held page carries, and the word it says for each
-#: category that holds. Words rather than letters: the maintainer reads this
-#: line in the staged file. A page the judge gave no answer for gets none —
-#: nobody judged it, so nothing may expire it on the judge's word (#429).
+#: Frontmatter key a staged page the judge answered carries, and the word it
+#: says for each category. Words rather than letters: the maintainer reads
+#: this line in the staged file. A page the judge gave no answer for gets none
+#: — nobody judged it, so nothing may expire it on the judge's word (#429).
 HELD_KEY = "reference_gate"
-HELD_LABELS = {"G": "generic", "N": "narrative"}
+LABELS = {"G": "generic", "N": "narrative", "T": "technique", "S": "system"}
+#: The labels that mean "held": expirable. T/S on a staged page (a demotion,
+#: a multi-source page) say the judge would keep it, and it waits for a human.
+HELD_LABELS = {k: LABELS[k] for k in ("G", "N")}
 
 #: How much of a page the judge reads — the raters' view, name + body, cut
 #: where the audit sample cut it.
@@ -124,16 +133,14 @@ def parse_verdicts(text: str, n: int) -> List[Optional[str]]:
 
 
 def needs_judging(page) -> bool:
-    """A reference page the model inferred, headed for the live directory.
+    """A reference page the model inferred, or one the evidence gate demoted.
 
-    Pages the evidence gate already routed are left to it: a demoted feedback
-    page stages anyway, and a quote-verified page is ``feedback`` by now.
+    A quote-verified page is ``feedback`` by now and is not asked. A demoted
+    one is (#432): it stages whatever the answer — routing reads
+    ``unverified_feedback`` before the verdict — and the answer only decides
+    the stamp it stages with.
     """
-    return (
-        page.type == "reference"
-        and page.confidence != "verified"
-        and not page.unverified_feedback
-    )
+    return page.type == "reference" and page.confidence != "verified"
 
 
 Judge = Callable[[str], str]
@@ -169,6 +176,9 @@ def cleared(page) -> bool:
 def held(page, vault_root: Path) -> bool:
     """True when a judged page must stage in ``shared/_inbox/`` this run.
 
+    A demotion stages on the evidence gate's word before this is asked, so
+    ``summary.reference_held`` (inferred pages the judge held) skips them.
+
     - a page already live in ``shared/<type>/`` is never held: the stock is
       not this gate's to change, and a re-emission reinforces it as before;
     - a page already staged stays staged whatever today's answer: the review
@@ -187,18 +197,19 @@ def held(page, vault_root: Path) -> bool:
 
 
 def held_line(page) -> str:
-    """The frontmatter line for a page staged on a G or N verdict, else ``""``.
+    """The frontmatter line for a page the judge answered, else ``""``.
 
     Written by ``extract.inbox.rendering._render_page`` into staged pages
-    only. The verdict otherwise lives for one run, and a page nothing marks
-    cannot be told apart from a demotion or a multi-source staging later.
+    only. The verdict otherwise lives for one run; on the page, G/N make it
+    expirable (:func:`is_held_frontmatter`) and T/S tell a reviewer the judge
+    would keep it — a staged T/S page is a demotion or a multi-source page.
     """
-    label = HELD_LABELS.get(getattr(page, "judged", None) or "")
+    label = LABELS.get(getattr(page, "judged", None) or "")
     return f"{HELD_KEY}: {label}\n" if label else ""
 
 
 def is_held_frontmatter(fm) -> bool:
-    """True when parsed frontmatter carries :func:`held_line`'s stamp."""
+    """True when parsed frontmatter carries a G or N stamp — an expirable page."""
     return isinstance(fm, dict) and str(fm.get(HELD_KEY) or "") in HELD_LABELS.values()
 
 

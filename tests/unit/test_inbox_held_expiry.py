@@ -93,8 +93,18 @@ def test_a_held_verdict_is_written_on_the_staged_page(judged, label):
     assert rg.is_held_frontmatter(fm)
 
 
-@pytest.mark.parametrize("judged", ["T", "S", "", None])
-def test_no_stamp_for_a_page_the_judge_cleared_or_never_answered(judged):
+@pytest.mark.parametrize("judged,label", [("T", "technique"), ("S", "system")])
+def test_a_kept_verdict_on_a_staged_page_says_so_and_does_not_expire(judged, label):
+    """#432: a staged T/S page (a demotion, a multi-source page) carries the
+    judge's word too, and that word is "keep": not expirable."""
+    fm, _ = parse_frontmatter(_render_page(_extracted(judged), run_id="r"))
+
+    assert fm["reference_gate"] == label
+    assert not rg.is_held_frontmatter(fm)
+
+
+@pytest.mark.parametrize("judged", ["", None])
+def test_no_stamp_for_a_page_the_judge_never_answered(judged):
     """``""`` is a judge that failed: nobody judged that page, so nothing may
     expire it on the judge's word."""
     fm, _ = parse_frontmatter(_render_page(_extracted(judged), run_id="r"))
@@ -185,14 +195,27 @@ def test_a_held_page_younger_than_its_days_stays(tmp_vault: Path):
 
 
 def test_a_page_staged_for_any_other_reason_waits_for_a_human(tmp_vault: Path):
-    """Demotions are 128 of the 142 staged pages on the real vault, and nobody
-    has measured them: the judge's measurement is what licenses an expiry."""
+    """An unstamped page — a demotion from before #432, a multi-source page —
+    nobody judged: the judge's word is what licenses an expiry."""
     _page(tmp_vault, "shared/_inbox/reference/demoted.md", age_days=60,
           extra="demoted_from: feedback\n")
     _page(tmp_vault, "shared/_inbox/feedback/multi.md", age_days=60)
 
     assert I.expire_held(tmp_vault, days=14) == []
     assert len(I.staged_pages(tmp_vault)) == 2
+
+
+def test_a_generic_demotion_expires_and_a_kept_one_waits(tmp_vault: Path):
+    """#432: the stamp, not the reason it staged, decides."""
+    for slug, label in (("generic", "generic"), ("technique", "technique"),
+                        ("system", "system")):
+        _page(tmp_vault, f"shared/_inbox/reference/{slug}.md", age_days=60,
+              extra=f"demoted_from: feedback\nreference_gate: {label}\n")
+
+    results = I.expire_held(tmp_vault, days=14)
+
+    assert [r.moved_to.stem for r in results] == ["generic"]
+    assert sorted(p.slug for p in I.staged_pages(tmp_vault)) == ["system", "technique"]
 
 
 def test_zero_days_turns_expiry_off(tmp_vault: Path):

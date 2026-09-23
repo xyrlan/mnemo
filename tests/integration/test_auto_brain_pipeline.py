@@ -173,7 +173,10 @@ def test_second_run_unchanged_source_is_noop(tmp_path, monkeypatch):
 
     cfg = {
         "vaultRoot": str(vault),
-        "extraction": {"model": "claude-haiku-4-5", "chunkSize": 10, "subprocessTimeout": 60},
+        # The page is demoted (no quote), and a demotion is judged (#432):
+        # this counts consolidation calls, so the judge is off.
+        "extraction": {"model": "claude-haiku-4-5", "chunkSize": 10, "subprocessTimeout": 60,
+                       "referenceGate": {"enabled": False}},
     }
 
     extract_mod.run_extraction(cfg, background=True)
