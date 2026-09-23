@@ -1,7 +1,7 @@
 # The round before 2.0: a vault that drains itself, and a second user from zero
 
 **Date:** 2026-09-23
-**Status:** draft; the maintainer approved the direction, the open questions below are theirs
+**Status:** measurements run 2026-09-23; results at the end
 **Related:** #429 (inbox expiry), #417/#425 (reference gate judge), #432 (demotions judged), #155 (desktop onboarding), #439 (closed: the child-level A/B will not run)
 
 ## Why this round, and not another round of tools
@@ -182,3 +182,14 @@ and the maintainer does not type on it.
   is untouched.
 - No accounts, no relay, no live presence (team layer 3 waits for demand).
 - No new recall ranking work (#158) and no Jev pool widening in this round.
+
+## Results (2026-09-23)
+
+- **A1 failed its bar** (#465, `tools/measure_demoted_keeps.py`). 29/40 = 72.5% [57.2, 83.9] of the demoted S/T pages were good under both raters, against ≥ 85%. They are not promoted on the gate's verdict. Their fate (expire, stay, or be offered) is open.
+- **A2 found the inbox refilling itself** (#466). 34 of the 61 `.proposed.md` were archive copies misplaced by a pre-#180 migration; they were moved back by hand. Tools edited tracked pages without advancing `written_hash`, which primed 423 of 481 live project pages to divert their next update. #470 (PR #473) fixed the writers and re-baselines the drift that known edits explain.
+- **B1: day one was silent** (#467, `tools/measure_day_one.py`).
+  - Install backfill: 0 live pages, because every page was staged.
+  - Without history: the first on-point injection came at session 24.
+  - Claude Code's auto-memory mirror (#472): 81 live pages on day one, with the reflex firing on 7 of 50 prompts, 2 of 11 injections on-point.
+- **#471 (PR #474):** backfill pages now take the normal gates. The bar held 40/47 = 85.1% by one page on clubinho. A second corpus is being checked in #477, and a failure there reverts it.
+- **Still open:** what the reflex does for a user with no judge key (injections are ~84% noise without it); A1's pages; B2, the clean install.
