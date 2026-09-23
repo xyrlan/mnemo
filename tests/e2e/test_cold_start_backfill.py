@@ -1,12 +1,15 @@
 # tests/e2e/test_cold_start_backfill.py
-"""Cold-start backfill, end to end: a transcript on disk must stop at review.
+"""Cold-start backfill, end to end: a transcript on disk meets the normal gates.
 
 The chain under test is the one a brand-new user actually gets:
 
     SessionStart hook  →  mnemo backfill --install-run  →  discover  →  ledger
       →  harvest (LLM)  →  bots/<agent>/memory/*.md stamped `origin: backfill`
-      →  mnemo extract  →  the origin gate  →  shared/_inbox/<type>/
+      →  mnemo extract  →  the normal gates  →  shared/<type>/ or _inbox/
       →  mnemo doctor
+
+Since #471 the origin stamp is provenance: a backfilled page takes the gates
+any page takes, and only a page one of them holds stops at review.
 
 Everything in that chain is the real code. Two things are not:
 
@@ -214,16 +217,15 @@ _HARVEST_PAGES = [
 ]
 
 
-def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
+def test_a_transcript_meets_the_normal_gates_in_both_pipelines(
     tmp_home: Path, tmp_tempdir: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ):
-    """Transcript → memory file → _inbox, for both extraction pipelines.
+    """Transcript → memory file → the gates, for both extraction pipelines (#471).
 
-    ``feedback`` goes through the LLM cluster path (``inbox/paths``' routing
-    gate); ``project`` goes through ``extract/promote.py``, a separate 1:1
-    pipeline that writes straight to ``shared/project/`` with no ``_inbox``
-    hop at all. Project is the type backfill produces most, so a gate that
-    only covered the cluster path would leak the bulk of a sweep.
+    ``feedback`` goes through the LLM cluster path, where the evidence gate
+    demotes a page with no user quote and stages it; ``project`` goes through
+    ``extract/promote.py``, the 1:1 pipeline with no gate, and goes live. Both
+    keep ``origin: backfill``.
     """
     vault = _install(tmp_home, monkeypatch)
     repo = _make_repo(tmp_home, "repo")
@@ -267,33 +269,33 @@ def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
     assert (shared / "_inbox" / "reference" / "run-pytest-before-push.md").exists()
     assert not (shared / "reference" / "run-pytest-before-push.md").exists()
     assert not (shared / "feedback" / "run-pytest-before-push.md").exists()
-    # promote.py names project pages "<agent>__<slug>".
-    assert (shared / "_inbox" / "project" / "repo__layout.md").exists()
-    assert not (shared / "project" / "repo__layout.md").exists()
+    # promote.py names project pages "<agent>__<slug>". No gate on this path,
+    # so since #471 the backfilled project page goes live.
+    assert (shared / "project" / "repo__layout.md").exists()
+    assert not (shared / "_inbox" / "project" / "repo__layout.md").exists()
 
-    # The staged pages carry the stamp forward, so a later extract (or a
-    # reader like doctor) can still tell what they are.
+    # Both pages carry the stamp forward as provenance, so a later extract (or
+    # a reader like doctor) can still tell what they are.
     staged = (shared / "_inbox" / "reference" / "run-pytest-before-push.md").read_text(
         encoding="utf-8"
     )
     assert "origin: backfill" in staged
     assert "origin: backfill" in (
-        shared / "_inbox" / "project" / "repo__layout.md"
+        shared / "project" / "repo__layout.md"
     ).read_text(encoding="utf-8")
 
-    # -- a staged page must not reach the user: neither index sees it, and the
-    #    SessionStart injection envelope cannot name it.
+    # -- the staged page must not reach the user: neither index sees it, and
+    #    the SessionStart injection envelope cannot name it.
     from mnemo.core import rule_activation
     from mnemo.core.reflex import index as reflex_index
 
     ra = rule_activation.build_index(vault)
     assert "run-pytest-before-push" not in ra["rules"]
-    assert "repo__layout" not in ra["rules"]
-    assert reflex_index.build_index(vault)["docs"] == {}
+    assert not any("run-pytest" in d for d in reflex_index.build_index(vault)["docs"])
 
     rule_activation.write_index(vault, ra)
     payload = session_start._build_injection_payload(vault, current_project="repo")
-    assert "pytest" not in payload and "layout" not in payload
+    assert "pytest" not in payload
 
     # -- doctor tells the user there is something to review
     capsys.readouterr()
@@ -301,7 +303,7 @@ def test_a_transcript_becomes_a_staged_page_and_goes_no_further(
     out = capsys.readouterr().out
     assert "staged in _inbox/ awaiting review" in out
     assert "reference/run-pytest-before-push" in out
-    assert "project/repo__layout" in out
+    assert "project/repo__layout" not in out
     # ...and does not misfile them as a reconciliation backlog.
     assert "cross universalThreshold but remain in _inbox/" not in out
 

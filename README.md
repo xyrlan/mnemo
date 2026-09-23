@@ -249,12 +249,14 @@ mnemo backfill              # this repo
 mnemo backfill --all        # every project
 ```
 
-Backfilled pages are reconstructed rather than observed, so every rule from
-them lands in `shared/_inbox/` for you to read — **never auto-promoted into
-`shared/`**. `mnemo inbox` lists what's waiting and takes the decision in one
-command — `--promote <key>` to keep a page, `--drop <key>` to throw it away —
-and mnemo names the oldest of them at session start rather than waiting for you
-to ask ([details](docs/getting-started.md#backfill)).
+Backfilled pages go through the same gates as rules from live sessions, and
+each one carries `origin: backfill` so you can tell it apart. A feedback rule
+without your own words behind it, a reference page the judge calls generic or
+narrative, and anything drawn from two sources wait in `shared/_inbox/`.
+`mnemo inbox` lists what's waiting and takes the decision in one command —
+`--promote <key>` to keep a page, `--drop <key>` to throw it away — and mnemo
+names the oldest of them at session start rather than waiting for you to ask
+([details](docs/getting-started.md#backfill)).
 
 ## Commands
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from mnemo.core.backfill import origin
 from mnemo.core.backfill.origin import is_backfill_page
 from mnemo.core.extract import reference_gate
 
@@ -33,9 +34,10 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
 
     Single-source pages go directly to the sacred dir (auto-promote).
     Multi-source pages stage in _inbox/ for review.
-    Backfill-origin pages always stage, whatever their source count: they are
-    reconstructed from archived transcripts, so a human confirms before they
-    reach the sacred dir.
+    Backfill-origin pages take these same gates (#471): the stamp is kept as
+    provenance and no longer stages a page on its own — except one that is
+    already staged, which stays staged, because the review queue owns it and
+    a live copy would leave the staged one behind (the #177 shape).
     Feedback pages that failed evidence verification stage as reference pages,
     whatever their source count.
     Reference pages the reference gate did not clear stage too (#417) — see
@@ -45,7 +47,9 @@ def _target_path_for_page(page: ExtractedPage, vault_root: Path) -> Path:
     ``shared/<type>/<slug>.md`` shape lives in exactly one place
     (kills D1 inline target construction in PR I).
     """
-    if page.unverified_feedback or is_backfill_page(page):
+    if page.unverified_feedback:
+        return _inbox_path(vault_root, page)
+    if origin.stages(is_backfill_page(page), _inbox_path(vault_root, page)):
         return _inbox_path(vault_root, page)
     if reference_gate.held(page, vault_root):
         return _inbox_path(vault_root, page)

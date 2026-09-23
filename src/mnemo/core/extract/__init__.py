@@ -452,6 +452,26 @@ def _learned_entries_for_pages(
     return entries
 
 
+def _live_project_keys(
+    state: scanner.ExtractionState, keys: list[str],
+) -> list[str]:
+    """The ``written_fresh`` project keys that actually landed in ``shared/``.
+
+    ``promote_projects`` reports a backfill page it staged in
+    ``shared/_inbox/project/`` as written too — it was written, just not
+    live — and the ledger is what SessionStart announces as learned, each
+    with a ``disable-rule`` line for a rule the user cannot see (#471). The
+    state entry's status says which: ``"direct"`` lives in ``shared/project/``,
+    ``"inbox"`` is staged for review.
+    """
+    live: list[str] = []
+    for key in keys:
+        entry = state.entries.get(key)
+        if entry is not None and entry.status == "direct":
+            live.append(key)
+    return live
+
+
 def _learned_entries_for_projects(
     project_files: list[scanner.MemoryFile], keys: list[str],
 ) -> list[dict]:
@@ -576,7 +596,9 @@ def _run_extraction_body(
         _merge_apply(project_result, summary)
         _record_learned(
             vault_root, run_id,
-            _learned_entries_for_projects(project_files, project_result.written_fresh),
+            _learned_entries_for_projects(
+                project_files, _live_project_keys(state, project_result.written_fresh),
+            ),
         )
     # `last_run` is the *vault-wide* watermark the SessionEnd debounce reads
     # (`hooks.session_end._debounce_passes`). A scoped run consolidated one

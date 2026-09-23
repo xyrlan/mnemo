@@ -204,7 +204,7 @@ hooks live.
 │   ├── user/             user-profile facts
 │   ├── reference/        pointers to external systems
 │   ├── project/          per-repo project context
-│   ├── _inbox/           staged for your review: backfilled pages, proposed rewrites
+│   ├── _inbox/           staged for your review: pages a gate held, proposed rewrites
 │   └── _archive/         originals kept by reclassify; never read
 └── .mnemo/               internal state (indices, telemetry)
 ```
@@ -243,8 +243,8 @@ it times out. Sessions that touched fewer than `backfill.minFileMutations`
 files are skipped without a call.
 
 What comes back is written into `bots/<repo>/memory/` — the same place live
-capture writes — and the next extraction turns it into rules, staged for your
-review as described next. While those staged rules are the only thing in the
+capture writes — and the next extraction turns it into rules through the same
+gates as any other, as described next. While those staged rules are the only thing in the
 vault, every session start says so — one line naming how many are waiting in
 `shared/_inbox/` and what to do with them — and stops saying so the moment you
 move or delete them, or any rule goes live.
@@ -256,16 +256,23 @@ The calls go through your existing `claude` CLI on whatever authentication it
 already uses. On a Pro/Max subscription that means no per-token charge; on
 API-key auth it is billed like any other Haiku call.
 
-### Backfilled pages are always staged for review
+### Backfilled pages take the same gates as live ones
 
-This is a guarantee, not a default. A backfilled page is the model's
-*reconstruction* of a session that ended weeks ago — not something mnemo
-watched happen. So every page it produces is stamped `origin: backfill`, and
-every rule extracted from one lands in `shared/_inbox/<type>/`. **Nothing of
-backfill origin is ever auto-promoted into `shared/`**, whatever its source
-count, and the stamp survives across extraction runs.
+A backfilled page is the model's *reconstruction* of a session that ended
+weeks ago, not something mnemo watched happen, so every page it produces is
+stamped `origin: backfill` and the stamp survives across extraction runs.
+The stamp records where a page came from. It does not hold the page back:
+backfilled rules go through the gates every rule goes through. A feedback rule
+whose quote is not found in your own words is demoted and staged. A reference
+page the judge calls generic or narrative is staged. A page drawn from more
+than one source is staged. The rest go live in `shared/`. Until #471 every
+backfilled page was staged. Nobody reviewed them, so a new install with weeks
+of history still started from nothing. Two blind raters judged 40 of the 47
+pages these gates let through from a real backfill to be good (85%). A page
+that an older mnemo already staged stays staged until you decide, and a
+backfilled page never goes live across all your projects at once without you.
 
-Review them the way you'd review a pull request:
+Review what is staged the way you'd review a pull request:
 
 ```bash
 mnemo inbox                      # what's staged for this project, oldest first
