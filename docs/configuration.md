@@ -178,7 +178,7 @@ the machine.**
 | `reflex.judge.keyEnv` | `"TYPESAFE_API_KEY"` | The environment variable holding the key — the same one `recall.rerank` uses. One key per machine serves both. |
 | `reflex.judge.timeoutSeconds` | `2.5` | The whole budget a prompt may spend waiting. It is a hard wall, not a socket timeout: past it the request is abandoned. |
 | `reflex.judge.candidates` | `3` | How deep into the BM25F ranking the pool goes. |
-| `reflex.judge.injectAt` | `0.6` | The probability a rule has to clear to be injected. |
+| `reflex.judge.injectAt` | `0.4` | The probability a rule has to clear to be injected. It was `0.6` until #461; a config that sets it keeps its own value. |
 
 **When it is on, it replaces the accept step — it does not stack on it.** The
 pool is the top `candidates` of the *ranking*, including the prompts the
@@ -204,8 +204,13 @@ which, in a `judge` object on the row (`status`, `asked`, `injected`, `ms`,
 and the probability per slug). The log still holds no prompt text — the row's
 `prompt_hash` is what it has always been.
 
-**Turning it on.** `mnemo rerank --reflex on` prints the paragraph above, asks
-for a `y`, and needs a key `mnemo rerank --setup` has already proved and
+**Turning it on.** `mnemo rerank --setup`, once the key is stored and its
+test request has succeeded, prints the paragraph above and asks `Turn on the
+per-prompt judge too? [Y/n]` — a question of its own, never answered by the
+`y` the list stage got. Off a tty, or with `--key-stdin`, it does not ask and
+leaves the judge off unless `--judge` is passed. `mnemo rerank --reflex on`
+does the same on its own later: it prints the paragraph, asks for a `y` (or
+takes `--yes` from a script), and needs a key `--setup` has already proved and
 stored — it makes no request of its own. `mnemo rerank --reflex off` sets the
 provider back to `"none"` and leaves the list stage alone; `mnemo rerank
 --off` turns both off and takes the key off the machine. `mnemo rerank` then
@@ -225,8 +230,8 @@ fired on, 80 it silenced), and had every one of the 891 pairs blind-labelled
 | shipped (today) | 298 | 220 | 56% | 11% | 32 |
 | every top 3 | 891 | 300 | 65% | 7% | 64 |
 | BM25F ≥ 4.07 | 550 | 206 | 51% | 10% | 56 |
-| judge ≥ 0.4 | 209 | 129 | 15% | 27% | 57 |
-| **judge ≥ 0.6 (shipped)** | **111** | **76** | **10%** | **42%** | **47** |
+| **judge ≥ 0.4 (shipped)** | **209** | **129** | **15%** | **27%** | **57** |
+| judge ≥ 0.6 | 111 | 76 | 10% | 42% | 47 |
 | judge ≥ 0.7 | 69 | 55 | 4% | 52% | 36 |
 
 With the bar fixed on the dev two thirds (0.40, the loosest keeping 90% of the
@@ -234,6 +239,28 @@ dev on-point pairs) and applied unchanged to the held-out third: the shipped
 gate leaves 44% noise / 12% on-point and keeps 12 of 25, the judge 17% / 23%
 and 21 of 25. AUC for on-point against the rest is 0.941 on dev and 0.922 on
 test; BM25F has no bar that separates them (0.726 and 0.593).
+
+**Why the bar is 0.4 and not 0.6.** 0.6 injects half as many rules at 10%
+noise instead of 15%, and until #461 it was the default. What the table above
+cannot show is how often an on-point rule reaches the prompt at all, because
+it only labels the top three. `tools/measure_reflex_reach.py` (#455) labels
+the top ten of 290 of the same prompts and counts, of the prompts holding an
+on-point rule, the share where one is injected — under two raters, since they
+agree only loosely (κ 0.38 on "on-point"):
+
+| gate | reach, Sonnet labels | reach, Fable labels where it labelled |
+|---|---|---|
+| lexical gates (judge off) | 48.8% | 21.8% |
+| **judge ≥ 0.4 (shipped)** | **57.6%** | **34.6%** |
+| judge ≥ 0.6 | 36.0% | 28.6% |
+| judge ≥ 0.7 | 27.9% | 21.1% |
+
+0.4 is the only bar that beats the lexical gates under both; at 0.6 the judge
+reaches fewer on-point rules than the gates it replaces under one rater and
+more under the other. The judge rows are the low end of a range (123 top-three
+pairs were never scored by the judge and count as dropped). The report is
+`PYTHONPATH=src python3 tools/measure_reflex_reach.py`; it reads cached labels
+and only `--send` asks a model for new ones.
 
 Four limits. The labels are a model's (`claude-fable-5-1`, blind, one 0/1/2
 per pair), never the developer whose prompt it was. There are 64 on-point
@@ -319,7 +346,8 @@ access log records which (`rerank.status` in `.mnemo/mcp-access-log.jsonl`).
 a `y`, reads the key without echoing it — never as a command-line argument,
 which would land in shell history and in `ps` — makes one test request with a
 fixed harmless task and rule of its own, and writes nothing at all if that
-request fails.
+request fails. Once it has written, it offers the per-prompt judge on that
+stage's own consent ([below](#reflexjudge--an-opt-in-judge-as-the-gate)).
 
 **Where the key lives, and why not here.** Not in this file and not in the
 vault: `mnemo.config.json` sits *inside* the vault, which may be a git repo or

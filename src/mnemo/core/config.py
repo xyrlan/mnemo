@@ -231,16 +231,23 @@ DEFAULTS: dict[str, Any] = {
         # `candidates` is how deep into the BM25F ranking the pool goes and
         # `injectAt` the probability a rule has to clear to be injected; both
         # were fixed on a dev split of 300 sampled prompts and read once on the
-        # held-out third (tools/measure_reflex_gate.py): at 0.6, 111 injections
-        # instead of 298, 10% noise instead of 56%, 42% on-point instead of
-        # 11%. Turn it on with `mnemo rerank --reflex on`.
+        # held-out third (tools/measure_reflex_gate.py): at 0.4, 209 injections
+        # instead of 298, 15% noise instead of 56%, 27% on-point instead of
+        # 11%, and 57 of the 64 on-point rules kept against 32. 0.4 over 0.6
+        # (#461): it is the one setting that raised how often an on-point
+        # rule reaches the prompt under both raters of
+        # tools/measure_reflex_reach.py (57.6% / 34.6%, against 36.0% / 28.6%
+        # at 0.6 and 48.8% / 21.8% for the lexical gates); 0.6 halves the
+        # noise and loses a third of the on-point rules. A config that sets
+        # `injectAt` keeps it. Turn the judge on with `mnemo rerank --setup`
+        # (it asks) or `mnemo rerank --reflex on`.
         "judge": {
             "provider": "none",
             "model": "jev-1.13.0",
             "keyEnv": "TYPESAFE_API_KEY",
             "timeoutSeconds": 2.5,
             "candidates": 3,
-            "injectAt": 0.6,
+            "injectAt": 0.4,
         },
         "thresholds": {
             "termOverlapMin": 2,

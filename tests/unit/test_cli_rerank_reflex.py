@@ -188,6 +188,148 @@ def test_the_paragraph_is_printed_before_the_question(
     assert "first 1,200 characters" in flat
 
 
+# --- offered by --setup (#461) -----------------------------------------------
+
+def _answering(value=0.9):
+    def client(state, questions):
+        return {"answers": {key: {"noul": value} for key in questions}}
+    return client
+
+
+def _setup(monkeypatch, vault, argv, *, answers=None, tty=False, client=None):
+    """``--setup`` with the probe answered, the key read and any questions
+    answered from ``answers`` in order; records the questions asked."""
+    asked = []
+    monkeypatch.setattr(mcp_rerank, "typesafe_client",
+                        lambda k, **kw: (client or _answering()))
+    monkeypatch.setattr("sys.stdin", io.StringIO(SENTINEL))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: tty, raising=False)
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: SENTINEL)
+    queue = list(answers or [])
+
+    def fake_input(prompt=""):
+        asked.append(prompt)
+        if not queue:
+            raise EOFError
+        return queue.pop(0)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    code, out, err = _run(monkeypatch, vault, argv)
+    return code, out, err, asked
+
+
+def _judge_provider(config_path: Path):
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    return written.get("reflex", {}).get("judge", {}).get("provider")
+
+
+def test_setup_asks_for_the_judge_after_the_key_works(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    code, out, err, asked = _setup(monkeypatch, tmp_vault, ["--setup"],
+                                   answers=["y", "y"], tty=True)
+    assert code == 0, err
+    assert asked[-1] == "Turn on the per-prompt judge too? [Y/n] "
+    flat = re.sub(r"\s+", " ", out)
+    # Its own paragraph, word for word, after the key was proved and stored.
+    assert re.sub(r"\s+", " ", cmd.REFLEX_SENDS) in flat
+    assert flat.index("the provider answered") < flat.index("first 1,200 characters")
+    assert _judge_provider(config_path) == "typesafe"
+    assert SENTINEL not in out and SENTINEL not in err
+
+
+def test_setup_judge_question_defaults_to_yes(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    code, _, err, _ = _setup(monkeypatch, tmp_vault, ["--setup"],
+                             answers=["y", ""], tty=True)
+    assert code == 0, err
+    assert _judge_provider(config_path) == "typesafe"
+
+
+def test_setup_writes_what_reflex_on_writes(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    """The same one key --reflex on sets, next to the list stage's own."""
+    _setup(monkeypatch, tmp_vault, ["--setup"], answers=["y", "y"], tty=True)
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {
+        "recall": {"rerank": {"provider": "typesafe"}},
+        "reflex": {"judge": {"provider": "typesafe"}}}
+
+
+@pytest.mark.parametrize("answer", ["n", "no", "N"])
+def test_setup_judge_declined_leaves_it_off_and_says_how(
+        monkeypatch, tmp_vault, config_path, secrets_path, answer):
+    code, out, err, _ = _setup(monkeypatch, tmp_vault, ["--setup"],
+                               answers=["y", answer], tty=True)
+    assert code == 0, err
+    assert _judge_provider(config_path) is None
+    assert "mnemo rerank --reflex on" in out
+    # The list stage and the key are what the user did say yes to.
+    assert secrets.read("typesafe") == SENTINEL
+
+
+def test_setup_judge_eof_is_a_no(monkeypatch, tmp_vault, config_path, secrets_path):
+    code, _, err, _ = _setup(monkeypatch, tmp_vault, ["--setup"],
+                             answers=["y"], tty=True)
+    assert code == 0, err
+    assert _judge_provider(config_path) is None
+
+
+def test_setup_with_key_stdin_never_turns_the_judge_on_silently(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    """`--yes` is the list stage's consent; it is not the judge's."""
+    code, out, err, asked = _setup(
+        monkeypatch, tmp_vault, ["--setup", "--yes", "--key-stdin"], tty=True)
+    assert code == 0, err
+    assert asked == [], "stdin held the key; there is no one to ask"
+    assert _judge_provider(config_path) is None
+    assert "--judge" in out and "mnemo rerank --reflex on" in out
+
+
+def test_setup_off_a_tty_never_turns_the_judge_on_silently(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    code, out, err, asked = _setup(monkeypatch, tmp_vault, ["--setup", "--yes"])
+    assert code == 0, err
+    assert asked == []
+    assert _judge_provider(config_path) is None
+
+
+def test_setup_judge_flag_is_the_scripted_consent(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    code, out, err, asked = _setup(
+        monkeypatch, tmp_vault, ["--setup", "--yes", "--key-stdin", "--judge"])
+    assert code == 0, err
+    assert asked == []
+    assert _judge_provider(config_path) == "typesafe"
+    flat = re.sub(r"\s+", " ", out)
+    assert re.sub(r"\s+", " ", cmd.REFLEX_SENDS) in flat, \
+        "a script's consent still prints what it consented to"
+
+
+def test_a_failed_setup_never_offers_the_judge(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    def refuse(state, questions):
+        raise RuntimeError("down")
+
+    code, out, _, asked = _setup(
+        monkeypatch, tmp_vault, ["--setup", "--yes", "--key-stdin", "--judge"],
+        client=refuse)
+    assert code == 1
+    assert "first 1,200 characters" not in out
+    assert not config_path.exists()
+
+
+def test_setup_does_not_ask_again_when_the_judge_is_on(
+        monkeypatch, tmp_vault, config_path, secrets_path):
+    config_path.write_text(json.dumps(
+        {"reflex": {"judge": {"provider": "typesafe"}}}), encoding="utf-8")
+    code, out, err, asked = _setup(monkeypatch, tmp_vault, ["--setup"],
+                                   answers=["y"], tty=True)
+    assert code == 0, err
+    assert asked == ["Turn it on? [y/N] "]
+    assert "already on" in out
+    assert _judge_provider(config_path) == "typesafe"
+
+
 # --- the report --------------------------------------------------------------
 
 def test_the_report_says_the_reflex_stage_is_off(

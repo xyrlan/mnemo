@@ -7,8 +7,9 @@ finds candidates for posts the first 1,200 characters of that prompt —
 ``candidates`` rules to the provider, from inside the ``UserPromptSubmit``
 hook. That is a different cost from ``recall.rerank``'s (#405), which only
 ever sees a query an agent chose to type into a tool call, and it is why this
-stage has its own switch and its own consent (``mnemo rerank --reflex on``)
-rather than riding on that one.
+stage has its own switch and its own consent rather than riding on that one:
+``mnemo rerank --setup`` asks for it separately once the key works (#461), and
+``mnemo rerank --reflex on`` asks for it on its own.
 
 Why it exists. Since ``relativeGap`` went to 1.0 (#332) the reflex fires on
 roughly every second prompt, and of what it injects about 11% is about the
@@ -16,11 +17,19 @@ prompt and 56% is noise; it also drops half the on-point rules sitting in its
 own top 3. No BM25F bar and no minimum prompt length fixes that — the score
 says a prompt and a rule share vocabulary, never that the rule bears on the
 task. A judge reading the pair does: on 300 sampled prompts, at
-``injectAt`` 0.6, 111 injections instead of 298, 10% noise instead of 56%,
-42% on-point instead of 11%, and 47 of the 64 on-point rules kept against 32.
+``injectAt`` 0.4, 209 injections instead of 298, 15% noise instead of 56%,
+27% on-point instead of 11%, and 57 of the 64 on-point rules kept against 32.
 ``tools/measure_reflex_gate.py`` is that measurement and it computes its judge
 rows with :func:`question` and :func:`chosen` from here, so the table grades
 what ships.
+
+Why 0.4 and not 0.6 (#461). 0.6 halves the noise (10%) and keeps 47 of the
+64. What decides it is how often an on-point rule reaches the prompt at all,
+which ``tools/measure_reflex_reach.py`` measures over the top 10 (#455): of
+the prompts holding one, the judge at 0.4 reaches 57.6% under Sonnet's labels
+and 34.6% under Fable's, against 36.0% / 28.6% at 0.6 and 48.8% / 21.8% for
+the lexical gates. 0.4 is the only bar that beats the lexical gates under
+both raters; at 0.6 the sign depends on which rater you believe.
 
 **It replaces the accept step; it does not stack on it.** That is what was
 measured: the pool is the top ``candidates`` of the *ranking*, including the
@@ -64,10 +73,11 @@ DEFAULT_TIMEOUT_S = 2.5
 #: what ``reflex-log``'s receipt already keeps.
 DEFAULT_CANDIDATES = 3
 
-#: The bar a rule's probability has to clear to be injected. Fixed on the dev
-#: two thirds of the sample and read once on the held-out third
-#: (``tools/measure_reflex_gate.py``).
-DEFAULT_INJECT_AT = 0.6
+#: The bar a rule's probability has to clear to be injected. Fitted on the
+#: dev two thirds of the sample (the loosest bar keeping 90% of dev's on-point
+#: pairs) and read once on the held-out third (``tools/measure_reflex_gate.py``);
+#: chosen over 0.6 for reach (``tools/measure_reflex_reach.py``, #461).
+DEFAULT_INJECT_AT = 0.4
 
 #: How much of the prompt is sent. The measurement truncated here, and a
 #: paste of a whole file is not a better question for having been sent whole.

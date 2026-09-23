@@ -319,7 +319,8 @@ and `reflex.judge.provider`, which sends **the text of the prompts you type**
 — plus up to three candidate rules, to the same model, from inside the
 `UserPromptSubmit` hook ([what is sent, and why](docs/configuration.md#reflexjudge--an-opt-in-judge-as-the-gate)).
 That last one is the only thing mnemo can send that you did not type into a
-tool call on purpose, so it has its own consent (`mnemo rerank --reflex on`)
+tool call on purpose, so it has its own consent (asked separately at the end
+of `mnemo rerank --setup`, or later with `mnemo rerank --reflex on`)
 and `mnemo rerank --off` turns it off along with everything else.
 No third-party Python dependencies. Every piece of telemetry
 (`.mnemo/*.jsonl`) stays on disk. LLM calls go through the `claude` CLI you

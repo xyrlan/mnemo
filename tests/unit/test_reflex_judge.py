@@ -8,6 +8,7 @@ timeout, and every failure invisible to the session but countable in the log.
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -66,9 +67,31 @@ def test_the_stage_is_off_in_the_shipped_defaults():
     assert chosen["provider"] == "none"
     assert chosen["model"] == "jev-1.13.0"
     assert chosen["candidates"] == 3
-    assert chosen["injectAt"] == 0.6
+    assert chosen["injectAt"] == 0.4
     assert chosen["timeoutSeconds"] == 2.5
     assert chosen["keyEnv"] == rerank.DEFAULT_KEY_ENV
+
+
+def test_the_default_bar_and_the_config_default_agree():
+    """Two places state it; a change to one must be a change to both (#461)."""
+    assert judge.DEFAULT_INJECT_AT == 0.4
+    assert DEFAULTS["reflex"]["judge"]["injectAt"] == judge.DEFAULT_INJECT_AT
+
+
+def test_a_config_that_sets_the_bar_keeps_it(tmp_path, monkeypatch):
+    """#461 moved the default, not anyone's chosen value: a user file that
+    says 0.6 is read as 0.6 through the real loader, merge included."""
+    from mnemo.core import config as cfg_mod
+
+    target = tmp_path / "mnemo.config.json"
+    target.write_text(json.dumps({"reflex": {"judge": {"injectAt": 0.6}}}),
+                      encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(target))
+    assert judge.settings(cfg_mod.load_config())["injectAt"] == 0.6
+
+    target.write_text(json.dumps({"reflex": {"judge": {"provider": "typesafe"}}}),
+                      encoding="utf-8")
+    assert judge.settings(cfg_mod.load_config())["injectAt"] == 0.4
 
 
 def test_an_unknown_provider_reads_as_off():

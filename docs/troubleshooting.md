@@ -274,10 +274,11 @@ candidates to ask about — the prompt was too short (`minQueryTokens`), the
 index is missing, or the session cap is spent. None of those costs a request.
 
 If it is judging and injecting nothing, that is the stage working: the rows
-say `judge_none_relevant`, and the bar is `reflex.judge.injectAt`. Lower it to
-0.4 for roughly twice the injections at 15% noise instead of 10% — the table
-in [configuration](configuration.md#reflexjudge--an-opt-in-judge-as-the-gate)
-is the trade.
+say `judge_none_relevant`, and the bar is `reflex.judge.injectAt` (0.4 by
+default since #461). Raising it to 0.6 roughly halves the injections, at 10%
+noise instead of 15%, and reaches fewer of the on-point rules — the tables in
+[configuration](configuration.md#reflexjudge--an-opt-in-judge-as-the-gate)
+are the trade.
 
 Unlike the list stage, this one takes effect on the next prompt: the hook
 reads the config every time, so there is nothing to restart.

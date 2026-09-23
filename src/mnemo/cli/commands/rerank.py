@@ -1,7 +1,8 @@
 """``mnemo rerank`` — turn the opt-in recall rerank on, off, or just look at it (#406).
 
     mnemo rerank                 # is it on, where does the key come from, what has it done
-    mnemo rerank --setup         # consent, key, one test request, then write
+    mnemo rerank --setup         # consent, key, one test request, then write;
+                                 # then offers the judge on its own consent
     mnemo rerank --reflex on     # the second stage: the per-prompt judge (#412)
     mnemo rerank --off           # both stages back to "none", key off the machine
 
@@ -179,7 +180,54 @@ def _setup(args: argparse.Namespace) -> int:
     print("recall.rerank.provider = %r in %s" % (provider, cfg_path))
     print("Restart Claude Code so the MCP server picks it up, then "
           "`mnemo rerank` to see what it does.")
+    print()
+    _offer_judge(args, provider)
     return 0
+
+
+def _offer_judge(args: argparse.Namespace, provider: str) -> None:
+    """The per-prompt judge, offered in the same run on its own consent (#461).
+
+    Only after the key is stored and proved, so a yes here never needs the
+    "run --setup first" refusal ``--reflex on`` has. Its paragraph is
+    ``--reflex on``'s, word for word, because what it sends is not what the
+    list stage sends: the prompt the user typed. A yes to the list stage is
+    never read as a yes to this one — off a tty, or with the key on stdin
+    (which has already consumed it), only ``--judge`` turns it on.
+    """
+    if _judge_settings()["provider"] == provider:
+        print("The per-prompt reflex judge is already on "
+              "(reflex.judge.provider = %r)." % provider)
+        return
+
+    print(textwrap.fill(REFLEX_SENDS, 78))
+    print()
+    if getattr(args, "judge", False):
+        _judge_on(provider)
+        return
+    if getattr(args, "key_stdin", False) or not sys.stdin.isatty():
+        print("The per-prompt judge stays off: without a tty it is only turned "
+              "on by --judge. `mnemo rerank --reflex on` turns it on later.")
+        return
+    try:
+        answer = input("Turn on the per-prompt judge too? [Y/n] ").strip().lower()
+    except EOFError:
+        answer = "n"
+    if answer not in ("", "y", "yes"):
+        print("The per-prompt judge stays off. `mnemo rerank --reflex on` "
+              "turns it on later.")
+        return
+    _judge_on(provider)
+
+
+def _judge_on(provider: str) -> None:
+    """What ``--reflex on`` writes, and nothing else: the one provider key."""
+    from mnemo.core import config as cfg_mod
+
+    cfg_path = cfg_mod.set_config_value("reflex.judge.provider", provider)
+    print("reflex.judge.provider = %r in %s" % (provider, cfg_path))
+    print("It takes effect on the next prompt — the hook reads the config "
+          "each time. `mnemo rerank` shows what it has done.")
 
 
 def _judge_settings():
@@ -225,10 +273,7 @@ def _reflex(args: argparse.Namespace) -> int:
               % args.provider, file=sys.stderr)
         return 2
 
-    cfg_path = cfg_mod.set_config_value("reflex.judge.provider", args.provider)
-    print("reflex.judge.provider = %r in %s" % (args.provider, cfg_path))
-    print("It takes effect on the next prompt — the hook reads the config "
-          "each time. `mnemo rerank` shows what it has done.")
+    _judge_on(args.provider)
     return 0
 
 
