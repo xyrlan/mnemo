@@ -160,8 +160,9 @@ the usual culprit is a single enormous transcript timing out twice at
 ## `shared/_inbox/` is full of pages I didn't write
 
 That's backfill, working as intended. Pages reconstructed from old transcripts
-are stamped `origin: backfill` and always stage for review — they are never
-auto-promoted into `shared/`, whatever their source count. `mnemo inbox` lists
+are stamped `origin: backfill`, and those the extraction gates hold — demoted
+feedback, generic or narrative reference, multi-source — stage for review
+(before #471, every one of them did). `mnemo inbox` lists
 them, and mnemo names the oldest of them at session start so the queue reaches
 you without your having to ask:
 

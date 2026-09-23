@@ -286,11 +286,11 @@ def _report_summary(
         print(f"          {barren} produced nothing (quiet, below the mutation "
               "threshold, or already on disk).")
     if produced:
-        # `extract` is the right next step, but it does not produce live rules
-        # from this material: the origin gate stages every backfill-origin page
-        # in shared/_inbox/ for a human to confirm, whatever its source count.
-        print("          run `mnemo extract` — backfilled pages stage in "
-              "shared/_inbox/ for review.")
+        # `extract` is the right next step: backfilled pages take the same
+        # gates as live ones (#471), and what they hold stages in
+        # shared/_inbox/ for a human to confirm.
+        print("          run `mnemo extract` — backfilled pages take the normal "
+              "gates; what they hold stages in shared/_inbox/ for review.")
     if failed:
         print(
             f"          ⚠ failed: {failed} (see {_error_log(vault_root)}; "

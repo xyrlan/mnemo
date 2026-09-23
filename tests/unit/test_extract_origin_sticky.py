@@ -19,10 +19,12 @@ half a fix.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
 from mnemo.core import llm as llm_mod
+from mnemo.core.backfill import origin
 from mnemo.core.extract import run_extraction
 
 
@@ -79,6 +81,20 @@ def _emit(
     }]))
 
 
+@contextlib.contextmanager
+def _pre_471(monkeypatch):
+    """Run under the routing mnemo had before #471: every backfill page stages.
+
+    Since #471 a fresh backfill page takes the normal gates, so a run no
+    longer stages one. What these tests guard is the queue a pre-#471 run
+    left behind — a staged backfill page must stay staged, whatever a later
+    run sees — so the run that builds that queue runs under the old rule.
+    """
+    with monkeypatch.context() as m:
+        m.setattr(origin, "stages", lambda backfill, staged: bool(backfill))
+        yield
+
+
 def _state(root: Path) -> dict:
     return json.loads(
         (root / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8")
@@ -114,7 +130,8 @@ def test_a_later_extract_cannot_launder_a_staged_page(tmp_path, monkeypatch):
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     assert staged.exists(), "precondition: run 1 staged the page"
@@ -143,7 +160,8 @@ def test_the_staged_page_keeps_its_stamp_after_the_later_extract(tmp_path, monke
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     _memory(root, "beta", "always-use-pathlib", origin=None)
     _emit(monkeypatch, ["bots/beta/memory/always-use-pathlib.md"])
@@ -158,7 +176,8 @@ def test_origin_is_persisted_onto_the_state_entry(tmp_path, monkeypatch):
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     entry = _state(root)["entries"]["reference/prefer-pathlib"]
     assert entry["origin_backfill"] is True
@@ -210,7 +229,8 @@ def test_an_old_state_file_is_healed_from_the_staged_page(tmp_path, monkeypatch)
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     _downgrade_state(root)
 
@@ -270,7 +290,8 @@ def test_force_must_not_wipe_the_staged_page_a_legacy_vault_heals_from(
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     staged = root / "shared" / "_inbox" / "reference" / "prefer-pathlib.md"
     assert staged.exists(), "precondition: run 1 staged the page"
@@ -477,7 +498,8 @@ def test_force_survives_an_undecodable_inbox_file(tmp_path, monkeypatch):
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     junk = root / "shared" / "_inbox" / "reference" / "hand-edited.md"
     junk.write_bytes(b"---\nname: n\ntype: reference\n---\n\noops \xff\n")
@@ -524,7 +546,8 @@ def test_a_project_page_stays_staged_after_its_source_loses_the_stamp(
     root = _vault(tmp_path)
     _memory(root, "alpha", "layout", type_="project", origin="backfill")
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     staged = root / "shared" / "_inbox" / "project" / "alpha__layout.md"
     assert staged.exists(), "precondition: run 1 staged the project page"
@@ -547,7 +570,8 @@ def test_a_legacy_project_vault_heals_from_the_staged_page(tmp_path, monkeypatch
     root = _vault(tmp_path)
     _memory(root, "alpha", "layout", type_="project", origin="backfill")
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     staged = root / "shared" / "_inbox" / "project" / "alpha__layout.md"
     assert staged.exists(), "precondition: run 1 staged the project page"
@@ -571,7 +595,8 @@ def test_a_project_page_survives_losing_both_its_stamps(tmp_path, monkeypatch):
     root = _vault(tmp_path)
     _memory(root, "alpha", "layout", type_="project", origin="backfill")
     monkeypatch.setattr(llm_mod, "call", lambda *a, **k: _resp([]))
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     staged = root / "shared" / "_inbox" / "project" / "alpha__layout.md"
     text = staged.read_text(encoding="utf-8")
@@ -656,7 +681,8 @@ def test_the_reconciler_blocks_a_staged_page_whose_stamp_was_edited_out(
     root = _vault(tmp_path)
     _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"])
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     # A second project's source joins the page, so its merged sources cross
     # universalThreshold and the reconciler will consider it every run.
@@ -698,7 +724,8 @@ def test_an_unchanged_re_emission_still_persists_a_recovered_origin(
     root = _vault(tmp_path)
     src = _memory(root, "alpha", "prefer-pathlib", origin="backfill")
     _emit(monkeypatch, ["bots/alpha/memory/prefer-pathlib.md"], slug="use-pathlib")
-    run_extraction(_cfg(root))
+    with _pre_471(monkeypatch):
+        run_extraction(_cfg(root))
 
     _downgrade_state(root)
 
