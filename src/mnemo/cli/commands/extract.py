@@ -34,10 +34,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     # Summary
     total_tokens = summary.total_input_tokens + summary.total_output_tokens
-    if summary.all_calls_subscription:
-        cost_line = f"{total_tokens} tokens processed (subscription — no charge)"
-    else:
-        cost_line = f"${summary.total_cost_usd:.4f} ({total_tokens} tokens)"
+    cost_line = _cost_line(summary, total_tokens)
 
     cluster_pages = summary.pages_written - summary.projects_promoted
     print("✓ extraction complete")
@@ -61,6 +58,23 @@ def cmd_extract(args: argparse.Namespace) -> int:
         print(f"  ⚠ failed_chunks: {summary.failed_chunks} (see ~/.errors.log; re-run to retry)", file=sys.stderr)
         return 1
     return 0
+
+
+def _cost_line(summary, total_tokens: int) -> str:
+    """The run's cost, printed as a charge only when an API key paid it (#441).
+
+    ``total_cost_usd`` is the CLI's price at API rates for every call; on a
+    subscription, or when billing could not be told, it is an equivalent.
+    """
+    usd = summary.total_cost_usd
+    if summary.all_calls_subscription:
+        return (
+            f"{total_tokens} tokens processed (subscription — no charge; "
+            f"≈${usd:.4f} API-price equivalent)"
+        )
+    if summary.api_calls:
+        return f"${usd:.4f} ({total_tokens} tokens)"
+    return f"≈${usd:.4f} at API prices (billing unknown) ({total_tokens} tokens)"
 
 
 def _run_extract_background(cfg: dict, args: argparse.Namespace) -> int:
