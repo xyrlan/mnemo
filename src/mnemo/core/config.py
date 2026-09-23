@@ -235,12 +235,14 @@ DEFAULTS: dict[str, Any] = {
         # instead of 298, 15% noise instead of 56%, 27% on-point instead of
         # 11%, and 57 of the 64 on-point rules kept against 32. 0.4 over 0.6
         # (#461): it is the one setting that raised how often an on-point
-        # rule reaches the prompt under both raters of
-        # tools/measure_reflex_reach.py (57.6% / 34.6%, against 36.0% / 28.6%
-        # at 0.6 and 48.8% / 21.8% for the lexical gates); 0.6 halves the
-        # noise and loses a third of the on-point rules. A config that sets
-        # `injectAt` keeps it. Turn the judge on with `mnemo rerank --setup`
-        # (it asks) or `mnemo rerank --reflex on`.
+        # rule reaches the prompt under both label sets of
+        # tools/measure_reflex_reach.py (Sonnet / Fable-where-labelled:
+        # 57.6% / 34.6%, against 36.0% / 28.6% at 0.6 and 48.8% / 21.8% for
+        # the lexical gates); 0.6 injects 111 rules instead of 209 at 10%
+        # noise instead of 15%, and keeps 47 of the 64 on-point rules
+        # instead of 57. A config that sets `injectAt` keeps it. Turn the
+        # judge on with `mnemo rerank --setup` (it asks) or
+        # `mnemo rerank --reflex on`.
         "judge": {
             "provider": "none",
             "model": "jev-1.13.0",

@@ -23,11 +23,11 @@ task. A judge reading the pair does: on 300 sampled prompts, at
 rows with :func:`question` and :func:`chosen` from here, so the table grades
 what ships.
 
-Why 0.4 and not 0.6 (#461). 0.6 halves the noise (10%) and keeps 47 of the
-64. What decides it is how often an on-point rule reaches the prompt at all,
+Why 0.4 and not 0.6 (#461). 0.6 cuts the noise from 15% to 10% and keeps 47
+of the 64. What decides it is how often an on-point rule reaches the prompt at all,
 which ``tools/measure_reflex_reach.py`` measures over the top 10 (#455): of
 the prompts holding one, the judge at 0.4 reaches 57.6% under Sonnet's labels
-and 34.6% under Fable's, against 36.0% / 28.6% at 0.6 and 48.8% / 21.8% for
+and 34.6% under Fable's where it labelled (Sonnet's elsewhere), against 36.0% / 28.6% at 0.6 and 48.8% / 21.8% for
 the lexical gates. 0.4 is the only bar that beats the lexical gates under
 both raters; at 0.6 the sign depends on which rater you believe.
 
