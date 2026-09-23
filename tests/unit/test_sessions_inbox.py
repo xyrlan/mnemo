@@ -164,6 +164,71 @@ def test_notify_drops_the_notice_when_the_parent_is_gone(tmp_path, monkeypatch):
     assert inbox.notify(tmp_path, "p", "text") is False
 
 
+def _dead_pid() -> int:
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _live_row(sid, sock_path):
+    import os
+
+    pid = os.getpid()
+    return {"session_id": sid, "socket": str(sock_path), "token": None,
+            "pid": pid, "pid_start": inbox.pid_start(pid)}
+
+
+def test_resolve_skips_a_newer_row_whose_process_exited(tmp_path):
+    """#454, the 2026-09-22 shape: the parent stays open in one process while
+    a second process resumes its id, writes a newer row, and exits. The live
+    one is the address; newest-wins sent every later child's report nowhere."""
+    live_sock = tmp_path / "live.sock"
+    live_sock.write_text("", encoding="utf-8")
+    inbox.record(tmp_path, _live_row("parent-uuid", live_sock))
+    inbox.record(tmp_path, {"session_id": "parent-uuid", "socket": str(tmp_path / "gone.sock"),
+                            "token": None, "pid": _dead_pid(), "pid_start": "Tue Sep 22 19:32:46 2026"})
+
+    assert not inbox.is_live(inbox.lookup(tmp_path, "parent-uuid"))
+    address, why = inbox.resolve(tmp_path, "parent-uuid")
+    assert why == "" and address["socket"] == str(live_sock)
+
+
+def test_resolve_says_why_when_nothing_is_live(tmp_path):
+    assert inbox.resolve(tmp_path, "p") == (None, "no address recorded for the parent in session-inbox.jsonl")
+    pid = _dead_pid()
+    inbox.record(tmp_path, {"session_id": "p", "socket": str(tmp_path / "x.sock"),
+                            "pid": pid, "pid_start": "x"})
+    address, why = inbox.resolve(tmp_path, "p")
+    assert address is None
+    assert why == f"parent not live: none of its 1 recorded address(es) is (pid {pid})"
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="POSIX sockets only")
+def test_deliver_reaches_the_live_parent_behind_a_dead_newer_row(short_dir):
+    sock = pathlib.Path(short_dir) / "p.sock"
+    received, ready = [], threading.Event()
+    t = threading.Thread(target=_serve, args=(sock, received, ready))
+    t.start()
+    ready.wait(5)
+    inbox.record(short_dir, _live_row("p", sock))
+    inbox.record(short_dir, {"session_id": "p", "socket": str(pathlib.Path(short_dir) / "d.sock"),
+                             "token": None, "pid": _dead_pid(), "pid_start": "x"})
+
+    assert inbox.deliver(short_dir, "p", "hello parent") == ""
+    t.join(5)
+    assert "hello parent" in received[0]
+
+
+def test_deliver_names_a_socket_that_refused_the_write(tmp_path):
+    sock = tmp_path / "not-a-socket.sock"
+    sock.write_text("", encoding="utf-8")
+    inbox.record(tmp_path, _live_row("p", sock))
+    assert inbox.deliver(tmp_path, "p", "hi") == f"socket write failed: {sock}"
+
+
 # --- the sibling-channel interaction -----------------------------------
 
 def test_a_notice_is_not_counted_as_a_human_unblocking_the_parent():

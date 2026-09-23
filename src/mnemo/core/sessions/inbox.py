@@ -194,6 +194,49 @@ def is_live(address: dict | None) -> bool:
     return current == recorded if recorded else True
 
 
+def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
+    """The newest address for *session_id* that is still live, or why none is.
+
+    Returns ``(address, "")`` or ``(None, reason)``. Newest-*live*, not
+    newest (#454): a second process can start under a session's id while the
+    first is still running — on 2026-09-22 something resumed the dispatching
+    session ``a6158015`` in pid 28611 (``source: resume``, one of seven
+    sessions resumed within five seconds) while it stayed open in pid 75451.
+    28611 exited; its row was newest, so every child that finished after it
+    found its parent "gone" and posted nothing, though 75451 was live the
+    whole time. :func:`is_live` still guards each row, so an older row only
+    wins when its own pid and start time still match.
+    """
+    if not session_id:
+        return None, "no parent session id"
+    rows: list = []
+    try:
+        path = log_path(vault_root)
+        if path.exists():
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        row = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if isinstance(row, dict) and row.get("session_id") == session_id:
+                        rows.append(row)
+    except OSError as exc:
+        return None, f"cannot read {LOG_NAME}: {exc}"
+    if not rows:
+        return None, f"no address recorded for the parent in {LOG_NAME}"
+    seen = set()
+    for row in reversed(rows):
+        key = (row.get("socket"), row.get("pid"), row.get("pid_start"))
+        if key in seen:
+            continue
+        seen.add(key)
+        if is_live(row):
+            return row, ""
+    pids = ", ".join(str(pid) for _, pid, _ in seen)
+    return None, f"parent not live: none of its {len(seen)} recorded address(es) is (pid {pids})"
+
+
 def post(address: dict, text: str) -> bool:
     """Write one user turn into *address*'s inbox. True when it went out.
 
@@ -228,10 +271,18 @@ def notify(vault_root: Path | str, session_id: str, text: str) -> bool:
     Returns True only when the notice actually went onto a socket, so a caller
     can log a delivery without claiming one that did not happen (#306).
     """
+    return deliver(vault_root, session_id, text) == ""
+
+
+def deliver(vault_root: Path | str, session_id: str, text: str) -> str:
+    """:func:`notify`, answering why not: ``""`` when the notice went onto a
+    socket, else the reason it did not (#454). Never raises."""
     try:
-        address = lookup(vault_root, session_id)
-        if not is_live(address):
-            return False
-        return post(address, text)
-    except Exception:
-        return False
+        address, why = resolve(vault_root, session_id)
+        if address is None:
+            return why
+        if not post(address, text):
+            return f"socket write failed: {address.get('socket')}"
+        return ""
+    except Exception as exc:  # noqa: BLE001 — never raises, by contract
+        return f"{type(exc).__name__}: {exc}"

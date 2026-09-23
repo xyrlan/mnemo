@@ -48,12 +48,17 @@ def log_error(vault_root: Path, where: str, exc: BaseException) -> None:
 def _breaker_relevant(entry: dict, cutoff: datetime) -> bool:
     """True when a log entry counts toward the breaker.
 
-    Background extraction and the session-end scheduler are excluded: their
-    failures are already reported elsewhere and must not silence the hooks.
+    Background extraction, the session-end scheduler and undelivered child
+    reports are excluded: their failures are already reported elsewhere and
+    must not silence the hooks.
     Raises on a malformed entry; callers skip those.
     """
     where = entry.get("where", "")
     if where.startswith("extract.") or where.startswith("session_end.schedule"):
+        return False
+    # A child's report to a parent the maintainer closed (#454) is logged so
+    # it is never silent; it is not a hook failing.
+    if where == "child_report.undelivered":
         return False
     return datetime.fromisoformat(entry["timestamp"]) >= cutoff
 
