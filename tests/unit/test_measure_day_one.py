@@ -223,7 +223,7 @@ def test_both_arms_run_isolated_and_a_rerun_spends_nothing(corpus, tmp_path, mon
     (real / "untouched.md").write_text("x", encoding="utf-8")
     work = tmp_path / "work"
 
-    assert day.main(["--send", "--corpus", str(corpus), "--work", str(work),
+    assert day.main(["--send", "--arm", "both", "--corpus", str(corpus), "--work", str(work),
                      "--install-after", "3", "--prompts", "4", "--budget", "60"]) == 0
 
     progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
@@ -256,7 +256,7 @@ def test_both_arms_run_isolated_and_a_rerun_spends_nothing(corpus, tmp_path, mon
     assert progress["calls"]["total"] == len(calls)
 
     spent = len(calls)
-    assert day.main(["--send", "--corpus", str(corpus), "--work", str(work)]) == 0
+    assert day.main(["--send", "--arm", "both", "--corpus", str(corpus), "--work", str(work)]) == 0
     assert len(calls) == spent
     out = capsys.readouterr().out
     assert "first on-point injection at session 3" in out
@@ -313,3 +313,202 @@ def test_a_briefing_that_fails_is_logged_and_the_session_goes_unbriefed(corpus, 
     assert len(rows) == 6 and rows[0]["briefed"] is False and rows[1]["briefed"] is True
     data = day.report(progress, {}, work)
     assert data["errors"]["b"] == {"briefing.cli:LLMTimeoutError": 1}
+
+
+# --- arm (c): the auto-memory snapshot and its mirror -------------------------------
+
+def _mem(name, mtype, body="a rule about " + WORDS):
+    return ("---\nname: %s\ndescription: \"%s\"\nmetadata:\n  node_type: memory\n  type: %s\n---\n\n%s\n"
+            % (name, body, mtype, body))
+
+
+def _line(ts, **kw):
+    return json.dumps(dict(timestamp=(T0 + timedelta(minutes=ts)).isoformat() + "Z", **kw))
+
+
+def test_memory_events_read_writes_shell_edits_and_mentions(tmp_path):
+    mem = tmp_path / "proj" / "memory"
+    t = tmp_path / "s.jsonl"
+    t.write_text("\n".join([
+        _line(1, toolUseResult={"type": "create", "filePath": str(mem / "new.md"), "content": "x"}),
+        _line(2, toolUseResult={"filePath": str(mem / "old.md"), "originalFile": "before",
+                                "oldString": "b", "newString": "a"}),
+        _line(3, message={"content": [{"type": "tool_use", "name": "Bash", "input": {
+            "command": "cd %s/ && cat > shelled.md <<'EOF'\nx\nEOF" % mem}}]}),
+        _line(4, message={"content": [{"type": "tool_use", "name": "Bash", "input": {
+            "command": "cat %s/read.md 2>/dev/null" % mem}}]}),
+        _line(5, message={"content": "unrelated"}),
+    ]) + "\n", encoding="utf-8")
+
+    events = day.memory_events([t], mem)
+
+    assert [(e.name, e.kind, e.original) for e in events] == [
+        ("new.md", "create", None), ("old.md", "edit", "before"),
+        ("shelled.md", "shell", None), ("read.md", "mention", None)]
+
+
+def test_memory_events_find_a_path_json_escaped_in_the_raw_line(tmp_path):
+    # A Windows path's backslashes are escaped in the transcript's JSON, so
+    # the raw line never holds the path as written; a quote is escaped the
+    # same way and shows it on any platform.
+    mem = tmp_path / 'we"ird' / "memory"
+    t = tmp_path / "s.jsonl"
+    t.write_text(_line(1, toolUseResult={"type": "create", "filePath": str(mem / "new.md")}) + "\n"
+                 + _line(2, message={"content": "see %s" % (mem / "seen.md")}) + "\n",
+                 encoding="utf-8")
+
+    events = day.memory_events([t], mem)
+
+    assert [(e.name, e.kind) for e in events] == [("new.md", "create"), ("seen.md", "mention")]
+
+
+def test_the_snapshot_restores_what_it_can_and_names_what_it_cannot():
+    at = 100.0
+    E = day.MemEvent
+    current = {
+        "still.md": ("s", 50.0, 10.0),        # not modified since install
+        "edited.md": ("new", 150.0, 10.0),    # Edit after install recorded the prior text
+        "made.md": ("m", 150.0, 140.0),       # a Write created it after install
+        "shelled.md": ("t", 150.0, 140.0),    # a shell wrote it, never named before
+        "touched.md": ("u", 150.0, 150.0),    # named before install, shell-edited after
+    }
+    events = [E(120, "edited.md", "edit", "old"), E(130, "made.md", "create"),
+              E(125, "shelled.md", "shell"), E(90, "touched.md", "mention"),
+              E(140, "touched.md", "shell"), E(160, "touched.md", "edit", "u0"),
+              E(80, "deleted.md", "edit", "x"), E(80, "README.md", "shell")]
+
+    snap = day.snapshot_at(current, events, at)
+
+    assert snap == {"still.md": ("s", "unchanged"), "edited.md": ("old", "restored"),
+                    "made.md": (None, "created after"),
+                    "shelled.md": (None, "created after (inferred)"),
+                    "touched.md": ("u", "approximate"), "deleted.md": (None, "gone")}
+
+
+def test_types_read_the_nested_metadata_and_only_non_project_types_cost_calls():
+    types = day.memory_types([("a.md", _mem("a", "project")), ("b.md", _mem("b", "reference")),
+                              ("c.md", "no frontmatter"), ("MEMORY.md", _mem("m", "user"))])
+
+    assert types == {"project": 1, "reference": 1, "feedback": 1}
+    assert day.extraction_bound({"project": 80, "feedback": 11, "user": 1}, chunk=10) == 2 * 2 + 2
+
+
+def test_routes_name_why_each_page_is_live_or_staged(tmp_path):
+    shared = tmp_path / "shared"
+
+    def page(rel, extra=""):
+        p = shared / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("---\nname: x\n%s---\n\nbody\n" % extra, encoding="utf-8")
+
+    page("project/p.md")
+    page("feedback/f.md")
+    page("_inbox/project/b.md", "origin: backfill\n")
+    page("_inbox/reference/d.md", "demoted_from: feedback\n")
+    page("_inbox/reference/g.md", "reference_gate: generic\n")
+    page("_inbox/feedback/m.md")
+    page("_inbox/feedback/m.proposed.md")
+
+    assert day.routes(tmp_path) == {
+        "live: direct": {"project": 1}, "live: auto-promoted": {"feedback": 1},
+        "staged: backfill origin": {"project": 1}, "staged: evidence demotion": {"reference": 1},
+        "staged: reference gate": {"reference": 1}, "staged: multi-source/other": {"feedback": 1}}
+
+
+@pytest.fixture
+def memory(corpus):
+    """The corpus's auto-memory: two files from before install, one after; and another project's."""
+    mem = corpus / "memory"
+    mem.mkdir()
+    install = day.load_sessions(corpus)[3].start  # the first session after --install-after 3
+    for name, mtype, when in (("ledger-cache.md", "project", install - 3600),
+                              ("webhook-rule.md", "feedback", install - 3600),
+                              ("later.md", "project", install + 3600)):
+        (mem / name).write_text(_mem(name[:-3], mtype), encoding="utf-8")
+        os.utime(str(mem / name), (when, when))
+    # A worktree's session writes the same directory; its transcript lives elsewhere.
+    (corpus.parent / "-tmp-repo-wt-1").mkdir()
+    (corpus.parent / "-tmp-repo-wt-1" / "later.jsonl").write_text(json.dumps({
+        "timestamp": datetime.fromtimestamp(install + 3600).astimezone().isoformat(),
+        "toolUseResult": {"type": "create", "filePath": str(mem / "later.md")}}) + "\n",
+        encoding="utf-8")
+    other = corpus.parent / "-elsewhere" / "memory"
+    other.mkdir(parents=True)
+    (other / "secret.md").write_text(_mem("secret", "project"), encoding="utf-8")
+    return mem
+
+
+def test_arm_c_mirrors_the_install_snapshot_of_this_project_only(corpus, memory, tmp_path, monkeypatch, capsys):
+    from mnemo.core import llm
+
+    calls = []
+    monkeypatch.setattr(llm, "call", _stub(calls))
+    work = tmp_path / "work"
+
+    assert day.main(["--send", "--corpus", str(corpus), "--work", str(work),
+                     "--install-after", "3", "--prompts", "4"]) == 0
+
+    progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
+    snap = progress["snapshot"]
+    assert snap["status"] == {"unchanged": 2, "created after": 1} and snap["present"] == 2
+    c, ac = progress["c"], progress["ac"]
+    assert c["mirror"]["counts"]["memory"] == 2 and c["mirror"]["memory_before"] == 0
+    vault_c = work / "arm-c" / "vault"
+    assert sorted(p.name for p in vault_c.glob("bots/*/memory/*.md")) == ["ledger-cache.md", "webhook-rule.md"]
+    assert not list(vault_c.rglob("secret.md"))
+    # The project page goes live without a model; the reflex can inject it.
+    assert c["extract"]["routes"]["live: direct"] == {"project": 1}
+    assert any(u["pool"] for u in c["units"])
+    # (a)+(c): arm (a)'s harvested files, then the same mirror.
+    assert ac["backfill_copied"] == progress["a"]["backfill"]["counts"]["memory"]
+    assert ac["mirror"]["counts"]["memory"] == ac["backfill_copied"] + 2
+    assert progress["calls_c"]["total"] >= 1 and progress["calls"]["total"] == len(calls)
+    data = day.report(progress, json.loads((work / "labels.json").read_text(encoding="utf-8"))[
+        day.mrr.column(day.DEFAULT_RATER)], work)
+    assert data["c"]["next_prompts"]["fired"] >= 1 and data["c"]["next_prompts"]["labelled"] >= 1
+    out = capsys.readouterr().out
+    assert "ARM (c)" in out and "ARMS (a)+(c)" in out
+
+    spent = len(calls)
+    (memory / "ledger-cache.md").write_text("changed after the first run", encoding="utf-8")
+    assert day.main(["--send", "--arm", "c", "--corpus", str(corpus), "--work", str(work)]) == 0
+    assert len(calls) == spent
+    kept = work / "memory-snapshot" / corpus.name / "memory" / "ledger-cache.md"
+    assert "changed" not in kept.read_text(encoding="utf-8")
+
+
+def test_arm_c_alone_skips_the_combined_arm_until_arm_a_has_run(corpus, memory, tmp_path, monkeypatch):
+    from mnemo.core import llm
+
+    monkeypatch.setattr(llm, "call", _stub([]))
+    work = tmp_path / "work"
+
+    assert day.main(["--send", "--arm", "c", "--corpus", str(corpus), "--work", str(work),
+                     "--install-after", "3", "--prompts", "4"]) == 0
+
+    progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
+    assert progress["c"]["units"] and progress["ac"] == {"skipped": "arm (a) has not run; --arm a first"}
+    assert "a" not in progress and "b" not in progress
+
+
+def test_arm_c_refuses_a_plan_over_its_own_budget(corpus, memory, tmp_path, monkeypatch):
+    from mnemo.core import llm
+
+    monkeypatch.setattr(llm, "call", lambda *a, **k: pytest.fail("called a model"))
+
+    with pytest.raises(SystemExit, match="over the 1 budget"):
+        day.main(["--send", "--arm", "c", "--corpus", str(corpus), "--work", str(tmp_path / "w"),
+                  "--install-after", "3", "--budget-c", "1"])
+
+
+def test_the_dry_run_plans_arm_c_from_the_snapshot(corpus, memory, tmp_path, monkeypatch, capsys):
+    from mnemo.core import llm
+
+    monkeypatch.setattr(llm, "call", lambda *a, **k: pytest.fail("the dry run called a model"))
+
+    assert day.main(["--dry-run", "--corpus", str(corpus), "--work", str(tmp_path / "w"),
+                     "--install-after", "3"]) == 0
+
+    out = capsys.readouterr().out
+    assert "2 of today's 3 file(s) present" in out and "'created after': 1" in out
+    assert not (tmp_path / "w").exists()
