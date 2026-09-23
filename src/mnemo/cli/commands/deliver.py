@@ -135,8 +135,22 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
 
     tree = delivery.find_worktree(named, repo_root=repo_root)
     if tree is None:
+        several = delivery.trees_for_target(named, repo_root=repo_root)
+        if len(several) > 1:
+            print(f"{named}: {len(several)} dispatch worktrees for this issue — "
+                  f"name the child by its session id")
+            return False
         print(f"{named}: no dispatch worktree — "
               f"run `mnemo deliver --review` to see what there is")
+        return False
+
+    # A twin (#449) waits for the blind read, and a pair delivers once.
+    from mnemo.core import twins
+
+    vault = _vault()
+    refusal = twins.delivery_refusal(vault, tree) if vault is not None else None
+    if refusal:
+        print(f"{named}: {refusal}")
         return False
 
     state = delivery.ready(tree, repo_root=repo_root)
@@ -163,6 +177,7 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         # that `gh pr create` will open a new PR for.
         print(f"{state.label}: PR already exists — {state.pr}")
         delivery.close_on_merge(state.pr, target=state.target, worktree=tree)
+        _delivered_twin(vault, tree, label=state.label)
         _stop_finished(tree, label=state.label)
         return True
 
@@ -184,8 +199,34 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         return False
 
     print(f"{state.label}: {url or state.branch + ' pushed, PR created'}")
+    _delivered_twin(vault, tree, label=state.label)
     _stop_finished(tree, label=state.label)
     return True
+
+
+def _vault() -> Path | None:
+    """The vault, or ``None`` when it cannot be resolved. Never raises."""
+    try:
+        from mnemo.core import twins
+
+        return twins.default_vault()
+    except Exception:  # noqa: BLE001 — a delivery must not fail on bookkeeping
+        return None
+
+
+def _delivered_twin(vault: Path | None, tree: Path, *, label: str) -> None:
+    """Record a delivered twin (#449) and release its held briefing.
+
+    Before the stop, not after: a twin still running when it is delivered is
+    briefed by its own SessionEnd, which reads this record to know it is the
+    run that shipped. Nothing for a tree that is not a twin's.
+    """
+    from mnemo.core import dispatch, twins
+
+    if vault is None or dispatch.twin_tag_for_cwd(tree) is None:
+        return
+    if twins.record_delivered(vault, tree):
+        print(f"{label}: briefing released — this run is the one that shipped")
 
 
 def _stop_finished(tree: Path, *, label: str) -> None:

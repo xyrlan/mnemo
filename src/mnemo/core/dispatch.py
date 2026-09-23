@@ -122,10 +122,16 @@ WORKTREE_SUFFIX = "-wt-"
 #
 # The alternation is the whole point: a wildcard `(.+)` would name every
 # directory ending in `-wt-<anything>` a dispatch child, and `mnemo sessions`
-# would then label an unrelated session as one of ours. Only two shapes this
-# module itself writes are admitted — a bare issue number, and a contract
-# piece under the reserved `c-` prefix, which no hand-made branch name uses.
-_WT_RE = re.compile(r"-wt-(\d+|c-[a-z0-9-]+)/?$")
+# would then label an unrelated session as one of ours. Only the shapes this
+# module itself writes are admitted — a bare issue number, a contract piece
+# under the reserved `c-` prefix, which no hand-made branch name uses, and an
+# issue number followed by a twin's tag (#449): exactly six lowercase hex
+# digits, which is what :func:`new_twin_tag` draws, so `mnemo-wt-12-old` or
+# `mnemo-wt-12-v2` stays a hand-made tree.
+_WT_RE = re.compile(r"-wt-(\d+(?:-[0-9a-f]{6})?|c-[a-z0-9-]+)/?$")
+
+# One twin's tag inside what `_WT_RE` captured: `449-3fa9c1` -> `3fa9c1`.
+_TWIN_RE = re.compile(r"^(\d+)-([0-9a-f]{6})$")
 
 # What names a child: a GitHub issue number, or a contract piece slug.
 #
@@ -195,7 +201,9 @@ class Dispatched:
 # --- naming: the mapping, as a convention ----------------------------------
 
 
-def worktree_path(target: Target, *, repo_root: Path | str) -> Path:
+def worktree_path(
+    target: Target, *, repo_root: Path | str, tag: str | None = None,
+) -> Path:
     """Where *target*'s child works: a **sibling** of the repo.
 
     A sibling, never a subdirectory: a worktree inside the repo is swept by
@@ -208,13 +216,47 @@ def worktree_path(target: Target, *, repo_root: Path | str) -> Path:
     The same holds for a slug-named tree: a dispatch out of
     ``mnemo-wt-c-parser`` yields ``mnemo-wt-c-seam``, because the suffix that
     is stripped is whatever ``_WT_RE`` admits, not just a number.
+
+    *tag* names one of an issue's twins (#449): ``mnemo-wt-449-3fa9c1``. Two
+    children of one issue need two trees, and the tag is what tells them
+    apart without saying which is which — see :mod:`mnemo.core.twins`.
     """
     root = Path(repo_root)
     base = _WT_RE.sub("", root.name)
-    return root.parent / f"{base}{WORKTREE_SUFFIX}{target}"
+    suffix = f"{target}-{_checked_tag(target, tag)}" if tag else f"{target}"
+    return root.parent / f"{base}{WORKTREE_SUFFIX}{suffix}"
 
 
-def branch_name(target: Target, *, feature: str | None = None) -> str:
+def new_twin_tag() -> str:
+    """A fresh twin tag: six random lowercase hex digits (#449).
+
+    Random rather than ``a``/``b`` or ``1``/``2``: the tag is in the child's
+    own ``cwd`` and branch, and an ordinal there would tell the child that
+    another run exists and which one it is. Six hex digits say neither.
+    """
+    import secrets
+
+    return secrets.token_hex(3)
+
+
+def _checked_tag(target: Target, tag: str) -> str:
+    """*tag*, refused unless it is a twin tag on an issue number.
+
+    A tag that ``_WT_RE`` would not read back would name a tree nothing
+    recognises as a dispatch — ``deliver`` could not find it, and the queue
+    would not label it. Refused here, before any git state exists.
+    """
+    if not isinstance(target, int) or not re.fullmatch(r"[0-9a-f]{6}", tag or ""):
+        raise ValueError(
+            f"twin tag {tag!r} on {target!r}: a twin is an issue number "
+            "and six lowercase hex digits"
+        )
+    return tag
+
+
+def branch_name(
+    target: Target, *, feature: str | None = None, tag: str | None = None,
+) -> str:
     """The branch a child works on.
 
     An issue keeps ``fix/issue-<n>``, unchanged. A contract piece is namespaced
@@ -227,7 +269,12 @@ def branch_name(target: Target, *, feature: str | None = None) -> str:
     not exist — and nothing downstream would object, because ``git branch``
     accepts the name happily. The mistake would surface days later as an
     inexplicable branch in the repo instead of at the call that made it.
+
+    A twin (#449) is ``fix/issue-<n>-<tag>``: git will not check one branch
+    out in two trees, so each twin needs its own.
     """
+    if tag:
+        return f"fix/issue-{target}-{_checked_tag(target, tag)}"
     if feature:
         slug = str(target)
         slug = slug[2:] if slug.startswith("c-") else slug
@@ -253,7 +300,27 @@ def issue_for_cwd(cwd: str | Path | None) -> Target | None:
     if not match:
         return None
     captured = match.group(1)
+    twin = _TWIN_RE.match(captured)
+    if twin:
+        # A twin is its issue's child like any other: `#449` in the queue, and
+        # `Closes #449` on the PR `deliver` opens for it.
+        return int(twin.group(1))
     return int(captured) if captured.isdigit() else captured
+
+
+def twin_tag_for_cwd(cwd: str | Path | None) -> str | None:
+    """The twin tag a dispatched worktree encodes (#449), or ``None``.
+
+    ``None`` for every tree that is not a twin's, including an ordinary
+    ``-wt-<n>`` child of the same issue.
+    """
+    if not cwd:
+        return None
+    match = _WT_RE.search(str(cwd))
+    if not match:
+        return None
+    twin = _TWIN_RE.match(match.group(1))
+    return twin.group(2) if twin else None
 
 
 # --- the prompt: context and scope, never a solution -----------------------
@@ -267,7 +334,7 @@ which often re-scope it. The body as it stands:
 {body}
 ---
 
-You are in a git worktree of your own on branch `{branch}`. Work only here.
+You are in a git worktree of your own {on_branch}. Work only here.
 {siblings}
 Scope limits:
 {publish}
@@ -566,10 +633,18 @@ def _wrap(text: str, **indent: str) -> str:
     )
 
 
+#: Where a blind twin is told it works (#449), in place of its branch's name.
+#: The one sentence of the issue prompt that names something only one child
+#: has: two twins cannot share a branch, so the name would make their prompts
+#: differ, and would name the tag that tells them apart.
+_BLIND_BRANCH = "on a branch of its own"
+
+
 def build_prompt(
     issue: int, *, title: str, body: str, repo_root: Path | str | None = None,
     may: grants.Grant = (), read_only: bool = False,
     siblings: Sequence[Issue] = (),
+    blind: bool = False,
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -595,6 +670,11 @@ def build_prompt(
     :data:`_SIBLINGS_PROMPT` for why the parent's own reasoning stays out.
     This issue is filtered from its own roster, so a caller may pass the whole
     batch without trimming it.
+
+    *blind* renders the prompt a pair of twins shares byte for byte (#449):
+    the branch is not named, because each twin has its own. Nothing else
+    changes, and nothing says another run exists. Without it the prompt is
+    the one every issue child was given before twins existed.
     """
     branch = branch_name(issue)
     roster = _siblings_clause(
@@ -615,6 +695,7 @@ def build_prompt(
         title=title or f"issue #{issue}",
         body=(body or "").strip() or "(empty — read it with gh)",
         branch=branch,
+        on_branch=_BLIND_BRANCH if blind else f"on branch `{branch}`",
         siblings=roster,
         changelog=_changelog_prompt(str(issue), repo_root),
         publish=_wrap(
@@ -751,7 +832,8 @@ def fetch_issue(issue: int, *, repo_root: Path | str) -> Issue:
 
 
 def ensure_worktree(
-    issue: Target, *, repo_root: Path | str, feature: str | None = None
+    issue: Target, *, repo_root: Path | str, feature: str | None = None,
+    tag: str | None = None, base: str | None = None,
 ) -> Path:
     """Create *issue*'s worktree on its own branch, or refuse.
 
@@ -769,9 +851,15 @@ def ensure_worktree(
 
     On failure no directory is left behind — a stray tree blocks every later
     attempt at the same target, which is worse than never having started.
+
+    *tag* makes the tree one of an issue's twins (#449), and *base* is the
+    commit to branch from instead of the repo's ``HEAD``: two twins started
+    one after the other must start from the same commit even if something
+    lands in between.
     """
-    target = worktree_path(issue, repo_root=repo_root)
-    branch = branch_name(issue, feature=feature)  # before the path is touched
+    target = worktree_path(issue, repo_root=repo_root, tag=tag)
+    # before the path is touched
+    branch = branch_name(issue, feature=feature, tag=tag)
 
     if target.exists():
         raise DispatchError(
@@ -780,7 +868,8 @@ def ensure_worktree(
 
     try:
         result = subprocess.run(
-            ["git", "worktree", "add", "-b", branch, str(target)],
+            ["git", "worktree", "add", "-b", branch, str(target),
+             *([base] if base else [])],
             cwd=str(repo_root), capture_output=True, text=True,
         )
     except (FileNotFoundError, OSError) as exc:

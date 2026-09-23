@@ -123,10 +123,12 @@ def test_prompt_never_prescribes_an_approach() -> None:
     # cannot carry an approach. `siblings` is a roster (#384): the issues this
     # same run started, rendered as their own numbers and titles — a fact
     # about which children are live, and the only new parameter here that a
-    # caller does not write. A summary of the parent's reasoning would be an
-    # approach with a citation attached, and there is still no way to pass one.
+    # caller does not write. `blind` is one bit too (#449): whether the branch
+    # is named, so two twins can share one prompt. A summary of the parent's
+    # reasoning would be an approach with a citation attached, and there is
+    # still no way to pass one.
     assert params == {"issue", "title", "body", "repo_root", "may", "read_only",
-                      "siblings"}
+                      "siblings", "blind"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:

@@ -41,6 +41,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "rewrites",
     "stale",
     "redact",
+    "twins",
 })
 
 # Internal subparsers that should never appear in user-facing help (wired
@@ -271,6 +272,22 @@ def _build_parser() -> argparse.ArgumentParser:
     dispatch_p.add_argument("--full-profile", dest="full_profile", action="store_true",
                             help="give children the full user profile (plugins, all MCP "
                                  "servers, all skills) instead of the lean default")
+    # #449: #439's pilot. Two children, one prompt, one base commit, neither
+    # told of the other and neither publishing; `mnemo twins` reads them blind.
+    dispatch_p.add_argument("--twins", action="store_true",
+                            help="run one issue as two blind children that publish "
+                                 "nothing; judge them with `mnemo twins show`")
+    twins_p = sub.add_parser(
+        "twins",
+        help="issues run twice with `dispatch --twins`: list them, read a pair "
+             "blind, record which you would merge")
+    twins_p.add_argument("action", nargs="?", default="list",
+                         choices=("list", "show", "prefer"),
+                         help="list (default), show PAIR, or prefer PAIR A|B|tie")
+    twins_p.add_argument("pair", nargs="?", metavar="PAIR",
+                         help="pair id, or the issue number when it has one pair")
+    twins_p.add_argument("answer", nargs="?", metavar="A|B|tie",
+                         help="which diff you would merge; tie when you cannot say")
     deliver_p = sub.add_parser(
         "deliver",
         help="review what a dispatch produced, or push + open a PR for named children")

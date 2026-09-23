@@ -77,6 +77,15 @@ with it, a bounded number of times, and hands it back to you after that. Dispatc
 `Closes #205` included — and naming it is the approval; no flag approves them
 all.
 
+To see how far apart two runs of one issue land, `mnemo dispatch 449 --twins`
+starts two children with the same prompt, byte for byte, from the same commit,
+neither told of the other and neither publishing. `mnemo twins show <pair>`
+prints their diffs as `A` and `B` in a drawn order, `mnemo twins prefer <pair>
+A|B|tie` records which you would merge and only then says which was which, and
+you deliver the one you chose. Only a delivered twin writes a briefing: the
+other's work never shipped, so it teaches the vault nothing.
+`tools/measure_child_pairs.py` reads the pairs back.
+
 When the unit of work is a feature rather than issues, ask any session to
 "decompose this for dispatch": the `decomposing-for-dispatch` skill writes a
 contract — the pieces, the files each may touch, the signatures each `exposes`
