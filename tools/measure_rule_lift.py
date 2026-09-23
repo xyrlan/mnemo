@@ -70,6 +70,19 @@ evidence to retire it: per-rule pruning needs ``--samples 2`` or more first.
 Cost: 128 arm calls at $3.53 plus 13 judge calls at $0.90, the API-price
 equivalent of subscription usage. The dry run had predicted $4.14.
 
+Second sample, same day (``--send --samples 2``, which added only the missing
+half: 128 arm calls at $3.41 and 13 judge calls at $0.97). Over both samples,
+3 pairs were "na" in both arms. Over the other 61, the follow rate went from
+41.0% (A) to 72.1% (B): lift **+31.1 pp, 95% CI [+19.7, +42.6]**, 34 pairs
+gained and 7 lost. The branch is the same and the CI is tighter. "Redundant"
+rose to 60.7% because it counts A following the rule in *either* sample, so
+it is not comparable with the one-sample 45.6%. Per rule, samples are not the
+bottleneck: 43 of the 52 rules have a single pair (9 have two or three), so a
+rule's lift still moves in steps of 50 pp. The lowest are five one-pair rules
+at −50 pp and one two-pair rule at −25 pp, and none is negative across two
+pairs. Retiring a rule on its lift needs more pairs per rule, not a third
+sample.
+
 Files, under ``<vault>/.mnemo/rule-lift/``: ``pairs.json``, ``answers.json``
 (per arm column — model and :data:`ARM_SYSTEM` hash — per pair, per arm, a
 list of samples; saved after every call) and ``verdicts.json`` (per arm column
