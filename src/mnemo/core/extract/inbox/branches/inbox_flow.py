@@ -119,6 +119,11 @@ def _handle_inbox_status(
         else:
             sibling = _sibling_path(target, vault_root)
             atomic_write(sibling, content)
+            # Recorded, as ``_handle_promoted`` does for its update file, so
+            # an unchanged source takes the fast path instead of re-rendering
+            # this sibling every run (#470). written_hash stays: the staged
+            # page is still the user's.
+            entry.source_hash = page.source_hash
             result.sibling_proposed.append((key, str(sibling)))
     else:
         if promoted_file.exists():

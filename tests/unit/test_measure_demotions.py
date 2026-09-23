@@ -116,7 +116,7 @@ def test_stamp_apply_writes_exactly_the_missing_lines(tmp_vault: Path):
 
     todo, skipped = md.plan_stamps(
         tmp_vault, _sample("a", "b", "done", "gone", "unanswered"), verdicts, gate.LABELS)
-    assert md.apply_stamps(todo) == 2
+    assert md.apply_stamps(todo, tmp_vault) == 2
 
     # One line, right after demoted_from:, every other byte where it was.
     # `write_text` writes the platform's line ending, so expect that one.
@@ -153,7 +153,7 @@ def test_the_stamp_takes_the_files_own_line_ending(tmp_vault: Path):
     path.write_bytes(b"---\r\nname: crlf\r\ndemoted_from: feedback\r\nsources:\r\n---\r\n\r\nbody\r\n")
 
     todo, _ = md.plan_stamps(tmp_vault, _sample("crlf"), {"reference/crlf": "S"}, gate.LABELS)
-    assert md.apply_stamps(todo) == 1
+    assert md.apply_stamps(todo, tmp_vault) == 1
 
     assert path.read_bytes() == (
         b"---\r\nname: crlf\r\ndemoted_from: feedback\r\nreference_gate: system\r\n"

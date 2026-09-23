@@ -86,6 +86,7 @@ def _target_path(
 
 def _render_project_page(
     file: MemoryFile, *, run_id: str, backfill: bool | None = None,
+    vault_root: Path | None = None,
 ) -> str:
     # TOP-LEVEL, not nested under `metadata:` — that is the one spelling both
     # frontmatter parsers in this codebase agree on (see backfill/origin.py).
@@ -100,6 +101,15 @@ def _render_project_page(
     name = redact_secrets(str(file.frontmatter.get('name', file.slug)))[0]
     description = redact_secrets(str(file.frontmatter.get('description', '')))[0]
     body = redact_secrets(file.body)[0]
+    # Vault-relative, the form the state entry records and the doctor fixer
+    # wants (#470). Rendering the scanner's absolute path gave the fixer a
+    # `source_path_absolute` to repair on every page this writes, and its edit
+    # left the page drifted from `written_hash`, so the next update of the page
+    # was diverted into a `.proposed.md` as if the user had edited it.
+    source = (
+        vault_relative_source(file.path, vault_root)
+        if vault_root is not None else str(file.path)
+    )
     return (
         "---\n"
         f"name: {name}\n"
@@ -115,7 +125,7 @@ def _render_project_page(
         f"promoted_at: {run_id}\n"
         f"extraction_run: {run_id}\n"
         "sources:\n"
-        f"  - {file.path}\n"
+        f"  - {source}\n"
         "---\n\n"
         f"{body}"
     )
@@ -164,7 +174,9 @@ def promote_projects(
             result.unchanged_skipped.append(key)
             continue
 
-        content = _render_project_page(file, run_id=run_id, backfill=backfill)
+        content = _render_project_page(
+            file, run_id=run_id, backfill=backfill, vault_root=vault_root,
+        )
         new_written_hash = content_hash(content)
 
         if entry is None:
@@ -212,6 +224,12 @@ def promote_projects(
             sibling = _sibling_path(target, vault_root)
             sibling.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(sibling, content)
+            # Record that this source has been proposed (#470). Without it the
+            # unchanged fast path above never fires again for this key, and
+            # every later run re-renders the same sibling with new run stamps.
+            # The next source change still reaches this branch and replaces
+            # the proposal; written_hash stays, so the page stays the user's.
+            entry.source_hash = file.source_hash
             result.sibling_proposed.append((key, str(sibling)))
 
     return result

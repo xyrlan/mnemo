@@ -28,7 +28,9 @@ demotion of the frozen sample would have been rendered with, from the answers
 already in ``scores.json`` (no model calls). Dry run unless ``--apply``. Only
 a page that still exists, still says ``demoted_from:`` and has no
 ``reference_gate:`` line yet is touched, and only by inserting that one line
-after ``demoted_from:`` — every other byte stays. The mtime moves on purpose:
+after ``demoted_from:`` — every other byte stays, and the page's
+``written_hash`` moves with it so extraction does not take the line for a
+user edit (#470). The mtime moves on purpose:
 it starts the page's ``inbox.heldExpiryDays`` at the stamp, not at a verdict
 nobody could see.
 
@@ -197,14 +199,24 @@ def plan_stamps(vault: Path, sample: List[Dict[str, Any]], verdicts: Dict[str, O
     return todo, skipped
 
 
-def apply_stamps(todo: List[Tuple[Path, str]]) -> int:
-    """Write each planned line; a page that changed since the plan is skipped."""
+def apply_stamps(todo: List[Tuple[Path, str]], vault: Path) -> int:
+    """Write each planned line; a page that changed since the plan is skipped.
+
+    Through :func:`machine_edits.edit_session`, so each stamped page's
+    ``written_hash`` moves with the line (#470). A bare write left 127 staged
+    pages reading as user-edited, and their next update went to a
+    ``.proposed.md`` sibling instead. Raises ``VaultBusy`` while an extraction
+    holds the vault.
+    """
+    from mnemo.core.extract.machine_edits import edit_session
+
     done = 0
-    for path, label in todo:
-        new = _stamped(path.read_bytes(), label)
-        if new is not None:
-            path.write_bytes(new)
-            done += 1
+    with edit_session(vault) as session:
+        for path, label in todo:
+            new = _stamped(path.read_bytes(), label)
+            if new is not None:
+                session.write(path, new)
+                done += 1
     return done
 
 
@@ -291,7 +303,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.stamp:
         todo, skipped = plan_stamps(vault, sample, scores.get(col, {}), gate.LABELS)
-        applied = apply_stamps(todo) if args.apply else None
+        from mnemo.core.extract.machine_edits import VaultBusy
+        try:
+            applied = apply_stamps(todo, vault) if args.apply else None
+        except VaultBusy as exc:
+            print("nothing stamped: %s" % exc)
+            return 1
         print("judge %s, sample %s\n" % (col, sample_path))
         for line in stamp_lines(todo, skipped, applied=applied):
             print(line)

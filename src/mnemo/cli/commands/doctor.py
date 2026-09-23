@@ -49,6 +49,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("activation_fidelity",   activation._doctor_check_activation_fidelity),
     ("rule_integrity",        rules._doctor_check_rule_integrity),
     ("missing_slugs",         rules._doctor_check_missing_slugs),
+    ("written_hash_drift",    rules._doctor_check_written_hash_drift),
     ("stray_proposed",        rules._doctor_check_stray_proposed),
     ("staged_proposals",      rules._doctor_check_staged_proposals),
     ("reflex_index",          reflex._doctor_check_reflex_index),

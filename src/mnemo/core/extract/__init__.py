@@ -18,6 +18,7 @@ from mnemo.core.backfill.origin import (
 from mnemo.core.extract import (
     evidence,
     inbox,
+    machine_edits,
     promote,
     prompts,
     reference_gate,
@@ -205,6 +206,10 @@ class ExtractionSummary:
     reference_held: int = 0
     # #429: held pages archived this run for sitting unreviewed too long.
     reference_expired: int = 0
+    # #470: pages whose drift a known machine edit explained, re-baselined this
+    # run, and the diverted `.proposed.md` updates applied with them.
+    rebaselined: int = 0
+    siblings_applied: int = 0
     mode: str = "manual"
 
 
@@ -538,6 +543,20 @@ def _run_extraction_body(
         _proposed.relocate_proposed(vault_root)
     except Exception as exc:  # noqa: BLE001 — fail-open by design
         errors.log_error(vault_root, "extract.proposed_migration", exc)
+
+    # #470: re-baseline pages whose drift from written_hash is only a known
+    # machine edit (the doctor fixer's `sources:` swap, the `reference_gate:`
+    # stamp, the `slug:` stamp just above), and apply the update each one had
+    # diverted into a `.proposed.md`. On the state this run already loaded:
+    # a separate load-and-save would be overwritten by this run's own write.
+    # Whole-vault, so not under a scoped run.
+    if only is None:
+        try:
+            rebased = machine_edits.rebaseline(vault_root, state)
+            summary.rebaselined += len(rebased.rebaselined)
+            summary.siblings_applied += len(rebased.siblings_applied)
+        except Exception as exc:  # noqa: BLE001 — fail-open by design
+            errors.log_error(vault_root, "extract.rebaseline", exc)
 
     # Scoped runs never clear the whole inbox: `only` narrows this pass to one
     # file, and wiping every staged cluster page for it would destroy work the
