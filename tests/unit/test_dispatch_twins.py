@@ -65,9 +65,10 @@ class Spawned:
         self.calls: List[Dict] = []
 
     def __call__(self, prompt, *, cwd, model=None, lean=True, effort=None,
-                 read_only=False):
+                 read_only=False, settings=None):
         self.calls.append({"prompt": prompt, "cwd": Path(cwd), "model": model,
-                           "lean": lean, "effort": effort, "read_only": read_only})
+                           "lean": lean, "effort": effort, "read_only": read_only,
+                           "settings": settings})
         return f"{len(self.calls):08x}"
 
 
@@ -596,3 +597,296 @@ def test_the_log_is_one_json_object_per_line(vault: Path, pair) -> None:
     lines = twins.log_path(vault).read_text(encoding="utf-8").splitlines()
     events = [json.loads(line)["event"] for line in lines]
     assert events == ["pair", "started", "started"]
+
+
+# --- #453: what else reaches a twin, and its closing report ----------------
+#
+# Transcript records below copy the shapes read off the six pilot pairs'
+# real transcripts (2026-09-22): the opening prompt is a string user turn with
+# `origin.kind: human`, an answered AskUserQuestion comes back as a
+# `tool_result` whose content starts "Your questions have been answered", and
+# a sibling shows up inside a Bash result (`ps`, `git worktree list`).
+
+
+def _line(record: Dict) -> str:
+    return json.dumps(record) + "\n"
+
+
+def _prompt(text="Work on issue #449 in this repo") -> str:
+    return _line({"type": "user", "message": {"role": "user", "content": text},
+                  "origin": {"kind": "human"}})
+
+
+def _say(*blocks) -> str:
+    return _line({"type": "assistant", "message": {"role": "assistant",
+                                                   "content": list(blocks)}})
+
+
+def _result(tool_use_id: str, content: str, **extra) -> str:
+    return _line({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tool_use_id, "content": content, **extra},
+    ]}})
+
+
+def _text(text: str) -> Dict:
+    return {"type": "text", "text": text}
+
+
+def _tool(tool_id: str, name: str, **inp) -> Dict:
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": inp}
+
+
+def _transcript(tmp_path: Path, name: str, *lines: str) -> Path:
+    path = tmp_path / f"{name}.jsonl"
+    path.write_text("".join(lines), encoding="utf-8")
+    return path
+
+
+def _states(**paths: Path):
+    """A `state` reader: every twin done, each with its own transcript."""
+    def state(short_id):
+        data = _done(short_id)
+        if short_id in paths:
+            data["linkScanPath"] = str(paths[short_id])
+        return data
+    return state
+
+
+def test_twins_start_with_auto_memory_off_and_the_pair_says_so(
+    repo: Path, vault: Path, spawned: Spawned,
+) -> None:
+    pair_id, _ = _dispatch(repo, vault)
+
+    assert [c["settings"] for c in spawned.calls] == [{"autoMemoryEnabled": False}] * 2
+    assert twins.read_pairs(vault)[pair_id].settings == {"autoMemoryEnabled": False}
+
+
+def test_an_ordinary_dispatch_hands_the_chokepoint_no_settings_at_all(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not `settings=None` either: every other stub of `spawn_child` in the
+    suite, and every caller, keeps the exact call it had before #453."""
+    seen = []
+
+    def strict(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
+        seen.append(cwd)
+        return "0000000a"
+
+    monkeypatch.setattr(dispatch, "spawn_child", strict)
+    monkeypatch.setattr(claude_cli, "verify_registered", lambda short_id, *, cwd: None)
+    result = dispatch.dispatch_issue(449, repo_root=repo, fetch=_issue)
+    assert result.short_id == "0000000a" and seen
+
+
+class _Run:
+    """Records the argv `spawn_child` would run."""
+
+    def __init__(self) -> None:
+        self.args: List[str] = []
+
+    def __call__(self, args, **kwargs):
+        self.args = list(args)
+        return subprocess.CompletedProcess(args, 0, "backgrounded · 0000000b\n", "")
+
+
+def _settings_files(args: List[str]) -> List[Dict]:
+    return [json.loads(Path(args[i + 1]).read_text(encoding="utf-8"))
+            for i, a in enumerate(args) if a == "--settings"]
+
+
+@pytest.mark.real_spawn
+def test_a_lean_twin_gets_one_settings_file_holding_the_hooks_and_the_memory_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One file: given two `--settings`, the CLI keeps only the last (2.1.280),
+    which would drop mnemo's hooks from the child."""
+    from mnemo.core import child_profile
+
+    hooks = {"SessionEnd": [{"hooks": [{"type": "command", "command": "mnemo x"}]}]}
+    monkeypatch.setattr(child_profile, "mnemo_hooks", lambda: hooks)
+    monkeypatch.setattr(child_profile, "mnemo_mcp_servers", lambda: {})
+    monkeypatch.delenv("MNEMO_DISPATCH_FULL_PROFILE", raising=False)
+    run = _Run()
+    monkeypatch.setattr(dispatch.subprocess, "run", run)
+
+    dispatch.spawn_child("P", cwd=tmp_path, settings=twins.SETTINGS)
+    assert _settings_files(run.args) == [{"hooks": hooks, "autoMemoryEnabled": False}]
+    assert run.args[-1] == "P"
+
+    dispatch.spawn_child("P", cwd=tmp_path, lean=False, settings=twins.SETTINGS)
+    assert _settings_files(run.args) == [{"autoMemoryEnabled": False}]
+    assert "--setting-sources" not in run.args
+
+
+@pytest.mark.real_spawn
+def test_without_settings_the_argv_and_the_file_are_what_they_were(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mnemo.core import child_profile
+
+    hooks = {"Stop": []}
+    monkeypatch.setattr(child_profile, "mnemo_hooks", lambda: hooks)
+    monkeypatch.setattr(child_profile, "mnemo_mcp_servers", lambda: {})
+    monkeypatch.delenv("MNEMO_DISPATCH_FULL_PROFILE", raising=False)
+    run = _Run()
+    monkeypatch.setattr(dispatch.subprocess, "run", run)
+
+    dispatch.spawn_child("P", cwd=tmp_path)
+    assert _settings_files(run.args) == [{"hooks": hooks}]
+    dispatch.spawn_child("P", cwd=tmp_path, lean=False)
+    assert run.args == ["claude", "--bg", "P"]
+
+
+def test_show_puts_each_twins_closing_report_under_its_diff_scrubbed_alike(
+    vault: Path, repo: Path, spawned: Spawned, tmp_path: Path,
+) -> None:
+    pair_id, results = _dispatch(repo, vault)
+    _work(results[0].worktree, "x = 1\n")          # the other commits nothing
+    first = _transcript(tmp_path, "a", _prompt(), _say(_text("working")),
+                        _say(_text("Done. Branch fix/issue-449-aaaaaa, id 00000001.")))
+    second = _transcript(tmp_path, "b", _prompt(),
+                         _say(_text("Already shipped in #251; nothing to change.")))
+
+    out = twins.show(vault, pair_id, rng=random.Random(0),
+                     state=_states(**{"00000001": first, "00000002": second}))
+
+    order = twins.read_pairs(vault)[pair_id].order
+    sections = dict(zip(("A", "B"), out.split("===== A =====")[1].split("===== B =====")))
+    label_of_second = "A" if order[0] == "bbbbbb" else "B"
+    assert "Already shipped in #251" in sections[label_of_second]
+    assert "(no commits on this branch — its closing report says why)" in \
+        sections[label_of_second]
+    assert "delivered nothing" not in out
+    other = "B" if label_of_second == "A" else "A"
+    assert "Done. Branch <twin>, id <twin>." in sections[other]
+    # The report comes after its own diff, never before it.
+    assert sections[other].index("x = 1") < sections[other].index("closing report")
+
+
+def test_a_twin_with_no_transcript_says_so_rather_than_showing_nothing(
+    vault: Path, pair,
+) -> None:
+    pair_id, _ = pair
+    out = twins.show(vault, pair_id, state=_done)
+    assert out.count("(no closing report — its transcript is gone or holds no text)") == 2
+
+
+def test_show_records_what_reached_each_twin_once(
+    vault: Path, repo: Path, spawned: Spawned, tmp_path: Path,
+) -> None:
+    pair_id, results = _dispatch(repo, vault)
+    for r in results:
+        _work(r.worktree, "x = 1\n")
+    asked = _transcript(
+        tmp_path, "asked", _prompt(),
+        _say(_tool("q1", "AskUserQuestion", questions=[{"question": "Drop it?"}])),
+        _result("q1", 'Your questions have been answered: "Drop it?"="Yes".'),
+        _say(_tool("w1", "Write",
+                   file_path="/Users/x/.claude/projects/-Users-x-mnemo/memory/note.md",
+                   content="...")),
+        _result("w1", "File created"),
+        _say(_text("Report.")),
+    )
+    looked = _transcript(
+        tmp_path, "looked", _prompt(),
+        _say(_tool("b1", "Bash", command="git worktree list")),
+        _result("b1", f"{repo}  abc [master]\n{repo.parent}/mnemo-wt-449-aaaaaa  abc "
+                      "[fix/issue-449-aaaaaa]\n"),
+        _say(_text("Report.")),
+    )
+    state = _states(**{"00000001": asked, "00000002": looked})
+
+    twins.show(vault, pair_id, state=state)
+    twins.show(vault, pair_id, state=state)
+
+    found = twins.read_pairs(vault)[pair_id].conditions
+    assert found == {
+        "aaaaaa": {"human_turns": 0, "answered_questions": 1, "saw_sibling": False,
+                   "memory_writes": 1},
+        "bbbbbb": {"human_turns": 0, "answered_questions": 0, "saw_sibling": True,
+                   "memory_writes": 0},
+    }
+    events = [json.loads(l) for l in twins.log_path(vault).read_text(encoding="utf-8").splitlines()]
+    assert sum(1 for e in events if e["event"] == "conditions") == 1
+
+
+def test_a_pruned_transcript_is_unknown_not_clean_and_is_read_when_it_can_be(
+    vault: Path, pair, tmp_path: Path,
+) -> None:
+    pair_id, _ = pair
+    later = _transcript(tmp_path, "later", _prompt(), _say(_text("Report.")))
+    twins.show(vault, pair_id, state=_states(**{"00000001": later}))
+    assert set(twins.read_pairs(vault)[pair_id].conditions) == {"aaaaaa"}
+
+    twins.show(vault, pair_id, state=_states(**{"00000001": later, "00000002": later}))
+    assert set(twins.read_pairs(vault)[pair_id].conditions) == {"aaaaaa", "bbbbbb"}
+
+
+def test_only_input_during_the_run_counts_as_a_person(tmp_path: Path) -> None:
+    path = _transcript(
+        tmp_path, "t",
+        _prompt(),                                              # the prompt: not input
+        _say(_tool("q1", "AskUserQuestion", questions=[])),
+        _result("q1", "User declined to answer questions", is_error=True),
+        _result("x1", "tool output"),                           # the loop, not a person
+        _prompt("<mnemo-resume>the limit reset</mnemo-resume>"),  # mnemo waking it
+        _prompt("<task-notification>done</task-notification>"),
+        _prompt("go with the second option"),                   # a person
+        _line({"type": "user", "isSidechain": True,
+               "message": {"role": "user", "content": "subagent prompt"}}),
+    )
+    found = twins.conditions_of(path)
+    assert (found["human_turns"], found["answered_questions"]) == (1, 0)
+    assert twins.human_input(found) is True
+    assert twins.human_input({"human_turns": 0, "answered_questions": 0}) is False
+    assert twins.human_input(None) is None
+    assert twins.conditions_of(tmp_path / "gone.jsonl") is None
+
+
+def test_the_sibling_is_named_by_issue_and_tag_never_by_a_bare_tag(
+    repo: Path, vault: Path, spawned: Spawned, tmp_path: Path,
+) -> None:
+    """A bare six-hex tag turns up inside any commit hash."""
+    pair_id, _ = _dispatch(repo, vault)
+    pair = twins.read_pairs(vault)[pair_id]
+    a, b = pair.twins
+    assert twins.sibling_names(pair, a) == ["-449-bbbbbb", "00000002"]
+
+    hashes = _transcript(tmp_path, "h", _prompt(),
+                         _say(_tool("b1", "Bash", command="git log")),
+                         _result("b1", "commit 9bbbbbb1c0ffee\n"))
+    assert twins.conditions_of(hashes, sibling=twins.sibling_names(pair, a))[
+        "saw_sibling"] is False
+    ps = _transcript(tmp_path, "ps", _prompt(),
+                     _say(_tool("b1", "Bash", command="ps")),
+                     _result("b1", "123 node /x/mnemo-wt-449-bbbbbb/node_modules/.bin/jest"))
+    assert twins.conditions_of(ps, sibling=twins.sibling_names(pair, a))["saw_sibling"]
+
+
+def test_the_cli_says_what_reached_each_twin_only_after_the_answer(
+    vault: Path, pair, monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path,
+    tmp_jobs_dir: Path,
+) -> None:
+    pair_id, _ = pair
+    asked = _transcript(
+        tmp_path, "asked", _prompt(),
+        _say(_tool("q1", "AskUserQuestion", questions=[])),
+        _result("q1", "Your questions have been answered: x"), _say(_text("Report.")),
+    )
+    monkeypatch.setattr(twins, "default_vault", lambda: vault)
+    # Through the jobs dir, as the CLI reads it: `show`'s `state=` default is
+    # bound when the module loads, so patching `twins._state` would not reach it.
+    for short_id, data in (("00000001", {**_done(""), "linkScanPath": str(asked)}),
+                           ("00000002", _done(""))):
+        (tmp_jobs_dir / short_id).mkdir(parents=True)
+        (tmp_jobs_dir / short_id / "state.json").write_text(json.dumps(data), encoding="utf-8")
+    ns = lambda **kw: argparse.Namespace(**{"action": "list", "pair": None, "answer": None, **kw})
+
+    assert twins_cmd.cmd_twins(ns(action="show", pair=pair_id)) == 0
+    shown = capsys.readouterr().out
+    assert "Report." in shown                 # the transcript really was read
+    assert "question(s) answered" not in shown
+
+    assert twins_cmd.cmd_twins(ns(action="prefer", pair=pair_id, answer="A")) == 0
+    out = capsys.readouterr().out
+    assert "1 question(s) answered" in out

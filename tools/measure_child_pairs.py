@@ -1,7 +1,8 @@
 """Run-to-run spread and tie rate over issues run as twins, and the study they size (#449).
 
 Usage:
-    PYTHONPATH=src python3 tools/measure_child_pairs.py [--vault ~/mnemo] [--agreement 0.78] [--list] [--json]
+    PYTHONPATH=src python3 tools/measure_child_pairs.py [--vault ~/mnemo] [--agreement 0.78]
+        [--exclude human-input|sibling|memory ...] [--list] [--json]
 
 Read-only: no LLM calls, no network, no writes.
 
@@ -35,6 +36,18 @@ reproduces to the pair (the unit tests pin its table):
   a 15% reduction; the paired difference has sd ``sqrt(2)`` times the
   run-to-run spread.
 
+**What else reached a twin (#453).** A pair is two runs under the same
+conditions only if nothing reached one twin that did not reach the other.
+Each row carries what ``mnemo twins show`` read out of both transcripts
+(:func:`mnemo.core.twins.conditions_of`), or reads it now for a pair shown
+before that existed: whether a person answered either twin (a question, or a
+typed turn), whether either named its sibling's tree, branch or id, and
+whether either wrote Claude Code auto-memory. The report counts the pairs
+with each; ``--exclude`` leaves them out of everything above — a twin that
+sat 39 minutes on a question inflates the wall-time spread by exactly the
+wait. A pair whose transcripts are gone is counted as unknown, never as
+clean, and is not excluded.
+
 Six pairs pin neither number down. The report gives a 95% interval for each
 — chi-square for the spread (computed here, no scipy), Wilson for the tie
 rate — and the pairs needed at both ends, so the study is sized from the
@@ -60,6 +73,8 @@ AGREEMENT = 0.78
 EFFECTS = (0.70, 0.65, 0.60)
 #: The token reduction #439 sized the secondary metric for.
 REDUCTION = 0.15
+#: What ``--exclude`` can leave out, and how each reads a twin's conditions.
+CONDITIONS = ("human-input", "sibling", "memory")
 
 _Z = NormalDist()
 
@@ -192,11 +207,46 @@ def _metric(pair: Any, tag: str, key: str, live: Any) -> Optional[float]:
     return live(tag).get(key)
 
 
-def rows(pairs: Sequence[Any], *, live: Any = None) -> List[Dict[str, Any]]:
-    """One row per complete pair: both twins' tokens and wall time, and the answer.
+def flag(found: Optional[Dict[str, Any]], kind: str) -> Optional[bool]:
+    """Whether one twin's conditions (``conditions_of``) show *kind*; ``None``
+    when its transcript was never read."""
+    from mnemo.core import twins
+
+    if not isinstance(found, dict):
+        return None
+    if kind == "human-input":
+        return twins.human_input(found)
+    if kind == "sibling":
+        return bool(found.get("saw_sibling"))
+    if kind == "memory":
+        return bool(found.get("memory_writes"))
+    raise ValueError(f"unknown condition {kind!r}")
+
+
+def pair_flag(row: Dict[str, Any], kind: str) -> Optional[bool]:
+    """True when either twin shows *kind*, None when neither does and one is unknown."""
+    flags = [flag(found, kind) for found in row.get("conditions") or [None, None]]
+    if any(flags):
+        return True
+    return None if None in flags else False
+
+
+def select(pair_rows: Sequence[Dict[str, Any]],
+           exclude: Sequence[str] = ()) -> List[Dict[str, Any]]:
+    """*pair_rows* without the pairs where either twin shows a kind in *exclude*."""
+    return [r for r in pair_rows if not any(pair_flag(r, k) for k in exclude)]
+
+
+def rows(pairs: Sequence[Any], *, live: Any = None,
+         live_conditions: Any = None) -> List[Dict[str, Any]]:
+    """One row per complete pair: both twins' tokens and wall time, the answer,
+    and what their transcripts show reached them.
 
     *live* maps a tag to :func:`mnemo.core.twins.metrics_of` of its job, for
     a pair never shown; the default reads the jobs directory.
+    *live_conditions* maps a tag to :func:`mnemo.core.twins.conditions_of`,
+    for a twin whose conditions were never recorded; the default reads its
+    transcript.
     """
     from mnemo.core import twins
 
@@ -212,19 +262,41 @@ def rows(pairs: Sequence[Any], *, live: Any = None) -> List[Dict[str, Any]]:
             twin = pair.twin(tag)
             return twins.metrics_of(twins._state(twin.short_id))
 
+        def _found(tag: str, pair=pair) -> Optional[Dict[str, Any]]:
+            if tag in pair.conditions:
+                return pair.conditions[tag]
+            if live_conditions is not None:
+                return live_conditions(tag)
+            twin = pair.twin(tag)
+            return twins.conditions_of(twins.transcript_of(pair, twin),
+                                       sibling=twins.sibling_names(pair, twin))
+
         tags = [t.tag for t in started]
         out.append({
             "pair": pair.pair, "issue": pair.issue,
             "tokens": [_metric(pair, t, "tokens", _live) for t in tags],
             "wall_seconds": [_metric(pair, t, "wall_seconds", _live) for t in tags],
             "choice": pair.choice,
+            "conditions": [_found(t) for t in tags],
         })
     return out
 
 
 def measure(pair_rows: Sequence[Dict[str, Any]], *,
-            agreement: float = AGREEMENT) -> Dict[str, Any]:
-    """The report: both spreads, the tie rate, and the pairs they size."""
+            agreement: float = AGREEMENT,
+            exclude: Sequence[str] = ()) -> Dict[str, Any]:
+    """The report: both spreads, the tie rate, and the pairs they size.
+
+    The conditions are counted over every row given; the rest is measured
+    over the rows *exclude* leaves in.
+    """
+    conditions = {
+        kind: {"pairs": sum(1 for r in pair_rows if pair_flag(r, kind)),
+               "unknown": sum(1 for r in pair_rows if pair_flag(r, kind) is None)}
+        for kind in CONDITIONS
+    }
+    everything = len(pair_rows)
+    pair_rows = select(pair_rows, exclude)
     tokens = spread([tuple(r["tokens"]) for r in pair_rows])
     wall = spread([tuple(r["wall_seconds"]) for r in pair_rows])
     answered = [r for r in pair_rows if r.get("choice")]
@@ -243,6 +315,9 @@ def measure(pair_rows: Sequence[Dict[str, Any]], *,
 
     return {
         "pairs": len(pair_rows),
+        "all_pairs": everything,
+        "excluded": list(exclude),
+        "conditions": conditions,
         "tokens": tokens,
         "wall": wall,
         "answered": len(answered),
@@ -266,7 +341,20 @@ def _num(value: Optional[float], fmt: str = "{:.2f}") -> str:
 
 def format_report(report: Dict[str, Any], *, pair_rows: Sequence[Dict[str, Any]] = (),
                   listing: bool = False) -> str:
-    lines = [f"pairs: {report['pairs']} complete (two twins started)"]
+    lines = [f"pairs: {report['all_pairs']} complete (two twins started)"]
+    names = {"human-input": "a person answered a twin",
+             "sibling": "a twin named its sibling",
+             "memory": "a twin wrote auto-memory"}
+    for kind, count in report["conditions"].items():
+        lines.append(
+            f"  {names[kind]}: {count['pairs']} pair(s)"
+            + (f", {count['unknown']} unknown (transcript gone)" if count["unknown"] else "")
+        )
+    if report["excluded"]:
+        lines.append(
+            f"measured over {report['pairs']} pair(s), leaving out "
+            + ", ".join(report["excluded"])
+        )
     for key, name in (("tokens", "output tokens"), ("wall", "wall time")):
         s = report[key]
         lines.append(
@@ -296,11 +384,16 @@ def format_report(report: Dict[str, Any], *, pair_rows: Sequence[Dict[str, Any]]
     )
     if listing:
         lines.append("")
+        from mnemo.core import twins
+
         for r in pair_rows:
+            found = "; ".join(filter(None, (twins.describe(c) for c in
+                                            r.get("conditions") or [])))
             lines.append(
                 f"  {r['pair']}  #{r['issue']}  tokens {r['tokens']}  "
                 f"wall {[None if w is None else round(w) for w in r['wall_seconds']]}  "
                 f"answer {r['choice'] or '—'}"
+                + (f"  [{found}]" if found else "")
             )
     return "\n".join(lines) + "\n"
 
@@ -310,6 +403,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--vault", help="vault root (default: the configured one)")
     parser.add_argument("--agreement", type=float, default=AGREEMENT,
                         help=f"the rater's self-agreement (default {AGREEMENT}, #411)")
+    parser.add_argument("--exclude", action="append", choices=CONDITIONS, default=[],
+                        help="leave out pairs where either twin shows this "
+                             "(repeatable)")
     parser.add_argument("--list", action="store_true", help="print every pair")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -318,7 +414,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     vault = Path(args.vault).expanduser() if args.vault else twins.default_vault()
     pair_rows = rows(list(twins.read_pairs(vault).values()))
-    report = measure(pair_rows, agreement=args.agreement)
+    report = measure(pair_rows, agreement=args.agreement, exclude=args.exclude)
     if args.json:
         print(json.dumps({"report": report, "pairs": pair_rows}, indent=2))
     else:

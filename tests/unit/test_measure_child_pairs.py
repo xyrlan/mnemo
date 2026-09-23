@@ -161,3 +161,88 @@ def test_main_prints_a_report_and_json(tmp_path: Path, capsys) -> None:
     data = json.loads(capsys.readouterr().out)
     assert data["report"]["tokens"]["log_sd"] == pytest.approx(
         abs(math.log(30000 / 45000)) / math.sqrt(2))
+
+
+# --- #453: pairs that were not run under the same conditions ---------------
+
+
+_CLEAN = {"human_turns": 0, "answered_questions": 0, "saw_sibling": False,
+          "memory_writes": 0}
+
+
+def _conditions(vault: Path, pid: str, a: dict, b: dict) -> None:
+    twins._append(vault, {"event": "conditions", "pair": pid,
+                          "twins": {f"{pid[:5]}a": a, f"{pid[:5]}b": b}})
+
+
+def test_a_pair_a_person_answered_can_be_left_out(tmp_path: Path) -> None:
+    """The #329 shape: one twin sat on a question, and its wall time with it."""
+    vault = tmp_path / "v"
+    _pair(vault, "aaaaaa", tokens=(30000, 30000), wall=(600, 600), choice="A")
+    _pair(vault, "bbbbbb", tokens=(40000, 40000), wall=(2700, 75), choice="B")
+    _conditions(vault, "aaaaaa", _CLEAN, {**_CLEAN, "saw_sibling": True})
+    _conditions(vault, "bbbbbb", {**_CLEAN, "answered_questions": 1}, _CLEAN)
+
+    rows = tool.rows(list(twins.read_pairs(vault).values()),
+                     live_conditions=lambda tag: pytest.fail("recorded, not read live"))
+    everything = tool.measure(rows)
+    without = tool.measure(rows, exclude=["human-input"])
+
+    assert everything["conditions"] == {
+        "human-input": {"pairs": 1, "unknown": 0},
+        "sibling": {"pairs": 1, "unknown": 0},
+        "memory": {"pairs": 0, "unknown": 0},
+    }
+    assert everything["wall"]["pairs"] == 2 and everything["wall"]["log_sd"] > 1
+    assert (without["pairs"], without["all_pairs"]) == (1, 2)
+    assert without["wall"]["log_sd"] == 0
+    assert without["conditions"] == everything["conditions"]   # counted over all
+    assert tool.measure(rows, exclude=["human-input", "sibling"])["pairs"] == 0
+
+
+def test_an_unread_transcript_is_unknown_and_never_excluded(tmp_path: Path) -> None:
+    vault = tmp_path / "v"
+    _pair(vault, "cccccc", tokens=(1, 1), wall=(1, 1))
+    _conditions(vault, "cccccc", _CLEAN, _CLEAN)
+    _pair(vault, "dddddd", tokens=(1, 1), wall=(1, 1))
+
+    rows = tool.rows(list(twins.read_pairs(vault).values()),
+                     live_conditions=lambda tag: None)
+    report = tool.measure(rows, exclude=["human-input"])
+
+    assert report["pairs"] == 2
+    assert report["conditions"]["human-input"] == {"pairs": 0, "unknown": 1}
+    assert "1 unknown" in tool.format_report(report)
+
+
+def test_a_pair_shown_before_conditions_existed_is_read_from_its_transcript(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "v"
+    _pair(vault, "eeeeee", tokens=(1, 1), wall=(1, 1))
+    asked = []
+
+    def _live(tag):
+        asked.append(tag)
+        return {**_CLEAN, "memory_writes": 2} if tag.endswith("a") else _CLEAN
+
+    rows = tool.rows(list(twins.read_pairs(vault).values()), live_conditions=_live)
+    assert sorted(asked) == ["eeeeea", "eeeeeb"]
+    assert tool.pair_flag(rows[0], "memory") is True
+    assert tool.pair_flag(rows[0], "human-input") is False
+
+
+def test_main_leaves_out_what_it_is_told_and_lists_what_reached_each_pair(
+    tmp_path: Path, capsys,
+) -> None:
+    vault = tmp_path / "v"
+    _pair(vault, "aaaaaa", tokens=(30000, 30000), wall=(600, 600), choice="A")
+    _pair(vault, "bbbbbb", tokens=(40000, 40000), wall=(2700, 75), choice="B")
+    _conditions(vault, "aaaaaa", _CLEAN, _CLEAN)
+    _conditions(vault, "bbbbbb", {**_CLEAN, "human_turns": 1}, _CLEAN)
+
+    assert tool.main(["--vault", str(vault), "--exclude", "human-input", "--list"]) == 0
+    out = capsys.readouterr().out
+    assert "a person answered a twin: 1 pair(s)" in out
+    assert "measured over 1 pair(s), leaving out human-input" in out
+    assert "1 human turn(s)" in out

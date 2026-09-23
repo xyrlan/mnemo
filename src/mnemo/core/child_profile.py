@@ -92,7 +92,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 #: Where the derived files live inside the child's worktree. Under the tree so
 #: they are removed with it, and dot-prefixed and gitignore-worthy so a child
@@ -197,14 +197,7 @@ def mnemo_mcp_servers(claude_json: Optional[Dict[str, Any]] = None) -> Dict[str,
     return {MCPSERVER_NAME: entry} if isinstance(entry, dict) else {}
 
 
-def write_profile(tree: Path | str) -> Dict[str, Path]:
-    """Write the derived settings and MCP config under *tree*; return their paths.
-
-    A key is absent from the result when there was nothing to write — mnemo
-    not installed, or installed without hooks — so the caller can say which
-    half of the vault the child will be missing instead of pointing at an
-    empty file.
-    """
+def _profile_dir(tree: Path | str) -> Path:
     directory = Path(tree) / PROFILE_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -213,13 +206,36 @@ def write_profile(tree: Path | str) -> Dict[str, Path]:
     # repo would otherwise need the same line added. `git add -A` in the
     # worktree — which children do run — skips the directory on this alone.
     (directory / ".gitignore").write_text("*\n", encoding="utf-8")
+    return directory
 
+
+def write_profile(
+    tree: Path | str, settings: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Path]:
+    """Write the derived settings and MCP config under *tree*; return their paths.
+
+    A key is absent from the result when there was nothing to write — mnemo
+    not installed, or installed without hooks — so the caller can say which
+    half of the vault the child will be missing instead of pointing at an
+    empty file.
+
+    *settings* are further keys for the same settings file — a twin's
+    ``autoMemoryEnabled: false`` (#453). They go into this one file rather
+    than a second ``--settings``: given two, the CLI keeps the last and drops
+    the first whole (measured on 2.1.280), which would take mnemo's hooks
+    with it.
+    """
+    directory = _profile_dir(tree)
     written: Dict[str, Path] = {}
 
+    data: Dict[str, Any] = {}
     hooks = mnemo_hooks()
     if hooks:
+        data["hooks"] = hooks
+    data.update(settings or {})
+    if data:
         path = directory / "settings.json"
-        path.write_text(json.dumps({"hooks": hooks}, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         written["settings"] = path
 
     servers = mnemo_mcp_servers()
@@ -231,14 +247,27 @@ def write_profile(tree: Path | str) -> Dict[str, Path]:
     return written
 
 
-def lean_args(tree: Path | str) -> List[str]:
+def write_settings(tree: Path | str, settings: Mapping[str, Any]) -> Path:
+    """Write *settings* alone as a child's settings file; return its path.
+
+    For a child on the full profile, whose hooks come from the user's own
+    settings and need no handing back: only the extra keys go in.
+    """
+    path = _profile_dir(tree) / "settings.json"
+    path.write_text(json.dumps(dict(settings), indent=2), encoding="utf-8")
+    return path
+
+
+def lean_args(
+    tree: Path | str, settings: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
     """The ``claude`` flags that start a lean child in *tree*.
 
     Order is not significant to the CLI, but is kept stable — drop, then hand
     back — so a maintainer reading a spawn in ``ps`` sees the shape of the
-    decision rather than a flag soup.
+    decision rather than a flag soup. *settings* as in :func:`write_profile`.
     """
-    written = write_profile(tree)
+    written = write_profile(tree, settings)
     args = list(LEAN_FLAGS)
     if "mcp" in written:
         args += ["--mcp-config", str(written["mcp"])]

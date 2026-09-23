@@ -109,7 +109,7 @@ import subprocess
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence, Union
+from typing import Any, Callable, Mapping, Sequence, Union
 
 from mnemo.core import child_profile, claude_cli, contracts, redact
 from mnemo.core.sessions import grants, parents
@@ -959,6 +959,7 @@ READ_ONLY_TOOLS = ("Edit", "Write", "NotebookEdit")
 def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
     effort: str | None = None, read_only: bool = False,
+    settings: Mapping[str, Any] | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -1069,6 +1070,12 @@ def spawn_child(
     So the list is emitted early and ``--`` goes last, immediately before the
     prompt: the flags in between stay flags, and the prompt is the prompt
     however few of them are present.
+
+    **Extra settings (#453).** *settings* are keys for the child's
+    ``--settings`` file — a twin's ``autoMemoryEnabled: false``. On a lean
+    child they join mnemo's hooks in the one file the lean profile already
+    passes; on the full profile they are the file's only content. ``None``
+    (every caller but twins) leaves the argv byte-identical.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -1095,7 +1102,9 @@ def spawn_child(
         # read as a second positional by any CLI that stops parsing there.
         # Alongside --model, never instead of it: the two choose different
         # things (who the child is, and what it loads) and both survive.
-        args += child_profile.lean_args(cwd)
+        args += child_profile.lean_args(cwd, settings)
+    elif settings:
+        args += ["--settings", str(child_profile.write_settings(cwd, settings))]
     if read_only:
         # Last, immediately before the prompt. `--` ends flag parsing, so it
         # both closes `--disallowedTools`' variadic list and guarantees the
@@ -1127,6 +1136,7 @@ def _spawn_into(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
+    settings: Mapping[str, Any] | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -1147,10 +1157,13 @@ def _spawn_into(
     (``jobs-state-json``); a mismatch there is likewise a warning, since the
     child is running either way.
     """
+    # Only when given, so every other caller hands the chokepoint exactly
+    # the call it always did (#453: nothing changes for non-twin children).
+    extra = {"settings": settings} if settings else {}
     try:
         short_id = spawn_child(
             prompt, cwd=tree, model=model, lean=lean, effort=effort,
-            read_only=read_only,
+            read_only=read_only, **extra,
         )
     except claude_cli.ContractBroken as exc:
         return Dispatched(

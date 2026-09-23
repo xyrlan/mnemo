@@ -4,10 +4,12 @@ The reading half of #449; ``mnemo dispatch <n> --twins`` is the running half,
 and :mod:`mnemo.core.twins` says why each piece is shaped the way it is.
 
 - ``mnemo twins`` lists every pair and how far along it is.
-- ``mnemo twins show <pair>`` prints both diffs as ``A`` and ``B``, in an
-  order drawn once per pair, with each run's own names scrubbed out.
+- ``mnemo twins show <pair>`` prints both diffs as ``A`` and ``B``, each with
+  its closing report, in an order drawn once per pair, with each run's own
+  names scrubbed out.
 - ``mnemo twins prefer <pair> A|B|tie`` records the answer — once — and only
-  then says which run was which, and how to deliver it.
+  then says which run was which, what reached each one besides its prompt
+  (#453), and how to deliver it.
 
 Pipe-safe like ``deliver``: the answer is in the argv, not a keystroke.
 """
@@ -52,6 +54,11 @@ def _reveal(pair) -> None:
     for label, tag in zip(twins.LABELS, pair.order):
         twin = pair.twin(tag)
         print(f"  {label} was {twin.short_id or '(id unknown)'}  {twin.tree}")
+        # After the answer, like the names: what reached a twin mid-run is
+        # for the measurement, not for the judgment (#453).
+        found = twins.describe(pair.conditions.get(tag))
+        if found:
+            print(f"    {found}")
     if pair.preferred:
         chosen = pair.twin(pair.preferred)
         name = chosen.short_id or f"#{pair.issue}-{chosen.tag}"

@@ -19,6 +19,33 @@ checkable claim, not a promise. Their trees are ``<repo>-wt-<n>-<tag>`` on
 twin that runs ``git worktree list`` can still see the other tree; nothing
 short of two clones hides that, and nothing in its prompt points there.
 
+**What a twin can still learn, and what the pair records of it (#453).** The
+six-pair pilot of #439 showed the pair is not sealed. Three of its twelve
+twins named their sibling's tree or branch — from ``ps`` (the other tree's
+``jest`` and ``tsc``), from ``git worktree list``/``git branch``, and once
+through the other's auto-memory — and one ``cd``-ed into the sibling's tree to
+read its ``git status``. Three twins wrote Claude Code auto-memory, which the
+held briefing does not cover, and which a sibling reading the same directory
+picks up mid-run. One twin asked a question and was answered, its sibling was
+not. So:
+
+- Twins start with Claude Code's auto-memory **off** —
+  :data:`SETTINGS`, in the child's own ``--settings`` file, which a wake keeps.
+  That is the one channel that can be closed without touching the child's
+  tools: with it off a twin neither reads the maintainer's memory nor writes
+  its own, so both arms get the same nothing, and neither can leave a note the
+  other reads. Everything else a normal child has, a twin keeps.
+- Seeing the sibling is **not** closed: ``ps``, the parent directory and the
+  repo's own refs all show it, and hiding them takes separate clones — which
+  ``show`` and ``deliver`` do not know how to read — or a sandbox. And a
+  question to the maintainer is part of how a child works, so a twin may
+  still ask. Both are **recorded** instead: the first ``show`` of a finished
+  pair reads each twin's transcript and appends a ``conditions`` event —
+  human turns and answered questions after the opening prompt, whether the
+  sibling's tree, branch or id appears anywhere in it, and any file tool
+  pointed at an auto-memory directory. ``tools/measure_child_pairs.py``
+  reports them and can leave those pairs out.
+
 **Neither publishes.** Twins are dispatched with no grant (``--may none``):
 the choice between them is the maintainer's, made after reading both. That
 also keeps them outside #436's PR follow, which only wakes children granted
@@ -29,7 +56,11 @@ also keeps them outside #436's PR follow, which only wakes children granted
 source and recorded, so a second ``show`` shows the same order. Each twin's
 tag, branch, tree name and session id are replaced in the diff text by the
 same placeholder, so a child that wrote its own path into a file does not
-sign its work. ``mnemo twins prefer <pair> A|B|tie`` records the answer and
+sign its work. Under each diff is that twin's closing report — the last text
+it wrote, which its prompt tells it to write as "the only copy" — scrubbed
+the same way: a twin that delivers nothing on purpose (the issue had already
+shipped, or it stopped for approval) says why only there, and a bare "no
+commits" cannot be judged next to a diff. ``mnemo twins prefer <pair> A|B|tie`` records the answer and
 only then says which twin was which. One answer per pair: an answer changed
 after the labels are known is no longer blind. ``show`` refuses while either
 twin is still working, because a half-finished diff is not what is being
@@ -87,6 +118,17 @@ PLACEHOLDER = "<twin>"
 #: Process phases after which a twin will not change its tree again.
 _FINISHED = frozenset({"done", "stopped"})
 
+#: What every twin's settings file adds (#453). Auto-memory off: the twin
+#: neither reads the maintainer's memory nor writes to it, so the held
+#: briefing is not undone by a note the losing twin left there, and the
+#: sibling cannot read one mid-run. Checked against 2.1.280 with ``--settings``:
+#: the system prompt names a memory directory without it and none with it.
+SETTINGS: Dict[str, Any] = {"autoMemoryEnabled": False}
+
+#: File tools, and the input key naming the file each one changes.
+_FILE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+               "NotebookEdit": "notebook_path"}
+
 
 class TwinsError(RuntimeError):
     """A twins command could not do what it was asked, with the reason."""
@@ -116,6 +158,8 @@ class Pair:
     effort: Optional[str] = None
     lean: bool = True
     created_at: str = ""
+    #: The extra child settings the twins started with; ``{}`` before #453.
+    settings: Dict[str, Any] = field(default_factory=dict)
     twins: Tuple[Twin, ...] = ()
     #: The tags in the order ``A``, ``B`` — set by the first ``show``.
     order: Tuple[str, ...] = ()
@@ -130,6 +174,8 @@ class Pair:
     #: ``{tag: {"jsonl": ..., "agent": ...}}`` for each briefing held.
     held: Dict[str, Dict[str, str]] = field(default_factory=dict)
     released: Tuple[str, ...] = ()
+    #: ``{tag: conditions_of(...)}`` — what each twin's transcript showed.
+    conditions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     @property
     def started(self) -> Tuple[Twin, ...]:
@@ -208,6 +254,7 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
                     base=str(ev["base"]), prompt_sha256=str(ev.get("prompt_sha256") or ""),
                     model=ev.get("model"), effort=ev.get("effort"),
                     lean=bool(ev.get("lean", True)), created_at=str(ev.get("at") or ""),
+                    settings=ev["settings"] if isinstance(ev.get("settings"), dict) else {},
                     twins=twins,
                 )
             except (KeyError, TypeError, ValueError):
@@ -242,6 +289,14 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
             held[tag] = {"jsonl": str(ev.get("jsonl") or ""),
                          "agent": str(ev.get("agent") or "")}
             pair = replace(pair, held=held)
+        elif kind == "conditions" and isinstance(ev.get("twins"), dict):
+            # Per twin, first reading wins: one taken while the transcript was
+            # there is not replaced by a later one after it was pruned.
+            conditions = dict(pair.conditions)
+            for tag, found in ev["twins"].items():
+                if isinstance(found, dict) and tag not in conditions:
+                    conditions[str(tag)] = found
+            pair = replace(pair, conditions=conditions)
         elif kind == "released":
             pair = replace(pair, released=pair.released + (str(ev.get("tag") or ""),))
         pairs[pid] = pair
@@ -363,7 +418,7 @@ def dispatch_twins(
             "event": "pair", "pair": pair_id, "issue": issue,
             "repo_root": str(repo_root), "base": base,
             "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            "model": model, "effort": effort, "lean": lean,
+            "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
             "twins": [{"tag": t.tag, "tree": t.tree, "branch": t.branch} for t in twins],
         })
     except OSError as exc:
@@ -379,7 +434,7 @@ def dispatch_twins(
             )
             result = dispatch._spawn_into(
                 issue, tree, prompt, repo_root=repo_root, branch=twin.branch,
-                model=model, lean=lean, may=(), effort=effort,
+                model=model, lean=lean, may=(), effort=effort, settings=SETTINGS,
             )
         except dispatch.DispatchError as exc:
             result = dispatch.Dispatched(issue=issue, error=str(exc))
@@ -466,6 +521,167 @@ def _scrub(text: str, pair: Pair) -> str:
     return text
 
 
+def transcript_of(
+    pair: Pair, twin: Twin, *,
+    state: Callable[[str], Optional[Dict[str, Any]]] = _state,
+) -> Optional[Path]:
+    """*twin*'s transcript on disk, or ``None``.
+
+    ``state.json``'s ``linkScanPath`` first — a wake writes a new file that
+    carries the old history, and this names the newest — then the path its
+    SessionEnd recorded when it held the briefing.
+    """
+    candidates = [((state(twin.short_id) or {}).get("linkScanPath")),
+                  (pair.held.get(twin.tag) or {}).get("jsonl")]
+    for path in candidates:
+        if isinstance(path, str) and path and Path(path).is_file():
+            return Path(path)
+    return None
+
+
+def sibling_names(pair: Pair, twin: Twin) -> List[str]:
+    """What names *twin*'s sibling, in any text the twin could have read.
+
+    ``-<issue>-<tag>`` is in both the sibling's tree
+    (``<repo>-wt-<n>-<tag>``, which ``ps``, ``ls ..`` and ``git worktree
+    list`` print) and its branch (``fix/issue-<n>-<tag>``, which ``git
+    branch`` prints); its short id is what ``claude agents`` prints. A bare
+    six-hex tag would also match inside any commit hash.
+    """
+    names = []
+    for other in pair.twins:
+        if other.tag == twin.tag:
+            continue
+        names.append(f"-{pair.issue}-{other.tag}")
+        if other.short_id:
+            names.append(other.short_id)
+    return names
+
+
+def conditions_of(transcript: Optional[Path], *, sibling: Sequence[str] = ()) -> Optional[Dict[str, Any]]:
+    """What reached one twin besides its prompt, read from its transcript.
+
+    ``None`` when there is no transcript to read. Otherwise:
+
+    - ``human_turns``: turns :func:`mnemo.core.sessions.detector.is_human_turn`
+      counts as a person (or a session speaking for one) after the twin's
+      first reply — the opening prompt is not input *during* the run;
+    - ``answered_questions``: ``AskUserQuestion`` calls that came back with an
+      answer rather than an error — the #329 twin's "Remover o campo";
+    - ``saw_sibling``: whether any of *sibling* (:func:`sibling_names`)
+      appears anywhere in it — a command's output, the twin's own words or a
+      tool's input;
+    - ``memory_writes``: file-tool calls aimed at a Claude Code auto-memory
+      directory (``~/.claude/projects/<project>/memory/``).
+    """
+    from mnemo.core.sessions import detector
+
+    if transcript is None:
+        return None
+    found: Dict[str, Any] = {"human_turns": 0, "answered_questions": 0,
+                             "saw_sibling": False, "memory_writes": 0}
+    asked = set()
+    replied = False
+    try:
+        with open(transcript, encoding="utf-8") as fh:
+            for line in fh:
+                if not found["saw_sibling"] and any(n and n in line for n in sibling):
+                    found["saw_sibling"] = True
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("isSidechain"):
+                    continue
+                content = (record.get("message") or {}).get("content")
+                blocks = [b for b in content if isinstance(b, dict)] \
+                    if isinstance(content, list) else []
+                if record.get("type") == "assistant":
+                    replied = True
+                    for block in blocks:
+                        if block.get("type") != "tool_use":
+                            continue
+                        name = block.get("name")
+                        if name == "AskUserQuestion":
+                            asked.add(block.get("id"))
+                        elif name in _FILE_TOOLS:
+                            target = str((block.get("input") or {}).get(_FILE_TOOLS[name]) or "")
+                            target = target.replace("\\", "/")
+                            if "/.claude/projects/" in target and "/memory/" in target:
+                                found["memory_writes"] += 1
+                elif record.get("type") == "user":
+                    if replied and detector.is_human_turn(record):
+                        found["human_turns"] += 1
+                    for block in blocks:
+                        if (block.get("type") == "tool_result"
+                                and block.get("tool_use_id") in asked
+                                and not block.get("is_error")):
+                            found["answered_questions"] += 1
+    except OSError:
+        return None
+    return found
+
+
+def human_input(found: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Whether *found* (:func:`conditions_of`) shows a person reached the twin."""
+    if not isinstance(found, dict):
+        return None
+    return bool(found.get("human_turns") or found.get("answered_questions"))
+
+
+def describe(found: Optional[Dict[str, Any]]) -> str:
+    """*found* in words, ``""`` when nothing reached the twin."""
+    if not isinstance(found, dict):
+        return "transcript not read"
+    parts = []
+    if found.get("answered_questions"):
+        parts.append(f"{found['answered_questions']} question(s) answered")
+    if found.get("human_turns"):
+        parts.append(f"{found['human_turns']} human turn(s)")
+    if found.get("saw_sibling"):
+        parts.append("saw its sibling")
+    if found.get("memory_writes"):
+        parts.append(f"{found['memory_writes']} auto-memory write(s)")
+    return ", ".join(parts)
+
+
+def _record_conditions(
+    vault_root: Path | str, pair: Pair,
+    state: Callable[[str], Optional[Dict[str, Any]]],
+) -> None:
+    """Append what each finished twin's transcript shows, once per twin.
+
+    Only twins not yet read, and only readings that found a transcript: a
+    pruned one is left unknown rather than recorded as clean. Never raises —
+    the blind read goes ahead without it.
+    """
+    readings = {}
+    for twin in pair.started:
+        if twin.tag in pair.conditions:
+            continue
+        found = conditions_of(transcript_of(pair, twin, state=state),
+                              sibling=sibling_names(pair, twin))
+        if found is not None:
+            readings[twin.tag] = found
+    if readings:
+        try:
+            _append(vault_root, {"event": "conditions", "pair": pair.pair,
+                                 "twins": readings})
+        except OSError:
+            pass
+
+
+def _report(pair: Pair, twin: Twin,
+            state: Callable[[str], Optional[Dict[str, Any]]]) -> str:
+    """*twin*'s closing report, framed for the blind read (not yet scrubbed)."""
+    from mnemo.core.sessions.report_card import closing_report
+
+    text = closing_report(transcript_of(pair, twin, state=state))
+    body = text.rstrip() + "\n" if text else \
+        "(no closing report — its transcript is gone or holds no text)\n"
+    return f"\n{'-' * 24} closing report {'-' * 24}\n{body}"
+
+
 def _diff(pair: Pair, twin: Twin) -> str:
     """What *twin* would deliver: its branch against the pair's base."""
     result = _git(["diff", "--stat", "--patch", pair.base, twin.branch],
@@ -474,7 +690,9 @@ def _diff(pair: Pair, twin: Twin) -> str:
         return f"(no diff: {result.stderr.strip() or 'git diff failed'})\n"
     text = result.stdout
     if not text.strip():
-        text = "(no commits — this run delivered nothing)\n"
+        # Not "delivered nothing": two of the six pilot twins committed
+        # nothing on purpose, and the reason is in the report under this.
+        text = "(no commits on this branch — its closing report says why)\n"
     if Path(twin.tree).is_dir():
         status = _git(["status", "--porcelain"], cwd=twin.tree)
         if status.returncode == 0 and status.stdout.strip():
@@ -488,11 +706,14 @@ def show(
     rng: Optional[Any] = None,
     state: Callable[[str], Optional[Dict[str, Any]]] = _state,
 ) -> str:
-    """The two diffs of pair *name*, labelled only ``A`` and ``B``.
+    """The two diffs of pair *name*, labelled only ``A`` and ``B``, each
+    followed by that twin's closing report, scrubbed like the diff.
 
     The first call draws the order and snapshots both twins' metrics; every
-    later call reuses them. Raises :class:`TwinsError` for a pair that is not
-    two finished twins.
+    later call reuses them. Any call that finds a twin's conditions unread
+    records them (:func:`conditions_of`), so a pair shown before #453 gets
+    them the next time it is shown. Raises :class:`TwinsError` for a pair
+    that is not two finished twins.
     """
     pair = resolve(vault_root, name)
     if len(pair.started) != len(LABELS):
@@ -516,12 +737,14 @@ def show(
         except OSError as exc:
             raise TwinsError(f"could not record the order shown: {exc}") from exc
         pair = resolve(vault_root, pair.pair)
+    if any(t.tag not in pair.conditions for t in pair.started):
+        _record_conditions(vault_root, pair, state)
 
     parts = [f"pair {pair.pair} — issue #{pair.issue}, both from {pair.base[:12]}\n"]
     for label, tag in zip(LABELS, pair.order):
         twin = pair.twin(tag)
         parts.append(f"\n{'=' * 30} {label} {'=' * 30}\n")
-        parts.append(_scrub(_diff(pair, twin), pair))
+        parts.append(_scrub(_diff(pair, twin) + _report(pair, twin, state), pair))
     parts.append(
         f"\nWhich would you merge? mnemo twins prefer {pair.pair} A|B|tie\n"
         "(one answer per pair, recorded before the labels are revealed)\n"
