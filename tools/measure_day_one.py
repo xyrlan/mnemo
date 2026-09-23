@@ -430,6 +430,18 @@ class MemEvent:
     original: Optional[str] = None
 
 
+def _strings(obj: Any) -> Iterable[str]:
+    """Every string value in a decoded JSON event."""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _strings(v)
+
+
 def memory_markers(memory_dir: Path) -> List[str]:
     """The spellings a transcript uses for ``memory_dir``: absolute, and ``~/``-relative."""
     out = [str(memory_dir)]
@@ -446,17 +458,21 @@ def memory_events(transcripts: Iterable[Path], memory_dir: Path) -> List[MemEven
 
     markers = memory_markers(memory_dir)
     prefix = str(memory_dir) + os.sep
-    names = [re.compile(re.escape(m) + r"/" + _MD_NAME.pattern) for m in markers]
+    names = [re.compile(re.escape(m) + r"[/\\]" + _MD_NAME.pattern) for m in markers]
+    # The raw line is JSON: a Windows path sits in it with its backslashes
+    # escaped, so the prefilter looks for that spelling too, and everything
+    # after it reads the decoded strings.
+    raw = markers + [json.dumps(m)[1:-1] for m in markers]
     out: List[MemEvent] = []
     for path in transcripts:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if not any(m in text for m in markers):
+        if not any(m in text for m in raw):
             continue
         for line in text.splitlines():
-            if not any(m in line for m in markers):
+            if not any(m in line for m in raw):
                 continue
             try:
                 event = json.loads(line)
@@ -484,7 +500,8 @@ def memory_events(transcripts: Iterable[Path], memory_dir: Path) -> List[MemEven
                 if any(m in command for m in markers) and _SHELL_WRITES.search(command):
                     for name in sorted(set(_MD_NAME.findall(command))):
                         out.append(MemEvent(ts, name, "shell"))
-            for name in sorted({n for rx in names for n in rx.findall(line)} - {written}):
+            found = {n for value in _strings(event) for rx in names for n in rx.findall(value)}
+            for name in sorted(found - {written}):
                 out.append(MemEvent(ts, name, "mention"))
     out.sort(key=lambda e: (e.ts, e.name))
     return out

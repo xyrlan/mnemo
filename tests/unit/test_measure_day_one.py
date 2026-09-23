@@ -347,6 +347,21 @@ def test_memory_events_read_writes_shell_edits_and_mentions(tmp_path):
         ("shelled.md", "shell", None), ("read.md", "mention", None)]
 
 
+def test_memory_events_find_a_path_json_escaped_in_the_raw_line(tmp_path):
+    # A Windows path's backslashes are escaped in the transcript's JSON, so
+    # the raw line never holds the path as written; a quote is escaped the
+    # same way and shows it on any platform.
+    mem = tmp_path / 'we"ird' / "memory"
+    t = tmp_path / "s.jsonl"
+    t.write_text(_line(1, toolUseResult={"type": "create", "filePath": str(mem / "new.md")}) + "\n"
+                 + _line(2, message={"content": "see %s" % (mem / "seen.md")}) + "\n",
+                 encoding="utf-8")
+
+    events = day.memory_events([t], mem)
+
+    assert [(e.name, e.kind) for e in events] == [("new.md", "create"), ("seen.md", "mention")]
+
+
 def test_the_snapshot_restores_what_it_can_and_names_what_it_cannot():
     at = 100.0
     E = day.MemEvent
