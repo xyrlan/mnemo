@@ -10,6 +10,7 @@ match.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -20,7 +21,10 @@ from tools import measure_verb_usage as tool  # noqa: E402
 
 def _transcript(tmp_path: Path, *, uuid: str, cwd: str, at: str,
                  prompt: str = "hi", bash=(), bash_input=()) -> None:
-    project = tmp_path / "projects" / cwd.strip("/").replace("/", "-")
+    # Encoded the way Claude Code names its project dirs: every character that
+    # is not a letter, digit or hyphen becomes "-". A raw Windows cwd
+    # (`C:\\...`) is absolute, and pathlib would drop `projects/` for it.
+    project = tmp_path / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", cwd)
     project.mkdir(parents=True, exist_ok=True)
     records = [
         {"type": "user", "cwd": cwd, "timestamp": at,
@@ -93,6 +97,7 @@ def test_a_throwaway_cwd_is_excluded(tmp_path) -> None:
 
     report = _measure(tmp_path, since_days=None)
 
+    assert report["transcripts"] == 1
     assert report["counted"] == 0
     assert report["excluded_temp"] == 1
 
