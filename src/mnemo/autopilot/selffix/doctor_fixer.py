@@ -32,6 +32,7 @@ from mnemo.autopilot.core import network, pr_budget
 from mnemo.autopilot.core.labels import SELF_FIX_LABEL
 from mnemo.autopilot.selffix import _gh
 from mnemo.autopilot.selffix._perimeter import assert_perimeter
+from mnemo.core.extract.machine_edits import EditSession, VaultBusy, edit_session
 from mnemo.core.extract.source_paths import vault_relative_source
 
 # Kinds that the fixer knows how to handle mechanically.
@@ -154,20 +155,39 @@ def detect_fixable(*, vault_root: Path) -> List[DoctorWarning]:
 # ---------------------------------------------------------------------------
 
 
-def fix_warning(warning: DoctorWarning, *, vault_root: Path) -> Path:
+def fix_warning(
+    warning: DoctorWarning, *, vault_root: Path, session: Optional[EditSession] = None,
+) -> Path:
     """Apply the mechanical fix for *warning* in-place.
+
+    Every rule this edits is a page the extraction ledger tracks, so the write
+    goes through an :class:`~mnemo.core.extract.machine_edits.EditSession`,
+    which advances ``written_hash`` with it (#470). Without that the fix read
+    as a user edit, and the page's next update was diverted into a
+    ``.proposed.md``. Pass *session* to batch several fixes under one lock and
+    one state write; without it the call opens its own (and raises
+    ``VaultBusy`` while an extraction runs).
 
     Returns the path of the modified file.
     Raises ``ValueError`` for unrecognised kinds.
     """
+    if session is None:
+        with edit_session(vault_root) as own:
+            return fix_warning(warning, vault_root=vault_root, session=own)
     if warning.kind == "source_path_missing":
-        return _fix_source_path_missing(warning.rule_path, warning.detail)
+        return _fix_source_path_missing(warning.rule_path, warning.detail, session)
     if warning.kind in ("source_path_moved", "source_path_absolute"):
         old_src, new_src = warning.detail.split("\n", 1)
-        return _fix_source_path_moved(warning.rule_path, old_src, new_src)
+        return _fix_source_path_moved(warning.rule_path, old_src, new_src, session)
     if warning.kind == "sources_empty":
-        return _fix_sources_empty(warning.rule_path, warning.detail.splitlines())
+        return _fix_sources_empty(warning.rule_path, warning.detail.splitlines(), session)
     raise ValueError(f"No fixer for kind {warning.kind!r}")
+
+
+def _read(rule_path: Path) -> str:
+    # Bytes, not read_text: universal-newline reading plus write_text would
+    # turn every line ending into the platform's, a whole-page edit on Windows.
+    return rule_path.read_bytes().decode("utf-8", errors="replace")
 
 
 def _relocate_source(vault_root: Path, src: str) -> str | None:
@@ -232,34 +252,39 @@ def _sources_from_state(vault_root: Path, page_type: str, stem: str) -> list[str
     return out
 
 
-def _fix_source_path_moved(rule_path: Path, old_src: str, new_src: str) -> Path:
+def _fix_source_path_moved(
+    rule_path: Path, old_src: str, new_src: str, session: EditSession,
+) -> Path:
     """Re-point a dead ``sources`` line at the path the briefing moved to."""
-    text = rule_path.read_text(encoding="utf-8", errors="replace")
+    text = _read(rule_path)
     pattern = re.compile(
-        r"^([ \t]*-[ \t]+)" + re.escape(old_src) + r"[ \t]*$",
+        # ``(?=\r?$)``: a CRLF page keeps its ``\r``, and is still matched.
+        r"^([ \t]*-[ \t]+)" + re.escape(old_src) + r"[ \t]*(?=\r?$)",
         re.MULTILINE,
     )
     new_text, count = pattern.subn(lambda m: m.group(1) + new_src, text)
     if count == 0:
         raise ValueError(f"source line {old_src!r} not found in {rule_path.name}")
-    rule_path.write_text(new_text, encoding="utf-8")
+    session.write(rule_path, new_text)
     return rule_path
 
 
-def _fix_sources_empty(rule_path: Path, sources: list[str]) -> Path:
+def _fix_sources_empty(rule_path: Path, sources: list[str], session: EditSession) -> Path:
     """Re-populate an empty ``sources:`` block from recovered paths."""
     if not sources:
         raise ValueError(f"no recoverable sources for {rule_path.name}")
-    text = rule_path.read_text(encoding="utf-8", errors="replace")
+    text = _read(rule_path)
     block = "sources:\n" + "".join(f"  - {s}\n" for s in sources)
     new_text, count = re.subn(r"^sources:[ \t]*\n", block, text, count=1, flags=re.MULTILINE)
     if count != 1:
         raise ValueError(f"no empty sources block found in {rule_path.name}")
-    rule_path.write_text(new_text, encoding="utf-8")
+    session.write(rule_path, new_text)
     return rule_path
 
 
-def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
+def _fix_source_path_missing(
+    rule_path: Path, missing_source: str, session: EditSession,
+) -> Path:
     """Strip the orphan source line from the rule's frontmatter.
 
     Refuses when it is the rule's only source — see ``detect_fixable``: an
@@ -267,7 +292,7 @@ def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
     """
     from mnemo.core.filters import parse_frontmatter
 
-    text = rule_path.read_text(encoding="utf-8", errors="replace")
+    text = _read(rule_path)
     try:
         sources = [s for s in (parse_frontmatter(text).get("sources") or [])
                    if isinstance(s, str)]
@@ -281,11 +306,11 @@ def _fix_source_path_missing(rule_path: Path, missing_source: str) -> Path:
     # Match the YAML list item "  - <missing_source>" and remove it
     # We handle both leading spaces and tabs (YAML style).
     pattern = re.compile(
-        r"^[ \t]*-[ \t]+" + re.escape(missing_source) + r"[ \t]*\n?",
+        r"^[ \t]*-[ \t]+" + re.escape(missing_source) + r"[ \t]*\r?\n?",
         re.MULTILINE,
     )
     new_text = pattern.sub("", text)
-    rule_path.write_text(new_text, encoding="utf-8")
+    session.write(rule_path, new_text)
     return rule_path
 
 
@@ -353,14 +378,21 @@ def open_doctor_fix_pr(
         print(f"[autopilot] doctor fix skipped: {reason}")
         return None
 
-    # Apply fixes in-place first (we need the diff to check perimeter)
+    # Apply fixes in-place first (we need the diff to check perimeter). One
+    # edit session for the batch: one lock, one state write, and every fixed
+    # page's written_hash moved with it (#470).
     modified: List[Path] = []
-    for w in warnings:
-        try:
-            path = fix_warning(w, vault_root=vault_root)
-            modified.append(path)
-        except Exception as exc:
-            print(f"[autopilot] failed to fix {w.rule_path.name}: {exc}")
+    try:
+        with edit_session(vault_root) as session:
+            for w in warnings:
+                try:
+                    path = fix_warning(w, vault_root=vault_root, session=session)
+                    modified.append(path)
+                except Exception as exc:
+                    print(f"[autopilot] failed to fix {w.rule_path.name}: {exc}")
+    except VaultBusy as exc:
+        print(f"[autopilot] doctor fix skipped: {exc}")
+        return None
 
     if not modified:
         return None

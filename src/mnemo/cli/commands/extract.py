@@ -53,6 +53,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
         f"reference expired: {summary.reference_expired} · "
         f"echo rejected: {summary.echo_rejected} · redactions: {summary.redactions}"
     )
+    if summary.rebaselined:
+        # #470: drift a known machine edit explained, not a user edit.
+        print(
+            f"  re-baselined: {summary.rebaselined} pages a tool had edited · "
+            f"diverted updates applied: {summary.siblings_applied}"
+        )
 
     if summary.failed_chunks > 0:
         print(f"  ⚠ failed_chunks: {summary.failed_chunks} (see ~/.errors.log; re-run to retry)", file=sys.stderr)

@@ -102,6 +102,43 @@ def _doctor_check_missing_slugs(vault: Path) -> bool:
     return True
 
 
+def _doctor_check_written_hash_drift(vault: Path) -> bool:
+    """#470: tracked pages a tool edited without moving ``written_hash``.
+
+    A page whose bytes no longer hash to its ``written_hash`` reads as a user
+    edit, and extraction diverts its next update into a ``.proposed.md``. When
+    undoing a known machine edit (the fixer's ``sources:`` swap, the
+    ``reference_gate:`` stamp, the ``slug:`` stamp) reproduces the recorded
+    hash, the drift is a tool's, not a person's: ``mnemo extract``
+    re-baselines those. Seeing them again after an extract means a writer went
+    around ``machine_edits.edit_session`` — which is what this line is for.
+
+    The drifted pages no known edit explains are counted, never touched: they
+    are most likely the user's edits, which is what the hash protects.
+    Dry-run and advisory.
+    """
+    from mnemo.core.extract import machine_edits
+    from mnemo.core.extract.inbox.state_io import load_state
+
+    state_path = vault / machine_edits.STATE_REL
+    if not state_path.is_file():
+        return True
+    try:
+        rep = machine_edits.rebaseline(vault, load_state(state_path), dry_run=True)
+    except Exception as exc:  # noqa: BLE001 — a doctor line never raises
+        print(f"  \u26a0 could not compare pages with extraction state: {exc}")
+        return True
+    if not rep.rebaselined:
+        print(f"  \u2713 no tracked page carries an unrecorded tool edit "
+              f"({len(rep.left)} differ by edits mnemo cannot attribute, kept as the user's)")
+        return True
+    print(f"  \u26a0 {machine_edits.summary_line(rep)} \u2014 would be, by the next "
+          "`mnemo extract`")
+    print("       \u2192 if this comes back after an extract, a tool edited pages "
+          "without advancing written_hash (#470)")
+    return True
+
+
 def _doctor_check_stray_proposed(vault: Path) -> bool:
     """#155: ``.proposed.md`` siblings left in ``shared/<type>/`` shadow rules.
 
