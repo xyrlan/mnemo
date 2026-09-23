@@ -723,8 +723,8 @@ def _spawn_watcher() -> None:
     on purpose. Its whole value is being alive after everything else is dead.
     """
     import subprocess
-    import sys
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs: Dict[str, Any] = {
@@ -733,10 +733,5 @@ def _spawn_watcher() -> None:
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
     subprocess.Popen(self_argv("resume", "--watch"), **kwargs)
