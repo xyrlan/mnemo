@@ -150,7 +150,9 @@ BATCH = 40
 #: The #434 lift and its 95% CI, in percentage points (PR #451).
 LIFT_PP = (31.1, 19.7, 42.6)
 
-#: The judge bars the report grades; 0.6 is the shipped ``injectAt``.
+#: The judge bars the report grades. ``SHIPPED_AT`` is the ``injectAt`` this
+#: tool measured against (#455): the levers are named from it, so it stays 0.6
+#: although #461 moved the default to 0.4 on this report's recommendation.
 JUDGE_BARS = (0.4, 0.6, 0.7)
 SHIPPED_AT = 0.6
 

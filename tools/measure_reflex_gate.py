@@ -124,8 +124,9 @@ CHUNK = mrj.CHUNK
 #: rater must see one prompt with all of its candidates.
 BLIND_CHUNK = 60
 
-#: What the report grades the judge at unless ``--at`` says otherwise. 0.6 is
-#: the shipped ``reflex.judge.injectAt``; the other two bracket it.
+#: What the report grades the judge at unless ``--at`` says otherwise. 0.4 is
+#: the shipped ``reflex.judge.injectAt`` (0.6 until #461); the other two are
+#: the stricter bars it was chosen over.
 DEFAULT_AT = (0.4, 0.6, 0.7)
 
 #: The recall a fitted bar has to keep on dev. Loosest bar that keeps this

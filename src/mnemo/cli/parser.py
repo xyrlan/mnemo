@@ -547,6 +547,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="read the key from stdin instead of prompting (for scripts; implies you also pass --yes)",
     )
     rerank_p.add_argument("--yes", "-y", action="store_true", help="consent without a prompt (required off a tty)")
+    rerank_p.add_argument(
+        "--judge", action="store_true",
+        help="with --setup: also turn the per-prompt judge on, without asking (its own consent; the only way to turn it on off a tty or with --key-stdin)",
+    )
     rerank_p.add_argument("--days", type=int, default=14, help="window for the access-log summary (default: 14)")
     rerank_p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     recall_sessions = sub.add_parser("recall-sessions", help="recall harness built from extraction sessions (delta detector, not comparable to `recall`)")
