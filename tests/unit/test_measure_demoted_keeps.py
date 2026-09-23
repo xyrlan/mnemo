@@ -213,5 +213,5 @@ def test_freeze_draws_once_refuses_a_redraw_over_labels_and_writes_no_page(tmp_v
         mk.freeze(out, tmp_vault, {"labels": {"A@x": {"p": "S"}}})
     assert {p: p.read_bytes() for p in pages} == before
     written = {p.relative_to(tmp_vault) for p in tmp_vault.rglob("*") if p.is_file()}
-    assert all(str(p).startswith(".mnemo") or str(p).startswith("shared/_inbox")
+    assert all(p.as_posix().startswith(".mnemo") or p.as_posix().startswith("shared/_inbox")
                or p.name == "mnemo.config.json" for p in written)
