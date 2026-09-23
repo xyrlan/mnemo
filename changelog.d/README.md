@@ -12,7 +12,9 @@ never conflict there (#246).
   contract piece (`contract-dispatch-parser`);
 - `<section>` is one of `breaking`, `added`, `changed`, `deprecated`,
   `removed`, `fixed`, `security`, `internal` — the `### ` heading it lands
-  under, in that order.
+  under, in that order. `internal` is for what no user of mnemo runs or
+  sees: a measurement tool under `tools/`, tests, CI. A new `tools/measure_*`
+  script is `internal`, not `added`.
 
 The file holds the `- ` bullet(s) exactly as they will appear under the
 heading — the same prose an entry carried when it was written into
