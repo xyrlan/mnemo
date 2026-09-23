@@ -124,6 +124,7 @@ def _spawn_detached_extraction() -> None:
     """
     import subprocess
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs = {
@@ -132,12 +133,7 @@ def _spawn_detached_extraction() -> None:
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
 
     argv = self_argv("extract", "--background")
     subprocess.Popen(argv, **kwargs)
@@ -170,6 +166,7 @@ def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
     """
     import subprocess
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs = {
@@ -178,12 +175,7 @@ def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
 
     argv = self_argv("briefing", str(jsonl_path), agent)
     subprocess.Popen(argv, **kwargs)
@@ -330,6 +322,7 @@ def _spawn_detached_unblock_consumption() -> None:
     """
     import subprocess
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs = {
@@ -338,12 +331,7 @@ def _spawn_detached_unblock_consumption() -> None:
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
 
     subprocess.Popen(self_argv("sessions", "--consume-unblocks"), **kwargs)
 
@@ -478,6 +466,7 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
     the caller can fall back to the one-line notice. Returns the reporter's pid."""
     import subprocess
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs = {
@@ -486,12 +475,7 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
 
     argv = self_argv("child-report", short_id, "--parent", parent)
     if cwd:

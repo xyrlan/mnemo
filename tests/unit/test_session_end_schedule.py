@@ -265,9 +265,9 @@ def test_spawn_detached_extraction_windows_uses_creationflags(monkeypatch):
     session_end._spawn_detached_extraction()
 
     flags = captured["kwargs"].get("creationflags", 0)
-    # DETACHED_PROCESS = 0x00000008, CREATE_NEW_PROCESS_GROUP = 0x00000200
-    assert flags & 0x00000008
-    assert flags & 0x00000200
+    # CREATE_NO_WINDOW = 0x08000000, CREATE_NEW_PROCESS_GROUP = 0x00000200;
+    # never DETACHED_PROCESS = 0x00000008 (#452)
+    assert flags == 0x08000000 | 0x00000200
     assert "start_new_session" not in captured["kwargs"]
 
 

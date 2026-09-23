@@ -306,6 +306,7 @@ def _spawn_detached(args: list, cwd: str | None = None) -> None:
     """
     import subprocess
 
+    from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
 
     kwargs: dict = {
@@ -314,12 +315,7 @@ def _spawn_detached(args: list, cwd: str | None = None) -> None:
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if sys.platform == "win32":
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(detach_kwargs())
     kwargs["cwd"] = cwd if cwd and os.path.isdir(cwd) else None
 
     subprocess.Popen(self_argv(*args), **kwargs)

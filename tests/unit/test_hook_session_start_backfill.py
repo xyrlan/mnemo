@@ -386,7 +386,7 @@ def test_windows_detaches_with_creationflags(monkeypatch):
 
     _REAL_SPAWN(cwd=None)
 
-    assert seen["creationflags"] == 0x00000008 | 0x00000200
+    assert seen["creationflags"] == 0x08000000 | 0x00000200  # #452
     assert "start_new_session" not in seen
 
 
