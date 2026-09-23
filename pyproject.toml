@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mnemo-claude"
 version = "1.6.0"
-description = "The Obsidian that populates itself so your Claude never forgets."
+description = "Claude Code forgets your corrections. mnemo doesn't — and the sessions it fans out for you start out knowing them."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }

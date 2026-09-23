@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from mnemo.cli.parser import COMMANDS, _build_parser
+from mnemo.cli.parser import COMMANDS, TAGLINE, _build_parser
 
 
 def _force_utf8_streams() -> None:
@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
 def _print_landing() -> int:
     from mnemo._version import resolve_version
     v = resolve_version()
-    print(f"mnemo {v} — the Obsidian that populates itself")
+    print(f"mnemo {v}")
+    print(TAGLINE)
     print()
     print("  mnemo init       first-run setup")
     print("  mnemo status     vault + hook health + recent activity")
