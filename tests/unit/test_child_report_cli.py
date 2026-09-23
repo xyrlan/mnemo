@@ -34,7 +34,8 @@ def _card(state_checks) -> rc.Card:
 def _run(monkeypatch, card, *, delivered=True):
     sent, watched = [], []
     monkeypatch.setattr(rc, "gather", lambda *a, **k: card)
-    monkeypatch.setattr(inbox, "notify", lambda v, p, text: sent.append((p, text)) or delivered)
+    why = "" if delivered else "parent not live: none of its 1 recorded address(es) is (pid 9)"
+    monkeypatch.setattr(inbox, "deliver", lambda v, p, text: sent.append((p, text)) or why)
     monkeypatch.setattr(
         rc, "watch_checks",
         lambda c, **kw: watched.append(kw["minutes"]) or "settled",
@@ -96,3 +97,47 @@ def test_a_crash_is_logged_not_raised(tmp_path, monkeypatch) -> None:
 
     assert cli_main(["child-report", "c0da0f55", "--parent", "P1"]) == 1
     assert "child_report.cli" in (vault / ".errors.log").read_text(encoding="utf-8")
+
+
+def test_an_undelivered_card_leaves_a_row_with_the_reason_and_an_error(
+    tmp_path, monkeypatch,
+) -> None:
+    """#454: a report that did not reach its parent is never only a missing row."""
+    vault = _setup(tmp_path, monkeypatch)
+
+    _run(monkeypatch, _card({"pass": 3}), delivered=False)
+
+    [row] = _rows(vault)
+    assert (row["event"], row["delivered"]) == ("finished", False)
+    assert row["reason"].startswith("parent not live")
+    [err] = [json.loads(l) for l in (vault / ".errors.log").read_text(encoding="utf-8").splitlines()]
+    assert err["where"] == rc.UNDELIVERED_WHERE and "c0da0f55" in err["message"]
+
+
+def test_a_watch_that_ends_without_a_post_is_recorded_as_undelivered(
+    tmp_path, monkeypatch,
+) -> None:
+    vault = _setup(tmp_path, monkeypatch, watch=5)
+    monkeypatch.setattr(rc, "gather", lambda *a, **k: _card({"pending": 1}))
+    monkeypatch.setattr(inbox, "deliver", lambda *a: "")
+    monkeypatch.setattr(rc, "watch_checks", lambda c, **kw: "parent-gone")
+
+    cli_main(["child-report", "c0da0f55", "--parent", "P1"])
+
+    assert [(r["event"], r["delivered"], r.get("reason")) for r in _rows(vault)] == [
+        ("finished", True, None),
+        ("parent-gone", False, "parent not live when checks were due"),
+    ]
+
+
+def test_a_crash_leaves_a_row_too(tmp_path, monkeypatch) -> None:
+    vault = _setup(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rc, "gather", boom)
+    cli_main(["child-report", "c0da0f55", "--parent", "P1"])
+
+    [row] = _rows(vault)
+    assert row["delivered"] is False and row["reason"] == "child-report crashed: RuntimeError: boom"

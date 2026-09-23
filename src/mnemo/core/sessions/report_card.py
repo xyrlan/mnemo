@@ -608,3 +608,35 @@ def record(vault_root: Path, row: Dict[str, object]) -> None:
             fh.write(json.dumps(stamped, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         pass
+
+
+#: ``errors.log`` home of a report that did not reach its parent. Excluded from
+#: the hook breaker (:func:`mnemo.core.errors._breaker_relevant`): a parent the
+#: maintainer closed is a normal end, and it must not pause every hook.
+UNDELIVERED_WHERE = "child_report.undelivered"
+
+
+class Undelivered(Exception):
+    """A report card that did not reach the session that dispatched it."""
+
+
+def undelivered(vault_root: Path, row: Dict[str, object], reason: str) -> None:
+    """Record a report that could not be built or delivered, loudly (#454).
+
+    Before #454 an undelivered report was a *missing* row: on 2026-09-22 three
+    of one parent's four children finished, the hook decided their parent was
+    gone, and nothing anywhere said so. Now the row is written with
+    ``delivered: false`` and the *reason*, and ``errors.log`` gets an entry
+    naming the child. Never raises.
+    """
+    record(vault_root, {**row, "delivered": False, "reason": reason})
+    try:
+        from mnemo.core import errors
+
+        parent = str(row.get("parent") or "")[:8] or "?"
+        errors.log_error(
+            vault_root, UNDELIVERED_WHERE,
+            Undelivered(f"{row.get('short_id')} -> {parent} ({row.get('event')}): {reason}"),
+        )
+    except Exception:  # noqa: BLE001
+        pass

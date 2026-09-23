@@ -218,6 +218,111 @@ def test_session_end_starts_no_reporter_for_a_parent_that_has_exited(
     assert session_end.main() == 0
 
 
+def _dead_pid() -> int:
+    import subprocess
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _report_rows(vault: Path):
+    from mnemo.core.sessions import report_card
+
+    path = vault / ".mnemo" / report_card.LOG_NAME
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_session_end_reports_to_a_live_parent_behind_a_newer_dead_row(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#454, the path that failed on 2026-09-22, with nothing in inbox patched:
+    the parent is live in one process (here, this one) while a second process
+    that resumed its id wrote a newer row and exited. Three children of that
+    parent took the "parent has exited" return and posted nothing."""
+    from mnemo.core.sessions import inbox
+
+    parent = "a6158015-1b6f-4801-a446-ecbc63a9826c"
+    child = _dispatched_child(hook_env, parent=parent)
+    live_sock = hook_env / "75451.sock"
+    live_sock.write_text("", encoding="utf-8")
+    inbox.record(hook_env, {
+        "session_id": parent, "socket": str(live_sock), "token": None,
+        "pid": os.getpid(), "pid_start": inbox.pid_start(os.getpid()),
+    })
+    inbox.record(hook_env, {
+        "session_id": parent, "socket": str(hook_env / "28611.sock"), "token": None,
+        "pid": _dead_pid(), "pid_start": "Tue Sep 22 19:32:46 2026",
+    })
+    spawned = []
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda short_id, **kw: spawned.append(kw["parent"]) or 4242,
+    )
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+
+    assert spawned == [parent]
+    assert [(r["event"], r.get("pid")) for r in _report_rows(hook_env)] == [("spawned", 4242)]
+
+
+def test_session_end_says_so_when_the_parent_is_gone(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#454: no reporter for a dead parent, but a row with the reason and an
+    errors.log entry — and that entry must not count toward the hook breaker."""
+    from mnemo.core import errors
+    from mnemo.core.sessions import inbox, report_card
+
+    parent = "0ff9d810-e54d-41f3-a045-b0ccff6c5186"
+    child = _dispatched_child(hook_env, parent=parent)  # pid 1, start "now": not live
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda *a, **k: pytest.fail("nobody is left to read it"),
+    )
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("must not send"))
+    for _ in range(3):
+        monkeypatch.setattr(
+            sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+        )
+        assert session_end.main() == 0
+
+    rows = _report_rows(hook_env)
+    assert len(rows) == 3
+    assert all(r["delivered"] is False and r["reason"].startswith("parent not live") for r in rows)
+    logged = (hook_env / ".errors.log").read_text(encoding="utf-8")
+    assert logged.count(report_card.UNDELIVERED_WHERE) == 3
+    assert errors.recent_strikes(hook_env) == 0
+
+
+def test_session_end_logs_the_one_line_fallback(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(inbox, "post", lambda a, t: False)
+
+    def _cannot_start(*a, **k):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(session_end, "_spawn_detached_child_report", _cannot_start)
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+
+    [row] = _report_rows(hook_env)
+    assert row["delivered"] is False
+    assert "reporter did not start (OSError: no such executable)" in row["reason"]
+    assert "socket write failed" in row["reason"]
+
+
 def test_session_end_says_nothing_for_a_session_nobody_dispatched(
     hook_env: Path, monkeypatch: pytest.MonkeyPatch,
 ):

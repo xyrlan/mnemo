@@ -472,10 +472,10 @@ def _notice_text(short_id: str, detail: str | None = None) -> str:
     )
 
 
-def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transcript) -> None:
+def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transcript):
     """Fire-and-forget ``mnemo child-report`` (#426). Detach semantics match
     :func:`_spawn_detached_briefing`; raises when the process cannot start, so
-    the caller can fall back to the one-line notice."""
+    the caller can fall back to the one-line notice. Returns the reporter's pid."""
     import subprocess
 
     from mnemo._selfexec import self_argv
@@ -498,7 +498,7 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
         argv += ["--cwd", cwd]
     if transcript:
         argv += ["--transcript", str(transcript)]
-    subprocess.Popen(argv, **kwargs)
+    return subprocess.Popen(argv, **kwargs).pid
 
 
 def _maybe_notify_parent(
@@ -519,7 +519,7 @@ def _maybe_notify_parent(
     """
     if not bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
         return
-    from mnemo.core.sessions import inbox, parents
+    from mnemo.core.sessions import inbox, parents, report_card
 
     short_id = (session_id or "")[:8]
     if not short_id or short_id == "unknown"[:8]:
@@ -527,21 +527,34 @@ def _maybe_notify_parent(
     parent = parents.read(vault).get(short_id)
     if not parent:
         return
+    row = {"short_id": short_id, "parent": parent, "event": "finished"}
     # A parent that has exited cannot be told anything; spawning a reporter
-    # (and a half-hour watch) for it would be work with no reader.
-    if not inbox.is_live(inbox.lookup(vault, parent)):
+    # (and a half-hour watch) for it would be work with no reader. It is
+    # still said, in the log (#454): this return used to be silent, and three
+    # children of one live parent ended here on 2026-09-22.
+    address, why = inbox.resolve(vault, parent)
+    if address is None:
+        report_card.undelivered(vault, row, why)
         return
 
     try:
-        _spawn_detached_child_report(
+        pid = _spawn_detached_child_report(
             short_id, parent=parent, cwd=cwd, transcript=transcript,
         )
+        # The reporter writes its own row; this one says it was started, so a
+        # reporter that dies before writing is a "spawned" with nothing after.
+        report_card.record(vault, {**row, "event": "spawned", "pid": pid})
         return
     except Exception as exc:
         from mnemo.core import errors
 
         errors.log_error(vault, "session_end.child_report_spawn", exc)
-    inbox.notify(vault, parent, _notice_text(short_id))
+        reason = f"reporter did not start ({type(exc).__name__}: {exc}); sent the one-line notice"
+    why = inbox.deliver(vault, parent, _notice_text(short_id))
+    if why:
+        report_card.undelivered(vault, row, f"{reason}; that failed too: {why}")
+    else:
+        report_card.record(vault, {**row, "state": "thin", "delivered": True, "reason": reason})
 
 
 def _maybe_follow_pr(cfg, vault, *, session_id: str, cwd: str) -> None:

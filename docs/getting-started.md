@@ -578,7 +578,9 @@ there is no PR for commits that exist), `no-change`, `merged`, `closed` or
 are running a detached reporter polls them every 30 s and posts once more when
 they settle, naming any that failed; it stops early if the session exits, and
 gives up after `dispatch.watchChecksMinutes` (30; `0` sends the card alone).
-Each notice is logged to `.mnemo/child-reports.jsonl`. Nothing reaches the
+Each notice is logged to `.mnemo/child-reports.jsonl`, and so is each one
+that was not delivered, with `delivered: false`, a `reason` and an entry in
+`.errors.log`, so a quiet parent can be told apart from a lost report. Nothing reaches the
 session when a child *blocks*: that is still the queue's to show.
 
 A child's PR can still need something after the child has stopped: a check
