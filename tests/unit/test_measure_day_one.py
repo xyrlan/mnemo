@@ -228,12 +228,15 @@ def test_both_arms_run_isolated_and_a_rerun_spends_nothing(corpus, tmp_path, mon
 
     progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
     a, b = progress["a"], progress["b"]
-    # The install run harvested the history, and nothing it made went live.
+    # The install run harvested the history; the harvest alone makes nothing
+    # live. Since #471 the first extraction runs backfilled pages through the
+    # normal gates, so what they clear goes live and the next prompts can
+    # reach it — and with a live rule there is no staged-only notice.
     assert a["backfill"]["counts"]["memory"] == 3
     assert a["backfill"]["counts"]["live"] == 0
-    assert a["extract"]["counts"]["live"] == 0 and a["extract"]["counts"]["staged"] >= 1
-    assert a["extract"]["carry"]["staged_notice"]
-    assert len(a["units"]) == 4 and not any(u["pool"] for u in a["units"])
+    assert a["extract"]["counts"]["live"] >= 1
+    assert not a["extract"]["carry"]["staged_notice"]
+    assert len(a["units"]) == 4 and any(u["pool"] for u in a["units"])
     # Arm (b): session 1 meets an empty vault; its briefing is consolidated at
     # session 2's end (extraction runs first), so session 3 is the first that
     # can be injected into.
