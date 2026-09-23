@@ -5,6 +5,7 @@ Usage:
     PYTHONPATH=src python3 tools/measure_backfill_routes.py --send      # both raters label what is pending (model calls)
     PYTHONPATH=src python3 tools/measure_backfill_routes.py             # report, local
     PYTHONPATH=src python3 tools/measure_backfill_routes.py --json
+    PYTHONPATH=src python3 tools/measure_backfill_routes.py --live --vault V --out O --dry-run  # #477
 
 Front B of the second-user round. **Measure only**: nothing here promotes,
 stamps or edits a page. The vault is read, never written; every write goes
@@ -53,6 +54,18 @@ page: 39/47 would have failed, and the interval's floor is 72%. By route,
 after the fact: project 26/32 = 81.2% [64.7, 91.1], reference 14/15. Junk was
 G 2, N 1 and W 4 (Opus) / W 1 (Fable): a stale or self-contradicting project
 fact, more than generic advice.
+
+Second corpus, 2026-09-23 (#477), after #471 made the change: arm (a) over
+clearframe (``measure_day_one.py --arm a --install-after 14``, 29 sessions,
+15 calls) put 40 backfill pages live and staged 1. ``--live`` rates the pages
+where the extraction put them, since a live page is no longer in ``_inbox``.
+Routes: project 30 live (no gate), reference 9 live and 1 staged (generic),
+user 1 live. 8 calls, $0.91. Good per rater: Opus 31/40 = 77.5% [62.5, 87.7],
+Fable 33/40 = 82.5% [68.0, 91.3]; under both **29/40 = 72.5% [57.2, 83.9]**,
+exact agreement 34/40, kappa 0.53. **Verdict: FAIL against the 85% bar**, and
+the interval's ceiling is under it too. By route: project 22/30 = 73.3%,
+reference 7/9, user 0/1. Junk again leans N (narrative: a pending smoke
+test, a restructured page) and W, over G.
 """
 from __future__ import annotations
 
@@ -218,6 +231,58 @@ def population(vault: Path) -> List[Dict[str, Any]]:
     return sorted(rows, key=lambda r: r["id"])
 
 
+def placed(vault: Path) -> List[Dict[str, Any]]:
+    """Every backfill page in *vault* where the extraction actually put it (#477).
+
+    Since #471 a backfill page takes the normal gates when it is written, so
+    the pages that went live are in ``shared/<type>/`` — still stamped
+    ``origin: backfill`` — and :func:`population`, which routes staged pages
+    counterfactually, never sees them. Here the route is the page's location:
+    ``live`` outside ``shared/_inbox/``, ``staged`` inside it. A live page
+    carries no gate verdict (``held_line`` stamps staged pages only), so its
+    reason is its type's path; a staged page's reason is :func:`route_page`'s,
+    and a staged page the routing code would send live says so. Read-only;
+    ``_archive`` and ``.proposed.md`` siblings are skipped.
+    """
+    from mnemo.core.backfill.origin import is_backfill_frontmatter
+    from mnemo.core.extract import reference_gate
+    from mnemo.core.extract.scanner import parse_frontmatter as split_frontmatter
+    from mnemo.core.filters import INBOX_DIR, iter_shared_pages, parse_frontmatter
+    from mnemo.core.text_utils import retrieval_body
+
+    shared = Path(vault) / "shared"
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="mnemo-backfill-routes-") as tmp:
+        scratch = Path(tmp)
+        for path in iter_shared_pages(Path(vault)):
+            try:
+                raw = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            fm = parse_frontmatter(raw) or {}
+            if not is_backfill_frontmatter(fm):
+                continue
+            parts = path.relative_to(shared).parts
+            staged = parts[0] == INBOX_DIR
+            page_type = parts[1] if staged else parts[0]
+            if staged:
+                where, why = route_page(fm, str(fm.get("slug") or path.stem), page_type, scratch)
+                where, why = STAGED, why if where == STAGED else "other (routing says %s)" % why
+            else:
+                where = LIVE
+                why = "project: no gate" if page_type == "project" else "%s: auto-promoted" % page_type
+            _, body = split_frontmatter(raw)
+            rows.append({
+                "id": "%s/%s" % (page_type, path.stem),
+                "type": page_type,
+                "route": where,
+                "reason": why,
+                "text": reference_gate.view(str(fm.get("name") or path.stem),
+                                            retrieval_body(body)),
+            })
+    return sorted(rows, key=lambda r: r["id"])
+
+
 # --- the pure part -----------------------------------------------------------------
 
 def route_counts(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
@@ -260,7 +325,8 @@ def report(sample: Sequence[Dict[str, Any]], labels: Dict[str, Dict[str, str]],
 
 
 def report_lines(data: Dict[str, Any], routes: Dict[str, Dict[str, int]]) -> List[str]:
-    lines = ["routes with the origin stamp off (every other gate's answer kept):"]
+    lines = ["routes as the extraction placed the pages (--live):" if data.get("mode") == "placed"
+             else "routes with the origin stamp off (every other gate's answer kept):"]
     for page_type in sorted(routes):
         for key, n in sorted(routes[page_type].items()):
             lines.append("  %-10s %-40s %d" % (page_type, key, n))
@@ -294,18 +360,28 @@ def report_lines(data: Dict[str, Any], routes: Dict[str, Dict[str, int]]) -> Lis
     return lines
 
 
-def freeze(out: Path, vault: Path, store: Dict[str, Any]) -> Dict[str, Any]:
-    """The frozen routes and sample, computed now if they do not exist yet."""
+def freeze(out: Path, vault: Path, store: Dict[str, Any], *, live: bool = False) -> Dict[str, Any]:
+    """The frozen routes and sample, computed now if they do not exist yet.
+
+    ``live`` reads where the pages are (:func:`placed`) instead of routing
+    staged ones (:func:`population`); a sample frozen in the other mode is
+    refused rather than relabelled.
+    """
     path = out / SAMPLE_NAME
+    mode = "placed" if live else "routed"
     if path.exists():
-        return dk._read(path, {})
+        frozen = dk._read(path, {})
+        if frozen.get("mode", "routed") != mode:
+            raise SystemExit("error: %s was frozen with mode %s; use another --out"
+                             % (path, frozen.get("mode", "routed")))
+        return frozen
     if any(store.get("labels", {}).values()):
         raise SystemExit("error: %s holds labels but %s is gone; refusing to redraw"
                          % (out / LABELS_NAME, path))
-    rows = population(vault)
+    rows = placed(vault) if live else population(vault)
     frozen = {
         "drawn_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "vault": str(vault), "seed": SEED, "population_size": len(rows),
+        "vault": str(vault), "mode": mode, "seed": SEED, "population_size": len(rows),
         "routes": route_counts(rows),
         "sample": draw(rows),
     }
@@ -322,6 +398,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="vault whose staged backfill pages are routed (read only)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT,
                     help="where the frozen sample and labels live")
+    ap.add_argument("--live", action="store_true",
+                    help="rate the backfill pages where the extraction put them (every page "
+                    "that went live), not staged pages routed with the stamp off (#477)")
     ap.add_argument("--dry-run", action="store_true",
                     help="routes, sample, pending calls and cost; calls nothing")
     ap.add_argument("--send", action="store_true", help="label every pending page (model calls)")
@@ -330,14 +409,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     labels_path = args.out / LABELS_NAME
     store: Dict[str, Any] = dk._read(labels_path, {"calls": 0, "usd": 0.0, "labels": {}})
-    frozen = freeze(args.out, args.vault, store)
+    frozen = freeze(args.out, args.vault, store, live=args.live)
     sample = frozen["sample"]
     todo = dk.plan(sample, store.get("labels", {}))
 
     if args.dry_run:
         e = dk.estimate(todo)
-        print("vault: %s — %d staged backfill pages (frozen %s)"
-              % (frozen["vault"], frozen["population_size"], frozen["drawn_at"]))
+        print("vault: %s — %d %s backfill pages (frozen %s)"
+              % (frozen["vault"], frozen["population_size"],
+                 "placed" if frozen.get("mode") == "placed" else "staged", frozen["drawn_at"]))
         for page_type in sorted(frozen["routes"]):
             for key, n in sorted(frozen["routes"][page_type].items()):
                 print("  %-10s %-40s %d" % (page_type, key, n))
@@ -378,6 +458,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     data = report(sample, labels, [dk.column(m) for m in dk.RATERS])
     data["population"] = frozen["population_size"]
     data["routes"] = frozen["routes"]
+    data["mode"] = frozen.get("mode", "routed")
     if args.json:
         print(json.dumps(data, indent=1))
         return 0
