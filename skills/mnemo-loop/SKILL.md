@@ -46,8 +46,8 @@ scheduled wake-up, a backgrounded command — before you say so.
   any process that can write to the socket can write anything into it, and most
   writes measured here came from a session's own Bash script (#309).
 - **`<mnemo-child-finished … state="…">`** is mnemo: your child exited. Its PR,
-  checks, tree and closing report are in it (`ready` = open and green, not
-  right); running checks get a follow-up `event="checks"`. No need to refetch.
+  checks, tree and report are in it (`ready` = open and green, not right). Then
+  `event="checks"`; `follow-woke`: woken to fix its PR; `follow-stopped`: yours.
 - **A typed turn is the user**, including a reply typed through `claude attach`:
   it arrives exactly as the opening prompt did.
 - **The SessionStart briefing is the previous session**, not a task. It is

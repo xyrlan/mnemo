@@ -529,6 +529,19 @@ def _maybe_notify_parent(
     inbox.notify(vault, parent, _notice_text(short_id))
 
 
+def _maybe_follow_pr(cfg, vault, *, session_id: str, cwd: str) -> None:
+    """Follow a dispatched child's PR after it stops (#436).
+
+    Registers the stop and makes sure a ``mnemo pr-follow`` watcher is alive;
+    the watcher, not this hook, reads the PR and decides whether to wake the
+    child. A session nobody dispatched, or a child not granted ``push``, costs
+    two small file reads here and nothing else.
+    """
+    from mnemo.core.sessions import pr_follow
+
+    pr_follow.on_session_end(cfg, vault_root=vault, session_id=session_id, cwd=cwd)
+
+
 def main() -> int:
     # Nothing at all inside a session mnemo launched for itself (#329): the
     # `claude --print` helpers that brief and extract run under the user's own
@@ -608,6 +621,11 @@ def main() -> int:
             )
         except Exception as e:
             errors.log_error(vault, "session_end.notify_parent", e)
+        try:
+            cwd = str(payload.get("cwd") or os.getcwd())
+            _maybe_follow_pr(cfg, vault, session_id=sid, cwd=cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_end.follow_pr", e)
         try:
             _maybe_consume_unblocks(cfg, vault)
         except Exception as e:

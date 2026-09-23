@@ -581,6 +581,25 @@ gives up after `dispatch.watchChecksMinutes` (30; `0` sends the card alone).
 Each notice is logged to `.mnemo/child-reports.jsonl`. Nothing reaches the
 session when a child *blocks*: that is still the queue's to show.
 
+A child's PR can still need something after the child has stopped: a check
+goes red, a reviewer comments, the base moves and the PR conflicts. For a
+child granted `push`, mnemo follows its PR (`dispatch.followPR`, on by
+default) and, when one of those happens, wakes the child in its own session
+with a note naming the event — `claude --bg --resume`, the same channel that
+wakes a rate-limited child. The child keeps its conversation, its tree and its
+opening prompt, which is still the only thing that says what it may publish;
+the note grants nothing, and tells it never to force-push and to bring the
+base in with a merge. A review counts only from an owner, member or
+collaborator, and only once it was written after the child stopped. mnemo
+leaves the PR alone, and posts a `follow-stopped` notice to the dispatching
+session instead, when the branch on GitHub has commits the child's tree does
+not (somebody else pushed), when the tree is gone or dirty, or when the child
+is still running or blocked — a rate-limited child is `mnemo resume`'s. It
+wakes a child at most `dispatch.followPR.attempts` times (2) within
+`dispatch.followPR.hours` of its first stop (24); a PR still red after that
+comes back to you the same way. Every wake is also a notice to the parent and
+a line in the day log, and the ledger is `.mnemo/pr-follow.json`.
+
 That note corrects one seam. The rest of the loop — which verbs a session may
 run itself, which are yours, what a socket message from another session is
 worth, and that the SessionStart briefing is the last session and not a task —
