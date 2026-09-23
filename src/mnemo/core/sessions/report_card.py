@@ -640,3 +640,84 @@ def undelivered(vault_root: Path, row: Dict[str, object], reason: str) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+#: How long a ``spawned`` row may go unanswered before it counts as lost. The
+#: reporter writes ``finished`` once :func:`gather` returns: a few ``git`` and
+#: ``gh`` calls, each bounded by :func:`_run`'s 60 s timeout.
+LOST_AFTER_MINUTES = 10
+
+#: How far back ``mnemo doctor`` looks for a lost reporter.
+LOST_WINDOW_DAYS = 7
+
+
+def _stamp(row: Dict[str, object]) -> Optional[float]:
+    from datetime import datetime
+
+    try:
+        return datetime.strptime(str(row.get("ts")), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def lost(
+    vault_root: Path,
+    *,
+    now: Optional[float] = None,
+    after_minutes: int = LOST_AFTER_MINUTES,
+    window_days: int = LOST_WINDOW_DAYS,
+) -> List[Dict[str, object]]:
+    """``spawned`` rows whose reporter never wrote a row of its own (#460).
+
+    The hook writes ``spawned`` once the reporter is started; the reporter
+    then writes ``finished`` — or, since #454, a crash row, and since #460 a
+    ``killed by SIG…`` row. A ``spawned`` with nothing after it is a reporter
+    that died where no ``except`` could run, and a parent that was never told.
+
+    A reporter's rows carry its pid as ``reporter``, which pairs them with the
+    hook's ``pid`` exactly, whichever of the two lands first. Reporters before
+    #460 stamped nothing, so a ``spawned`` row older than the first stamped
+    row is answered by any later row for the same child before its next
+    ``spawned``. Never raises.
+    """
+    try:
+        text = (Path(vault_root) / ".mnemo" / LOG_NAME).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return []
+    rows: List[Dict[str, object]] = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    now = time.time() if now is None else now
+    reporters = {row.get("reporter") for row in rows if row.get("reporter") is not None}
+    stamped_from = next(
+        (i for i, row in enumerate(rows) if row.get("reporter") is not None), len(rows),
+    )
+    found = []
+    for i, row in enumerate(rows):
+        if row.get("event") != "spawned":
+            continue
+        at = _stamp(row)
+        if at is None or not (after_minutes * 60 <= now - at <= window_days * 86400):
+            continue
+        if row.get("pid") is not None and row.get("pid") in reporters:
+            continue
+        answered = False
+        if i > stamped_from:
+            found.append(row)
+            continue
+        for later in rows[i + 1:]:
+            if later.get("short_id") != row.get("short_id"):
+                continue
+            if later.get("event") == "spawned":
+                break
+            if later.get("reporter") is None:
+                answered = True
+                break
+        if not answered:
+            found.append(row)
+    return found

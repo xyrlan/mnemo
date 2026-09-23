@@ -3,6 +3,9 @@ something to wait for and someone to tell."""
 from __future__ import annotations
 
 import json
+import os
+import signal
+import sys
 from pathlib import Path
 
 import pytest
@@ -141,3 +144,32 @@ def test_a_crash_leaves_a_row_too(tmp_path, monkeypatch) -> None:
 
     [row] = _rows(vault)
     assert row["delivered"] is False and row["reason"] == "child-report crashed: RuntimeError: boom"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.kill(SIGTERM) ends the process on Windows")
+def test_a_sigterm_leaves_a_row_naming_it(tmp_path, monkeypatch) -> None:
+    """#460: a SIGTERM used to end the reporter before any ``except`` ran."""
+    vault = _setup(tmp_path, monkeypatch)
+    before = signal.getsignal(signal.SIGTERM)
+
+    def killed(*a, **k):
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise AssertionError("the signal did not interrupt the reporter")
+
+    # Inside the real gather, whose ``except Exception`` must not turn the
+    # signal into a card.
+    monkeypatch.setattr(rc.subprocess, "run", killed)
+
+    assert cli_main(["child-report", "c0da0f55", "--parent", "P1", "--cwd", str(tmp_path)]) == 1
+    [row] = _rows(vault)
+    assert (row["delivered"], row["reason"]) == (False, "child-report killed by SIGTERM")
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_every_reporter_row_names_the_reporter(tmp_path, monkeypatch) -> None:
+    """#460: the pid pairs these rows with the hook's ``spawned`` row."""
+    vault = _setup(tmp_path, monkeypatch, watch=5)
+
+    _run(monkeypatch, _card({"pending": 2}))
+
+    assert [r["reporter"] for r in _rows(vault)] == [os.getpid(), os.getpid()]
