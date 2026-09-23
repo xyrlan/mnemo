@@ -85,7 +85,8 @@ def _print_listing(pages: list, *, project: str | None, other: int) -> None:
         desc = " ".join(p.description.split())
         if len(desc) > 72:
             desc = desc[:71] + "…"
-        print(f"  {p.key:<{width}}  {p.reason:<12} {p.age_days(now):>3}d  {desc}")
+        verdict = f"[{p.gate_label}] " if p.gate_label else ""
+        print(f"  {p.key:<{width}}  {p.reason:<12} {p.age_days(now):>3}d  {verdict}{desc}")
     print()
     print("nothing was written — this is a listing only.")
     print("  `mnemo inbox --promote KEY` moves one into shared/<type>/, where recall sees it")

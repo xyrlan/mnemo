@@ -33,13 +33,13 @@ def _run(vault: Path, monkeypatch, **flags) -> tuple[int, str]:
 
 
 def _page(vault: Path, rel: str, *, age_days: float = 1.0, project: str = "demo",
-          description: str = "what it says") -> Path:
+          description: str = "what it says", extra: str = "") -> Path:
     path = vault / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     src = f"  - bots/{project}/x.md" if project else ""
     path.write_text(
         f"---\nname: {path.stem}\nslug: {path.stem}\ndescription: {description}\n"
-        f"type: {path.parent.name}\nsources:\n{src}\n---\n\nbody\n",
+        f"type: {path.parent.name}\n{extra}sources:\n{src}\n---\n\nbody\n",
         encoding="utf-8",
     )
     # A minute past the day boundary: ages floor, and Windows' coarse clock can
@@ -69,6 +69,20 @@ def test_listing_writes_nothing_and_says_so(tmp_vault: Path, monkeypatch):
     assert "nothing was written" in out
     assert "--promote" in out and "--drop" in out
     assert page.exists()
+
+
+def test_listing_shows_the_judges_verdict_and_nothing_for_an_unjudged_page(
+    tmp_vault: Path, monkeypatch,
+):
+    _page(tmp_vault, "shared/_inbox/reference/kept.md", extra="reference_gate: technique\n")
+    _page(tmp_vault, "shared/_inbox/reference/plain.md")
+
+    _, out = _run(tmp_vault, monkeypatch, all=True)
+
+    kept = next(ln for ln in out.splitlines() if "reference/kept" in ln)
+    plain = next(ln for ln in out.splitlines() if "reference/plain" in ln)
+    assert "[judge: technique] what it says" in kept
+    assert "judge:" not in plain
 
 
 def test_listing_is_scoped_to_the_project_you_are_standing_in(tmp_vault: Path, monkeypatch):

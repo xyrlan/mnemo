@@ -69,6 +69,22 @@ EXPIRED_ARCHIVE_PREFIX = "expired-"
 #: ``inbox.heldExpiryDays`` when config does not say (#429).
 HELD_EXPIRY_DAYS = 14
 
+#: The ``reference_gate`` frontmatter values a staged page may carry: the
+#: reference judge's category, written on a page it staged (#417) or on an
+#: evidence-gate demotion it rated (#432). Anything else reads as unjudged.
+GATE_VERDICTS = ("generic", "narrative", "technique", "system")
+#: Verdicts the judge would keep live — the pages a decision is worth most on.
+_GATE_KEEP = ("technique", "system")
+#: Verdicts the judge would let expire.
+_GATE_LET_GO = ("generic", "narrative")
+#: How a verdict reads next to a page's age and reason.
+_GATE_LABELS = {
+    "generic": "generic",
+    "narrative": "narrative",
+    "technique": "technique",
+    "system": "system knowledge",
+}
+
 
 @dataclass(frozen=True)
 class StagedPage:
@@ -90,6 +106,15 @@ class StagedPage:
     #: Staged on the reference judge's G/N verdict (#429) — the only pages
     #: :func:`expire_held` may archive.
     gate_held: bool = False
+    #: The judge's ``reference_gate`` verdict — one of :data:`GATE_VERDICTS`,
+    #: or ``""`` when the page was never judged (#433).
+    gate_verdict: str = ""
+
+    @property
+    def gate_label(self) -> str:
+        """``judge: <verdict>`` for a judged page, ``""`` for an unjudged one."""
+        label = _GATE_LABELS.get(self.gate_verdict, "")
+        return f"judge: {label}" if label else ""
 
     def age_days(self, now: float | None = None) -> int:
         import time
@@ -141,6 +166,28 @@ def _reason_for(fm: dict) -> str:
     return "other"
 
 
+def _gate_verdict(fm: dict) -> str:
+    value = str(fm.get("reference_gate") or "").strip().lower()
+    return value if value in GATE_VERDICTS else ""
+
+
+def _offer_rank(page: StagedPage) -> int:
+    """Which pages the offer spends its slots on first (#433).
+
+    The judge's keeps (``technique``/``system``) first: they are invisible to
+    recall until a human promotes them and nothing else will ever move them.
+    Its let-gos (``generic``/``narrative``) last: they expire on their own
+    after ``inbox.heldExpiryDays``, so a slot spent on one is a slot spent on
+    a page the queue was going to shed anyway. Unjudged pages sit between —
+    no verdict says which side they fall on.
+    """
+    if page.gate_verdict in _GATE_KEEP:
+        return 0
+    if page.gate_verdict in _GATE_LET_GO:
+        return 2
+    return 1
+
+
 def staged_pages(vault_root: Path, *, project: str | None = None) -> list[StagedPage]:
     """Every plain staged page, oldest first. Never raises.
 
@@ -185,6 +232,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             reason=_reason_for(fm),
             mtime=_mtime(path),
             gate_held=is_held_frontmatter(fm),
+            gate_verdict=_gate_verdict(fm),
         ))
     out.sort(key=lambda p: (p.mtime, p.key))
     return out
@@ -318,6 +366,12 @@ def pick_offers(
     never pay for it. A silenced call therefore reports ``0`` waiting: nobody
     reads a total that comes with no pages, and counting it would cost exactly
     what this ordering saves.
+
+    The pages offered are not the queue's head but the fresh pages ordered by
+    :func:`_offer_rank` — the judge's keeps, then the unjudged, then the pages
+    it would let expire — oldest first within each. By age alone, the
+    130 evidence-gate demotions the judge rated on 2026-09-22 (G 69, N 3,
+    S 41, T 17) would spend most slots on the 72 that expire regardless.
     """
     try:
         settings = offer_settings(cfg)
@@ -340,6 +394,8 @@ def pick_offers(
             or page.key not in offered
             or ref - offered[page.key] >= cooldown
         ]
+        # Stable sort: oldest first within each group, as ``waiting`` is.
+        fresh.sort(key=_offer_rank)
         return fresh[: settings["max"]], len(waiting)
     except Exception:  # noqa: BLE001 — runs inside the session-start hook
         return [], 0

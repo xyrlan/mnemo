@@ -737,8 +737,9 @@ def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
                 f" · promote: mnemo inbox --promote {page.key}"
                 if _KEY_OK.match(page.key) else ""
             )
+            verdict = f", {page.gate_label}" if page.gate_label else ""
             lines.append(
-                f"• {page.key} — {desc} ({page.age_days()}d, {page.reason}){act}"
+                f"• {page.key} — {desc} ({page.age_days()}d, {page.reason}{verdict}){act}"
             )
         if waiting > len(pages):
             lines.append(

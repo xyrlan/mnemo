@@ -69,6 +69,22 @@ def test_the_block_names_the_page_why_it_is_staged_and_the_act(vault):
     assert lines[-1] == "[/mnemo staged]"
 
 
+def test_the_bullet_carries_the_judges_verdict_and_an_unjudged_one_nothing(vault):
+    """#433: the reviewer sees why this page is offered before an older one."""
+    _staged(vault, "kept", age_days=5, extra="demoted_from: feedback\nreference_gate: system\n")
+    _staged(vault, "plain", age_days=9, extra="demoted_from: feedback\n")
+
+    block = session_start._staged_offer_block(vault, DEFAULTS, "proj")
+
+    bullets = [ln for ln in block.splitlines() if ln.startswith("• ")]
+    assert bullets == [
+        "• reference/kept — what the page says (5d, demotion, judge: system knowledge) "
+        "· promote: mnemo inbox --promote reference/kept",
+        "• reference/plain — what the page says (9d, demotion) "
+        "· promote: mnemo inbox --promote reference/plain",
+    ]
+
+
 def test_the_overflow_is_counted_not_printed(vault):
     for i in range(5):
         _staged(vault, f"page-{i}", age_days=10 - i)
