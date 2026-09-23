@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -84,7 +85,10 @@ def test_a_project_whose_cwd_contains_mnemo_is_excluded(tmp_path) -> None:
 
 
 def test_a_throwaway_cwd_is_excluded(tmp_path) -> None:
-    _transcript(tmp_path, uuid="a1", cwd="/tmp/probe-1", at="2026-09-01T10:00:00Z",
+    # The platform's own temp dir: `/tmp` is a temp root on POSIX only, so a
+    # literal `/tmp/probe-1` is an ordinary project on Windows.
+    probe = str(Path(tempfile.gettempdir()) / "probe-1")
+    _transcript(tmp_path, uuid="a1", cwd=probe, at="2026-09-01T10:00:00Z",
                bash=["mnemo dispatch 1"])
 
     report = _measure(tmp_path, since_days=None)
