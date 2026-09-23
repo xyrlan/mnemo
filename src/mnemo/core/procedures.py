@@ -106,8 +106,9 @@ _SUBCOMMAND = re.compile(r"^[A-Za-z][A-Za-z0-9:._-]*$")
 _PASSTHROUGH = ("run", "exec", "x", "tauri")
 _RUNNERS = ("npm", "pnpm", "yarn", "bun", "npx", "uv", "poetry")
 #: Dispatch worktree suffixes, folded repeatedly: a child of a child of
-#: ``mnemo-desktop`` lives in ``mnemo-desktop-wt-round6-wt-104``.
-_FOLD = re.compile(r"-wt-(\d+|c-[a-z0-9-]+|[a-z0-9]+)$")
+#: ``mnemo-desktop`` lives in ``mnemo-desktop-wt-round6-wt-104``. A twin
+#: (#449) is ``mnemo-wt-449-3fa9c1``.
+_FOLD = re.compile(r"-wt-(\d+-[0-9a-f]{6}|\d+|c-[a-z0-9-]+|[a-z0-9]+)$")
 #: Repos the live suite builds in a temp dir: ``live``, ``live-model``, ``live-full``.
 _LIVE_TREE = re.compile(r"^live(-|$)")
 

@@ -215,6 +215,10 @@ def _maybe_schedule_briefing(
 
     Unlike extraction, briefings skip the count+time debounce — they are
     cheap and run on every session end so no handoff state is dropped.
+
+    One exception (#449): a twin's briefing is held until the maintainer
+    delivers it, and the twin never delivered is never briefed — see
+    :mod:`mnemo.core.twins` for why the losing run must not teach the vault.
     """
     try:
         from mnemo.core import errors as err_mod
@@ -225,6 +229,11 @@ def _maybe_schedule_briefing(
 
         jsonl_path = _resolve_session_jsonl_path(session_id, cwd)
         if jsonl_path is None:
+            return
+
+        from mnemo.core import twins
+
+        if twins.hold_briefing(vault_root, cwd=cwd, jsonl=jsonl_path, agent=agent_name):
             return
 
         try:
@@ -402,14 +411,20 @@ def _maybe_schedule_propose(
     reaching SessionEnd is the user's intent to close the session, and the
     Tier 3 catchup (autopilot.core.scheduler) must respect that even when
     autopilot is currently disabled.
+
+    A twin (#449) is marked but never analyzed, for the reason its briefing
+    is held: its run may be the one never delivered.
     """
     from mnemo.core import errors as err_mod
     from mnemo.core import session as session_mod
+    from mnemo.core import twins
 
     try:
         from mnemo.autopilot.core.kill_switch import is_active
 
-        if is_active(vault_root=vault_root):
+        if twins.holds(vault_root, cwd):
+            pass
+        elif is_active(vault_root=vault_root):
             from mnemo.autopilot.proposer.eos_extractor import analyze_session
 
             cwd_path = __import__("pathlib").Path(cwd)

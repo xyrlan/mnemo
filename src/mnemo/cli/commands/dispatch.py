@@ -183,6 +183,12 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     lean = not getattr(args, "full_profile", False)
 
+    if getattr(args, "twins", False):
+        return _dispatch_twins(
+            issues, contract_path=contract_path, root=root, args=args, lean=lean,
+            model=model, effort=effort,
+        )
+
     if contract_path:
         return _dispatch_contract(
             contract_path, root=root, args=args, lean=lean, may=may,
@@ -205,6 +211,61 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         ),
         lean=lean,
     )
+
+
+def _dispatch_twins(
+    issues: list, *, contract_path: str | None, root: Path,
+    args: argparse.Namespace, lean: bool, model: str | None, effort: str | None,
+) -> int:
+    """One issue as two blind children, for #439's pilot (#449).
+
+    Every refusal is before anything spawns. What twins may publish is not a
+    choice: nothing, because the maintainer picks one after reading both
+    blind — so a typed ``--may`` that grants anything is refused rather than
+    quietly dropped, and ``--read-only`` is refused because a twin builds.
+    """
+    from mnemo.core import dispatch as core
+    from mnemo.core import twins
+    from mnemo.core.sessions import grants
+
+    if contract_path:
+        print("--twins runs one issue twice; a contract is not an issue")
+        return 1
+    if len(issues) != 1:
+        print(f"--twins runs exactly one issue twice, not {len(issues)}")
+        return 1
+    if getattr(args, "read_only", False):
+        print("--twins: a twin builds; --read-only cannot be its posture")
+        return 1
+    typed = getattr(args, "may", None)
+    if typed is not None and grants.parse(typed):
+        print("--twins: twins publish nothing — you deliver the one you prefer "
+              "after reading both blind, so --may can only be none")
+        return 1
+
+    issue = issues[0]
+    if getattr(args, "dry_run", False):
+        for _ in twins.LABELS:
+            tree = core.worktree_path(issue, repo_root=root).name + "-<tag>"
+            print(f"#{issue}  fix/issue-{issue}-<tag>  {root.parent / tree}"
+                  f"{_model_suffix(model, effort)}")
+        return 0
+
+    try:
+        pair_id, results = twins.dispatch_twins(
+            issue, repo_root=root, model=model, lean=lean, effort=effort,
+        )
+    except core.DispatchError as exc:
+        print(f"#{issue}  FAILED: {exc}")
+        return 1
+    code = _report(results, lean=lean)
+    started = [r for r in results if r.error is None]
+    if len(started) == len(twins.LABELS):
+        print(f"  pair:   {pair_id} — once both finish: mnemo twins show {pair_id}")
+    elif started:
+        print(f"  pair:   {pair_id} — only one twin started; it is not a pair "
+              "and the pilot leaves it out")
+    return code
 
 
 def _print_example(contract_path: str | None) -> int:

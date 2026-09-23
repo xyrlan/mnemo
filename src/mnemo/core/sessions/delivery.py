@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from mnemo.core.dispatch import issue_for_cwd
+from mnemo.core.dispatch import issue_for_cwd, twin_tag_for_cwd
 
 # What a dispatched branch is measured against when the repo cannot say. Only
 # the fallback: xyrlan/mnemo-desktop's default branch is `main`, and measuring
@@ -165,7 +165,10 @@ class Readiness:
         one would read as an issue number that does not exist.
         """
         if isinstance(self.target, int):
-            return f"#{self.target}"
+            # A twin (#449) carries its tag: two rows reading `#449` would be
+            # two rows nobody can name apart.
+            tag = twin_tag_for_cwd(self.worktree)
+            return f"#{self.target}-{tag}" if tag else f"#{self.target}"
         if self.target:
             return str(self.target)
         return self.worktree.name
@@ -357,7 +360,7 @@ def pr_lookup(*, repo_root: Path | str):
             # feature; a piece slug does need one, and nothing here has it.
             if not isinstance(target, int):
                 return None
-            branch = branch_name(target)
+            branch = branch_name(target, tag=twin_tag_for_cwd(session.cwd))
         return cache.pr_for(branch, repo_root=repo_root)
 
     return _lookup
@@ -464,6 +467,24 @@ def dispatch_worktrees(*, repo_root: Path | str) -> list[Path]:
     return out
 
 
+def trees_for_target(named: str, *, repo_root: Path | str) -> list[Path]:
+    """Every dispatch worktree whose target is *named* — ``211``, ``#211``,
+    ``c-delivery`` or ``delivery``, or one twin as its label spells it,
+    ``#449-3fa9c1``. More than one only for an issue run as twins (#449)."""
+    wanted = str(named).lstrip("#")
+    out = []
+    for tree in dispatch_worktrees(repo_root=repo_root):
+        target = issue_for_cwd(tree)
+        tag = twin_tag_for_cwd(tree)
+        if tag and wanted == f"{target}-{tag}":
+            return [tree]
+        if str(target) == wanted or (
+            isinstance(target, str) and target == f"c-{wanted}"
+        ):
+            out.append(tree)
+    return out
+
+
 def find_worktree(short_id: str, *, repo_root: Path | str) -> Path | None:
     """The worktree a maintainer named, by session short id or by target.
 
@@ -483,13 +504,14 @@ def find_worktree(short_id: str, *, repo_root: Path | str) -> Path | None:
     # A target — `211`, `#211`, `c-delivery`, `delivery`. Matched first
     # because it is what --review prints, and because it costs no I/O beyond
     # the worktree list this needs anyway.
-    wanted = named.lstrip("#")
-    for tree in dispatch_worktrees(repo_root=repo_root):
-        target = issue_for_cwd(tree)
-        if str(target) == wanted or (
-            isinstance(target, str) and target == f"c-{wanted}"
-        ):
-            return tree
+    by_target = trees_for_target(named, repo_root=repo_root)
+    if len(by_target) == 1:
+        return by_target[0]
+    if by_target:
+        # An issue run as twins (#449) has two trees, and maybe a plain one
+        # besides. Naming the issue names none of them: the maintainer names
+        # the run by its session id, which is what `mnemo twins prefer` prints.
+        return None
 
     # A session short id, or a unique prefix of one, as `mnemo session` takes.
     try:

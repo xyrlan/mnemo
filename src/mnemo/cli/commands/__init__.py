@@ -49,5 +49,6 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     statusline,
     status,
     telemetry,
+    twins,
     why,
 )
