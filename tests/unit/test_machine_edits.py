@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from mnemo.core import locks
 from mnemo.core.extract import inbox, machine_edits, promote, reference_gate, scanner
 from mnemo.core.extract.inbox.io import content_hash
 from mnemo.core.extract.inbox.state_io import atomic_write_state, load_state
+from mnemo.core.extract.source_paths import vault_relative_source
 
 _TOOL = Path(__file__).resolve().parents[2] / "tools" / "measure_demotions.py"
 _spec = importlib.util.spec_from_file_location("measure_demotions_470", _TOOL)
@@ -32,10 +34,9 @@ RUN_2 = "2026-09-23T12:17:00"
 def _memory(vault: Path, stem: str, body: str) -> scanner.MemoryFile:
     path = vault / "bots" / "mnemo" / "memory" / f"{stem}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    _write(path,
         f"---\nname: {stem}\ndescription: what the maintainer measured\n"
         f"metadata:\n  type: project\n---\n\n{body}\n",
-        encoding="utf-8",
     )
     return scanner._read_memory_file(path, agent="mnemo")
 
@@ -50,16 +51,25 @@ def _legacy_project_page(vault: Path, state: scanner.ExtractionState,
     page = vault / "shared" / "project" / f"mnemo__{f.slug}.md"
     legacy = promote._render_project_page(f, run_id=RUN_1)  # no vault_root: absolute
     assert f"  - {f.path}\n" in legacy
-    page.write_text(legacy, encoding="utf-8")
+    _write(page, legacy)
     state.entries[key].written_hash = content_hash(legacy)
     return f, key, page
 
 
 def _old_fixer(page: Path, vault: Path) -> None:
     """What ``source_path_absolute`` did before #470: swap, and nothing else."""
-    text = page.read_text(encoding="utf-8")
-    abs_src = str(vault / "bots")
-    page.write_text(text.replace(f"  - {abs_src}/", "  - bots/"), encoding="utf-8")
+    text = page.read_bytes().decode("utf-8")
+    _write(page, re.sub(
+        r"^(  - )(.+)$",
+        lambda m: m.group(1) + vault_relative_source(m.group(2), vault),
+        text, count=1, flags=re.MULTILINE,
+    ))
+
+
+def _write(path: Path, text: str) -> None:
+    """Exact bytes on every platform: ``write_text`` writes CRLF on Windows,
+    which is itself a drift from the hash the ledger records."""
+    path.write_bytes(text.encode("utf-8"))
 
 
 def _staged_demotion(vault: Path, state: scanner.ExtractionState, slug: str) -> Path:
@@ -71,7 +81,7 @@ def _staged_demotion(vault: Path, state: scanner.ExtractionState, slug: str) -> 
     )
     inbox.apply_pages([page], state, vault)
     path = vault / "shared" / "_inbox" / "reference" / f"{slug}.md"
-    assert path.is_file() and "demoted_from: feedback" in path.read_text(encoding="utf-8")
+    assert path.is_file() and "demoted_from: feedback" in path.read_bytes().decode("utf-8")
     return path
 
 
@@ -98,7 +108,7 @@ def test_promote_renders_the_vault_relative_source(tmp_vault: Path):
     promote.promote_projects([f], state, tmp_vault, run_id=RUN_1)
     page = tmp_vault / "shared" / "project" / "mnemo__x.md"
 
-    assert "  - bots/mnemo/memory/project_x.md\n" in page.read_text(encoding="utf-8")
+    assert "  - bots/mnemo/memory/project_x.md\n" in page.read_bytes().decode("utf-8")
     assert state.entries["project/mnemo__x"].source_files == ["bots/mnemo/memory/project_x.md"]
     # So the fixer has nothing to fix on a page promote just wrote.
     assert doctor_fixer.detect_fixable(vault_root=tmp_vault) == []
@@ -123,21 +133,21 @@ def test_the_fixer_advances_written_hash_and_the_next_update_lands(tmp_vault: Pa
     f2 = _memory(tmp_vault, "project_hook_storm", "load 118, and the fix.")
     result = promote.promote_projects([f2], state, tmp_vault, run_id=RUN_2)
     assert result.overwrite_safe == [key] and result.sibling_proposed == []
-    assert "and the fix." in page.read_text(encoding="utf-8")
+    assert "and the fix." in page.read_bytes().decode("utf-8")
 
 
 def test_the_fixer_leaves_a_user_edited_page_reading_as_edited(tmp_vault: Path):
     state = _empty()
     _, key, page = _legacy_project_page(tmp_vault, state)
     _save(tmp_vault, state)
-    page.write_text(page.read_text(encoding="utf-8") + "\n(my note)\n", encoding="utf-8")
+    _write(page, page.read_bytes().decode("utf-8") + "\n(my note)\n")
     recorded = state.entries[key].written_hash
 
     (w,) = doctor_fixer.detect_fixable(vault_root=tmp_vault)
     doctor_fixer.fix_warning(w, vault_root=tmp_vault)
 
     assert _state(tmp_vault).entries[key].written_hash == recorded
-    assert "(my note)" in page.read_text(encoding="utf-8")
+    assert "(my note)" in page.read_bytes().decode("utf-8")
 
 
 def test_the_fixer_keeps_crlf_bytes_it_did_not_mean_to_change(tmp_vault: Path):
@@ -185,7 +195,7 @@ def test_the_stamp_advances_written_hash_so_the_page_takes_its_update(tmp_vault:
     assert md.apply_stamps(todo, tmp_vault) == 1
 
     entry = _state(tmp_vault).entries["reference/suite-needs-pythonpath"]
-    assert "reference_gate: generic" in path.read_text(encoding="utf-8")
+    assert "reference_gate: generic" in path.read_bytes().decode("utf-8")
     assert entry.written_hash == content_hash(path)
 
 
@@ -199,10 +209,10 @@ def test_explain_drift_names_each_known_edit_and_their_composition(tmp_vault: Pa
     _, key, page = _legacy_project_page(tmp_vault, state)
     written = state.entries[key].written_hash
     prefixes = machine_edits.vault_prefixes(tmp_vault)
-    original = page.read_text(encoding="utf-8")
+    original = page.read_bytes().decode("utf-8")
 
     _old_fixer(page, tmp_vault)
-    swapped = page.read_text(encoding="utf-8")
+    swapped = page.read_bytes().decode("utf-8")
     assert machine_edits.explain_drift(swapped, written, prefixes) == "sources"
 
     stamped = swapped.replace("runtime: false\n", "runtime: false\nreference_gate: generic\n")
@@ -224,7 +234,7 @@ def test_a_person_s_edit_is_never_explained_even_on_top_of_a_known_one(tmp_vault
     _, key, page = _legacy_project_page(tmp_vault, state)
     written = state.entries[key].written_hash
     _old_fixer(page, tmp_vault)
-    edited = edit(page.read_text(encoding="utf-8"))
+    edited = edit(page.read_bytes().decode("utf-8"))
     assert content_hash(edited) != content_hash(page)
 
     assert machine_edits.explain_drift(
@@ -274,13 +284,13 @@ def _drifted_vault(vault: Path) -> dict:
     sibling = vault / "shared" / "_inbox" / "project" / "mnemo__sib.proposed.md"
     sibling.parent.mkdir(parents=True, exist_ok=True)
     proposal = promote._render_project_page(f2, run_id=RUN_2)
-    sibling.write_text(proposal, encoding="utf-8")
+    _write(sibling, proposal)
     # A person's edit on top of the swap.
     _, user_key, user_page = _legacy_project_page(vault, state, "project_user", "u")
     _old_fixer(user_page, vault)
-    user_page.write_text(user_page.read_text(encoding="utf-8") + "\n(mine)\n", encoding="utf-8")
+    _write(user_page, user_page.read_bytes().decode("utf-8") + "\n(mine)\n")
     user_sibling = vault / "shared" / "_inbox" / "project" / "mnemo__user.proposed.md"
-    user_sibling.write_text("---\nname: pending\n---\n\nproposal\n", encoding="utf-8")
+    _write(user_sibling, "---\nname: pending\n---\n\nproposal\n")
     # A stamped staged demotion.
     staged = _staged_demotion(vault, state, "staged-demotion")
     raw = staged.read_bytes()
@@ -305,7 +315,7 @@ def test_rebaseline_moves_only_the_hashes_a_known_edit_explains(tmp_vault: Path)
     ])
     assert rep.left == [user_key]
     assert state.entries[user_key].written_hash == user_hash
-    assert "(mine)" in user_page.read_text(encoding="utf-8")
+    assert "(mine)" in user_page.read_bytes().decode("utf-8")
     for key, page in (v["swap"], v["staged"], v["sib"]):
         assert state.entries[key].written_hash == content_hash(page)
     assert "re-baselined (reference_gate 1, sources 2)" in machine_edits.summary_line(rep)
@@ -317,7 +327,7 @@ def test_the_diverted_update_is_applied_and_its_sibling_leaves_the_inbox(tmp_vau
 
     sib_key, sib_page = v["sib"]
     assert rep.siblings_applied == [sib_key]
-    assert sib_page.read_text(encoding="utf-8") == v["proposal"]
+    assert sib_page.read_bytes().decode("utf-8") == v["proposal"]
     assert not v["sibling"].exists()
     # A person's page keeps its sibling: that one is theirs to review.
     assert v["user_sibling"].exists()
@@ -326,7 +336,7 @@ def test_the_diverted_update_is_applied_and_its_sibling_leaves_the_inbox(tmp_vau
     f = _memory(tmp_vault, "project_sib", "v2 — the diverted update")
     result = promote.promote_projects([f], v["state"], tmp_vault, run_id="2026-09-24T00:00:00")
     assert result.overwrite_safe == [sib_key] and result.sibling_proposed == []
-    assert "  - bots/mnemo/memory/project_sib.md\n" in sib_page.read_text(encoding="utf-8")
+    assert "  - bots/mnemo/memory/project_sib.md\n" in sib_page.read_bytes().decode("utf-8")
 
 
 def test_a_staged_page_s_sibling_is_applied_but_not_when_a_live_page_exists(tmp_vault: Path):
@@ -334,20 +344,20 @@ def test_a_staged_page_s_sibling_is_applied_but_not_when_a_live_page_exists(tmp_
     staged = _staged_demotion(tmp_vault, state, "a")
     staged.write_bytes(md._stamped(staged.read_bytes(), "generic"))
     sib = staged.with_name("a.proposed.md")
-    sib.write_text("---\nname: a\n---\n\nnewer\n", encoding="utf-8")
+    _write(sib, "---\nname: a\n---\n\nnewer\n")
 
     other = _staged_demotion(tmp_vault, state, "b")
     other.write_bytes(md._stamped(other.read_bytes(), "system"))
     other_sib = other.with_name("b.proposed.md")
-    other_sib.write_text("---\nname: b\n---\n\nupgrade?\n", encoding="utf-8")
+    _write(other_sib, "---\nname: b\n---\n\nupgrade?\n")
     live = tmp_vault / "shared" / "reference" / "b.md"
     live.parent.mkdir(parents=True, exist_ok=True)
-    live.write_text("---\nname: b\n---\n\nlive\n", encoding="utf-8")
+    _write(live, "---\nname: b\n---\n\nlive\n")
 
     rep = machine_edits.rebaseline(tmp_vault, state)
 
     assert rep.siblings_applied == ["reference/a"]
-    assert staged.read_text(encoding="utf-8").endswith("newer\n") and not sib.exists()
+    assert staged.read_bytes().decode("utf-8").endswith("newer\n") and not sib.exists()
     assert other_sib.exists()
     assert state.entries["reference/b"].written_hash == content_hash(other)
 
@@ -403,7 +413,7 @@ def test_promote_records_a_proposed_source_so_it_is_not_re_rendered(tmp_vault: P
     f = _memory(tmp_vault, "project_x", "v1")
     promote.promote_projects([f], state, tmp_vault, run_id=RUN_1)
     page = tmp_vault / "shared" / "project" / "mnemo__x.md"
-    page.write_text(page.read_text(encoding="utf-8") + "\n(mine)\n", encoding="utf-8")
+    _write(page, page.read_bytes().decode("utf-8") + "\n(mine)\n")
 
     f2 = _memory(tmp_vault, "project_x", "v2")
     first = promote.promote_projects([f2], state, tmp_vault, run_id=RUN_1)
@@ -417,14 +427,14 @@ def test_promote_records_a_proposed_source_so_it_is_not_re_rendered(tmp_vault: P
     # A new source change is still proposed, not lost.
     f3 = _memory(tmp_vault, "project_x", "v3")
     third = promote.promote_projects([f3], state, tmp_vault, run_id=RUN_2)
-    assert len(third.sibling_proposed) == 1 and "v3" in sibling.read_text(encoding="utf-8")
-    assert "(mine)" in page.read_text(encoding="utf-8")
+    assert len(third.sibling_proposed) == 1 and "v3" in sibling.read_bytes().decode("utf-8")
+    assert "(mine)" in page.read_bytes().decode("utf-8")
 
 
 def test_inbox_flow_records_a_proposed_source_so_it_is_not_re_rendered(tmp_vault: Path):
     state = _empty()
     staged = _staged_demotion(tmp_vault, state, "a")
-    staged.write_text(staged.read_text(encoding="utf-8") + "\n(mine)\n", encoding="utf-8")
+    _write(staged, staged.read_bytes().decode("utf-8") + "\n(mine)\n")
     page = inbox.ExtractedPage(
         slug="a", type="reference", name="a", description="d", body="newer",
         source_files=["bots/mnemo/briefings/sessions/s2.md"],
