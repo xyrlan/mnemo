@@ -118,9 +118,7 @@ def test_dedupe_by_slug_keeps_the_backfill_flag(tmp_path):
     """Cross-chunk merge of the same slug must not launder the stamp.
 
     Reachable: two chunks emitting one slug off the same single source merge
-    to a one-source page. Since #471 the flag no longer stages a fresh page,
-    but it still keeps an already-staged one staged, and still shuts the
-    universal door — so losing it here would walk a staged page into shared/.
+    to a one-source page, which routes straight to shared/ if the flag is lost.
     """
     from mnemo.core.extract.inbox.dedup import dedupe_by_slug
     from mnemo.core.extract.inbox.paths import _target_path_for_page
@@ -129,10 +127,9 @@ def test_dedupe_by_slug_keeps_the_backfill_flag(tmp_path):
 
     assert len(merged) == 1
     assert merged[0].origin_backfill is True
-    staged = tmp_path / "shared" / "_inbox" / "reference" / "s.md"
-    staged.parent.mkdir(parents=True)
-    staged.write_text("---\norigin: backfill\n---\nx\n", encoding="utf-8")
-    assert _target_path_for_page(merged[0], tmp_path) == staged
+    assert _target_path_for_page(merged[0], tmp_path) == (
+        tmp_path / "shared" / "_inbox" / "reference" / "s.md"
+    )
 
 
 def test_union_with_prior_sources_keeps_the_backfill_flag():

@@ -1,28 +1,15 @@
-"""The backfill origin on the project-type 1:1 promotion path (Task 6c, #471).
+"""Origin gate for the project-type 1:1 promotion path (Task 6c).
 
-Task 6c staged every backfill project page in ``shared/_inbox/project/``;
-nobody reviewed them, so a new user's history made nothing live. Since #471
-a fresh backfill project page is promoted like any other and carries
-``origin: backfill`` as provenance. A page a pre-#471 run already staged stays
-staged: the review queue owns it.
+``promote_projects`` writes straight to ``shared/project/`` with no _inbox
+and, until Task 6c, no origin check — so a harvested page stamped
+``metadata.origin: backfill`` landed unreviewed in the sacred dir. Backfill
+project pages must stage in ``shared/_inbox/project/`` instead.
 """
 from __future__ import annotations
 
-import contextlib
 from pathlib import Path
 
-import pytest
-
-from mnemo.core.backfill import origin
 from mnemo.core.extract import promote, scanner
-
-
-@contextlib.contextmanager
-def _pre_471(monkeypatch):
-    """Promote under the rule mnemo had before #471: every backfill page stages."""
-    with monkeypatch.context() as m:
-        m.setattr(origin, "stages", lambda backfill, staged: bool(backfill))
-        yield
 
 
 def _mk_project_file(
@@ -55,7 +42,7 @@ def test_flat_parser_lifts_nested_origin_to_top_level(tmp_vault: Path):
     assert f.frontmatter.get("origin") == "backfill"
 
 
-def test_real_harvest_output_goes_live_with_its_stamp(tmp_vault: Path):
+def test_real_harvest_output_stages_in_inbox(tmp_vault: Path):
     """Reach the gate through harvest's own renderer, not a hand-built fixture.
 
     Task 6 shipped a gate that read the wrong frontmatter key precisely because
@@ -83,24 +70,19 @@ def test_real_harvest_output_goes_live_with_its_stamp(tmp_vault: Path):
     promote.promote_projects([f], state, tmp_vault)
 
     slug = f"alpha__{f.slug}"
-    live = tmp_vault / "shared" / "project" / f"{slug}.md"
-    assert live.exists()
-    assert "\norigin: backfill\n" in live.read_text(encoding="utf-8")
-    assert not (tmp_vault / "shared" / "_inbox" / "project" / f"{slug}.md").exists()
+    assert (tmp_vault / "shared" / "_inbox" / "project" / f"{slug}.md").exists()
+    assert not (tmp_vault / "shared" / "project" / f"{slug}.md").exists()
 
 
-def test_fresh_backfill_project_file_goes_live(tmp_vault: Path):
-    """#471: the stamp no longer stages a page on its own."""
+def test_backfill_project_file_stages_in_inbox(tmp_vault: Path):
     state = scanner.ExtractionState(last_run=None, entries={})
     f = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal", backfill=True)
-    result = promote.promote_projects([f], state, tmp_vault)
+    promote.promote_projects([f], state, tmp_vault)
 
     staged = tmp_vault / "shared" / "_inbox" / "project" / "sg-imports__china-portal.md"
     promoted = tmp_vault / "shared" / "project" / "sg-imports__china-portal.md"
-    assert promoted.exists()
-    assert not staged.exists()
-    assert result.written_fresh == ["project/sg-imports__china-portal"]
-    assert state.entries["project/sg-imports__china-portal"].origin_backfill is True
+    assert staged.exists(), "backfill project page must stage in shared/_inbox/project/"
+    assert not promoted.exists(), "backfill project page must not reach shared/project/"
 
 
 def test_unstamped_project_file_still_promotes_directly(tmp_vault: Path):
@@ -116,9 +98,8 @@ def test_unstamped_project_file_still_promotes_directly(tmp_vault: Path):
     assert result.written_fresh == ["project/sg-imports__china-portal"]
 
 
-@pytest.mark.parametrize("pre_471", [False, True], ids=["live", "staged"])
-def test_backfill_project_page_keeps_the_origin_stamp(tmp_vault: Path, monkeypatch, pre_471):
-    """The page stays self-describing, live or staged, in the spelling both readers share.
+def test_staged_project_page_keeps_the_origin_stamp(tmp_vault: Path):
+    """The staged file stays self-describing, in the spelling both readers share.
 
     Asserted at the **text** level, and through the *consumer's* parser. The
     flat ``scanner.parse_frontmatter`` lifts nested keys to the top level, so a
@@ -131,11 +112,10 @@ def test_backfill_project_page_keeps_the_origin_stamp(tmp_vault: Path, monkeypat
 
     state = scanner.ExtractionState(last_run=None, entries={})
     f = _mk_project_file(tmp_vault, "a", "project_x", backfill=True)
-    with _pre_471(monkeypatch) if pre_471 else contextlib.nullcontext():
-        promote.promote_projects([f], state, tmp_vault)
+    promote.promote_projects([f], state, tmp_vault)
 
-    where = ("shared", "_inbox", "project") if pre_471 else ("shared", "project")
-    text = tmp_vault.joinpath(*where, "a__x.md").read_text(encoding="utf-8")
+    staged = tmp_vault / "shared" / "_inbox" / "project" / "a__x.md"
+    text = staged.read_text(encoding="utf-8")
     assert "\norigin: backfill\n" in text, "stamp must be written top-level"
     assert filters_parse(text).get("origin") == "backfill"
     fm, _body = scanner.parse_frontmatter(text)
@@ -153,7 +133,7 @@ def test_promoted_project_page_carries_no_origin_stamp(tmp_vault: Path):
     assert "origin" not in fm
 
 
-def test_staged_project_entry_is_recorded_as_inbox(tmp_vault: Path, monkeypatch):
+def test_staged_project_entry_is_recorded_as_inbox(tmp_vault: Path):
     """State must not claim a staged page was promoted.
 
     ``status="direct"`` means "written to shared/<type>/"; readers that check
@@ -163,12 +143,8 @@ def test_staged_project_entry_is_recorded_as_inbox(tmp_vault: Path, monkeypatch)
     them.
     """
     state = scanner.ExtractionState(last_run=None, entries={})
-    f = _mk_project_file(tmp_vault, "a", "project_x", body="v1", backfill=True)
-    with _pre_471(monkeypatch):
-        promote.promote_projects([f], state, tmp_vault)
-    assert state.entries["project/a__x"].status == "inbox"
-    f2 = _mk_project_file(tmp_vault, "a", "project_x", body="v2", backfill=True)
-    promote.promote_projects([f2], state, tmp_vault)
+    f = _mk_project_file(tmp_vault, "a", "project_x", backfill=True)
+    promote.promote_projects([f], state, tmp_vault)
     assert state.entries["project/a__x"].status == "inbox"
 
 
@@ -179,24 +155,22 @@ def test_live_project_entry_still_recorded_as_direct(tmp_vault: Path):
     assert state.entries["project/a__x"].status == "direct"
 
 
-def test_staged_project_page_is_idempotent_across_runs(tmp_vault: Path, monkeypatch):
+def test_staged_project_page_is_idempotent_across_runs(tmp_vault: Path):
     """A second extract must not re-route the staged page into shared/project/."""
     state = scanner.ExtractionState(last_run=None, entries={})
     f = _mk_project_file(tmp_vault, "a", "project_x", backfill=True)
-    with _pre_471(monkeypatch):
-        promote.promote_projects([f], state, tmp_vault)
+    promote.promote_projects([f], state, tmp_vault)
     result = promote.promote_projects([f], state, tmp_vault)
 
     assert "project/a__x" in result.unchanged_skipped
     assert not (tmp_vault / "shared" / "project" / "a__x.md").exists()
 
 
-def test_edited_backfill_source_rewrites_the_staged_page(tmp_vault: Path, monkeypatch):
+def test_edited_backfill_source_rewrites_the_staged_page(tmp_vault: Path):
     """Source churn keeps updating the staged copy, never the sacred dir."""
     state = scanner.ExtractionState(last_run=None, entries={})
     f = _mk_project_file(tmp_vault, "a", "project_x", body="v1", backfill=True)
-    with _pre_471(monkeypatch):
-        promote.promote_projects([f], state, tmp_vault)
+    promote.promote_projects([f], state, tmp_vault)
     f2 = _mk_project_file(tmp_vault, "a", "project_x", body="v2", backfill=True)
     result = promote.promote_projects([f2], state, tmp_vault)
 

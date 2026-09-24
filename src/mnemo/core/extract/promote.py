@@ -1,18 +1,14 @@
 """Project-type 1:1 promotion (no LLM, no clustering, direct to shared/project/).
 
-Backfill-origin pages take this same path and carry ``origin: backfill`` as
-provenance (#471: 85.1% of what the normal gates let through from a real
-backfill was good under two blind raters, against a declared 85% bar —
-``tools/measure_backfill_routes.py``). The one exception is a backfill page
-whose copy is already staged in ``shared/_inbox/project/``: it stays there
-until a human reviews it.
+Exception: backfill-origin pages stage in ``shared/_inbox/project/`` instead —
+they are reconstructed from archived transcripts and need a human to confirm
+them before they reach the sacred dir.
 """
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 
-from mnemo.core.backfill import origin
 from mnemo.core.backfill.origin import (
     ORIGIN_LINE,
     is_backfill_entry,
@@ -67,22 +63,24 @@ def _sticky_backfill(
     """
     if _is_backfill(file) or is_backfill_entry(entry):
         return True
-    return is_backfill_markdown(_staged_path(vault_root, file))
-
-
-def _staged_path(vault_root: Path, file: MemoryFile) -> Path:
-    return vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"
+    return is_backfill_markdown(
+        vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"
+    )
 
 
 def _target_path(
-    vault_root: Path, file: MemoryFile, stage: bool = False,
+    vault_root: Path, file: MemoryFile, backfill: bool | None = None,
 ) -> Path:
-    # Project-type pages are the one extraction path that writes straight to
-    # the sacred dir with no _inbox hop and no gate. ``stage`` is the one
-    # exception, decided by ``promote_projects``: a backfill page whose staged
-    # copy is already waiting for review stays in _inbox (#471).
-    if stage:
-        return _staged_path(vault_root, file)
+    # Origin gate: project-type pages are the one extraction path that writes
+    # straight to the sacred dir with no _inbox hop. Backfill-origin pages are
+    # LLM reconstructions of archived transcripts, so they stage for review
+    # like every other backfill page (see inbox/paths._target_path_for_page).
+    # ``backfill`` defaults to the file's own stamp; ``promote_projects`` passes
+    # the sticky answer, which also honours the state entry.
+    if backfill is None:
+        backfill = _is_backfill(file)
+    if backfill:
+        return vault_root / "shared" / "_inbox" / "project" / f"{_project_slug(file)}.md"
     return vault_root / "shared" / "project" / f"{_project_slug(file)}.md"
 
 
@@ -163,19 +161,14 @@ def promote_projects(
             # (Task 9b review). Same guard as
             # ``inbox/apply._stamp_entry_origin``.
             entry.origin_backfill = True
-        # #471: the stamp is provenance, not a route. A backfill page goes
-        # live like any other project page — the measured bar held — unless a
-        # staged copy is already waiting for review: the queue owns that one,
-        # and writing it live would leave the staged copy behind.
-        stage = origin.stages(backfill, _staged_path(vault_root, file))
-        target = _target_path(vault_root, file, stage)
+        target = _target_path(vault_root, file, backfill)
         # "direct" means "lives in shared/<type>/". A staged page does not, so
         # it records the same "inbox" status every other _inbox page uses —
         # readers that look for the promoted file (the universal reconciler,
         # doctor) would otherwise look in the wrong place. What distinguishes a
         # staged backfill page from a live one is the file's `origin` key, not
         # the status.
-        written_status = "inbox" if stage else "direct"
+        written_status = "inbox" if backfill else "direct"
 
         if entry is not None and entry.source_hash == file.source_hash and not force:
             result.unchanged_skipped.append(key)

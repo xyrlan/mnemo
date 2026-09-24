@@ -1,25 +1,15 @@
-"""Backfill-origin pages take the normal gates; an already-staged one stays staged (#471)."""
+"""Backfill-origin pages stage in _inbox instead of auto-promoting."""
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 
 import pytest
 
 from mnemo.core import llm as llm_mod
-from mnemo.core.backfill import origin
 from mnemo.core.extract import _parse_pages_from_response, run_extraction
 from mnemo.core.extract.inbox.paths import _target_path_for_page
 from mnemo.core.extract.inbox.types import ExtractedPage
-
-
-@contextlib.contextmanager
-def _pre_471(monkeypatch):
-    """Route under the rule mnemo had before #471: every backfill page stages."""
-    with monkeypatch.context() as m:
-        m.setattr(origin, "stages", lambda backfill, staged: bool(backfill))
-        yield
 
 
 def _page(**kw) -> ExtractedPage:
@@ -36,31 +26,8 @@ def test_single_source_live_page_auto_promotes(tmp_path):
     assert target == tmp_path / "shared" / "reference" / "s.md"
 
 
-def test_single_source_backfill_page_takes_the_normal_route(tmp_path):
-    """#471: the stamp is provenance; on its own it no longer stages a page."""
+def test_single_source_backfill_page_stages_in_inbox(tmp_path):
     target = _target_path_for_page(_page(origin_backfill=True), tmp_path)
-    assert target == tmp_path / "shared" / "reference" / "s.md"
-
-
-def test_an_already_staged_backfill_page_stays_staged(tmp_path):
-    """The review queue owns a page a pre-#471 run staged; a live copy would orphan it."""
-    staged = tmp_path / "shared" / "_inbox" / "reference" / "s.md"
-    staged.parent.mkdir(parents=True)
-    staged.write_text("---\norigin: backfill\n---\nx\n", encoding="utf-8")
-    assert _target_path_for_page(_page(origin_backfill=True), tmp_path) == staged
-    # Only the stamp keeps it there: a live page with a staged namesake routes as before.
-    assert _target_path_for_page(_page(), tmp_path) == tmp_path / "shared" / "reference" / "s.md"
-
-
-def test_demoted_backfill_page_still_stages(tmp_path):
-    """The evidence gate's answer is kept: only the origin stopped routing."""
-    target = _target_path_for_page(
-        _page(origin_backfill=True, unverified_feedback=True), tmp_path)
-    assert target == tmp_path / "shared" / "_inbox" / "reference" / "s.md"
-
-
-def test_backfill_page_the_reference_gate_held_still_stages(tmp_path):
-    target = _target_path_for_page(_page(origin_backfill=True, judged="G"), tmp_path)
     assert target == tmp_path / "shared" / "_inbox" / "reference" / "s.md"
 
 
@@ -199,10 +166,10 @@ def test_harvested_source_carries_a_flat_origin_key(harvested_vault: Path):
     assert mf.frontmatter.get("metadata") == ""
 
 
-def test_single_source_harvested_file_goes_live_with_its_stamp(
+def test_single_source_harvested_file_stages_instead_of_auto_promoting(
     harvested_vault: Path, monkeypatch,
 ):
-    """End-to-end: harvested file in, live page out, provenance kept (#471)."""
+    """End-to-end: harvested file in, staged page out. One source, no promotion."""
     _stub_llm(monkeypatch, [{
         "slug": "prefer-pathlib",
         "type": "reference",
@@ -214,11 +181,9 @@ def test_single_source_harvested_file_goes_live_with_its_stamp(
 
     summary = run_extraction(_cfg(harvested_vault))
 
-    live = harvested_vault / "shared" / "reference" / "prefer-pathlib.md"
-    assert live.exists()
-    assert "\norigin: backfill\n" in live.read_text(encoding="utf-8")
-    assert not (harvested_vault / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
-    assert summary.auto_promoted == 1
+    assert (harvested_vault / "shared" / "_inbox" / "reference" / "prefer-pathlib.md").exists()
+    assert not (harvested_vault / "shared" / "reference" / "prefer-pathlib.md").exists()
+    assert summary.auto_promoted == 0
 
 
 def test_single_source_live_file_still_auto_promotes(tmp_vault: Path, monkeypatch):
@@ -241,7 +206,6 @@ def test_single_source_live_file_still_auto_promotes(tmp_vault: Path, monkeypatc
     run_extraction(_cfg(tmp_vault))
 
     assert (tmp_vault / "shared" / "reference" / "prefer-pathlib.md").exists()
-
 
 def test_staged_backfill_project_page_is_not_recorded_as_learned(
     tmp_vault: Path, monkeypatch,
@@ -275,38 +239,11 @@ def test_staged_backfill_project_page_is_not_recorded_as_learned(
     )
     _stub_llm(monkeypatch, [])
 
-    # A pre-#471 run: the only way a fresh backfill page stages now.
-    with _pre_471(monkeypatch):
-        run_extraction(_cfg(tmp_vault))
+    run_extraction(_cfg(tmp_vault))
 
     staged = tmp_vault / "shared" / "_inbox" / "project" / "alpha__deploy-pipeline.md"
     assert staged.exists(), "fixture precondition: the backfill page staged"
     assert (tmp_vault / "shared" / "project" / "alpha__live-notes.md").exists()
     assert [e["slug"] for e in learned.pending(tmp_vault, "alpha")] == [
         "alpha__live-notes",
-    ]
-
-
-def test_a_live_backfill_project_page_is_recorded_as_learned(tmp_vault: Path, monkeypatch):
-    """The other half of #471: a backfill page that went live is announced."""
-    from mnemo.core import learned
-    from mnemo.core.backfill.harvest import _render_memory_file
-
-    mem = tmp_vault / "bots" / "alpha" / "memory"
-    mem.mkdir(parents=True)
-    (mem / "project_deploy_pipeline.md").write_text(
-        _render_memory_file(
-            slug="project_deploy_pipeline", page_type="project", name="Deploy pipeline",
-            description="How deploys work", body="Reconstructed project context.",
-            session_id="0c8f-uuid",
-        ),
-        encoding="utf-8",
-    )
-    _stub_llm(monkeypatch, [])
-
-    run_extraction(_cfg(tmp_vault))
-
-    assert (tmp_vault / "shared" / "project" / "alpha__deploy-pipeline.md").exists()
-    assert [e["slug"] for e in learned.pending(tmp_vault, "alpha")] == [
-        "alpha__deploy-pipeline",
     ]
