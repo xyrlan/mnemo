@@ -432,6 +432,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--retry-failed", action="store_true",
         help="clear previously failed sessions so they are attempted again",
     )
+    bf.add_argument(
+        "--extract", action="store_true",
+        help="after the sweep, run the first extraction for that project",
+    )
+    bf.add_argument(
+        "--json", action="store_true",
+        help="with --dry-run: print the estimate as one JSON document",
+    )
+    bf.add_argument(
+        "--progress-json", action="store_true",
+        help="print progress as JSON lines (harvest, extract, done) on stdout",
+    )
     bf.add_argument("--install-run", action="store_true", help=argparse.SUPPRESS)
     imp = sub.add_parser(
         "import",

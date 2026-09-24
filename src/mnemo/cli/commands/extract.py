@@ -51,6 +51,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         f"  staged unverified: {summary.demoted_unverified} · "
         f"reference held: {summary.reference_held} · "
         f"reference expired: {summary.reference_expired} · "
+        f"backfill expired: {summary.backfill_expired} · "
         f"echo rejected: {summary.echo_rejected} · redactions: {summary.redactions}"
     )
     if summary.rebaselined:
