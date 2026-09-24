@@ -324,6 +324,61 @@ def test_project_overrides_are_asked_once_per_project(env):
     assert out.silence == {"absolute_floor_fail": 3}
 
 
+
+# --- the judge stage (#479) ------------------------------------------------------
+
+def test_the_judge_decides_from_the_top_of_the_ranking_in_the_hooks_order(env):
+    """Pool = the ranking's top N, minus what this session was told; the judge alone decides."""
+    from mnemo.core.reflex import judge as judge_stage
+
+    vault, _projects = env
+    _rule(vault, "prisma-jest-typescript", sources=[_briefing(vault, "alpha", SID_A)],
+          extracted_at="2026-09-01T13:00:00", desc="Type jest mocks of prisma in typescript",
+          body="In a jest test, type the prisma mock with typescript's DeepMockProxy.")
+    index = build_index(vault)
+    at = T0 + timedelta(days=2)
+    asked = []
+
+    def pick_last(prompt, pool):
+        asked.append(list(pool))
+        return [pool[-1]]
+
+    out = R.run([_p(SID_B, at), _p(SID_B, at + timedelta(minutes=1))], index, {},
+                reflex_cfg=_CFG, judge=pick_last, judge_candidates=2)
+
+    assert len(asked[0]) == 2, "the top 2 of the ranking, whatever the gates said"
+    assert asked[1] == [s for s in asked[0] if s != asked[0][-1]], "told once per session per day"
+    assert [i.slug for i in out.injections] == [asked[0][-1], asked[1][-1]]
+
+    silent = R.run([_p(SID_B, at)], index, {}, reflex_cfg=_CFG, judge=lambda p, pool: [])
+    assert silent.injections == [] and silent.silence == {judge_stage.SILENCE_REASON: 1}
+
+
+def test_a_judge_failure_falls_back_to_the_gates_exactly(env):
+    vault, _projects = env
+    prompts = [_p(SID_B, T0 + timedelta(days=2, minutes=m)) for m in range(3)]
+
+    gates = _run(vault, prompts)
+    failed = R.run(prompts, build_index(vault), R.rule_facts(vault), reflex_cfg=_CFG,
+                   judge=lambda p, pool: None)
+
+    assert [(i.ts, i.slug) for i in failed.injections] == [(i.ts, i.slug) for i in gates.injections]
+    assert failed.silence == gates.silence
+
+
+def test_the_session_cap_and_a_short_prompt_never_reach_the_judge(env):
+    vault, _projects = env
+    asked = []
+    at = T0 + timedelta(days=2)
+    prompts = [R.Prompt(SID_B, "alpha", at.timestamp(), "ok")] + [
+        _p(SID_B, at + timedelta(minutes=m)) for m in (1, 2)]
+
+    out = R.run(prompts, build_index(vault), {}, reflex_cfg={"maxEmissionsPerSession": 1},
+                judge=lambda p, pool: asked.append(p) or pool[:1])
+
+    assert len(asked) == 1 and len(out.injections) == 1
+    assert out.silence == {"below_min_tokens": 1, "session_cap_reached": 1}
+
 # --- the report --------------------------------------------------------------------
 
 def test_wilson_interval_behaves_near_zero_and_at_the_edges():

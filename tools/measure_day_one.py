@@ -7,6 +7,9 @@ Usage:
     PYTHONPATH=src python3 tools/measure_day_one.py --send --arm c   # arm (c) and (a)+(c)
     PYTHONPATH=src python3 tools/measure_day_one.py               # the report, from saved results
     PYTHONPATH=src python3 tools/measure_day_one.py --json
+    PYTHONPATH=src python3 tools/measure_day_one.py --judge --dry-run   # judge on (#479): bounds, sends nothing
+    PYTHONPATH=src python3 tools/measure_day_one.py --judge --send --arm-a-work ~/.cache/mnemo/day-one-471
+    PYTHONPATH=src python3 tools/measure_day_one.py --judge             # its report, from judge.json
 
 Every number that says mnemo works was measured on the maintainer's vault.
 This starts two vaults from nothing and replays one repository's real
@@ -152,6 +155,56 @@ equivalent.
 - ``~/mnemo`` changed in 52 files during the run. The 7 naming clubinho were
   the maintainer's own clubinho session ending at 13:47 and 14:12 (its log
   lines, and its briefing differing from this run's), not this run.
+
+**Judge on (#479).** ``--judge`` re-extracts nothing: it replays the prompts
+the arms above already replayed, over the vaults they left, with
+``reflex.judge`` on as a user who turns it on gets it (:func:`shipped_judge`:
+``jev-1.13.0``, ``injectAt`` 0.4, 2.5 s, the top 3 of the ranking). The stage
+runs in the hook's order inside ``reflex.replay.run`` — the pool is the top 3
+of the *ranking*, including prompts the gates silenced, minus what the
+session was already told; the real ``judge.ask`` decides; a timeout or an
+error falls back to the gates' decision and is counted. Only ``--send``
+leaves the machine: it posts what the hook posts (the prompt's first 1,200
+characters, each rule's first 800) to TypeSafe with the key
+``judge.resolve_key`` finds. Arm (a) is read from ``--arm-a-work``, since
+master's arm (a) (after #471) was run into a directory of its own.
+
+Arm (b)'s vault grew during its run and only its end state is kept, so each
+session gets it rewound (:func:`rewind`): the pages ``learned.jsonl`` says
+went live later are removed, and a page's text is its final one. Every
+prompt is also replayed judge-off over the same vault and compared with what
+the run recorded; the judge-off numbers in the table are that replay's, so
+on and off always share a vault. Transcripts Claude Code has since pruned are
+rebuilt from the prompts the run recorded (:func:`from_record`).
+
+``--dry-run`` bounds the requests locally (a stage that answers "none" to
+everything asks on every ranked prompt; real answers can only ask on fewer)
+and the label calls. ``--send`` stops arm (b) before a session whose bound
+would cross ``--jev-budget`` (1,000), and labels at most ``--label-budget``
+(40) calls' worth of injected pairs, judge on and off together, with the same
+blind rater as the arms above. ``judge.json`` under ``--work`` resumes.
+
+**Judge on, first run 2026-09-24** (dry run bound 950 requests; sent 940, all
+answered, none timed out or errored, so nothing fell back; median 788 ms, max
+1,753 ms; 4 label calls, every pair labelled). Arm (b) ran 69 of 88
+sessions, 1,275 prompts; session 70 would have crossed the budget. Its
+rewound vaults reproduce the recorded judge-off injections on 1,233 of 1,275
+prompts (57 of 69 sessions exactly); the 42 others fall in sessions 39-64,
+where a page that later gained a second source ranks with its final text.
+Three sessions were rebuilt from the record (transcripts pruned).
+
+- **Arm (b)**: judge off (replayed) fires on 186 prompts, 236 pairs, 16
+  on-point, 181 noise (77%). Judge on fires on 78 (6.1%), 87 pairs, 32
+  on-point, 37 marginal, **18 noise (20.7%, Wilson 13.5-30.4%)**. Prompts
+  holding an on-point rule: 16 off, 29 on. The first on-point injection
+  moves from session 24 to session 23.
+- **Arm (a)** (master, after #471): 6 of 50 fire either way; off 10 pairs,
+  all noise; on 6 pairs, 2 on-point, 2 noise.
+- **Arm (c)**: off 7 of 50, 11 pairs, 2 on-point, 9 noise; on 6 of 50, 7
+  pairs, 3 on-point, 2 noise.
+- Against the bar declared in #479 (noise <= 20% of labelled injections):
+  arm (b) misses it by one pair, with an interval that straddles it; arms (a)
+  and (c) have 6 and 7 pairs, too few to call either way (2/6 and 2/7).
 
 **Resume.** Everything lives under ``--work`` (default
 :data:`DEFAULT_WORK`): each arm's vault, ``progress.json`` after every
@@ -366,6 +419,8 @@ def rates(units: Sequence[Dict[str, Any]], labels: Dict[str, Dict[str, int]]) ->
     on = sum(1 for v in lab if v == ON_POINT)
     return {"prompts": len(units), "fired": len(fired), "pairs": len(pairs),
             "on_point": on, "labelled": sum(1 for v in lab if v is not None),
+            "marginal": sum(1 for v in lab if v == mrr.MARGINAL),
+            "noise": sum(1 for v in lab if v == mrr.NOISE),
             "prompts_on_point": sum(
                 1 for u in fired
                 if any(labels.get(u["uid"], {}).get(c["slug"]) == ON_POINT for c in u["pool"]))}
@@ -728,8 +783,13 @@ def session_start_blocks(vault: Path, project: str, cwd: str) -> Dict[str, Any]:
 
 
 def replay_prompts(vault: Path, project: str, items: Sequence[Tuple[Session, float, str]],
-                   texts: Dict[str, str]) -> List[Dict[str, Any]]:
-    """The prompts through the hook's decision, in order; one unit per prompt."""
+                   texts: Dict[str, str], jev: Optional["Jev"] = None) -> List[Dict[str, Any]]:
+    """The prompts through the hook's decision, in order; one unit per prompt.
+
+    With ``jev``, the judge stage runs as the hook runs it (#479): each unit
+    then carries ``judge``, the stage's log row for that prompt (None when
+    nothing was asked), with ``fallback`` set when the gates answered instead.
+    """
     from mnemo.core import config
     from mnemo.core.mcp import rerank, tools as mcp_tools
     from mnemo.core.reflex import replay
@@ -739,7 +799,12 @@ def replay_prompts(vault: Path, project: str, items: Sequence[Tuple[Session, flo
     index = load_index(vault) or {"docs": {}, "postings": {}, "doc_count": 0}
     prompts = [replay.Prompt(session_id=s.sid, project=project, ts=ts, text=text)
                for s, ts, text in items]
-    result = replay.run(prompts, index, {}, reflex_cfg=cfg.get("reflex") or {})
+    rows: Dict[Tuple[str, float], Dict[str, Any]] = {}
+    stage = None
+    if jev is not None:
+        stage = jev.stage(vault, project, rows)
+    result = replay.run(prompts, index, {}, reflex_cfg=cfg.get("reflex") or {}, judge=stage,
+                        judge_candidates=jev.chosen["candidates"] if jev else 3)
     injected: Dict[Tuple[str, float], List[str]] = {}
     for inj in result.injections:
         injected.setdefault((inj.session_id, inj.ts), []).append(inj.slug)
@@ -753,6 +818,8 @@ def replay_prompts(vault: Path, project: str, items: Sequence[Tuple[Session, flo
             pool.append({"slug": slug, "text": texts[slug]})
         units.append({"uid": mrg.unit_id(p.session_id, p.ts, p.text), "session_id": p.session_id,
                       "ts": p.ts, "prompt": mrg.judge_state(p.text), "pool": pool})
+        if jev is not None:
+            units[-1]["judge"] = rows.get((p.session_id, p.ts))
     return units
 
 
@@ -995,13 +1062,15 @@ def run_mirror_arm(ctx: Dict[str, Any], state: Dict[str, Any], save: Callable[[]
 
 
 def label(units: Sequence[Dict[str, Any]], labels: Dict[str, Dict[str, int]], rater: str,
-          save: Callable[[], None]) -> int:
+          save: Callable[[], None], limit: Optional[int] = None) -> int:
     from mnemo.core import config, llm
 
     cfg = config.load_config()
     provider = llm.resolve(cfg)
     timeout = int(cfg["extraction"]["subprocessTimeout"])
     todo = mrr.batches([u for u in units if u["pool"]], labels)
+    if limit is not None:
+        todo = todo[:max(0, limit)]
     for n, batch in enumerate(todo, 1):
         resp = provider(mrr.rater_prompt(batch), system=mrr.RATER_SYSTEM, model=rater,
                         timeout=timeout)
@@ -1219,6 +1288,568 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
     return lines
 
 
+# --- the judge on (#479) ------------------------------------------------------------
+
+#: Jev requests and Claude label calls one ``--judge`` run may spend (#479).
+JEV_BUDGET = 1000
+JUDGE_LABEL_BUDGET = 40
+#: Run order: the two arms with a fixed vault first; arm (b) takes what is left.
+JUDGE_ARMS = ("a", "c", "b")
+JUDGE_NAME = "judge.json"
+#: The judge-off bar declared in #479 before measuring: at most this share of
+#: the labelled injections may be noise for day one to count as "decent".
+NOISE_BAR = 0.20
+
+
+class BudgetReached(Exception):
+    """A request past ``--jev-budget``. ``judge.ask`` reads it as an error and falls back."""
+
+
+def shipped_judge() -> Dict[str, Any]:
+    """``reflex.judge`` as a user who turns it on gets it: every setting at its default."""
+    from mnemo.core.reflex import judge
+
+    return judge.settings({"reflex": {"judge": {"provider": "typesafe"}}})
+
+
+class Jev:
+    """The judge stage the hook runs, counting every request it sends.
+
+    ``client`` is ``rerank.typesafe_client`` over the key ``judge.resolve_key``
+    finds (a stub in tests). Each prompt goes through the real
+    :func:`mnemo.core.reflex.judge.ask`: the same prompt and rule truncation,
+    the shipped timeout on its own thread, None on any failure — which
+    :func:`mnemo.core.reflex.replay.run` turns into the gates' decision, as
+    the hook does.
+    """
+
+    def __init__(self, client: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+                 chosen: Dict[str, Any], budget: int, sent: int = 0):
+        self.client, self.chosen, self.budget, self.sent = client, dict(chosen), budget, sent
+
+    def _counted(self, state: Dict[str, Any], questions: Dict[str, Any]) -> Dict[str, Any]:
+        if self.sent >= self.budget:
+            raise BudgetReached("--jev-budget of %d requests reached" % self.budget)
+        self.sent += 1
+        return self.client(state, questions)
+
+    def stage(self, vault: Path, project: str,
+              rows: Dict[Tuple[str, float], Dict[str, Any]]) -> Callable[[Any, List[str]], Optional[List[str]]]:
+        from mnemo.core.reflex import judge
+
+        def _stage(prompt: Any, pool: List[str]) -> Optional[List[str]]:
+            picks, info = judge.ask(vault, prompt=prompt.text, slugs=pool,
+                                    chosen_settings=self.chosen, project=project,
+                                    client=self._counted)
+            rows[(prompt.session_id, prompt.ts)] = dict(info, fallback=picks is None)
+            return picks
+
+        return _stage
+
+
+def request_bound(vault: Path, project: str, items: Sequence[Tuple[Session, float, str]]) -> List[int]:
+    """Per session, the most requests the stage can send over ``items``.
+
+    Probed locally with a stage that answers "none" to every pool: nothing is
+    injected, so neither the session cap nor the dedupe keeps a ranked prompt
+    from being asked. Real answers inject, and injecting only removes prompts
+    (the cap) or rules (the dedupe) from later pools.
+    """
+    from mnemo.core import config
+    from mnemo.core.reflex import replay
+    from mnemo.core.reflex.index import load_index
+
+    asked: Dict[str, int] = {}
+
+    def probe(prompt: Any, _pool: List[str]) -> List[str]:
+        asked[prompt.session_id] = asked.get(prompt.session_id, 0) + 1
+        return []
+
+    prompts = [replay.Prompt(session_id=s.sid, project=project, ts=ts, text=text)
+               for s, ts, text in items]
+    replay.run(prompts, load_index(vault) or {"docs": {}, "postings": {}, "doc_count": 0}, {},
+               reflex_cfg=config.load_config().get("reflex") or {}, judge=probe)
+    return list(asked.values())
+
+
+def pairs_bound(asks: Sequence[int], candidates: int, cap: int) -> int:
+    """Most pairs the judge can inject: ``candidates`` per request, the cap per session.
+
+    The cap is checked before a prompt, so the last prompt can take a session
+    ``candidates - 1`` past it, as in the hook.
+    """
+    return sum(min(candidates * n, cap - 1 + candidates) for n in asks if n)
+
+
+def learned_order(vault: Path) -> List[str]:
+    """``type/slug`` of every page that went live, in the order it did (``learned.jsonl``)."""
+    rows = []
+    try:
+        lines = (vault / ".mnemo" / "learned.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("slug") and row.get("type"):
+            rows.append((int(row.get("seq") or 0), "%s/%s" % (row["type"], row["slug"])))
+    out: List[str] = []
+    for _seq, key in sorted(rows):
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def rewind(src: Path, dest: Path, keep: Sequence[str]) -> Path:
+    """``src`` as it stood when only the live pages ``keep`` existed, built at ``dest``.
+
+    Arm (b)'s vault grows session by session and only its end state is kept.
+    ``learned.jsonl`` orders the pages that went live, and a row's live count
+    says how many there were, so the vault a session met is the final one
+    minus the pages that went live later; staged pages stay, since nothing
+    reads them. A page's text is its final text. The judge-off replay over the
+    rewound vault is compared with the injections arm (b) recorded, which is
+    what says whether that approximation holds.
+    """
+    if (dest / ".mnemo" / "rewound.json").exists():
+        return dest
+    tmp = dest.parent / (dest.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(str(tmp))
+    shutil.copytree(str(src), str(tmp))
+    wanted = set(keep)
+    left = 0
+    for ptype in LIVE_TYPES:
+        for md in sorted((tmp / "shared" / ptype).glob("*.md")):
+            if "%s/%s" % (ptype, md.stem) in wanted:
+                left += 1
+            else:
+                md.unlink()
+    if left != len(wanted):
+        raise SystemExit("error: rewinding %s to %d live page(s) left %d; learned.jsonl and the "
+                         "pages disagree" % (src, len(wanted), left))
+    with arm_vault(tmp):
+        rebuild_indexes(tmp)
+    (tmp / ".mnemo" / "rewound.json").write_text(json.dumps(sorted(wanted)), encoding="utf-8")
+    raw = json.loads((tmp / "mnemo.config.json").read_text(encoding="utf-8"))
+    raw["vaultRoot"] = str(dest)
+    (tmp / "mnemo.config.json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    if dest.exists():
+        shutil.rmtree(str(dest))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(str(tmp), str(dest))
+    return dest
+
+
+def reproduced(mine: Sequence[Dict[str, Any]], cached: Sequence[Dict[str, Any]]) -> List[int]:
+    """[prompts whose injected rules match, prompts compared] — the replay against the record."""
+    theirs = {u["uid"]: [c["slug"] for c in u["pool"]] for u in cached}
+    same = sum(1 for u in mine if theirs.get(u["uid"]) == [c["slug"] for c in u["pool"]])
+    return [same, len(mine)]
+
+
+def jev_stats(units: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Requests the stage sent over ``units``, how they ended, and their median wall time."""
+    rows = [u["judge"] for u in units if u.get("judge") and u["judge"].get("asked")]
+    by: Dict[str, int] = {}
+    for r in rows:
+        by[r["status"]] = by.get(r["status"], 0) + 1
+    ms = sorted(int(r.get("ms") or 0) for r in rows)
+    median = None
+    if ms:
+        mid = len(ms) // 2
+        median = ms[mid] if len(ms) % 2 else (ms[mid - 1] + ms[mid]) / 2.0
+    return {"requests": len(rows), "status": by,
+            "fallback": sum(1 for r in rows if r.get("fallback")),
+            "said_none": sum(1 for r in rows if not r.get("fallback") and not r.get("injected")),
+            "median_ms": median, "max_ms": ms[-1] if ms else None}
+
+
+def noise_share(r: Dict[str, Any]) -> Optional[float]:
+    return r["noise"] / float(r["labelled"]) if r["labelled"] else None
+
+
+def _sessions_by_sid(corpus: Path) -> Dict[str, Session]:
+    return {s.sid: s for s in load_sessions(corpus)}
+
+
+def from_record(row: Dict[str, Any]) -> Session:
+    """An arm-(b) session whose transcript is gone, rebuilt from the units it recorded.
+
+    Claude Code prunes old transcripts. A unit keeps the prompt as the judge
+    would send it (whitespace collapsed, the first 1,200 characters), so the
+    ranking of a longer prompt can differ from the one recorded; the
+    judge-off check says whether it did.
+    """
+    return Session(sid=row["sid"], path=Path(row["sid"] + ".jsonl"), start=row["start"],
+                   end=row["end"], mutations=0,
+                   prompts=[(u["ts"], u["prompt"]) for u in row["units"]])
+
+
+def recorded_only(session: Session, row: Dict[str, Any]) -> Session:
+    """``session`` with only the prompts the arm-(b) row recorded."""
+    seen = {u["ts"] for u in row["units"]}
+    return Session(sid=session.sid, path=session.path, start=session.start, end=session.end,
+                   mutations=session.mutations, mtime=session.mtime,
+                   prompts=[(ts, t) for ts, t in session.prompts if ts in seen])
+
+
+def adopt_uids(mine: List[Dict[str, Any]], recorded: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """File each unit under the uid the judge-off run gave the same prompt, so labels line up.
+
+    Matched on (session, time); a transcript still on disk gives the same uid
+    anyway, a session rebuilt :func:`from_record` would not.
+    """
+    by = {(u["session_id"], u["ts"]): u["uid"] for u in recorded}
+    for u in mine:
+        u["uid"] = by.get((u["session_id"], u["ts"]), u["uid"])
+    return mine
+
+
+def judge_sources(work: Path, arm_a_work: Path, corpus: Path) -> Dict[str, Dict[str, Any]]:
+    """Per arm: its vault, its prompts and the judge-off units recorded for them."""
+    by_sid = None
+    out: Dict[str, Dict[str, Any]] = {}
+    for arm, base in (("a", arm_a_work), ("c", work), ("b", work)):
+        progress = _read(base / "progress.json", {})
+        meta, st = progress.get("meta") or {}, progress.get(arm) or {}
+        if arm == "b" and not st.get("rows") or arm != "b" and st.get("units") is None:
+            continue
+        if by_sid is None:
+            by_sid = _sessions_by_sid(corpus)
+        src = {"base": base, "vault": base / ("arm-" + arm) / "vault", "agent": meta["agent"]}
+        if arm == "b":
+            src["rows"] = st["rows"]
+            # A transcript still being written has grown since the run; only
+            # the prompts it recorded are replayed.
+            src["sessions"] = [recorded_only(by_sid[r["sid"]], r) if r["sid"] in by_sid
+                               else from_record(r) for r in st["rows"]]
+            src["from_record"] = sum(1 for r in st["rows"] if r["sid"] not in by_sid)
+            src["order"] = learned_order(src["vault"])
+        else:
+            future_sids = meta["sids"][int(meta["install_after"]):]
+            missing = [sid for sid in future_sids if sid not in by_sid]
+            if missing:
+                raise SystemExit("error: %d transcript(s) after %s's install point are gone from %s"
+                                 % (len(missing), base, corpus))
+            future = [by_sid[sid] for sid in future_sids]
+            src["items"] = first_prompts(future, len(st["units"]))
+            src["off"] = st["units"]
+        out[arm] = src
+    return out
+
+
+def b_live_before(rows: Sequence[Dict[str, Any]], k: int) -> int:
+    """Live pages session ``k`` (0-based) met: what the previous session's end left."""
+    return int(rows[k - 1]["counts"]["live"]) if k else 0
+
+
+def plan_judge(sources: Dict[str, Dict[str, Any]], rewinds: Path, *, arms: Sequence[str],
+               budget: int, max_sessions: int, chosen: Dict[str, Any], cap: int) -> Dict[str, Any]:
+    """Request and pair bounds per arm, and how many arm-(b) sessions fit what is left."""
+    plan: Dict[str, Any] = {}
+    left = budget
+    for arm in arms:
+        src = sources.get(arm)
+        if src is None:
+            continue
+        if arm != "b":
+            with arm_vault(src["vault"]):
+                asks = request_bound(src["vault"], src["agent"], src["items"])
+            plan[arm] = {"requests": sum(asks), "prompts": len(src["items"]),
+                         "pairs": pairs_bound(asks, chosen["candidates"], cap)}
+            left -= sum(asks)
+            continue
+        fit = requests = pairs = prompts = 0
+        for k, s in enumerate(src["sessions"][:max_sessions]):
+            n = b_live_before(src["rows"], k)
+            vault = rewind(src["vault"], rewinds / ("arm-b-live-%03d" % n) / "vault", src["order"][:n])
+            with arm_vault(vault):
+                asks = request_bound(vault, src["agent"], [(s, ts, t) for ts, t in s.prompts])
+            if requests + sum(asks) > left:
+                break
+            fit += 1
+            requests += sum(asks)
+            pairs += pairs_bound(asks, chosen["candidates"], cap)
+            prompts += len(s.prompts)
+        plan["b"] = {"requests": requests, "prompts": prompts, "pairs": pairs, "sessions": fit,
+                     "of": len(src["sessions"])}
+    return plan
+
+
+def run_judge(sources: Dict[str, Dict[str, Any]], state: Dict[str, Any], jev: Jev, rewinds: Path, *,
+              arms: Sequence[str], max_sessions: int, save: Callable[[], None]) -> None:
+    """Each arm's prompts with the stage on, and the same prompts off as a check on the replay."""
+    texts: Dict[str, str] = {}
+    for arm in arms:
+        src = sources.get(arm)
+        if src is None:
+            continue
+        st = state["arms"].setdefault(arm, {})
+        if arm != "b":
+            if st.get("units") is not None:
+                continue
+            with arm_vault(src["vault"]):
+                bound = sum(request_bound(src["vault"], src["agent"], src["items"]))
+                if jev.sent + bound > jev.budget:
+                    st["skipped"] = "budget: up to %d request(s) with %d sent of %d" % (
+                        bound, jev.sent, jev.budget)
+                    save()
+                    continue
+                st.pop("skipped", None)
+                off = adopt_uids(replay_prompts(src["vault"], src["agent"], src["items"], texts), src["off"])
+                st["off_check"] = reproduced(off, src["off"])
+                st["off_units"] = off
+                st["units"] = adopt_uids(
+                    replay_prompts(src["vault"], src["agent"], src["items"], texts, jev), src["off"])
+            state["requests"] = jev.sent
+            save()
+            print("judge: arm (%s) done, %d request(s) so far" % (arm, jev.sent), file=sys.stderr)
+            continue
+        rows = st.setdefault("rows", [])
+        st.pop("stopped", None)
+        while len(rows) < min(len(src["sessions"]), max_sessions):
+            k = len(rows)
+            s = src["sessions"][k]
+            n = b_live_before(src["rows"], k)
+            vault = rewind(src["vault"], rewinds / ("arm-b-live-%03d" % n) / "vault", src["order"][:n])
+            items = [(s, ts, t) for ts, t in s.prompts]
+            with arm_vault(vault):
+                bound = sum(request_bound(vault, src["agent"], items))
+                if jev.sent + bound > jev.budget:
+                    st["stopped"] = "budget: session %d may need %d request(s) with %d sent of %d" % (
+                        k + 1, bound, jev.sent, jev.budget)
+                    save()
+                    break
+                recorded = src["rows"][k]["units"]
+                off = adopt_uids(replay_prompts(vault, src["agent"], items, texts), recorded)
+                units = adopt_uids(replay_prompts(vault, src["agent"], items, texts, jev), recorded)
+            rows.append({"sid": s.sid, "live": n, "bound": bound,
+                         "off_check": reproduced(off, recorded), "off_units": off, "units": units})
+            state["requests"] = jev.sent
+            save()
+            print("judge: arm (b) session %d/%d, %d request(s) so far"
+                  % (k + 1, len(src["sessions"]), jev.sent), file=sys.stderr)
+
+
+def judge_report(state: Dict[str, Any], sources: Dict[str, Dict[str, Any]],
+                 labels: Dict[str, Dict[str, int]]) -> Dict[str, Any]:
+    """Per arm, the stage off (as recorded) next to on, over the same prompts."""
+    out: Dict[str, Any] = {"requests": state.get("requests", 0), "budget": state.get("budget"),
+                           "label_calls": state.get("label_calls", 0),
+                           "label_budget": state.get("label_budget"),
+                           "settings": state.get("settings"), "arms": {}}
+    everything: List[Dict[str, Any]] = []
+    for arm in JUDGE_ARMS:
+        st = (state.get("arms") or {}).get(arm) or {}
+        src = sources.get(arm)
+        if src is None:
+            continue
+        if arm != "b":
+            if st.get("units") is None:
+                if st.get("skipped"):
+                    out["arms"][arm] = {"skipped": st["skipped"]}
+                continue
+            on_units, off_units, recorded = st["units"], st["off_units"], src["off"]
+            row: Dict[str, Any] = {"off_check": st.get("off_check")}
+        else:
+            rows = st.get("rows") or []
+            if not rows:
+                continue
+            on_units = [u for r in rows for u in r["units"]]
+            off_units = [u for r in rows for u in r["off_units"]]
+            recorded = [u for r in src["rows"][:len(rows)] for u in r["units"]]
+            checks = [r["off_check"] for r in rows]
+            row = {"off_check": [sum(c[0] for c in checks), sum(c[1] for c in checks)],
+                   "sessions": len(rows), "of": len(src["rows"]), "stopped": st.get("stopped"),
+                   "first_on_point_recorded": first_on_point(
+                       [rates(r["units"], labels) for r in src["rows"][:len(rows)]]),
+                   "first_on_point_off": first_on_point([rates(r["off_units"], labels) for r in rows]),
+                   "first_on_point_on": first_on_point([rates(r["units"], labels) for r in rows]),
+                   "sessions_off_check": sum(1 for c in checks if c[0] == c[1]),
+                   "from_record": src.get("from_record", 0)}
+        everything += on_units
+        row.update({"recorded": rates(recorded, labels), "off": rates(off_units, labels),
+                    "on": rates(on_units, labels), "jev": jev_stats(on_units)})
+        row["noise_off"], row["noise_on"] = noise_share(row["off"]), noise_share(row["on"])
+        out["arms"][arm] = row
+    out["jev"] = jev_stats(everything)
+    return out
+
+
+def _share(x: Optional[float]) -> str:
+    return "n/a" if x is None else "%.0f%%" % (100 * x)
+
+
+def judge_lines(data: Dict[str, Any]) -> List[str]:
+    s = data.get("settings") or {}
+    j = data["jev"]
+    lines = ["day one with the judge on: %s, injectAt %s, timeout %ss, pool top %s; rater %s"
+             % (s.get("model"), s.get("injectAt"), s.get("timeoutSeconds"), s.get("candidates"),
+                data.get("rater")),
+             "Jev: %d request(s) of a %s budget; %s; fell back to the gates %d; median %s ms, max %s ms"
+             % (j["requests"], data.get("budget"), j["status"] or "none", j["fallback"],
+                j["median_ms"], j["max_ms"]),
+             "labels: %d call(s) of a %s budget" % (data.get("label_calls", 0), data.get("label_budget")),
+             "",
+             "arm  judge  prompts  fired  emit    pairs  labelled  on-point  marginal  noise  noise%",
+             "(off = judge-off replayed here, on the same vault as on; recorded = #467's run, "
+             "shown where the two differ)"]
+    names = {"a": "(a)", "b": "(b)", "c": "(c)"}
+    for arm in ("a", "b", "c"):
+        row = data["arms"].get(arm)
+        if not row:
+            continue
+        if row.get("skipped"):
+            lines.append("%-4s skipped: %s" % (names[arm], row["skipped"]))
+            continue
+        for mode in ("recorded", "off", "on") if row["off_check"][0] != row["off_check"][1] else ("off", "on"):
+            r = row[mode]
+            lines.append("%-4s %-5s  %7d  %5d  %-6s %5d  %8d  %8d  %8d  %5d  %6s"
+                         % (names[arm], mode[:5], r["prompts"], r["fired"], pct(r["fired"], r["prompts"]),
+                            r["pairs"], r["labelled"], r["on_point"], r["marginal"], r["noise"],
+                            _share(noise_share(r))))
+    lines.append("")
+    for arm in ("a", "b", "c"):
+        row = data["arms"].get(arm)
+        if not row or row.get("skipped"):
+            continue
+        jv = row["jev"]
+        lines.append("arm %s: Jev %d request(s), %s, %d fallback(s), %d answered none; median %s ms"
+                     % (names[arm], jv["requests"], jv["status"] or "none", jv["fallback"],
+                        jv["said_none"], jv["median_ms"]))
+        oc = row.get("off_check") or [0, 0]
+        lines.append("        judge-off replay here matches the recorded injections on %d of %d prompt(s)"
+                     % (oc[0], oc[1]))
+        if arm == "b":
+            never = "> %d" % row["sessions"]
+            lines.append("        %d of %d session(s) run%s; first on-point injection: recorded at session %s, "
+                         "off at %s, on at %s; sessions whose rewound vault reproduces the record "
+                         "exactly: %d" % (row["sessions"], row["of"],
+                                          " (%s)" % row["stopped"] if row.get("stopped") else "",
+                                          row["first_on_point_recorded"] or never,
+                                          row["first_on_point_off"] or never,
+                                          row["first_on_point_on"] or never,
+                                          row["sessions_off_check"]))
+            if row.get("from_record"):
+                lines.append("        %d session(s) rebuilt from the recorded prompts: their transcripts "
+                             "are gone" % row["from_record"])
+    lines.append("")
+    lines.append("BAR (declared in #479): day one is decent when noise <= %d%% of labelled injections"
+                 % int(NOISE_BAR * 100))
+    for arm in ("a", "b", "c"):
+        row = data["arms"].get(arm)
+        if not row or row.get("skipped"):
+            continue
+        share = row["noise_on"]
+        verdict = ("no labelled injection" if share is None
+                   else "clears" if share <= NOISE_BAR else "misses")
+        lines.append("  arm %s, judge on: %s noise over %d labelled of %d pair(s) -> %s"
+                     % (names[arm], _share(share), row["on"]["labelled"], row["on"]["pairs"], verdict))
+    return lines
+
+
+def main_judge(args: argparse.Namespace, work: Path, labels_path: Path,
+               all_labels: Dict[str, Dict[str, Dict[str, int]]], labels: Dict[str, Dict[str, int]]) -> int:
+    from mnemo.core import config
+    from mnemo.core.mcp import rerank
+    from mnemo.core.reflex import judge
+
+    arm_a_work = (args.arm_a_work or work).expanduser().resolve()
+    # Arm (a)'s judge-off labels may live beside its own run; the rater and
+    # its instruction are the same, so they are the same column.
+    if arm_a_work != work:
+        other = _read(arm_a_work / "labels.json", {}).get(mrr.column(args.rater), {})
+        for uid, row in other.items():
+            for slug, value in row.items():
+                labels.setdefault(uid, {}).setdefault(slug, value)
+    arms = [a for a in JUDGE_ARMS if args.arm in (a, "all")]
+    state_path = work / JUDGE_NAME
+    state: Dict[str, Any] = _read(state_path, {})
+    sources = judge_sources(work, arm_a_work, args.corpus)
+    chosen = shipped_judge()
+    cfg = config.load_config(missing_path=Path("/nonexistent/mnemo.config.json"))
+    cap = int((cfg.get("reflex") or {}).get("maxEmissionsPerSession", 10))
+
+    if not args.dry_run and not args.send:
+        if not state:
+            print("no judge results in %s; --judge --dry-run, then --judge --send" % work, file=sys.stderr)
+            return 1
+        data = judge_report(state, sources, labels)
+        data["rater"] = args.rater
+        print(json.dumps(data, indent=1, default=str) if args.json else "\n".join(judge_lines(data)))
+        return 0
+
+    if args.dry_run:
+        with tempfile.TemporaryDirectory(prefix="mnemo-day-one-rewind-") as tmp:
+            plan = plan_judge(sources, Path(tmp), arms=arms, budget=args.jev_budget,
+                              max_sessions=args.max_sessions, chosen=chosen, cap=cap)
+        print("judge: %s, injectAt %s, timeout %ss, pool top %d; sends the first %d chars of a prompt "
+              "and %d of each rule" % (chosen["model"], chosen["injectAt"], chosen["timeoutSeconds"],
+                                       chosen["candidates"], judge.PROMPT_CHARS, rerank.BODY_CHARS))
+        requests = pairs = 0
+        for arm in arms:
+            p = plan.get(arm)
+            if p is None:
+                print("arm (%s): no judge-off run to compare with; skipped" % arm)
+                continue
+            extra = (", %d of %d session(s) fit" % (p["sessions"], p["of"])) if arm == "b" else ""
+            print("arm (%s): %d prompt(s)%s: <= %d Jev request(s), <= %d injected pair(s)"
+                  % (arm, p["prompts"], extra, p["requests"], p["pairs"]))
+            requests += p["requests"]
+            pairs += p["pairs"]
+        print("total: <= %d Jev request(s) of a %d budget; labels <= %d Claude call(s) for <= %d pair(s) "
+              "(pairs already labelled judge-off are not asked again) of a %d budget"
+              % (requests, args.jev_budget, label_calls(pairs), pairs, args.label_budget))
+        return 0
+
+    chosen_key = dict(chosen)
+    key, source = judge.resolve_key(chosen_key)
+    if not key:
+        print("error: no TypeSafe key (%s or ~/.mnemo/secrets.json)" % chosen["keyEnv"], file=sys.stderr)
+        return 1
+    client = rerank.typesafe_client(key, model=chosen["model"], timeout=float(chosen["timeoutSeconds"]))
+    jev = Jev(client, chosen, args.jev_budget, sent=int(state.get("requests", 0)))
+    state.update({"settings": {k: v for k, v in chosen.items() if k != "keyEnv"}, "key_source": source,
+                  "budget": args.jev_budget, "label_budget": args.label_budget})
+    state.setdefault("arms", {})
+
+    def save() -> None:
+        _write(state_path, state)
+        _write(labels_path, all_labels)
+
+    rewinds = work / "judge-rewind"
+    before = fingerprint(Path.home() / REAL_VAULT)
+    run_judge(sources, state, jev, rewinds, arms=arms, max_sessions=args.max_sessions, save=save)
+    state["requests"] = jev.sent
+    save()
+    # Judge-on and judge-off pairs in one pass, arm by arm; the rater sees a
+    # prompt and a rule's text and nothing that says which mode injected it.
+    units = []
+    for arm in arms:
+        st = state["arms"].get(arm) or {}
+        for part in ([st] if arm != "b" else st.get("rows") or []):
+            units += (part.get("units") or []) + (part.get("off_units") or [])
+    left = args.label_budget - int(state.get("label_calls", 0))
+    any_vault = next(iter(sources.values()))["vault"] if sources else None
+    if any_vault is not None and left > 0:
+        with tempfile.TemporaryDirectory(prefix="mnemo-day-one-") as scratch, mrr.mrl._chdir(scratch), \
+                arm_vault(any_vault):
+            state["label_calls"] = int(state.get("label_calls", 0)) + label(
+                units, labels, args.rater, save, limit=left)
+        save()
+    diff = changed(before, fingerprint(Path.home() / REAL_VAULT))
+    state["real_vault"] = {"changed": len(diff), "suspects": suspects(
+        diff, [args.corpus.name, "day-one", "mnemo-day-one"])}
+    save()
+    data = judge_report(state, sources, labels)
+    data["rater"] = args.rater
+    print("\n".join(judge_lines(data)))
+    return 0
+
+
 # --- main -----------------------------------------------------------------------------
 
 def _read(path: Path, default: Any) -> Any:
@@ -1340,7 +1971,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="plan, calls and cost; calls nothing")
     ap.add_argument("--send", action="store_true", help="run the arms (model calls), then label")
     ap.add_argument("--arm", choices=("a", "b", "c", "both", "all"), default="all",
-                    help="both = a and b; c = arm (c) and (a)+(c); all = every arm")
+                    help="both = a and b; c = arm (c) and (a)+(c); all = every arm "
+                    "(--judge: a, b, c or all; (a)+(c) is not judged)")
     ap.add_argument("--corpus", type=Path, default=None,
                     help="transcript directory (default: ~/%s)" % DEFAULT_CORPUS)
     ap.add_argument("--work", type=Path, default=None,
@@ -1354,6 +1986,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="model calls arms (c) and (a)+(c) may spend, apart from --budget")
     ap.add_argument("--rater", default=DEFAULT_RATER)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--judge", action="store_true",
+                    help="replay the saved arms with reflex.judge on (#479); sends to TypeSafe with --send")
+    ap.add_argument("--jev-budget", type=int, default=JEV_BUDGET, help="--judge: Jev requests")
+    ap.add_argument("--label-budget", type=int, default=JUDGE_LABEL_BUDGET,
+                    help="--judge: Claude label calls")
+    ap.add_argument("--arm-a-work", type=Path, default=None,
+                    help="--judge: the --work whose arm (a) to judge (default: --work)")
     args = ap.parse_args(argv)
 
     home = Path.home()
@@ -1364,6 +2003,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     progress: Dict[str, Any] = _read(progress_path, {})
     all_labels: Dict[str, Dict[str, Dict[str, int]]] = _read(labels_path, {})
     labels = all_labels.setdefault(mrr.column(args.rater), {})
+
+    if args.judge:
+        return main_judge(args, work, labels_path, all_labels, labels)
 
     if not args.dry_run and not args.send:
         if not progress:
