@@ -275,7 +275,11 @@ def _merge(args: argparse.Namespace) -> int:
         path=paths[drop].relative_to(vault).as_posix(),
         target_path=paths[keep].relative_to(vault).as_posix(),
     )
-    report = apply_plan(vault, Plan(run_id=run_id, llm_calls=0, verdicts=[verdict]))
+    try:
+        report = apply_plan(vault, Plan(run_id=run_id, llm_calls=0, verdicts=[verdict]))
+    except RuntimeError as exc:  # VaultBusy: an extraction holds the vault
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
     if report.merged != 1:
         for note in report.notes:
             print("  " + note, file=sys.stderr)

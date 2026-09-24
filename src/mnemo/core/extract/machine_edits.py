@@ -11,7 +11,11 @@ told apart from the tool's.
 Two writers skipped that and drifted most of a real vault (2026-09-23: 423 of
 481 live project pages, 128 staged pages): the doctor self-fixer relativizing
 ``sources:``, and ``tools/measure_demotions.py --stamp --apply`` inserting
-``reference_gate:``. This module holds both halves of the fix:
+``reference_gate:``. Three more were found after (#487, #492): ``mnemo
+regen-graph-edges`` rewriting the ``## Sources`` section, and reclassify's
+keep and merge, which advanced the hash on a key built from the frontmatter
+slug where the ledger keys the page by its file stem. This module holds both
+halves of the fix:
 
 * :func:`edit_session` — the one door a tool uses to rewrite tracked pages. It
   takes the extraction lock, and advances ``written_hash`` for a page only when
@@ -26,9 +30,9 @@ from __future__ import annotations
 import contextlib
 import re
 from dataclasses import dataclass, field
-from itertools import combinations, product
+from itertools import combinations
 from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple, Union
 
 from mnemo.core import locks
 from mnemo.core.atomic import atomic_write_bytes
@@ -77,6 +81,9 @@ class EditSession:
     drifted: List[str] = field(default_factory=list)
     #: Pages with no ledger entry — nothing extraction would compare against.
     untracked: List[Path] = field(default_factory=list)
+    #: Set by a caller that edited ``state`` entries itself (reclassify adds,
+    #: dismisses and moves entries), so the state is saved on the way out.
+    changed: bool = False
 
     def write(self, page: Path, data: Union[str, bytes]) -> None:
         page = Path(page)
@@ -102,8 +109,11 @@ class EditSession:
 
 
 @contextlib.contextmanager
-def edit_session(vault_root: Path) -> Iterator[EditSession]:
+def edit_session(vault_root: Path, *, create: bool = False) -> Iterator[EditSession]:
     """Hold the extraction lock and yield an :class:`EditSession`.
+
+    With *create*, a vault with no state file gets an empty state, for a
+    caller that records entries of its own.
 
     The state is saved on the way out even when the body raised, so every page
     already written keeps its hash in step. Raises :class:`VaultBusy` when an
@@ -126,14 +136,17 @@ def edit_session(vault_root: Path) -> Iterator[EditSession]:
         # A state this mnemo cannot read is not ours to rewrite: the edit
         # still happens, as it did before #470, with no hash to move.
         try:
-            state = load_state(state_path) if state_path.is_file() else None
+            if state_path.is_file():
+                state = load_state(state_path)
+            else:
+                state = ExtractionState(last_run=None, entries={}) if create else None
         except StateSchemaError:
             state = None
         session = EditSession(vault_root=vault_root, state=state)
         try:
             yield session
         finally:
-            if state is not None and session.advanced:
+            if state is not None and (session.advanced or session.changed):
                 atomic_write_state(state, state_path)
 
 
@@ -184,7 +197,9 @@ def unstamp_slug(text: str) -> Optional[str]:
 _SOURCE_ITEM = re.compile(r"^([ \t]+-[ \t]+)(.*?)([ \t]*)$")
 
 
-def absolutize_sources(text: str, prefix: str) -> Optional[str]:
+def absolutize_sources(
+    text: str, prefix: str, only: Optional[FrozenSet[int]] = None,
+) -> Optional[str]:
     """Undo the ``sources:`` relativization, with *prefix* as the vault path.
 
     ``promote.py`` rendered each project page's source as the scanner's
@@ -192,6 +207,11 @@ def absolutize_sources(text: str, prefix: str) -> Optional[str]:
     to ``bots/...``. Only items of the frontmatter's ``sources:`` block are
     touched. A prefix spelled with backslashes (a Windows vault) is rejoined
     with them, as ``str(Path)`` rendered it there.
+
+    *only* restricts the undo to those ``bots/`` items (0-based, counted among
+    the ``bots/`` items): the fixer swapped only the items that were absolute,
+    so a page that mixed one absolute source among relative ones (#492,
+    ``backup-by-risk-not-ritual``) is overshot by absolutizing every item.
     """
     bounds = _fm_bounds(text)
     if bounds is None:
@@ -201,19 +221,217 @@ def absolutize_sources(text: str, prefix: str) -> Optional[str]:
     lines = text[start:close].split("\n")
     out: List[str] = []
     in_sources = changed = False
+    seen = 0
     for line in lines:
         if line and not line[0].isspace():
             in_sources = line.rstrip() == "sources:"
         elif in_sources:
             m = _SOURCE_ITEM.match(line)
             if m and m.group(2).startswith("bots/"):
-                rel = m.group(2) if sep == "/" else m.group(2).replace("/", "\\")
-                line = f"{m.group(1)}{prefix.rstrip(sep)}{sep}{rel}{m.group(3)}"
-                changed = True
+                if only is None or seen in only:
+                    rel = m.group(2) if sep == "/" else m.group(2).replace("/", "\\")
+                    line = f"{m.group(1)}{prefix.rstrip(sep)}{sep}{rel}{m.group(3)}"
+                    changed = True
+                seen += 1
         out.append(line)
     if not changed:
         return None
     return text[:start] + "\n".join(out) + text[close:]
+
+
+def _relative_items(text: str) -> int:
+    """How many ``sources:`` items are ``bots/``-relative."""
+    bounds = _fm_bounds(text)
+    if bounds is None:
+        return 0
+    n = 0
+    in_sources = False
+    for line in text[bounds[0]:bounds[1]].split("\n"):
+        if line and not line[0].isspace():
+            in_sources = line.rstrip() == "sources:"
+        elif in_sources:
+            m = _SOURCE_ITEM.match(line)
+            n += bool(m and m.group(2).startswith("bots/"))
+    return n
+
+
+#: Past this many relative items only the whole block is tried: the subsets
+#: grow as 2^n, and the one page #487 found mixed had two.
+_SUBSET_LIMIT = 6
+
+
+def _absolutizers(text: str, prefixes: Sequence[str]) -> List[Callable[[str], Optional[str]]]:
+    n = _relative_items(text)
+    if n == 0:
+        return []
+    subsets: List[Optional[FrozenSet[int]]] = [None]
+    if 1 < n <= _SUBSET_LIMIT:
+        subsets += [frozenset(c) for size in range(1, n)
+                    for c in combinations(range(n), size)]
+    return [lambda t, p=p, o=o: absolutize_sources(t, p, o)
+            for p in prefixes for o in subsets]
+
+
+def unkeep(text: str) -> Optional[str]:
+    """Undo reclassify's keep (``reclassify_apply._rewrite_keep``): it set
+    ``confidence: verified`` and appended an ``evidence:`` block to the
+    frontmatter. Dropping both reproduced the pre-keep bytes on 24/24 kept
+    pages of the maintainer's vault (#487)."""
+    bounds = _fm_bounds(text)
+    if bounds is None:
+        return None
+    start, close = bounds
+    lines = text[start:close].split("\n")
+    out: List[str] = []
+    in_evidence = dropped_conf = dropped_ev = False
+    for line in lines:
+        if in_evidence and line.startswith("  "):
+            continue
+        in_evidence = False
+        if line.startswith("evidence:"):
+            in_evidence = dropped_ev = True
+            continue
+        if line.rstrip() == "confidence: verified" and not dropped_conf:
+            dropped_conf = True
+            continue
+        out.append(line)
+    if not (dropped_conf and dropped_ev):
+        return None
+    return text[:start] + "\n".join(out) + text[close:]
+
+
+def _graph_section(links: Sequence[str]) -> str:
+    """The ``## Sources`` section as the renderer and regen write it."""
+    from mnemo.core.text_utils import GRAPH_SECTION_MARKER
+
+    if not links:
+        return ""
+    body = "\n".join(f"- [[{link}]]" for link in links)
+    return f"\n{GRAPH_SECTION_MARKER}\n## Sources\n{body}\n"
+
+
+_PROJECT_PART = re.compile(r"^bots/[^/]+/(?=briefings/)")
+
+
+def _link_spellings(sources: Sequence[str], prefixes: Sequence[str]) -> List[List[str]]:
+    """Every spelling a page's section may have had for *sources*.
+
+    The section is a pure function of the sources it was built from: the
+    renderer copied each one through verbatim, often absolute; ``regen``
+    relativizes it. Both strip ``.md``. The ledger's ``source_files`` may be
+    either spelling of what the page was rendered with. Older extractions
+    also cited a briefing as ``briefings/sessions/<id>`` (relative to its
+    project) or ``mnemo://bots/...``; 36 of the pages #492 measured were
+    rendered with one of those.
+    """
+    def strip_md(s: str) -> str:
+        return s[:-3] if s.endswith(".md") else s
+
+    def relative(s: str) -> str:
+        for p in prefixes:
+            for sep in ("/", "\\"):
+                head = p.rstrip(sep) + sep
+                if s.startswith(head) and s[len(head):].replace("\\", "/").startswith("bots/"):
+                    return s[len(head):].replace("\\", "/")
+        return s
+
+    out: Dict[Tuple[str, ...], None] = {}
+    out.setdefault(tuple(strip_md(s) for s in sources), None)
+    out.setdefault(tuple(strip_md(relative(s)) for s in sources), None)
+    def absolute(p: str, rel: str) -> str:
+        # Joined as ``str(Path)`` rendered it: with backslashes on Windows.
+        if "\\" in p and "/" not in p:
+            return p.rstrip("\\") + "\\" + rel.replace("/", "\\")
+        return f"{p.rstrip('/')}/{rel}"
+
+    for p in prefixes:
+        out.setdefault(tuple(
+            strip_md(absolute(p, relative(s)) if relative(s).startswith("bots/") else s)
+            for s in sources), None)
+    out.setdefault(tuple(
+        strip_md(f"mnemo://{relative(s)}" if relative(s).startswith("bots/") else s)
+        for s in sources), None)
+    out.setdefault(tuple(
+        strip_md(_PROJECT_PART.sub("", relative(s), count=1)) for s in sources), None)
+    return [list(links) for links in out]
+
+
+def _regen_undoers(
+    text: str, source_files: Sequence[str], prefixes: Sequence[str],
+    vault_root: Optional[Path],
+) -> List[Callable[[str], Optional[str]]]:
+    """Undo ``mnemo regen-graph-edges`` (``_refresh_rule``).
+
+    It replaced everything from the marker on with a section rebuilt from
+    ``sources:``, after trimming the body's trailing newlines to one. What it
+    replaced was either nothing or the section of the page as written, which
+    the ledger's ``source_files`` rebuild (#487).
+
+    Only a page that *is* regen's output is undone: the text must come back
+    unchanged from regen's own function. A note a person appended after the
+    section, or a link they edited in it, is not regen's, so the page is
+    left; so is a page regen never ran on. Where regen did run, guessing what
+    it replaced loses nothing — it had already replaced the whole region —
+    and only a guess that reproduces the recorded hash byte for byte is taken.
+    """
+    from mnemo.cli.commands.regen_graph_edges import refreshed_rule
+    from mnemo.core.text_utils import GRAPH_SECTION_MARKER
+
+    if GRAPH_SECTION_MARKER not in text:
+        return []
+    root = Path(vault_root) if vault_root is not None else Path(prefixes[0] if prefixes else ".")
+    # The page was rendered before later sources joined the ledger (a merge
+    # appends, a re-extraction unions): its section cites a leading run of
+    # them.
+    sections = [""] + [_graph_section(links)
+                       for n in range(len(source_files), 0, -1)
+                       for links in _link_spellings(source_files[:n], prefixes)]
+
+    def undo(t: str, section: str) -> Optional[str]:
+        at = t.find(GRAPH_SECTION_MARKER)
+        if at == -1 or refreshed_rule(t, root) != t:
+            return None
+        out = t[:at].rstrip("\n") + "\n" + section
+        return out if out != t else None
+
+    return [lambda t, sec=sec: undo(t, sec) for sec in dict.fromkeys(sections)]
+
+
+def unmerge_sources(text: str, appended: Sequence[str], count: int) -> Optional[str]:
+    """Undo reclassify's merge onto this page (``_append_sources``): drop the
+    last *count* ``sources:`` items, each one a source a merge appended.
+
+    It only appended items the block lacked, and created the block when there
+    was none, so emptying the block drops its key too.
+    """
+    bounds = _fm_bounds(text)
+    if bounds is None or count < 1:
+        return None
+    start, close = bounds
+    lines = text[start:close].split("\n")
+    try:
+        idx = next(i for i, l in enumerate(lines) if l.startswith("sources:"))
+    except StopIteration:
+        return None
+    end = idx + 1
+    while end < len(lines) and lines[end].startswith("  - "):
+        end += 1
+    items = lines[idx + 1:end]
+    if count > len(items):
+        return None
+    wanted = set(appended)
+    if any(l[4:].strip() not in wanted for l in items[len(items) - count:]):
+        return None
+    keep = items[:len(items) - count]
+    block = [lines[idx]] + keep if keep else []
+    return text[:start] + "\n".join(lines[:idx] + block + lines[end:]) + text[close:]
+
+
+def _unmergers(text: str, appended: Sequence[str]) -> List[Callable[[str], Optional[str]]]:
+    if not appended:
+        return []
+    return [lambda t, k=k: unmerge_sources(t, appended, k)
+            for k in range(1, len(appended) + 1)]
 
 
 _ABS_SOURCE = re.compile(r"^[ \t]+-[ \t]+(.+?)[/\\]bots[/\\]", re.MULTILINE)
@@ -239,34 +457,109 @@ def vault_prefixes(vault_root: Path, texts: Sequence[str] = ()) -> List[str]:
     return list(seen)
 
 
-def _reversals(prefixes: Sequence[str]) -> List[Tuple[str, List[Callable[[str], Optional[str]]]]]:
-    return [
-        ("sources", [lambda t, p=p: absolutize_sources(t, p) for p in prefixes]),
-        ("reference_gate", [unstamp_reference_gate]),
-        ("slug", [unstamp_slug]),
-    ]
+#: Display order of the edit names in :func:`explain_drift`'s answer.
+_KINDS = ("sources", "reference_gate", "slug", "regen", "keep", "merge")
+#: The order edits are undone in: last written first. Extraction wrote the
+#: page; reclassify's keep; the #114 slug stamp; the doctor fixer's sources
+#: swap; ``regen-graph-edges`` (09-08); dedupe-audit merges (09-22); the
+#: ``reference_gate`` stamp (09-23).
+_UNDO_ORDER = ("reference_gate", "merge", "regen", "sources", "slug", "keep")
+
+
+def _reversals(
+    text: str, prefixes: Sequence[str], source_files: Sequence[str],
+    merged_sources: Sequence[str], vault_root: Optional[Path],
+) -> Dict[str, List[Callable[[str], Optional[str]]]]:
+    return {
+        "sources": _absolutizers(text, prefixes),
+        "reference_gate": [unstamp_reference_gate],
+        "slug": [unstamp_slug],
+        "regen": _regen_undoers(text, source_files, prefixes, vault_root),
+        "keep": [unkeep],
+        "merge": _unmergers(text, merged_sources),
+    }
 
 
 def explain_drift(
     text: str, written_hash: str, prefixes: Sequence[str],
+    source_files: Sequence[str] = (), merged_sources: Sequence[str] = (),
+    vault_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Name the known machine edits that account for *text*'s drift, or None.
 
-    Every combination of the known edits is undone and the result hashed; a
-    match means the only changes since the extractor wrote the page were
-    those edits. The name is ``+``-joined, e.g. ``"sources+reference_gate"``.
-    A reworded body, a hand-added tag — anything else fails every candidate.
+    The known edits are undone, in every combination, newest first, and each
+    result hashed; a match means the only changes since the extractor wrote
+    the page were those edits. The name is ``+``-joined, e.g.
+    ``"sources+reference_gate"``; of several matches the one naming fewest
+    edits wins. A reworded body, a hand-added line — anything else fails
+    every candidate.
+
+    *source_files* are the ledger's (the ``regen`` section is rebuilt from
+    them), *merged_sources* the sources reclassify merges appended to this
+    page (:func:`merge_appends`).
     """
-    kinds = _reversals(prefixes)
-    for size in range(1, len(kinds) + 1):
-        for combo in combinations(kinds, size):
-            for undo in product(*(fns for _, fns in combo)):
-                candidate: Optional[str] = text
-                for fn in undo:
-                    candidate = fn(candidate) if candidate is not None else None
-                if candidate is not None and content_hash(candidate) == written_hash:
-                    return "+".join(name for name, _ in combo)
-    return None
+    fns = _reversals(text, prefixes, source_files, merged_sources, vault_root)
+    best: Optional[Tuple[str, ...]] = None
+    stack: List[Tuple[int, str, Tuple[str, ...]]] = [(0, text, ())]
+    seen = set()
+    while stack:
+        depth, candidate, done = stack.pop()
+        if (depth, candidate) in seen:
+            continue
+        seen.add((depth, candidate))
+        if done and content_hash(candidate) == written_hash:
+            if best is None or len(done) < len(best):
+                best = done
+            continue
+        if depth == len(_UNDO_ORDER):
+            continue
+        kind = _UNDO_ORDER[depth]
+        stack.append((depth + 1, candidate, done))
+        for fn in fns[kind]:
+            undone = fn(candidate)
+            if undone is not None and undone != candidate:
+                stack.append((depth + 1, undone, done + (kind,)))
+    if best is None:
+        return None
+    return "+".join(k for k in _KINDS if k in best)
+
+
+def merge_appends(vault_root: Path) -> Dict[str, List[str]]:
+    """Ledger key -> the sources reclassify merges appended to that page.
+
+    Read off every ``shared/_archive/reclassify-*/`` run: its manifest names
+    each merge's target, and ``merged/<slug>.md`` is the merged-away page,
+    whose ``sources:`` are what ``_append_sources`` added (#487).
+    """
+    import json
+
+    from mnemo.core.reclassify_types import split_frontmatter
+
+    vault_root = Path(vault_root)
+    out: Dict[str, List[str]] = {}
+    for manifest in sorted((vault_root / "shared" / "_archive").glob("reclassify-*/manifest.json")):
+        try:
+            moves = json.loads(manifest.read_text(encoding="utf-8")).get("moves") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for move in moves:
+            if not isinstance(move, dict) or move.get("verdict") != "merge":
+                continue
+            target = move.get("target_path")
+            if not target:
+                continue
+            key = page_key(vault_root / str(target), vault_root)
+            try:
+                merged = (manifest.parent / "merged" / f"{move.get('slug')}.md").read_text(encoding="utf-8")
+            except OSError:
+                continue
+            sources = split_frontmatter(merged)[0].get("sources") or []
+            if not isinstance(sources, list):
+                sources = [sources]
+            bucket = out.setdefault(key, []) if key else None
+            if bucket is not None:
+                bucket.extend(str(s) for s in sources if str(s) not in bucket)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -355,9 +648,11 @@ def rebaseline(
             drifted.append((key, entry, pages))
 
     prefixes = vault_prefixes(vault_root, texts)
+    appends = merge_appends(vault_root) if drifted else {}
     for key, entry, pages in drifted:
         for page, text in pages:
-            edits = explain_drift(text, entry.written_hash, prefixes)
+            edits = explain_drift(text, entry.written_hash, prefixes,
+                                  entry.source_files, appends.get(key, ()), vault_root)
             if edits is None:
                 continue
             report.rebaselined.append((key, edits))
