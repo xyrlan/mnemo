@@ -5,6 +5,988 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-24
+
+### Added
+
+- **`mnemo deliver --stop-done` stops every finished child in the repo's
+  dispatch worktrees, delivered or not.** A briefing is made from the session,
+  not from the pull request, and only a stopped child fires `SessionEnd` — so
+  the child that judged its task wrong and published nothing is exactly the one
+  delivery-shaped stopping could never reach, and its reasoning is the only
+  copy there is. It pushes nothing and approves nothing, and is refused
+  alongside named ids or `--review` because each of those is a different
+  command. `mnemo deliver --review` now also prints a `TERMINADAS, NÃO
+  PARADAS` group naming the finished children still running. (#349)
+- **`mnemo land` refuses a piece whose pull request has a failing check.** It
+  reads `gh pr checks --json name,bucket` and judges check by check, not the
+  run's conclusion or the PR's rollup: a repository may mark a job
+  non-blocking, and such a job fails while both aggregates still report
+  success. Pending is not failure, and an unreadable answer refuses nothing —
+  the gate stands on evidence, never on the absence of it. (#349)
+
+- **`mnemo dispatch --effort <level>` sets a child's reasoning effort, and `mnemo sessions` reports it.** The levels are Claude Code's own (`low`, `medium`, `high`, `xhigh`, `max`). mnemo checks the level before spawning, because the CLI only warns about an unknown one and then runs the default. A contract piece may name its own `effort:`, which wins over the flag, as `model:` does. The value is read back from the child's `respawnFlags`: `mnemo sessions --json` has an `effort` field, `mnemo session <id>` shows it, and the queue gets an `esforço:` footer once any child has one. `null` means the default, since Claude Code records an effort only when one was passed. With no `--effort`, the spawn command is byte-identical to before. mnemo does not choose the effort itself yet: nobody has measured whether it changes child outcomes. (#351)
+
+- **A finished child tells the session that dispatched it.** `mnemo dispatch`
+  spawns detached children and nothing woke the dispatcher when one exited, so
+  the maintainer was the message bus between two of his own sessions. On a
+  dispatched child's `SessionEnd`, mnemo now looks up its `parent_session` and
+  delivers one line over that session's inbox socket. Switchable off with
+  `dispatch.notifyParent`. Delivery is best-effort by design: a parent that
+  has already exited is not queued for.
+
+  Reaching a session by id needed a map that did not exist. The socket is
+  named by pid (`/tmp/cc-socks/<pid>.sock`), a transcript records no pid, and
+  `~/.claude/daemon/roster.json` — which does map session to pid, and is how
+  `mnemo-desktop` reaches a child — lists only daemon workers: measured
+  2026-09-17 it held 4, and 0 of the 13 `parent_session` ids ever recorded
+  were among them. So each session writes its own address down at
+  `SessionStart`, the one moment it knows it. A row keeps the pid *and* its
+  start time, because `/tmp/cc-socks` held 93 sockets of which only 8 named a
+  live process, and a recycled pid must not inherit someone else's notice.
+
+  The notice opens with a marker the unblock detector skips: the sweep that
+  looks for the maintainer answering a blocked session runs in the very hook
+  that sends this, and would otherwise have recorded mnemo's own message as a
+  human unblocking the parent. It reports an exit and points at
+  `mnemo sessions`; it carries no authority and says so in its own text.
+
+- **Model calls now go through a provider named by `extraction.provider`.**
+  Briefings, extraction, backfill harvest, reclassify and the friction
+  contradiction pass all used to call `claude --print` directly, so no other
+  host could learn rules. They now call the provider the config names, which
+  defaults to `claude-cli`, the same `claude --print` call as before, so
+  Claude Code users see no change. `claude-cli` is still the only provider;
+  this change is the seam a Codex or API provider will plug into. An unknown
+  value fails before the run writes anything. `llm.call` telemetry rows now
+  record which provider answered. (#358)
+
+- **`mnemo dispatch <issue> --read-only` spawns a child that investigates the issue and comments its finding, instead of building it.** The child gets the analysis prompt rather than the implementation one: no test suite to run, no changelog fragment to write, and a closing that posts to the issue with `gh issue comment` rather than checking for commits to publish. Its file-editing tools are closed at spawn — `Edit`, `Write` and `NotebookEdit`, its own subagents included — so an investigation does not drift into a branch out of habit. It can still write through the shell, measured rather than assumed, which is why it keeps a worktree of its own: the restriction prevents drift, it does not contain a child that means to build. Because it publishes nothing, `--may` is refused alongside it by name rather than ignored. A contract piece may ask for the same posture with `- **read-only:** yes`, which wins over the flag as `may:` does. With no `--read-only`, the spawn command is byte-identical to before. (#371)
+
+- **`mnemo inbox` — the review queue for staged pages, and the two acts that
+  clear it.** `shared/_inbox/` fills by itself and drained only by a hand `mv`:
+  194 plain pages on the maintainer's vault, median age 5.3 days, oldest 16 —
+  every one of them invisible to recall while it waited, because location is
+  what decides whether a page is served. `mnemo inbox` lists what is staged for
+  the project you are standing in (`--all` for every project, `--show KEY` for
+  one page), `--promote KEY` moves a page into `shared/<type>/` and rebuilds the
+  indexes so recall reaches it at once, and `--drop KEY` archives it and takes
+  it out of the queue. Both write the extractor's ledger, which the `mv` never
+  did: a promoted page no longer comes back as an `.update-proposed.md` on the
+  next extraction, and a dropped one does not come back at all. `--stats`
+  prints queue depth, median age and what drained in the last seven days.
+  (#380)
+- **A staged page reaches you at session start instead of waiting to be looked
+  for.** When pages are staged for the project you just opened, mnemo adds a
+  `[mnemo staged for review]` block naming the oldest of them, each with the
+  one command that acts on it — the disclosure half of extraction, next to the
+  `[mnemo learned]` block that already announces what it promoted. The
+  decision stays yours: nothing promotes, accepts or drops a page on its own.
+  Three numbers bound the noise, under `inbox` in `mnemo.config.json`:
+  `offerMax` (2) bullets per block, one block per project per
+  `offerIntervalHours` (24), and no page repeated inside `offerCooldownDays`
+  (7). `offerOnSessionStart: false` silences the block and leaves the command.
+  (#380)
+
+- **`mnemo recall` now says whether a buried rule could have been reached at
+  all.** Each queried case records how many of its query's tokens the expected
+  rule actually indexes and the rule's BM25F score, and the report splits the
+  cases outside the top 5 into the ones whose rule shares no token with the
+  query — unreachable by any re-ranking — and the ones that are scored and
+  still lose. Six of the twelve on the live vault are the former, so most of
+  the miss list was never a ranking problem, and a fix aimed at ranking cannot
+  move it. (#381)
+
+- **`tools/measure_exploration.py --by-kind` says what a dispatched child's
+  pre-mutation window was spent *on*, not just how big it was.** #269 measured
+  the size (median 18 tool uses, +43k tokens before the first tree change);
+  this splits it by the question each use asked — `list` (*what is here*),
+  `search` (*where does X live*), `read`, `run`, `context`, `vault` — and
+  reports the **ceiling**: the `list` + `search` share, which is the most any
+  repo map, index or extra opening-prompt context could ever remove, next to
+  the sample size an A/B would need to see a cut that size. A use that asks two
+  questions counts half in each, because resolving mixed commands to one kind
+  handed a map 96% of the bytes the co-located reads had returned.
+
+  Measured on the 176 dispatch children on disk on 2026-09-19, the ceiling is
+  **16% of the bytes and 4 of 18 uses**: reading the files the child is about
+  to change is 71%, and no map replaces it. #382 asked for a cached repo map
+  and is refused on this arithmetic — on every repo dispatch runs in, an index
+  dense enough to answer the `search` half costs more tokens in the prompt than
+  the whole ceiling is worth, and an A/B would need n≈141 children per arm to
+  see even a perfect, free one. `mnemo dispatch` is unchanged. (#382)
+
+- **`tools/measure_refusal_timing.py` dates a dispatch child's doubt about
+  its own issue.** For every dispatch transcript on disk it reports whether
+  the child recorded a refusal, a corrected premise or a re-scope, and how
+  many tool uses had run when that doubt first appears in the child's own
+  words — plus how often a child was answered by the maintainer at all, split
+  by what actually arrived, since a peer session's message and Claude Code's
+  own restart notice both land as human turns. `--list` prints the sentence
+  every marker matched so a count can be read rather than trusted. First
+  result, over 180 children: 33 refusals, of which 4 stated the doubt within
+  their first ten tool uses and 20 said nothing until the closing report.
+  (#383)
+
+- **Every child of an issue dispatch is now told which other issues that run
+  started.** `mnemo dispatch 382 383 384` gives each child a short roster —
+  number and title, nothing else — so a child knows who is editing the repo
+  beside it and can read their issue before landing on the same file. A child
+  dispatched alone reads the prompt it read before, unchanged. Measured over
+  118 past children: 30 of 36 batches started more than one child, and
+  siblings wrote the same file in 3 of the 16 multi-child *issue* batches
+  against 0 of the 13 *contract* batches, where each piece is already told
+  what it may not touch — so contract pieces deliberately get no roster.
+  `tools/measure_dispatch_siblings.py` is that count; `--list` prints every
+  pair. What the dispatching session *reasoned* is still not passed: its
+  written decisions already travel in the issue, which 68 of 68 prompted
+  children read, and passing its unwritten ones is the #187 failure — a
+  prescribed conclusion overriding a correct refusal. (#384)
+
+- **`tools/measure_child_procedures.py` counts what dispatched children get
+  wrong about running work in your repo**, and `CLAUDE.md` now states it for
+  this one. A procedure — how the suite runs, where changelog entries go — is
+  a boundary, not an approach, and a child that has to rediscover it pays
+  every time: measured over 182 children on four repos, 12 mnemo children
+  worked out `PYTHONPATH=src` mid-run and 2 never did, reporting a green
+  suite that had imported the main checkout. No new file format ships for
+  this. Claude Code already attaches the repo's `CLAUDE.md` to every child —
+  where clubinho states a flag there, 24 of 24 runs carried it; the heap size
+  it states nowhere was missed by 13 of 14 children. `mnemo dispatch` holds
+  no repo's procedure and is unchanged. (#385)
+
+- **`mnemo procedures` — what children keep rediscovering, as a proposed `CLAUDE.md` line.** #385 found that a repo's `CLAUDE.md` reaches every dispatched child while a ranked rule only reaches the ones whose prompt matches, and then wrote that file by hand. This reads the transcripts instead: a command shape two or more children of a repo ran bare and then re-ran with an environment variable in front is a procedure they paid to learn, and the command proposes the line that would have told them. `--show` prints it and who paid, `--accept` appends it (the only write, and it only ever appends), `--drop` takes it out of the queue for good. A `doctor` row carries the count, because a command you have to know about is one nobody runs. Detection uses no per-repo probes: the shapes every repo's children run — `git log`, `gh issue` — are excluded by counting repos, not by a list. (#392)
+- **`tools/measure_rediscovered_procedures.py`.** The count the command is gated on: across the 184 dispatch children on disk on 2026-09-19, five procedures were rediscovered by two or more children of the same repo and one of them (`PYTHONPATH` on mnemo's suite) was already written down. `--rejected` prints the other half of the finding — the same bar over flags would have proposed eleven more, led by `cargo test --nocapture`, which is a way of reading output and not a boundary. So flags are counted and excluded rather than guessed at, and a procedure that lives in one stays invisible. (#392)
+
+- **`mnemo resume` wakes the dispatched children a reset has freed, in one
+  command.** The recovery was two commands per child — `claude respawn <id>`,
+  then a cross-session message telling it the limit had reset — the second of
+  which is a socket message, a channel that can never carry authority and only
+  worked because the child's grant was already in its opening prompt. One
+  `mnemo resume` now does all of them: it wakes each child with `claude --bg
+  --resume <full session id>`, which restores every saved option (a read-only
+  child does not regain `Edit`, a lean child does not lose mnemo's hooks) and
+  continues the same session in the same worktree rather than forking a copy —
+  passing the *short* id silently starts a second session in the tree, so it
+  is refused. The message the child reads is a constant with no parameter to
+  pass anything through it: it grants nothing and says so, and points back at
+  the opening prompt, which stays the only instruction the child has.
+  Only a child whose process is gone and whose stall a clock frees is woken,
+  and only past the reset — read as a unix epoch from the child's own
+  transcript (`quotaLimits.resetsAt`). `--dry-run` shows what a bare `mnemo
+  resume` would wake and spends nothing; naming ids or issue numbers narrows
+  it. What bounds re-spending the window is stated rather than implied: no
+  `claude` subcommand reports how much of it is left, so past the reset the
+  window is fresh, and N children spend it N times faster rather than more.
+  (#393)
+
+- **A rate-limited child is woken when its own reset passes, with nobody
+  there to type `mnemo resume`.** #393 made the recovery one command; it still
+  waited for a person who knew to run it, and on 2026-09-19 six children sat
+  stalled for nearly four hours past their reset. mnemo now wakes them itself.
+  Switchable off with `resume.auto`; `resume.maxPerPass` bounds one pass.
+
+  The trigger is not a hook, and the measurement is why.
+  `tools/measure_wake_latency.py` reads every rate limit on disk against every
+  hook mnemo has ever recorded running (525 transcripts, 5372 hook events, 15
+  limits carrying a reset epoch): the first hook after each reset came 15,
+  109, 229 and 499 minutes late, and for four of the five resets *no hook fired
+  at all* between the stall and the reset — the account limit stops every
+  session on the machine, so the thing that would notice is stopped by the
+  same wall. A SessionStart pass would have saved the incident nothing. What
+  the same measurement does show is a hook firing 9 to 86 minutes *before*
+  each stall, so SessionStart now starts a small watcher process instead: it
+  makes no API call, survives the limit that killed everything else, wakes
+  each child as its clock comes round, and exits when there is nothing left to
+  watch — which on a machine running no dispatched children is immediately.
+  `mnemo resume --watch` is the same thing run by hand.
+
+  It is deliberately narrower than what `mnemo resume` will wake: only a rate
+  limit that named its own `resetsAt`, past that epoch. A stall needing a
+  person is never touched, and neither is a transient one or a per-model
+  credit cap — with no epoch there is no window, and no window means nothing
+  bounds a retry. What bounds re-spending the limit is the epoch itself, used
+  as an idempotency key: a child is woken automatically **at most once per
+  reset window**, so one that re-stalls immediately waits for the next
+  boundary rather than being woken in a loop. A machine-wide lock makes a
+  second concurrent pass a no-op and keeps a hundred session starts to one
+  watcher (#330). Every wake is recorded in `.mnemo/resume-wakes.json`, in the
+  day log of the repo the child was working in, and in a `mnemo sessions`
+  footer — not only in the child's own transcript. (#396)
+
+- **An undecided procedure reaches you at session start instead of waiting for
+  a command you have to know about.** `mnemo procedures` (#392) proposes the
+  `CLAUDE.md` line two or more dispatched children of a repo worked out for
+  themselves, and until now it reached only whoever ran it or its `doctor` row
+  — both pulls, and #385 priced a pull at 5 of 182 children. Open a session in
+  a repo with an undecided candidate and mnemo now adds a
+  `[mnemo procedure candidate]` block naming it, with the command that accepts
+  it; open one with none and nothing appears. Measured on the maintainer's own
+  vault: 398 bytes for `mnemo`'s one candidate, 547 for `mnemo-desktop`'s three
+  — roughly 100–140 tokens against a briefing that costs ~1783 at 90.9% of
+  session starts — and 0.5 ms of hook time. The decision stays yours: the block
+  offers, `mnemo procedures --accept KEY` writes, and nothing edits a
+  `CLAUDE.md` on its own. Bounds live under `procedures` in
+  `mnemo.config.json`: `offerMax` (**1**, not the inbox's 2, because accepting
+  writes a permanent line every session in that repo then pays for), one block
+  per repo per `offerIntervalHours` (24), no candidate repeated inside
+  `offerCooldownDays` (7). `offerOnSessionStart: false` silences it and leaves
+  the command working. (#397)
+- **One offer block per session start, alternating between the two review
+  queues.** `[mnemo staged for review]` (#380) and the new
+  `[mnemo procedure candidate]` both ask for a decision, and two of them on one
+  prompt is a nag — so they share a single slot, which goes to whichever has
+  gone longest without it. A queue that wins the slot with nothing to say hands
+  it straight back, so alternating never costs you an offer, and a repo with no
+  candidates sees exactly what it saw before. Worst case on the prompt is one
+  block. (#397)
+- **`mnemo procedures --refresh` and `--stats`.** Finding candidates means
+  reading every dispatch transcript on disk — ~1.0 s over the 184 there on
+  2026-09-19 — which the session-start path must not pay, so the scan runs
+  detached at most once per `procedures.refreshIntervalHours` (24) and the
+  block reads its cache under `.mnemo/procedure-candidates.json`. `--refresh`
+  rebuilds that cache in the foreground; it writes nothing to any repo. The two
+  staleness cases that would matter are read live rather than from the cache: a
+  candidate you already accepted or dropped, and a line you wrote into
+  `CLAUDE.md` by hand, are both silent immediately. `--stats` reads the
+  `offered` rows now appended to `.mnemo/procedure-decisions.jsonl` and reports
+  what was offered, accepted and dropped in the last seven days, and the median
+  time from a candidate being shown to being decided — the number that says
+  whether the offer is what gets candidates decided at all. (#397)
+
+- **`recall.rerank`: an opt-in second stage for `list_rules_by_topic`, off by default.** With `recall.rerank.provider` set to `typesafe`, a list call that carries a `query` posts that query and the first 800 characters of each rule in the topic to a pair-reading model (`jev-1.13.0`, pinned) and returns the list in its order; the key comes from `TYPESAFE_API_KEY`, never from the config file. One request per call, `urllib` only. A missing key, a timeout, an HTTP error or a malformed answer returns the BM25F order, and the access log records which (`rerank.status`). The per-prompt reflex, `mnemo recall` and every hook are untouched — the MCP server is the only caller. **This is the first recall feature that can leave the machine**, so the README's privacy paragraph now names both switches that can. Measured with `tools/measure_rerank_judges.py`, which asks the same question of the same rule text: +0.077 nDCG@5 [+0.029, +0.124] under a different model's labels over 38 replayed queries. On 85 real queried calls the same reordering is not established (+0.081 [-0.024, +0.185]), which is why the stage ships as a *marker* rather than a reordering — see #404. (#401)
+
+- **`recall.rerank` marks what is worth reading instead of just reordering it.** Every rule the judge scored comes back with `relevant: true|false` on it, the marked ones first, and **nothing is ever dropped** — a rule the judge got wrong is one line further down, not gone. A rule it did not score (past `maxRules`, empty body, skipped) carries no `relevant` key at all: absent means "not judged", never "irrelevant". The signal is the judge's probability plus `bm25Weight` (0.5) times the local BM25F score over the best one in that list, marked at `relevantAt` (0.69); both keys are new under `recall.rerank` and a bad value falls back to the default. `list_rules_by_topic`'s description now tells the agent to read the marked rules first, and that none marked is a real answer — nothing in this topic is about this task. With the stage off (the default) the list is exactly what it was and no item carries the key. Why: the list an agent gets is 15 rules, 75% of them about something else, and it picks from slugs alone, so reordering is worth little (+0.081 nDCG@5 [-0.024, +0.185], not established) while the same signal as a filter turns 15.0 rules per query into 2.3 and 75% junk into 13% without losing any of the 24 rules the labels call "should read". `tools/measure_rerank_filter.py` is that measurement and ships with it: 85 real queried calls mined from session transcripts, 1,536 labelled pairs, thresholds fixed on a dev split of 55 queries and the remaining 30 opened once. (#404)
+
+- **`mnemo rerank` — the opt-in recall rerank can now be turned on without a shell.** The stage shipped reading its key from one place, an environment variable, and the process that reads it is the MCP server, which Claude Code spawns: an `export` in `.zshrc` reached it only when `claude` was started from that shell, and never from an app opened from the Dock. `mnemo rerank --setup` asks for the key without echoing it, proves it with one request to the provider, and stores it in `~/.mnemo/secrets.json` — owner-only where the platform has file modes, outside the vault and outside `mnemo.config.json`, which is committed in a repo-local install. The environment variable still wins when it is set. `mnemo rerank --off` reverses both halves. (#406)
+- **The silent fallback is now visible to whoever configured it.** `mnemo rerank` reports the provider, where the key comes from and the last 14 days of the stage's access-log rows by status (`--json`, `--days`); `mnemo doctor` fails a `rerank` row when the provider is set and no key resolves, which is the state where the list looks unchanged because every call fell back; `mnemo status` carries the same summary in one line. None of the three makes a network call, and none of them can print the key. (#406) The provider request now goes through a verifying TLS context that, when Python's own CA store is empty — the python.org macOS build before its `Install Certificates.command` is run, where every HTTPS request dies with `CERTIFICATE_VERIFY_FAILED` and the stage would report `error` on every call — loads the operating system's bundle (`/etc/ssl/cert.pem` and its Linux equivalents) instead; verification is never relaxed and an explicit `SSL_CERT_FILE` wins.
+
+- **`mnemo dedup-rules --judge` — a queue for the duplicates no token gate can see.** Two rules that state one lesson in different words share no `name:` and no token overlap, so every dedupe mnemo has waves them through: #187 measured a real duplicate at Jaccard 0.136 against a p90 of 0.131 over 79,800 unrelated pairs, and no threshold separates those. This asks a model that reads the pair, over every pair of live rules inside one topic bucket of one project — the list `list_rules_by_topic` answers with, where since #404 a near-copy costs one of the few slots that are not already about something else. A pair is asked about once however many topics or projects hold both rules. It is a **dry run unless `--send`**: the default prints buckets, pairs, estimated tokens and cost, and how many pairs the Jaccard gate catches on its own (on a 2,203-rule vault: 1 of 48,090). `--max-pairs` (default 5,000) refuses a send over the cap and names the largest buckets. `--send` posts both rule bodies of every pair (1,200 characters each, link section removed) to `api.typesafe.ai` — the same provider, key and verifying TLS context as `recall.rerank`, but it does **not** require that stage to be on, and with no key anywhere it says `mnemo rerank --setup` and exits non-zero. Answers land in `.mnemo/dedupe-answers.json` as they arrive, so an interrupted run keeps what it paid for and a re-run asks only for what is missing; a pair the provider could not answer is counted apart and asked again rather than read as "not a duplicate". The result is `.mnemo/dedupe-queue.json` (`--json`): pairs at or over `--at` (default 1.5), best first, with both slugs, both names, the opening 200 characters of both bodies, the score, the Jaccard ratio and its rank inside the bucket — a duplicate Jaccard ranks 41st of 435 is the finding. (#409)
+- **`mnemo dedup-rules --merge KEEP DROP` acts on one pair, and only when you name both slugs.** Nothing in `--judge` deletes, merges or stages anything — there is no labelled set of duplicates in a vault, so it has no precision to quote and is a queue for a curator, never a merge list. `--merge` executes `reclassify`'s own `merge` verdict: `DROP`'s sources are unioned onto `KEEP`, `DROP` is archived with a byte-exact original under `shared/_archive/reclassify-<RUN_ID>/`, and `mnemo reclassify --undo <RUN_ID>` restores both. It works across page types — the pair #187 found was a `feedback` page and its `reference` twin — which `reclassify` alone could not do: a merge target it could not find silently became a demotion of the other page, and a merged-away page's extraction-state entry was keyed under `feedback/` whatever type it had, which would have let the next extraction write it back. (#409)
+- **The question `tools/measure_jev_dedupe.py` measures is now the one the command sends.** The question, the tokenisation, the pair enumeration, the cost arithmetic and the shape of one request moved to `mnemo.core.dedup_judge` and the tool imports them, with a test pinning them to the same objects — the pattern #404 used for `rerank.question`. The body judged moved with them: the link section is dropped the way the recall stage drops it, because rules in one cluster link to each other and those shared `[[wikilinks]]` are overlap that says nothing about what a page claims (on `mnemo`/`measurement`, 435 pairs, keeping it moves the Jaccard p90 from 0.117 to 0.142 and changes 5 of the top 20 pairs by ratio). (#409)
+
+- **`reflex.judge`: an opt-in judge reads the (prompt, rule) pair and decides
+  what the per-prompt reflex injects.** It replaces the lexical accept step
+  rather than stacking on it, and ships off with its own consent (`mnemo
+  rerank --reflex on`) because it is the only thing on the prompt path that
+  can leave the machine: the first 1,200 characters of the prompt you typed,
+  plus up to three candidate rules. Measured over 300 sampled prompts and 891
+  blind-labelled pairs (`tools/measure_reflex_gate.py`): at the shipped bar,
+  111 injections instead of 298, 10% noise instead of 56%, 42% on-point
+  instead of 11%, and 47 of the 64 on-point rules kept against 32. Every
+  failure — no key, a timeout, an HTTP error, a malformed answer — falls back
+  to exactly what the gates decide today, and the timeout is a hard wall.
+  (#412)
+- **`mnemo rerank` reports the per-prompt stage beside the list stage.**
+  Prompts judged, status counts, rules asked and injected, median and p90
+  milliseconds, read from `reflex-log.jsonl`. `mnemo rerank --off` now turns
+  both stages off, and `mnemo doctor`'s `rerank` row fails when either
+  provider is set and no key resolves. (#412)
+
+- **The access log now says which rules the rerank stage marked, and which session asked.** A judged `list_rules_by_topic` row's `rerank` object gains `relevant_slugs` (the rules marked `relevant: true`, in the order they were handed back) and `scores` (`[slug, signal]` for every rule judged, best first — the shape `reflex-log.jsonl` already uses); both are empty lists on every status but `ok`, and the object still holds no query and no rule text. Every MCP tool row gains `session_id`, read per call from `~/.claude/sessions/<pid>.json` — found through the messaging socket Claude Code exports, and trusted only when that file names the same socket — with the spawn environment's `CLAUDE_CODE_SESSION_ID` as the fallback and `null` outside Claude Code. The environment alone is not enough: the server outlives a `/clear`, and on 2026-09-22 two of the eight running mnemo servers still carried the id of a session their process had already left (`mcp-server-session` in `claude_cli.ASSUMPTIONS`). Why: `relevant` was a count, so "did the agent read what the judge marked?" — the question the stage exists to answer — could not be asked of the log, and list → read joins had only project + a time window to go on. (#416)
+
+- **A finished child's notice is a report card, and a second one follows when
+  its checks settle.** The notice #357 posts into the dispatching session said
+  only that the child finished, so the parent fetched the rest itself: on the
+  transcripts on disk, 56 of 58 notices were followed by a lookup of the queue,
+  the PR or its checks, and 12 by a wait for CI
+  (`tools/measure_notice_followups.py`). The notice now carries the child's PR
+  (open, draft or merged; `+adds −dels in N files`), its checks by bucket with
+  the names of any that failed, whether its tree holds work the PR lacks, and
+  its closing report in its own words, bounded. Every line is read from git,
+  `gh` or the transcript, and a line whose source fails is left out.
+
+  The header's `state="…"` names what those facts add up to — `ready`,
+  `ci-red`, `ci-running`, `draft`, `unpublished`, `no-change`, `merged`,
+  `closed`, `unknown`. `ready` means open, not a draft and every check passed,
+  never that the change is right. While checks are running, a detached
+  `mnemo child-report` polls them every 30 s and posts once more when they
+  settle; it stops early if the parent exits and gives up after
+  `dispatch.watchChecksMinutes` (30; `0` sends the card alone). It runs `git`
+  and `gh` only, never `claude`. Each notice is logged to
+  `.mnemo/child-reports.jsonl`, and the measuring tool counts parents' lookups
+  after thin and card notices apart, so the effect can be read after the next
+  round of dispatches. (#426)
+
+- **A finished child's PR that goes red, gets a review or conflicts with its
+  base is handed back to that child.** A dispatched child stops once its PR is
+  open, so whatever the PR needed afterwards was fixed by hand: 4 of 46 mnemo
+  child PRs and 5 of 35 mnemo-desktop ones carry commits made after the
+  child's last turn (`tools/measure_post_done_commits.py`). For a child
+  granted `push`, mnemo now follows its PR from a detached `mnemo pr-follow`
+  watcher and, on red checks, a comment or asking review from an owner, member
+  or collaborator, or a conflict, wakes the child in its own session
+  (`claude --bg --resume`, the rate-limit wake's channel) with a fixed note
+  naming the event. The child keeps its conversation, its tree and its opening
+  prompt, which still decides what it may publish; the note grants nothing and
+  forbids force-pushing. mnemo stands down and tells the dispatching session
+  instead when someone else has pushed to the branch, the tree is gone or
+  dirty, or the child is running or blocked (a rate-limited child stays
+  `mnemo resume`'s). It wakes a child at most `dispatch.followPR.attempts`
+  times (2) within `dispatch.followPR.hours` of its first stop (24), polls
+  each PR every 5 minutes, wakes at most 3 children a pass, and runs one
+  watcher per vault behind a lock; `dispatch.followPR.enabled: false` turns
+  it off. Wakes and hand-backs are notices to the parent, lines in the day
+  log and entries in `.mnemo/pr-follow.json`. (#436)
+
+- **One issue can run as two blind twins, and the maintainer's preference
+  between them is recorded.** #439 sized a child-level vault A/B at 85 to 580
+  pairs and named the two unknowns that decide where: how far apart two runs
+  of the same issue land, and how often a reader cannot choose between their
+  diffs. Nothing had ever been run twice. `mnemo dispatch <n> --twins` starts
+  two children in `<repo>-wt-<n>-<tag>` on `fix/issue-<n>-<tag>` (a random
+  six-hex-digit tag, so neither can tell which run it is), with one prompt
+  byte for byte (its sha256 is recorded), one base commit resolved before
+  either tree exists, the same model, effort and profile, and no grant, so
+  neither publishes and #436's PR follow never wakes them. `mnemo twins show
+  <pair>` prints the two diffs as `A` and `B` in an order drawn once, with
+  each run's tag, branch, tree and id scrubbed out, and refuses while either
+  twin is still working; `mnemo twins prefer <pair> A|B|tie` records one
+  answer and only then reveals which run was which. `mnemo deliver <id>`
+  refuses a twin until its pair is answered, and a second twin once one is
+  delivered; `mnemo deliver <n>` names neither twin and says so. A twin's
+  SessionEnd briefing, and the autopilot proposer's analysis, are held: only
+  the delivered twin is briefed, because the other run's work never shipped
+  and teaching it to the vault is the contamination that sank #439's replay
+  design. `tools/measure_child_pairs.py` reports the run-to-run log-sd of
+  output tokens and wall time, the tie rate, each with a 95% interval, and
+  the pairs the full study needs at 70/30, 65/35 and 60/40, with #439's sizing
+  reproduced to the pair. Existing `-wt-<n>` and `-wt-c-<slug>` children keep
+  their names, labels and delivery. (#449)
+
+- **`mnemo inbox` lists staged pages as JSON, decides them in batch, and reviews
+  them in a terminal.** `mnemo inbox --json [--origin backfill] [--project P]`
+  prints one document per call: each page's key, type, name, description, the
+  first 300 characters of its body with secrets redacted, when it was staged,
+  and when it expires (`inbox.heldExpiryDays`, 14 by default; `null` for a
+  page the queue never sheds). `--promote` and `--drop` now take several keys,
+  or `--keys-stdin`; a key that fails is reported in `failed` and never stops
+  the others, and every batch decision is recorded in
+  `.mnemo/inbox-offers.jsonl` with `"via": "review"`. `mnemo inbox --review`
+  is a checklist grouped by type with every page checked: toggle by number,
+  keep the checked and drop the rest, or quit and decide nothing. Off a
+  terminal it prints the list and decides nothing. The text listing is
+  unchanged. This is the interface the install review in mnemo-desktop reads.
+  (#495)
+
+- **`mnemo backfill` can run for the install review.** `--dry-run --json`
+  prints the estimate as one JSON document (`sessions`, `calls_estimate`,
+  `api_price_estimate_usd`, and the harvest/extraction split behind it) and
+  sends nothing. `--yes --extract --progress-json` harvests, then runs the
+  first extraction for that project only, and prints one JSON line per step
+  (`harvest`, `extract`, `done` with `staged`, `live` and `failed`). It exits
+  0 when the sweep finished, even if some sessions failed, and 2 with an
+  `error` line when it could not run. `--extract` works without the JSON too.
+  Without `--yes` it still asks first. The call count now counts only the
+  sessions that reach the model, so sessions below
+  `backfill.minFileMutations` no longer inflate it. (#496)
+- **Backfill pages nobody decided now expire after 14 days.** A staged page
+  with the backfill origin that was neither kept nor dropped is archived 14
+  days after staging. It goes through the same sweep, ledger row (`expired`)
+  and `inbox.heldExpiryDays` setting as the judge-held pages from #429, and
+  `mnemo inbox --restore KEY` brings it back. `mnemo extract` reports these as
+  `backfill expired: N`. (#496)
+
+- **A friction ledger records what contradicted the vault.** Every correction
+  a session produces can now become a structured row in
+  `<vault>/.mnemo/friction-ledger.jsonl` naming the rule it contradicts,
+  instead of a line of briefing prose that marks no rule and retires nothing.
+  Measured on the maintainer's vault, 97.9% of 1946 live rules have exactly
+  one source and `mnemo replay` reports zero carried correction-backed
+  injections — not for want of signal, since 100% of the briefings that were
+  asked for corrections found some, at about 8.75 a day. This first piece is
+  the on-disk shape alone (`mnemo.core.friction.ledger`): it runs no model,
+  reads no rule and writes to no page. It follows `briefing-log.jsonl` — same
+  telemetry switch, same 1 MiB rotation — and never raises, so a failed row
+  never costs an extraction. A repeated `(session_id, quote)` is refused
+  rather than appended, because the backfill that fills this ledger with
+  history sweeps the same sessions on every rerun. Nothing writes to it yet;
+  the contradiction pass, the backfill and `mnemo friction` follow.
+  (friction-loop-wave1)
+
+- **`mnemo friction` reports the friction ledger, and `--backfill` recovers the
+  corrections the vault threw away.** With no flags it is read-only. It shows
+  corrections by project and origin, how many live rules stand contradicted
+  (and which named slugs are not live rules at all), how many links an
+  injection in the same session corroborated, and the rank at which each
+  confirmed link sat among the candidates, so the candidate count can be
+  revisited against evidence. `--backfill` sweeps every session with a
+  transcript on disk, newest first, not only the briefed ones. Each session
+  gets one briefing call into `.mnemo/friction-backfill/`, reused on a rerun
+  unless `--fresh`. Every quote is checked against what the user typed, then
+  linked. Each session is reported as *corrections found (N)*, *none found*,
+  *transcript gone* or *briefing failed*. The plan is saved to
+  `.mnemo/friction-backfill-plan.json` after every session, so an interrupted
+  sweep resumes where it stopped. `--apply` writes exactly that plan with
+  `backfilled: true` and no second model call, and running it twice writes each
+  row once. `--since` and `--project` bound any of them; `--json` for all.
+  Link ranks go to `.mnemo/friction-link-ranks.jsonl` beside the ledger.
+  (friction-loop wave 2)
+
+- **A contradiction pass names the rule a correction contradicts.**
+  `mnemo.core.friction.candidates.rank` scores a correction's quote and rule
+  against the project's **whole** eligible pool with the reflex index and
+  BM25F, and returns the top 40 rules with their bodies. It does not use the
+  `existing_rules` hint's `source_count`-ordered top 80, which covers only
+  37.9% of mnemo's pool and settles a tie by slug order.
+  `mnemo.core.friction.link.resolve` then makes one `claude --print` call
+  (hooks off, #329) with its own prompt, which is separate from the
+  consolidation prompt. The prompt makes the model label each rule as
+  *contradicts*, *refines* or *unrelated*, and only *contradicts* counts, so
+  a refinement never retires a rule. A slug the model invents is dropped. A
+  missing CLI, a timeout or a malformed reply gives an unlinked result
+  (`link_basis: "none"`) and never an exception, so the correction is still
+  recorded. A link to a rule the reflex injected in that session is marked
+  `extractor+injected`, which records corroboration without requiring it.
+  Nothing calls the pass yet: the backfill and `mnemo friction` build on it.
+  (friction-loop-wave2)
+
+- **A rule a user correction contradicted can now be retired, and nothing
+  about it is deleted.** `mnemo.core.friction.retire` writes three
+  frontmatter keys on the contradicted page (`superseded_by`,
+  `superseded_at`, `superseded_by_friction`) and `supersedes` on the page
+  that replaced it, and changes nothing else; `undo(<friction id>)` puts both
+  pages back byte for byte. A retired rule is no longer injected, and `replay`
+  and `mnemo why` no longer count it: the reflex index marks it, and
+  `candidates_for_project` is the only filter. `list_rules_by_topic` withholds
+  it and counts what it withheld (`include_retired=True` returns it).
+  `read_mnemo_rule` always returns it, opening with what replaced it and the
+  quote that retired it. The existing-rules hint keeps listing it, marked
+  retired, so the extractor does not learn the rule again from a fresh
+  transcript. A retirement counts only when its `superseded_by_friction` id
+  is in the friction ledger, so a hand-edited key retires nothing. Writes are
+  refused when there is no replacement page, when they would create a
+  supersession cycle, or when a run would retire more than
+  `MAX_RETIREMENTS_PER_RUN` (5) rules. **Ships inert:** automatic retirement
+  runs only when `friction.autoRetire` is `true` (default off), so
+  `replay`'s historical counts do not move until you switch it on.
+  (friction-loop wave 2)
+
+### Changed
+
+- **Reflex no longer goes silent when two rules are relevant at once:
+  `reflex.thresholds.relativeGap` now defaults to `1.0` (off), down from
+  `1.5`.** The gate treated a near-tie between the top two rules as an
+  ambiguous prompt and injected nothing, yet the same near-tie is when the
+  runner-up gets injected. Replayed over a real vault (2723 prompts), prompts
+  with a near-tie turned out to be the *better* injections: 56% of them
+  came from an earlier session, against 44% for prompts with a clear winner.
+  Rules brought forward from earlier sessions went from 162 to 683. The
+  absolute floor still decides whether anything is relevant at all, and at
+  most two rules are still injected per prompt. Any value above `1.0` turns
+  the old gate back on, and values you set in global config or in a
+  per-project `reflex-config` file still apply. The calibrator's sweep now
+  starts at `1.0`, so it can no longer raise a gap above the default without
+  measuring the default. Briefing selection keeps its own gap of `1.5`,
+  because it can carry only one briefing. With the gate off, the per-session
+  cap of 10 injections is reached much more often. (#332)
+
+- **The reflex calibrator targets carried injections, measured by `mnemo replay`, instead of a 3–12% emit rate.** The old band was never validated and could not tell a *carried* injection (a rule from an earlier session — the only thing the vault can claim) from *hindsight* (extracted from the session it fires in). It was also fitted while `relative_gap` was mis-posed, so it would have tightened a hand-loosened gate straight back: the live emit rate is 5.5% at gap 1.3276 and 6.7% at 1.5, both inside the band, but 20.0% at 1.15. `mnemo autopilot tune reflex` now replays the vault once per candidate value and reports the carried curve per project. (#333)
+- **A threshold moves only for a peak strictly inside the safe range that clears the noise floor.** Measured over 2708 prompts, carried only falls as either knob tightens — on `mnemo`, gap 1.1 carries 78 and gap 1.5 carries 18 — so the curve has no interior maximum and hill-climbing it would just pick whichever bound the objective pointed at. The calibrator now says `monotone` and writes nothing, rather than proposing a number the data never chose. (#333)
+- **`.mnemo/reflex-config.{project}.json` may carry `"pinned": true`, and the calibrator will never rewrite it.** For a threshold you have set yourself and measured; the gate reader ignores the key. (#333)
+
+- **A dispatched child now ends itself: it reports, publishes when git says
+  there is work, and stops.** The closing clause is rendered into both the
+  issue prompt and the contract-piece prompt, because the opening prompt is the
+  one message a child reads as the maintainer's own. The order is
+  load-bearing — the closing report reaches the transcript first, the child
+  asks `git` whether there is anything to publish (clean tree, own branch, at
+  least one commit ahead of the base) rather than deciding it from memory, and
+  the stop comes last. Only a stopped child fires `SessionEnd`, which is where
+  its briefing is written; a child left running holds a few hundred megabytes
+  and leaves no memory behind. (#349)
+- **`mnemo dispatch --may` defaults to `pr`; pass `--may none` to withhold.**
+  Every grant ever recorded in the vault was `push` or `push,pr`, and the
+  empty default left children finished, unpublished and still running. The
+  default lives at the command line only: every `core` entry point still takes
+  `may: Grant = ()`, so a programmatic caller that says nothing still gets no
+  grant. `--may none` restores the withheld prompt byte for byte, and `merge`
+  is still refused. (#349)
+
+- **`mnemo sessions`, `mnemo session`, `mnemo deliver` and `mnemo land` now
+  print English only.** They had drifted into Portuguese, often beside English
+  lines in the same file. The queue buckets are now `WAITING ON YOU`,
+  `WORKING`, `DONE` and `ABANDONED`. `deliver` groups are `READY`,
+  `NOT READY` and `FINISHED, NOT STOPPED`. `land` uses one vocabulary:
+  `contract … (N pieces, in landing order)`, `CANNOT LAND`, `REHEARSAL`,
+  `LANDING`, `contract landed`. A script that matched the old Portuguese
+  headers needs the new ones. `--json` output is unchanged. (#355)
+
+- **A child is still not asked to rate its confidence before it explores, and
+  now there is a measurement saying why.** The proposal (#383) was that a low
+  rating should comment and stop rather than build. The transcripts say the
+  doubt worth acting on is the exploration's product, not a precondition: the
+  four children that showed it early read it out of `gh issue view --comments`
+  — which the opening prompt already puts first — and the only child that ever
+  refused without touching its tree needed 29 tool uses to get there. The
+  refusal, its numbers and the conditions under which it should be revisited
+  are in `docs/specs/2026-09-19-dispatch-confidence-timing.md` and in
+  `core/dispatch.py`'s module docstring. No prompt changed. (#383)
+
+- **An inferred `reference` page no longer goes live on the model's say-so.**
+  Extraction now asks a judge what each such page is — system knowledge,
+  a transferable technique, a generic aphorism or a session narrative — and
+  only the first two reach `shared/reference/`; the rest stage in
+  `shared/_inbox/reference/` for review (and expire after 14 days
+  unreviewed, undoably — #429). Pages already live are
+  untouched and still reinforced. Measured on the 2026-09-22 audit sample
+  (142 rules two blind raters agreed on), held-out half: 30 of 31 junk pages
+  staged, 3 of 41 good ones; the live junk share goes from 43% to 3%. One
+  extra model call per extraction chunk that yields reference pages, on
+  `extraction.referenceGate.model` (`claude-sonnet-5`); set
+  `extraction.referenceGate.enabled: false` for the old behaviour.
+  Reproduce with `tools/measure_reference_gate.py`. (#417)
+
+- **A reference page the judge held now leaves `shared/_inbox/` on its own
+  after 14 days unreviewed, and `mnemo inbox --restore KEY` brings it back.**
+  #417 staged the judge's generic and narrative pages for review, but the
+  queue had no exit anyone took: 44 session-start offers over four days
+  produced 0 decisions, so "staged" meant kept forever and invisible to recall.
+  Such a page now carries `reference_gate: generic|narrative` in its
+  frontmatter, and each extraction run archives the ones untouched for
+  `inbox.heldExpiryDays` (default 14, `0` = off) under
+  `shared/_archive/expired-<run>/`, marking the entry `dismissed` the way a
+  drop does. The ledger records `expired`, not `dropped`, so `mnemo inbox
+  --stats` keeps them apart from human decisions, and `mnemo extract` prints
+  `reference expired: N`. Only the judge's pages expire, because its verdict
+  is the measured one; evidence-gate demotions (128 of the 142 staged pages
+  on the maintainer's vault) still wait for a human. `--restore` also undoes
+  a `--drop`, and a restored page never expires again. (#429)
+
+- **The reference judge now also judges the evidence gate's demotions, and every staged page it answered says what it decided.** A demoted feedback page still stages, because its quote was never found. It now also carries `reference_gate: generic|narrative|technique|system`, like the judge's own pages. A `generic` or `narrative` demotion expires after `inbox.heldExpiryDays`, and a `technique` or `system` one waits for a human. On the maintainer's vault that is 72 of the 130 staged demotions. The count `reference held` still means inferred pages the judge held, not demotions. To stamp demotions staged before this change, run `tools/measure_demotions.py --stamp`. It is a dry run until you add `--apply`. The expiry clock starts at the stamp. (#432)
+
+- **The session-start staged-page offer now puts the pages worth a decision
+  first.** It used to offer the oldest staged pages, and the judge rated most
+  of the queue's 130 evidence-gate demotions generic or narrative (72) —
+  pages that expire on their own — so most of the two daily slots went to
+  pages the queue would shed anyway. A page stamped
+  `reference_gate: technique|system` is now offered first, unjudged pages
+  next, `generic|narrative` last, oldest first within each; the three offer
+  bounds are unchanged. The offer bullet and the `mnemo inbox` listing show
+  the verdict, e.g. `(5d, demotion, judge: system knowledge)`. (#433)
+
+- **`mnemo --help`/`-h` now show the same curated command list `mnemo help` does.** Advanced and internal commands stay hidden by default (`mnemo help --all` still reaches them); nothing was removed, so every documented `mnemo <verb>` invocation still works exactly as before. The one-line description shown there, in `pyproject.toml`, and in the plugin manifest now agrees with the README's opening line instead of the unrelated "Obsidian that populates itself" tagline. (#437)
+
+- **`mnemo twins show` prints each twin's closing report under its diff, and a
+  pair records what reached either twin besides its prompt.** In #439's
+  six-pair pilot, two twins committed nothing on purpose (the issue had
+  already shipped; a schema change needed approval), and `show` said only "no
+  commits — this run delivered nothing". It now prints the last text each
+  twin wrote, scrubbed of its names like the diff, and the no-commit line
+  points there. The first `show` of a finished pair (and any later one, for
+  a pair shown before this) reads both transcripts and records answered
+  questions and typed turns during the run, whether the sibling's tree,
+  branch or id appears anywhere, and writes to Claude Code auto-memory;
+  `mnemo twins prefer` lists them after the reveal. Over the six pilot pairs
+  that found one pair a person answered, three where a twin named its
+  sibling (via `ps`, `git worktree list`/`git branch`, or the sibling's
+  memory note) and three with auto-memory writes.
+  `tools/measure_child_pairs.py` counts them, and `--exclude
+  human-input|sibling|memory` leaves those pairs out: without the answered
+  pair the wall-time log-sd drops from 1.04 to 0.14. Twins now start with
+  auto-memory off (`autoMemoryEnabled: false` in the child's own settings
+  file, which a wake keeps), so neither reads the maintainer's memory nor
+  leaves a note the other, or the vault, picks up; ordinary children are
+  spawned exactly as before. Seeing the sibling is recorded, not prevented:
+  hiding it would take separate clones or a sandbox. (#453)
+
+- **The reflex judge's bar drops from 0.6 to 0.4, and `mnemo rerank --setup`
+  offers the judge in the same run.** At 0.4 an on-point rule reaches the
+  prompt on 57.6% / 34.6% of the prompts that hold one (Sonnet labels / Fable's
+  where it labelled, Sonnet's elsewhere), against 36.0% / 28.6% at 0.6 and 48.8% / 21.8% for the lexical
+  gates. It is the only bar that beats the lexical gates under both raters.
+  The cost is noise among injected rules: 15% instead of 10% (209 injected
+  on the 300-prompt sample instead of 111). A config that already sets
+  `reflex.judge.injectAt` keeps its value. Once `--setup` has stored and
+  tested the key, it prints the judge's own consent paragraph, which says
+  your typed prompt leaves the machine, and asks `Turn on the per-prompt
+  judge too? [Y/n]`. A yes to the list stage is never taken as a yes to this
+  one. Off a tty or with `--key-stdin`, the judge stays off unless `--judge`
+  is passed. Reproduce with `tools/measure_reflex_reach.py` and
+  `tools/measure_reflex_gate.py`, both from cached labels. (#461)
+
+### Fixed
+
+- **`mnemo replay` now scores a delivered dispatch child against its repo's
+  rules.** Once a child's tree (`<repo>-wt-<n>`, `<repo>-wt-c-<slug>`) was
+  removed, replay filed its prompts under the tree's own name, which no rule
+  is filed under, so they were ranked against the universal rules alone (11
+  candidates instead of 409 on one repo). The live hook was never affected:
+  while the tree exists, its `.git` pointer already leads to the repo. Replay
+  now folds a removed child into its repo the same way `learn` has since #301.
+  On the maintainer's transcripts, worktree-named sessions fall from 97 to 26,
+  and prompts replayed as fired go from 1095 to 1117. A removed hand-made
+  tree, or a child of one, still keeps its own name. (#334)
+
+- **A hook matcher this version widened now reaches installs that already
+  exist.** `mnemo init` writes each matcher once, so the `Read` that #271 added
+  to `PreToolUse` never reached anyone already installed: enrichment kept
+  running at roughly half reach — 23 notes over a week where the current
+  matcher delivers 40 — while `mnemo status` called the hook healthy and only
+  `mnemo doctor`, which is opt-in, could say otherwise. Session start now
+  repairs the drift it finds, with the same narrow write `mnemo init
+  --hooks-only` performs (mnemo's hook entries only; config, statusLine, MCP
+  and other tools' hooks untouched, previous file backed up) and a line on
+  stderr saying what changed. It runs once per distinct drift, so a matcher you
+  narrow by hand stays narrowed; `install.autoRepairHooks: false` turns it off.
+  `mnemo status` reports the drift and the one-line fix either way. (#337)
+
+- **A retired rule no longer shows up on the vault's HOME dashboard or in
+  `mnemo recall`'s session harness.** The recall harness copied the reflex's
+  candidate filter instead of calling it, so it kept ranking rules the reflex
+  had stopped serving, and its numbers no longer described what the reflex
+  actually does. It now ranks the reflex's own candidate pool. It also stops
+  expecting a retired rule, which it could never find and would have counted
+  as a miss. The dashboard asks `is_retired` like every other surface that
+  reads rule pages, so a retired rule's replacement is listed in its place. (#344)
+
+- **`mnemo friction --backfill` no longer reads a harness probe as the user
+  correcting a rule.** A session whose working directory is a background
+  Claude Code job's scratch dir (`~/.claude/jobs/<id>/tmp`) was started by
+  another session — "Use the Bash tool to run exactly this command: touch
+  probe-file-86 . Do nothing else." — and two such turns had been linked to
+  `run-git-commands-yourself`, a rule the user still wants, where
+  `friction.autoRetire` could act on them. These sessions are now listed as
+  *scratch session*, cost no briefing, and never reach the ledger; a plan
+  saved earlier is not reused for them. On the maintainer's machine this sets
+  aside 13 sessions, all probes or rehearsals, and takes the backfill from 14
+  links to 12. Rows an earlier `--apply` already wrote stay in the ledger. (#348)
+
+- **`mnemo doctor` no longer says the daemon keeps a finished child for 8 h.**
+  Every `bg retire` line in `~/.claude/daemon.log` (2026-08-13 → 2026-09-16)
+  shows 60–61 m in 34 of 45, 8 h only in 5 swept just after a daemon start,
+  and 11–44 m in 6 under `[low memory]`. The doctor line now says "usually
+  after ~60m idle, sooner on low memory", and the `deliver` docstring states
+  all three figures: the chance to stop a child and get its briefing usually
+  closes within the hour, not eight. (#350)
+
+- **A resumed session no longer receives the last briefing a second time.**
+  SessionStart read Claude Code's `source` only to label a log line, so
+  `claude --resume`, a forked session and a compaction each got the whole
+  `[last-briefing]` block again, even though the context already had it or
+  had just been compacted to make room. The briefing now goes out only on
+  `startup` and `clear`. `/clear` empties the context, so it counts as a
+  cold start. `resume`, `fork` and `compact` get the topic envelope without
+  the briefing. The `session_start.inject` access-log row now records
+  `source`, so the effect can be read straight off the log. On the
+  maintainer's transcripts, all 45 repeated briefings came from `resume` (44)
+  or `fork` (1). (#352)
+
+- **`briefing-log.jsonl` and `mnemo telemetry` now say which session received a
+  briefing, not just which one wrote it.** A briefing row's `session_id` is the
+  briefing's author. Newest-wins hands the same briefing to every session a
+  project starts, so one `session_id` repeated 23 times meant 12 different
+  readers, not one session briefed 23 times. Rows now also carry
+  `reader_session_id` and `source` (`startup`, `clear`, …), and each
+  `session_start.inject` row carries `session_id`. `mnemo telemetry` now labels
+  its counts as starts and adds a distinct-sessions line alongside them
+  (`distinct_sessions`, `distinct_sessions_with_briefing` in `--json`). Every
+  read keeps its row; nothing is deduplicated. (#359)
+
+- **A `!` shell command is no longer a correction.** A `<bash-input>` turn (or
+  its `<bash-stdout>`/`<bash-stderr>` output) is the user acting on a shell,
+  not telling the assistant anything, but `verify` accepted a quote found
+  there: 10 of the 90 backfilled corrections were shell blocks, and three
+  `gh pr merge … --admin` runs were linked as contradicting
+  `merge-requires-admin`, the largest cluster in the ledger. `verify` now
+  skips shell-mode turns, a reused backfill plan and `--apply` drop the ones
+  an older sweep saved, and ledger readers (`mnemo friction`, retirement,
+  `is_retired`) stop counting rows already written. The append-only ledger
+  file is not rewritten. The issue's proposed timestamp guard was not built: no
+  live rule page carries `modified`, and comparing against a page's last
+  rewrite would have dropped 9 of the 14 links, mostly the genuine ones.
+  (#360)
+
+- **The reflex no longer withholds a rule from a session because a different
+  session was told it.** The "already injected" cache was shared by every
+  session on the vault for the whole day, so once one session got a rule,
+  every other session that day was silenced on it, even when it was the
+  strongest match. On the maintainer's vault that was about two thirds of all
+  `deduped` silences (199 of 288), and the rules held back scored a median of
+  16.7 against a floor of 2.0. The cache now works per session, as the reflex
+  design spec intended: a session still hears each rule at most once a day,
+  including after `--resume`, and other sessions hear it too. `mnemo why` now
+  says "this session was already told it today". A cache written by an older
+  mnemo has no session attached, so it is ignored, which allows at most one
+  repeat per session until midnight. (#361)
+
+- **The autopilot's telemetry checks can fire again.** `mnemo autopilot
+  self-fix telemetry` looked for `llm.call` rows under an `event` key and read
+  flat `cost_usd` / `prompt_tokens` fields, none of which the access log
+  writes, so both checks always found nothing. They now read the row
+  `record_llm_call` writes: `tool`, `usage.input_tokens`, and a new top-level
+  `cost_usd` taken from what the claude CLI reported for the call (null when it
+  reported nothing). The token check is renamed `input_tokens_zero` because an
+  unreported count is written as 0. Rows logged before this change have no
+  `cost_usd` and are skipped. (#370)
+
+- **The reflex's day-scoped state now rolls over on the first access of any
+  kind, not on the first MCP tool call.** Only `increment()` compared the
+  stored date with today, so yesterday's injected-rule cache went on
+  suppressing until someone used an MCP tool, and that call then reset the
+  file — dropping every entry the hooks had written since midnight and
+  handing the day's live sessions a rule they had already been given. The
+  rollover moved into the loader every reader and writer shares, so a new
+  day starts empty and nothing written today can be wiped by a later call.
+  Yesterday's per-session emission counts no longer count against today's
+  `maxEmissionsPerSession` either. (#374)
+
+- **`doctor` now counts both things waiting in `shared/_inbox/`, and counts
+  them honestly.** Plain staged pages — the evidence gate's demotions and
+  multi-source stagings — were excluded from the backlog line on the grounds
+  that they follow their own path, and that path has no consumer: they are
+  not served to recall, not listed by `mnemo rewrites`, and not counted
+  anywhere, while an unscoped `mnemo extract --force` deletes them. On the
+  real vault that was 194 pages no surface showed. They get their own
+  advisory line now, split by why each page staged, with the oldest age and
+  the `--force` risk named. The rewrite line is unchanged in shape but no
+  longer reaches outside `_inbox/<type>/`, where every writer stages: it had
+  been counting archive copies an older `mnemo rewrites` left under
+  `_inbox/proposals/` and `_inbox/rejected-<run>/` — 34 of 36 on that same
+  vault — so `doctor` claimed a backlog `mnemo rewrites` showed nothing of.
+  When proposals are staged that no longer have a live rule to merge into,
+  the line says so. (#375)
+
+- **Accepting several rewrites in a loop no longer drops all but the first.**
+  `mnemo rewrites --accept KEY` derived its run id from a whole-second
+  timestamp, and a single accept finishes well inside a second, so every call
+  in a shell loop asked for the same archive directory. The first one landed;
+  the rest hit the guard that protects an existing run's undo archive and
+  aborted with `run ... already applied; undo it first` — 2 of 7 applied in
+  the run that found this, with a tail that still read like a normal batch.
+  The run id is now minted against the archive on disk and takes a `-2`, `-3`
+  suffix when the second is already taken, so back-to-back accepts each get
+  their own archive and their own `--undo` id. The re-apply guard is unchanged
+  and still refuses a plan whose run has already landed. (#376)
+
+- **A child the account's limit stopped is no longer shown as abandoned next
+  to a hint that deletes its worktree.** `mnemo sessions` filed every blocked
+  child whose process had died under **ABANDONED**, followed by `remove:
+  claude rm <id>` — which removes the tree. On 2026-09-19 that was offered for
+  six children the five-hour window had stopped mid-turn (#380-#385), five of
+  whose trees held uncommitted work, and none of which was dead: all six
+  finished with a PR once they were woken. Those now sit in their own
+  **STALLED** bucket saying when the window reopens (`five-hour spent — free
+  since 02:40`), with `resume: mnemo resume` instead of the `rm` hint. A child
+  blocked on a question, a permission prompt, a login or a billing decision is
+  untouched — it stays under ABANDONED, because what it needs is an answer,
+  not a nudge. `mnemo sessions --json` carries the same reading as `stall`.
+  (#393)
+
+- **A page type the model invents can no longer create a `shared/<type>/`
+  directory.** The type an extraction call returns is checked against the
+  four real ones and falls back to the kind that call was asked for, which
+  then meets that kind's gate; one live page had landed in
+  `shared/measurement-before-design/`. (#417)
+
+- **An archived non-feedback page stays archived.** Reclassify's archive step
+  dismissed the extraction-state entry under `feedback/<slug>` whatever the
+  page's type, so archiving a `reference` page left its real
+  `reference/<slug>` entry live and the next `mnemo extract` wrote the page
+  back. The dismissal is now keyed by the page's own type directory, as the
+  merge step already was since #409. (#419)
+
+- **Temp, pytest and probe directories no longer become agents in your
+  vault.** Every `claude` session runs mnemo's global hooks wherever it starts,
+  so a live test's `tmp_path`, a background job's probe in
+  `$CLAUDE_JOB_DIR/tmp` or a scratchpad under `/tmp/claude-<uid>/` each filed
+  a `bots/` directory, a log and a briefing — about 90 of 115 agents on the
+  maintainer's machine. A session whose cwd is under the system temp dir
+  (`tempfile.gettempdir()`, and `/tmp` on POSIX), a `pytest-of-*` base temp or
+  a job's scratch dir now runs no mnemo hook at all — no log, briefing or
+  extraction, and no reflex or enrichment either — unless the vault lives
+  there too, as a project vault in `/tmp/mnemo-demo` does. Separately, the
+  mirror skips a Claude Code `memory/` directory with no file in it (54 of 63
+  on the maintainer's machine), which is what made the file-less agents.
+  Existing directories are left alone; delete them by hand. (#420)
+
+- **A subscription call is no longer reported as paid.** mnemo told a
+  subscription call from an API-key call by the `apiKeySource` field of the
+  `claude` CLI's output, and Claude Code 2.1.280 stopped sending it, so every
+  call on a Pro/Max plan counted as paid: `mnemo extract` printed the CLI's
+  notional price as a charge and `last-auto-run.json` said
+  `"all_calls_subscription": false`. When the field is missing, mnemo now asks
+  `claude auth status` once per process (`authMethod: "claude.ai"` is the
+  subscription). An `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or Bedrock/Vertex
+  switch in the environment still counts as API billing, because
+  `claude auth status` says `claude.ai` even when `claude --print` uses the
+  key. On a subscription the cost line now shows `≈$X API-price equivalent`
+  next to "no charge". When billing cannot be told it shows
+  `≈$X at API prices (billing unknown)`, never a plain charge. (#441)
+
+- **`mnemo land` sees TypeScript and Rust definitions, not only Python
+  ones.** A contract piece's `exposes` is checked by finding a definition
+  of its name in the piece's files, and that lookup knew only `def`, `class`
+  and a top-level assignment. A TS or Rust piece therefore always read as
+  missing: mnemo-desktop's round 18 refused to land two of five green PRs
+  over `export function mergePr(…)` and `export function dispatchIssues(…)`,
+  both present. The check now also recognises `export function`/`const`/
+  `class`/`interface`/`type` and Rust's `pub fn`/`struct`/`trait`, and still
+  never counts an import or a call site. (#446)
+
+- **On Windows, mnemo's background workers no longer flash a console window
+  for every `git`, `gh` or `claude -p` they run.** The workers that session
+  start and session end leave behind were started with `DETACHED_PROCESS`, so
+  they had no console, and Windows opened a new visible one — stealing focus —
+  for each console program they launched. They now start with
+  `CREATE_NO_WINDOW`: a console that is never shown, which their children
+  inherit. `CREATE_NEW_PROCESS_GROUP` stays, so a Ctrl-C in the session's
+  terminal still never reaches them. Confirmed on a real Windows machine.
+  (#452)
+
+- **A dispatched child's report card now reaches a parent that another process
+  also resumed, and a report that cannot be delivered says why.** A session's
+  inbox address was "the newest row", so when a second process resumed the
+  parent's id and then exited, every child that finished afterwards took the
+  parent for gone and posted nothing, though it was still open: on 2026-09-22
+  three of one parent's four children ended that way. The newest *live* address
+  now wins. Every report that is not delivered, whether the parent is gone, the
+  socket refused the write, the reporter did not start or it crashed, writes a
+  `.mnemo/child-reports.jsonl` row with `delivered: false` and a `reason`, plus
+  a `child_report.undelivered` entry in `.errors.log`. That entry does not count
+  toward the hook breaker. A started reporter logs a `spawned` row first, so a
+  reporter that dies before writing is visible too. (#454)
+
+- **A dispatched child's report that never came is now named, not noticed by
+  accident.** `mnemo doctor` lists every `mnemo child-report` of the last 7
+  days that started and wrote nothing in 10 minutes, with the child, its
+  parent and the reporter's pid. On 2026-09-23 two such reporters left only
+  their `spawned` row, and the maintainer found one only because the child was
+  missing from their queue. A reporter stopped by SIGTERM, SIGHUP or SIGINT
+  now writes a `child-report killed by SIG…` row: the signal used to end it
+  before any handler ran, and turned into an ordinary card when it arrived
+  during `gh`. Every row a reporter writes carries its pid as `reporter`, so
+  doctor pairs it with the hook's `spawned` row whichever lands first. (#460)
+
+- **A tool's edit to a rule page no longer reads as your edit, so page updates stop piling up in `_inbox/` as `.proposed.md` files.** Extraction keeps a page you edited and stages its update beside it. It tells your edits apart by the page hash it recorded at its last write. Three tools changed tracked pages without moving that hash: the doctor self-fixer's `sources:` rewrite, `tools/measure_demotions.py --stamp --apply`, and the `slug:` stamp (its reconcile was overwritten when extraction saved its own state). On the maintainer's vault that left 1,192 pages looking user-edited, and their correct updates went into siblings. Now:
+  - project pages record their source vault-relative, so the fixer has nothing to change;
+  - every tool that edits a tracked page records the new hash, but only when the page was untouched before the edit;
+  - `mnemo extract` re-baselines a page only when undoing those known edits reproduces the recorded hash exactly. Any other drift is left alone, because it may be yours.
+  - An update that was diverted into a sibling is applied to its page. This covers project pages, and staged pages with no live page. The sibling then leaves the inbox.
+  - A sibling is not re-written on every run while its source stays unchanged.
+  - `mnemo doctor` shows how many pages the next extract would re-baseline. (#470)
+
+- **The first session no longer announces staged backfill pages as learned.**
+  The project phase reported a backfill page it staged in
+  `shared/_inbox/project/` as written, and the learned ledger took written for
+  live: on a fresh install over 44 prior sessions the first `[mnemo learned]`
+  block listed 32 staged pages, each with a `mnemo disable-rule` line for a
+  rule that was not live. Only pages that land in `shared/` are recorded now.
+  (#471)
+
+- **A dispatched child's report card no longer dies with the hook that
+  started it.** Claude Code ends a `SessionEnd` hook still running at its
+  1.5 s bound with a tree kill that follows parent pids from the hook and
+  signals every descendant, whatever its session. `start_new_session` was no
+  protection: while the hook was alive, `mnemo child-report` was its child,
+  and three reporters on 2026-09-23/24 were SIGTERMed about a second after
+  they started, so their parents never heard the child had finished. Every
+  worker the hooks start in the background — the reporter, the briefing,
+  extraction, unblock consumption and the `pr-follow` watcher — is now
+  started from a short-lived intermediate that exits at once, so init adopts
+  it before the hook can be killed. POSIX only; Windows spawns are
+  unchanged. (#475)
+
+- **`mnemo regen-graph-edges` and reclassify's keep and merge no longer make
+  their own edits read as yours.** They changed tracked pages without moving
+  `written_hash`, or moved it on a key built from the frontmatter slug. The
+  ledger keys a page by its file stem, and the two differed for every keep on
+  a real vault. So extraction stopped updating those pages and diverted each
+  update into a `.proposed.md`. All three writers now go through the
+  extraction lock and advance the hash on the page's own key, and only when
+  the page was the extractor's bytes before the edit. The next `mnemo extract`
+  re-baselines the drift they already left, but only where undoing the
+  section rewrite, the keep, the merge append or a partial `sources:` swap
+  reproduces the recorded hash byte for byte. On the maintainer's vault that
+  heals 297 of 325 drifted pages. A page with an edit someone asked for stays
+  theirs: an `aliases:` line, a hand merge, a redaction, a path fix. (#492)
+
+### Security
+
+- **Passwords and Google API keys no longer reach rules, briefings or the judges.** Redaction now knows a labelled password (``Password: `…` ``, ``password `…` ``, `senha: …`, `DB_PASSWORD=…`, `"password": "…"`), an unlabelled login pair (`` `qa@acme.io` / `…` ``) and a Google key (`AIza…`, 39 characters), and it now runs on every path that writes a `shared/` page or a briefing, not only on LLM extraction: project pages built from your mirrored auto-memory, session briefings, the evidence quote a page stores, pages staged by `mnemo import`, and autopilot's rule stubs. Those paths redact secrets only — a test-account e-mail is the identifier the rule needs and stays; the password beside it becomes `[redacted]`. Your own auto-memory files are never touched: the redaction happens in the page mnemo derives from them. The evidence gate compares quote and briefing under the same pass, so a quote still verifies whichever side was written before this change. Why: a real vault held production test-account passwords in live `reference` and `project` pages and a customer's password and a full Google key in briefings — text the opt-in rerank, reflex and dedupe judges send to a third party. (#418)
+- **`mnemo redact` finds secrets already on disk.** It walks `shared/` and `bots/*/briefings/` and prints file, line and kind — never the value; `--apply` replaces them with `[redacted]` in place (under the extraction lock, keeping extraction's record of each page in step so the next run does not mistake it for your edit), and `--json` is machine-readable. Pages written before a pattern existed are never revisited by any writer, so run it once after upgrading. It is a command rather than a `doctor` row because the walk costs about 3.5 s on a 4,754-file vault, on top of a doctor that is already the slowest thing on the vault screen. (#418)
+
+### Internal
+
+- **`tools/measure_rerank_judges.py` grades a judge's ordering with labels a different judge made.** Ordering a bucket by the relevance numbers in `recall-qrels.json` and grading it with the same numbers scores 1.000 and says nothing, so the tool builds a second set of labels with `claude-haiku-4-5` through `mnemo.core.llm.call` (hooks off, no tools, the provider mnemo already uses) and reports only the crossed rows as results; a self-graded row is printed as `circular` and never starred. Run on 2026-09-19 over 38 logged queries and 1,202 pairs: ordering by `jev-1.13.0` and grading with Haiku's labels lifts nDCG@5 from 0.820 to 0.897, +0.077 [+0.029, +0.124]; an earlier run of the same comparison in the session that opened #401 gave +0.087 [+0.035, +0.152]. The mirror did **not** reproduce: ordering by Haiku and grading with Jev's labels gave +0.026 [−0.027, +0.074], against +0.062 [+0.014, +0.115] before — Haiku's three-level labels move between runs (539 then 550 "should read") and break ties differently. The read label does not move for any ordering (31 / 31 / 32 of 49). Building the labels is 82 calls and about $2.50; the run saves after every call and resumes, which the real run exercised twice. Only `--judge --send` calls anything. (#401)
+
+- **`tools/measure_rerank_filter.py` asks whether the pair-reading judge is a better order or a better filter, and keeps the population it asked about.** The numbers behind #404 came from scripts in a session scratch directory and could not be re-run, which is what this fixes. `--mine` builds the population from session transcripts rather than replaying a ranking — every `list_rules_by_topic` `tool_use` that carried a `query`, paired with its `tool_result` by `tool_use_id`, the slugs it really returned (names resolved through `recall._name_to_slug` for lists logged before 2026-09-08) and the `read_mnemo_rule` calls that followed — and refuses to overwrite the units file every label on disk is keyed to. `--export-blind` / `--import-labels` run a blind 0/1/2 round for a rater that is not on this machine (a unit is never split across chunk files; an import with a gap or a 3 in it writes nothing), `--score` asks the judge in resumable chunks of 40, and the default report prints the filter table, the reranker rows with a paired bootstrap interval, and pooled average precision for "should read", on `--part dev|test|all`. The fused signal and its order come from `rerank.fuse` / `rerank.marks` / `rerank.ranked`, and a test runs the tool and the stage over the same numbers and compares, so the two cannot drift. Run on 2026-09-20 over 85 queried calls and 1,536 labelled pairs, it reproduces the test-split table in the docs; on the dev split where the bars were fitted, the shipped bar keeps 43 of 47 should-read rules and leaves one query holding one empty. It also prints the label noise the table inherits: of 107 pairs this rater answered twice, 84 came back identical. Only `--score --send` leaves the machine. (#404)
+
+- **The test suite no longer starts a real `mnemo procedures --refresh` from
+  every SessionStart test.** #397 added a detached spawn that the suite-wide
+  guard did not stub, so 93 tests each launched one per run, with its cwd in a
+  directory the test was about to delete — and Windows cannot delete a
+  directory that is a live process's cwd. That was the worktree test failing on
+  13 of the 16 Windows master runs since #397, none before. The guard now stubs
+  the hook's one spawn function and is pinned by what it prevents. The inbox
+  latency test's one-second flake is fixed too, with a pinned clock. (#408)
+
+- **`tools/measure_generic_rules.py` makes the generic-rule detector reproducible, labels and all.** On 2026-09-19 a calibrated judge was reported to separate generic aphorisms from real rules at AUC 0.936 on a held-out n=60, with a filter that flagged 8 of 60 and lost no project-specific rule; the scripts, the blind labels and the scores lived in a session scratchpad that was deleted, so per `CLAUDE.md` none of that could ship a claim. `--sample` draws live `shared/feedback` + `shared/reference` rules stratified by project (`--per-project`, `--seed`) — four projects hold 76% of the vault, so an unstratified draw would grade the detector on one writer's habits — freezes the name and `rerank.rule_text` of the body a rater will see into `<vault>/.mnemo/generic-sample.json`, and refuses to redraw once any rater file holds a label. `--export-blind` / `--import-labels --rater NAME` run a blind 0/1/2 round (0 generic, 1 specific practice, 2 project-specific) for a rater that is not a browser: the export carries the id, the name and the rule and nothing else, and an import with a gap or a 3 in it writes nothing. `--score` asks the judge in resumable chunks through `rerank.typesafe_client` and `rerank.resolve_key`, under `QUESTION_VERSION`, keeping both wordings — the pre-registered "what would an engineer lose if this rule were deleted", written as a three-level `score` question whose levels mirror the labels, and the cheaper "names a concrete artifact" — as named variants so the comparison can be re-run instead of remembered. The default report is local: AUC generic-vs-rest and project-specific-vs-rest per variant on dev, test and all; a threshold table fixed on dev and read once on test, counting what is flagged, what of it is truly generic, and the project-specific rules wrongly thrown away; label counts; and, once two raters exist, their exact and off-by-two agreement, which bounds every other number in the report. A local baseline runs beside the judge and needs no request: generic rules name nothing, so the count of backticked identifiers and path-like tokens is a detector, and a judge that cannot beat it is not worth its key. Drawn on this machine on 2026-09-20: 87 of 1,782 live rules over 17 projects, 41 dev / 46 test, ~29k tokens (~$0.0012) to score. Only `--score --send` leaves the machine; no label and no score has been produced yet. (#410)
+
+- **`tools/measure_rerank_reads.py` counts what an agent read against what the rerank stage marked.** Per judged list, as (rule, list) pairs: marked, judged but not marked, shown but never judged, and how many of each were read — so marked-then-read, unmarked-then-read and marked-never-read — with a Wilson interval per rate and, as a position-only reference rather than a control, the read rate by rank in queried lists that carried no marks. A read is credited to the latest earlier list in the same session that showed the slug, any list queried or not. The default source is the access log (a judged row from before #416 is counted as unauditable, never guessed at); `--transcripts` reads the marks from the tool results in `~/.claude/projects` instead, which is how the calls logged before this change can be audited — on 2026-09-22 it found the same 13 judged lists the log holds, with the same shown / judged / marked counts on every one. First run (`--transcripts --days 7`, 13 lists in 8 sessions): 10 of 39 marked rules read (26%, [15%, 41%]), 2 of 165 unmarked (1%), 3 of 50 top-three rules in unmarked lists (6%); marks and position are confounded, and one of the 8 sessions is the one that wrote the tool. A test runs a judged list and two reads through `handle_request` and reports on the log they leave, so the writer and the reader cannot drift apart. `measure_rerank_filter.result_marks` is the shared parser for a result's `relevant` flags. Reads files only; nothing leaves the machine. (#416)
+
+- **`tools/measure_rule_lift.py` measures whether an injected on-point rule changes the agent's answer.** Each of the 64 (prompt, rule) pairs a blind rater scored "inject" (#411) is answered twice by the same model with no tools, once with the prompt and its previous assistant turn alone and once with the rule appended the way the `UserPromptSubmit` reflex injects it. A judge that cannot see which arm it is reading then asks whether each answer acts on the rule. First run (1 sample per arm, `claude-sonnet-5`): follow rate 45.6% → 75.4%, lift **+29.8 pp, 95% CI [+12.3, +47.4]** over 57 pairs. That falls on the pre-registered "rules carry" branch. A second sample per arm (`--samples 2`) confirms it: **+31.1 pp, CI [+19.7, +42.6]** over 61 pairs. Per-rule lift is still too thin to retire anything, because 43 of the 52 rules have a single pair. `--dry-run` prints pairs, calls and tokens and makes no model calls. Runs are resumable after every call; results go under `<vault>/.mnemo/rule-lift/`. (#434)
+
+- **`tools/measure_reflex_reach.py` measures how often an on-point rule reaches the prompt, and where the rest is lost.** It covers the 300 prompts #411 sampled, re-ranked against today's vault down to rank 10 with no hindsight. Every pair is labelled blind 0/1/2 by `claude-sonnet-5` through `core.llm`, with batched calls saved after each one and resumable. The shipped gate is replayed session by session through the hook's cap and dedupe. Each prompt's loss is charged to ranking, gate, cap or dedupe. First run: 72 calls at an API-price equivalent of $5.99. 172 of 290 prompts hold an on-point rule in the top 10, and 20% of those hold it only below rank 3. Sonnet and #411's Fable labels agree poorly on what counts as on-point (kappa 0.38), so every row is also read under Fable's labels. Under both, the judge at `injectAt` 0.4 reaches more of these prompts than the shipped gate (57.6% vs 48.8%, and 34.6% vs 21.8%). Whether the judge at the shipped 0.6 beats the shipped gate depends on the rater. `--dry-run` makes no calls; results go under `<vault>/.mnemo/reflex-reach/`. No product change. (#455)
+
+- **`tools/measure_demoted_keeps.py` checks whether the reference gate's system/technique verdict holds on the pages the evidence gate demoted.** These pages wait in `shared/_inbox/` indefinitely, while a directly emitted reference page with the same verdict goes live. The tool reads the population from frontmatter (`demoted_from: feedback` plus `reference_gate: system|technique`) and draws a seeded sample of 40. Two blind raters, `claude-opus-5-5` and `claude-fable-5-1` (neither is the gate's model), each label a page good or junk using the gate's own definitions. The report gives each rater's good rate, the good rate under both (with 95% intervals), kappa, and the verdict against a bar declared before labelling: 85% good under both. It never uses more than 20 calls, it resumes, and `--dry-run` makes no calls. It writes only under `<vault>/.mnemo/demoted-keeps/`. First run: 67 pages. 29 of 40 were good under both (72.5%, [57.2%, 83.9%]), kappa 0.43, so the bar **fails**: do not promote these pages on the gate's verdict alone. (#465)
+
+- **`tools/measure_day_one.py` measures what a new user's empty vault carries on day one, with and without Claude Code history.** It replays one repo's real transcripts through two fresh vaults, with mnemo's vault and config isolated in a temp dir and the judge off. Arm (a) runs the real `backfill --install-run`, then the first extraction, then the next 50 prompts. Arm (b) feeds sessions one at a time through the SessionEnd path (extraction when the debounce passes on the transcript's clock, then the briefing) and records live pages, the SessionStart payload, and the reflex emit and on-point rates (#411 rubric) per session. `--dry-run` bounds the calls and cost first, `--send` meters every call under a 200-call budget and resumes. First run, on 88 clubinho sessions, 127 calls: the install backfill leaves **0 live rules** (all 56 pages it yields stage for review), so the reflex fires on 0 of the next 50 prompts. Without history, the first on-point injection comes at **session 24**, and only 11 of 328 injected rules over 88 sessions are on-point. No product change. (#467)
+
+- **`tools/measure_day_one.py` gets an arm (c): what Claude Code's own auto-memory carries on day one, and arms (a)+(c) together.** A real SessionEnd mirrors `~/.claude/projects/<project>/memory` into the vault. Arm (c) rebuilds that directory as it stood at the install point from every transcript's Write/Edit records (`originalFile`), and reports the files it could only approximate. It runs the real `mirror_all` over that snapshot alone, then the first extraction, the SessionStart payload, and arm (a)'s 50 prompts, with the judge off. `--arm c` has its own 60-call budget, and `--dry-run` prints the bound first. On clubinho, 17 calls: 90 files at install mirror to **81 live pages**, because 80 `project` files go live directly without a model or a review. The reflex then fires on 7 of 50 prompts, and 2 of its 11 pairs are on-point. With the backfill added, arms (a)+(c) fire on 6 of 50, with the same 2 on-point pairs. No product change. (#472)
+
+- **`tools/measure_backfill_routes.py --live` rates backfill pages where the
+  extraction put them.** Since #471 a backfill page that clears the normal gates
+  is written live, so the tool's staged-only reading could no longer see the
+  pages it was meant to rate. The second-corpus check (clearframe, 40 live
+  pages) came out at 29/40 = 72.5% good under both raters [57.2, 83.9],
+  κ 0.53, below the 85% bar #471 declared. (#477)
+
+- **`tools/measure_day_one.py --judge` measures day one with the Jev judge on.** It re-extracts nothing. It replays the saved arms' prompts through `reflex.judge` as the hook runs it (the real `judge.ask`, shipped settings, gate fallback on failure). `reflex.replay.run` gains an opt-in `judge=` stage for this, run in the hook's order. Arm (b)'s vault is rewound to each session from `learned.jsonl`. On clubinho, over 69 sessions, the judge cuts the noise in what the reflex injects from 77% to 21% (18 of 87 pairs) and doubles the on-point pairs (16 → 32). That is one pair short of the 20% bar declared beforehand. (#479)
+
+- **`tools/measure_noise_concentration.py` measures how few rules cause the reflex's noise.**
+  It reads injections and labels that already exist (day one's arms, #411, #455)
+  and rates the top 20 noisy rules of each corpus with #465's G/N/S/T/W rubric. On
+  a day-one vault with the judge off, 15 generic `feedback` rules cause 83% of the
+  noise and make 3 of 11 on-point injections. In the mature vault, noise is spread
+  across system-knowledge pages, and only 10–18% of it comes from generic rules.
+  No existing signal (gate stamp, friction ledger, #410 sample, emission count)
+  picks out the generic rules without also hitting the on-point ones. (#480)
+
+- **`tools/measure_judge_noise_kinds.py` asks whether generic rules still make
+  day one's noise with the Jev judge on.** It reads #479's judge-on replay
+  (no Jev request), types every injected rule with #480's two raters, and
+  runs the counterfactual twice: the G/N rules' pairs struck out, and the
+  prompts replayed with those rules retired, the judge answered from #479's
+  cached scores. On clubinho arm (b) 17 of 18 noise pairs are generic
+  `feedback` rules, but so are 20 of 32 on-point pairs; striking them clears
+  the 20% bar (4.2%), yet the replay moves 468 never-scored pairs into the
+  pools against a headroom of 4 noise pairs, so the bar is not decided. (#484)
+
+- **`tools/measure_project_gate.py` runs the shipped reference gate over the backfill project pages #471 and #477 already had rated.** Project pages go live with no gate, and they were the weak route on both corpora. With the gate in front of them: clubinho 26/30 = 86.7% [70.3, 94.7] good under both raters, over the 85% bar, with no good page held; clearframe 20/24 = 83.3% [64.1, 93.3], under it, holding all 4 narratives and 2 good pages. Both results are one page from the bar. No project wording was tried, because clubinho left one catchable junk page to tune on, so the routing stays as it is. (#485)
+
+- **`tools/measure_day_one_gate.py` asks whether the reference gate would cut day one's noise, and it would not.** It runs the real `reference_gate.judge_pages` over the auto-memory mirror's 80 live project pages (arm (c) of #472), then replays the same 50 prompts without the pages it calls generic or narrative, judge off and on, reusing #479's Jev answers where a prompt's pool is unchanged. On clubinho the gate holds 7 of 80 (N 7, S 64, T 9): project status pages are system knowledge by its own definition. Noise moves 82% → 80% judge off and stays 29% judge on, and the one held page that carried an on-point injection is lost. Eight of the nine noise pairs come from pages the gate keeps, so day one's noise is a relevance miss, not a category the gate sorts. No extraction change. (#486)
+
+- **`tools/label_recall_pairs.py` keeps the one relevance check that does not come from a model.** Both sets of labels the ranking is graded with are a model's; the 60 pairs labelled blind on 2026-09-19 that validated the first judge lived in a session scratchpad and were deleted with it. The tool draws 60 pairs stratified by the first judge's score (12 per fifth, seeded), serves them one at a time on `127.0.0.1` with the second judge's question and 0/1/2 scale — the page shows the task and the rule, never a score, a stratum or a slug — and writes `<vault>/.mnemo/recall-labels-human.json` through a rename after every answer. Run with no flag it grades both judges against the labels so far: AUC for "should read" and "any relevance", the first judge's two confident-and-wrong counts, and the second judge's confusion. Each pair freezes the text the rater saw and the score it was drawn on, so re-judging cannot move the report, and `--sample` refuses a file that already holds a label. Nothing leaves the machine.
+
+- **`tools/measure_demotions.py` asks the reference judge about the pages
+  the evidence gate demoted.** #429 lets the judge's own generic and narrative
+  pages expire from `shared/_inbox/` and left demotions out, because nobody
+  had measured them. The tool freezes every staged `demoted_from: feedback`
+  page into `<vault>/.mnemo/demotion-judge/sample.json`, as the judge would
+  read it: `reference_gate.view` of the name and body, with no Sources
+  section. It asks the stage's own prompt and parser, ten pages a call,
+  resuming from `scores.json`, and reports verdict counts, what would be held,
+  a per-project split, and the pages the judge would keep. Run on 2026-09-22
+  over 130 demotions with `claude-sonnet-5`: G 69, N 3, S 41, T 17. That is
+  72 (55%) held and 58 (45%) kept. None were 14+ days old yet. 13 calls on a Max plan,
+  so no charge: $0.95 is the CLI's API-price equivalent (#441). The verdict is not the truth: on the audit's held-out half the same
+  judge staged 30 of 31 junk pages and 3 of 41 good ones.
+
+- **`tools/measure_jev_dedupe.py` measures whether a calibrated judge sees the synonym duplicates Jaccard cannot.** #187 showed a real duplicate scoring 0.136 against a noise p90 of 0.131, so no threshold on token overlap separates them. The tool asks TypeSafe's `jev-1.13.0` one three-level `score` question per pair of rules in a topic bucket and prints each pair's score beside its Jaccard ratio and its rank by Jaccard. On `mnemo`/`measurement` (26 rules, 325 pairs, 2026-09-19) the gate catches 0 pairs and the judge puts a four-rule "measure before designing" cluster at the top, at Jaccard 0.13–0.20. It reports no precision or recall, since a vault has no labelled duplicates: the output is a queue for a curator. Nothing leaves the machine without `--send`, which posts rule bodies to a third party and needs `TYPESAFE_API_KEY`; nothing in `src/` calls it. (#187)
+
+- **`tools/measure_recall_judged.py` grades the ranking against judged relevance instead of against what happened to be read.** `mnemo recall` calls a rule "expected" when the agent read it after a list call; measured on 2026-09-19 the agent picks from slugs alone, 56% of reads come from the top 3 of the list it was shown, and the label is silent about rules that should have been read and were never seen. The tool asks TypeSafe's `jev-1.13.0` one yes/no question per (query, rule) pair, saves the answers to `<vault>/.mnemo/recall-qrels.json`, and from then on evaluates any ordering locally (nDCG@5, precision@5, should-read rules in the top 5, beside the read-based count). The judge was checked first: AUC 0.822 for read against not-read inside a list, and 0.913 / 0.943 against 60 pairs labelled blind. On 38 logged queries (1,202 pairs) the query rerank lifts nDCG@5 from 0.574 to 0.770, the gate is flat from 0 to 3, and 22 of 46 should-read rules sit outside the top 5, 20 of them scored and outranked, not lost to a vocabulary gap. Only `--judge --send` leaves the machine; it needs `TYPESAFE_API_KEY`, and nothing in `src/` calls the tool.
+
 ## [1.6.0] — 2026-09-15
 
 ### Added
