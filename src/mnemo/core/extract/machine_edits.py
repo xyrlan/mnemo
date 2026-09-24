@@ -338,9 +338,15 @@ def _link_spellings(sources: Sequence[str], prefixes: Sequence[str]) -> List[Lis
     out: Dict[Tuple[str, ...], None] = {}
     out.setdefault(tuple(strip_md(s) for s in sources), None)
     out.setdefault(tuple(strip_md(relative(s)) for s in sources), None)
+    def absolute(p: str, rel: str) -> str:
+        # Joined as ``str(Path)`` rendered it: with backslashes on Windows.
+        if "\\" in p and "/" not in p:
+            return p.rstrip("\\") + "\\" + rel.replace("/", "\\")
+        return f"{p.rstrip('/')}/{rel}"
+
     for p in prefixes:
         out.setdefault(tuple(
-            strip_md(f"{p.rstrip('/')}/{relative(s)}" if relative(s).startswith("bots/") else s)
+            strip_md(absolute(p, relative(s)) if relative(s).startswith("bots/") else s)
             for s in sources), None)
     out.setdefault(tuple(
         strip_md(f"mnemo://{relative(s)}" if relative(s).startswith("bots/") else s)

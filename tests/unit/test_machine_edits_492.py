@@ -44,7 +44,7 @@ def _extracted(vault: Path, state: ExtractionState, ty: str, stem: str, *,
                name: str, sources, ledger_sources=None, absolute: bool = True) -> Path:
     """A page as an extraction before #114 wrote it: no ``slug:`` line, its
     sources (and so its section) rendered with the vault's absolute path."""
-    rendered = [f"{vault}/{s}" if absolute else s for s in sources]
+    rendered = [_abs(vault, s) if absolute else s for s in sources]
     page = ExtractedPage(
         slug=stem, type=ty, name=name, description="what the maintainer measured",
         body="Measure before you design.\n\n**Why:** the numbers were wrong.",
@@ -61,14 +61,25 @@ def _extracted(vault: Path, state: ExtractionState, ty: str, stem: str, *,
     return path
 
 
+def _abs(vault: Path, rel: str) -> str:
+    """An absolute source as the renderer spelled it: ``str(Path)``, so with
+    backslashes on Windows."""
+    return str(vault.joinpath(*rel.split("/")))
+
+
 def _stamp_slug(path: Path, slug: str) -> None:
     """The #114 stamp as it ran before #179: bytes only, no hash."""
     _write(path, _stamp(_text(path), slug))
 
 
 def _old_regen(path: Path, vault: Path) -> None:
-    """``regen-graph-edges`` before #492: a plain write."""
-    assert regen._refresh_rule(path, vault) is True
+    """``regen-graph-edges`` before #492: its bytes, no hash moved. Written
+    exactly, as on the macOS vault #487 measured: ``write_text`` would add
+    CRLF on Windows, a drift of its own."""
+    before = _text(path)
+    after = regen.refreshed_rule(before, vault)
+    assert after != before
+    _write(path, after)
 
 
 def _save(vault: Path, state: ExtractionState) -> None:
@@ -257,7 +268,7 @@ def test_a_section_citing_the_leading_sources_is_rebuilt(tmp_vault: Path):
     state = _empty()
     page = _extracted(tmp_vault, state, "reference", "mark-form-dirty",
                       name="Mark form dirty", sources=[S1], ledger_sources=[S1, S3])
-    text = _text(page).replace(f"  - {tmp_vault}/{S1}\n", f"  - {tmp_vault}/{S1}\n  - {S3}\n")
+    text = _text(page).replace(f"  - {_abs(tmp_vault, S1)}\n", f"  - {_abs(tmp_vault, S1)}\n  - {S3}\n")
     _write(page, text)
     state.entries["reference/mark-form-dirty"].written_hash = content_hash(text)
     _old_regen(page, tmp_vault)
@@ -281,10 +292,10 @@ def test_one_absolute_source_among_relative_ones_is_explained(tmp_vault: Path):
     state = _empty()
     page = _extracted(tmp_vault, state, "reference", "backup-by-risk",
                       name="Backup by risk", sources=[S1, S2, S3], absolute=False)
-    text = _text(page).replace(f"  - {S2}\n", f"  - {tmp_vault}/{S2}\n")
+    text = _text(page).replace(f"  - {S2}\n", f"  - {_abs(tmp_vault, S2)}\n")
     _write(page, text)
     state.entries["reference/backup-by-risk"].written_hash = content_hash(text)
-    _write(page, text.replace(f"  - {tmp_vault}/{S2}\n", f"  - {S2}\n"))
+    _write(page, text.replace(f"  - {_abs(tmp_vault, S2)}\n", f"  - {S2}\n"))
     assert _explain(tmp_vault, state, "reference/backup-by-risk", page) == "sources"
 
 
@@ -385,3 +396,18 @@ def test_a_note_after_an_extractor_section_is_not_taken_for_regen(tmp_vault: Pat
                       name="Use yarn", sources=[S1], absolute=False)
     _write(page, _note_after_section(_text(page)))
     assert _explain(tmp_vault, state, "feedback/use-yarn", page) is None
+
+
+def test_a_windows_absolute_section_is_rebuilt_with_backslashes():
+    """A Windows renderer spelled the source, and so the section's link, as
+    ``str(Path)``: backslashes throughout."""
+    root = "C:\\Users\\me\\vault"
+    win = root + "\\" + S1.replace("/", "\\")
+    written = (
+        "---\nname: x\ndescription: d\ntype: reference\nsources:\n"
+        f"  - {win}\n---\n\nBody.\n\n<!-- mnemo:graph-section -->\n## Sources\n- [[{win[:-3]}]]\n"
+    )
+    regened = regen.refreshed_rule(written, Path(root))
+    assert regened != written and f"[[{S1[:-3]}]]" in regened
+    assert machine_edits.explain_drift(
+        regened, content_hash(written), [root], [S1], (), Path(root)) == "regen"
