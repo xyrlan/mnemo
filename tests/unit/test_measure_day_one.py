@@ -650,9 +650,11 @@ def test_judge_replays_each_arm_as_the_hook_would_and_a_rerun_sends_nothing(judg
     data = day.judge_report(state, day.judge_sources(work, work, Path(judged["args"][2])),
                             json.loads((work / "labels.json").read_text(encoding="utf-8"))[
                                 day.mrr.column(day.DEFAULT_RATER)])
-    for arm in ("a", "b"):
-        for mode in ("off", "on"):
-            assert data["arms"][arm][mode]["labelled"] == data["arms"][arm][mode]["pairs"] > 0
+    # Backfill pages stage again (#477 reverted #471's routing), so the
+    # fixture's arm (a) reaches no live rule and injects nothing.
+    for mode in ("off", "on"):
+        assert data["arms"]["a"][mode]["pairs"] == 0
+        assert data["arms"]["b"][mode]["labelled"] == data["arms"]["b"][mode]["pairs"] > 0
 
     spent, labelled = len(judged["sent"]), len(judged["calls"])
     assert day.main(judged["args"] + ["--send"]) == 0
@@ -669,14 +671,18 @@ def test_a_slow_judge_falls_back_to_the_gates_and_is_counted(judged, monkeypatch
     monkeypatch.setattr(rerank, "typesafe_client",
                         lambda key, **kw: _stub_jev(judged["sent"], sleep=0.3))
 
-    assert day.main(judged["args"] + ["--send", "--arm", "a"]) == 0
+    # Arm (b): the fixture's arm (a) reaches no live rule since #477, so
+    # nothing there would be asked.
+    assert day.main(judged["args"] + ["--send", "--arm", "b"]) == 0
 
-    a = json.loads((judged["work"] / day.JUDGE_NAME).read_text(encoding="utf-8"))["arms"]["a"]
-    asked = [u for u in a["units"] if u["judge"] and u["judge"]["asked"]]
+    b = json.loads((judged["work"] / day.JUDGE_NAME).read_text(encoding="utf-8"))["arms"]["b"]
+    units = [u for r in b["rows"] for u in r["units"]]
+    off_units = [u for r in b["rows"] for u in r["off_units"]]
+    asked = [u for u in units if u["judge"] and u["judge"]["asked"]]
     assert asked and all(u["judge"]["status"] == "timeout" and u["judge"]["fallback"] for u in asked)
     # Every fallback is the gates' answer, so judge on equals judge off.
-    assert [u["pool"] for u in a["units"]] == [u["pool"] for u in a["off_units"]]
-    assert day.jev_stats(a["units"])["fallback"] == len(asked)
+    assert [u["pool"] for u in units] == [u["pool"] for u in off_units]
+    assert day.jev_stats(units)["fallback"] == len(asked)
 
 
 def test_arm_b_stops_before_a_session_the_jev_budget_cannot_cover(judged):
