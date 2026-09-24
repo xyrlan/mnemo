@@ -75,12 +75,14 @@ def _replace_or_append_section(text: str, section: str) -> str:
     return head + section
 
 
-def _refresh_rule(md: Path, vault_root: Path) -> bool:
-    """Append/refresh a ``## Sources`` section on a rule .md file.
-    Returns True when the file content changed."""
+def refreshed_rule(text: str, vault_root: Path) -> str:
+    """*text* with its ``## Sources`` section rebuilt from its ``sources:``.
+
+    Pure: ``machine_edits`` asks it whether a page's section is this
+    command's output before undoing it (#492).
+    """
     from mnemo.core.filters import parse_frontmatter
 
-    text = md.read_text(encoding="utf-8")
     fm = parse_frontmatter(text)
     sources_raw = fm.get("sources") or []
     if isinstance(sources_raw, str):
@@ -89,10 +91,25 @@ def _refresh_rule(md: Path, vault_root: Path) -> bool:
     section = _build_section(
         "Sources", [_wikilink_target(s, vault_root) for s in sources]
     )
-    new_text = _replace_or_append_section(text, section)
+    return _replace_or_append_section(text, section)
+
+
+def _refresh_rule(md: Path, vault_root: Path, session=None) -> bool:
+    """Append/refresh a ``## Sources`` section on a rule .md file.
+    Returns True when the file content changed.
+
+    With *session* (a :class:`~mnemo.core.extract.machine_edits.EditSession`)
+    the write advances the page's ``written_hash``, as the command does: a
+    plain write left 267 pages of a real vault reading as edited by a person,
+    so extraction stopped updating them (#492)."""
+    text = md.read_text(encoding="utf-8")
+    new_text = refreshed_rule(text, vault_root)
     if new_text == text:
         return False
-    md.write_text(new_text, encoding="utf-8")
+    if session is not None:
+        session.write(md, new_text)
+    else:
+        md.write_text(new_text, encoding="utf-8")
     return True
 
 
@@ -144,24 +161,34 @@ def _build_briefing_to_rules_map(rules_dir_paths: list[Path]) -> dict[str, list[
 
 @command("regen-graph-edges")
 def cmd_regen_graph_edges(args: argparse.Namespace) -> int:
+    import sys
+
     from mnemo import cli
+    from mnemo.core.extract.inbox.types import ExtractionIOError
+    from mnemo.core.extract.machine_edits import VaultBusy, edit_session
 
     vault = cli._resolve_vault()
     rule_dirs = [vault / "shared" / t for t in _RETRIEVAL_TYPES]
 
-    # Pass 1: refresh rule files + build inverse map.
+    # Pass 1: refresh rule files + build inverse map. Rules are pages the
+    # extraction ledger tracks, so they are written through the edit session.
     rules_scanned = 0
     rules_refreshed = 0
-    for d in rule_dirs:
-        if not d.is_dir():
-            continue
-        for md in sorted(d.glob("*.md")):
-            rules_scanned += 1
-            try:
-                if _refresh_rule(md, vault):
-                    rules_refreshed += 1
-            except (OSError, UnicodeDecodeError):
-                continue
+    try:
+        with edit_session(vault) as session:
+            for d in rule_dirs:
+                if not d.is_dir():
+                    continue
+                for md in sorted(d.glob("*.md")):
+                    rules_scanned += 1
+                    try:
+                        if _refresh_rule(md, vault, session):
+                            rules_refreshed += 1
+                    except (OSError, UnicodeDecodeError, ExtractionIOError):
+                        continue
+    except VaultBusy as exc:
+        print(f"mnemo regen-graph-edges: {exc}", file=sys.stderr)
+        return 1
 
     inverse = _build_briefing_to_rules_map(rule_dirs)
 

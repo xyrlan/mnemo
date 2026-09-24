@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 from mnemo.core import errors
-from mnemo.core.extract.inbox.io import content_hash
+from mnemo.core.extract.inbox.io import atomic_write, content_hash
+from mnemo.core.extract.machine_edits import edit_session, page_key
+from mnemo.core.extract.scanner import ExtractionState, StateEntry
 from mnemo.core.extract.inbox.rendering import _render_nested_block
 from mnemo.core.reclassify_types import ApplyReport, Plan, split_frontmatter
 
@@ -136,15 +138,25 @@ def _append_sources(text: str, new_sources: list) -> str:
 # -------------------------------------------------------------------- apply
 
 
-def _entry_for(state: dict, key: str, sources: list) -> dict:
-    entry = state["entries"].get(key)
+def _entry_for(state: ExtractionState, key: str, sources: list) -> StateEntry:
+    entry = state.entries.get(key)
     if entry is None:
-        entry = {
-            "source_files": list(sources), "source_hash": "", "written_hash": "",
-            "written_at": _now(), "status": "auto_promoted",
-        }
-        state["entries"][key] = entry
+        now = _now()
+        entry = StateEntry(
+            source_files=list(sources), source_hash="", written_hash="",
+            written_at=now, status="auto_promoted", last_sync=now,
+        )
+        state.entries[key] = entry
     return entry
+
+
+def _key(path: Path, vault_root: Path) -> str:
+    """The ledger key of the page at *path*: its type directory and its file
+    stem, as extraction installs it — never the frontmatter slug a verdict
+    names. The two differ for most rules of a real vault (61/61 keeps of the
+    09-02 run), and an entry keyed on the slug is an orphan: the page's real
+    entry never moves, so the page reads as edited by a person (#492)."""
+    return page_key(path, vault_root) or f"{path.parent.name}/{path.stem}"
 
 
 def _slug_to_path(vault_root: Path) -> dict:
@@ -160,9 +172,51 @@ def _slug_to_path(vault_root: Path) -> dict:
     return {r.slug: r.path for r in collect_rules(vault_root)}
 
 
-def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> ApplyReport:
-    """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`."""
+def apply(
+    vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True, session=None,
+) -> ApplyReport:
+    """Execute *plan_obj*, keeping byte-exact originals for :func:`undo`.
+
+    Runs under the extraction lock (:func:`machine_edits.edit_session`, which
+    raises ``VaultBusy`` while an extraction holds it). A kept page and a
+    merge target are written through the session, so their ``written_hash``
+    moves only when the page was the extractor's bytes before: a page a
+    person had edited keeps reading as edited.
+
+    A caller that already holds a session (``reverify`` swaps briefings first,
+    under the same lock) passes it as *session*.
+    """
     vault_root = Path(vault_root)
+    if session is not None:
+        report = _apply(vault_root, plan_obj, session)
+        session.changed = True
+    else:
+        with edit_session(vault_root, create=True) as own:
+            report = _apply(vault_root, plan_obj, own)
+            own.changed = True
+
+    if rebuild_indexes:
+        try:
+            from mnemo.core import rule_activation
+            rule_activation.write_index(vault_root, rule_activation.build_index(vault_root))
+        except Exception as exc:  # noqa: BLE001 — index rebuild is best-effort
+            errors.log_error(vault_root, "reclassify.rule_activation_index", exc)
+        try:
+            from mnemo.core.reflex import index as reflex_index
+            reflex_index.write_index(vault_root, reflex_index.build_index(vault_root))
+        except Exception as exc:  # noqa: BLE001
+            errors.log_error(vault_root, "reclassify.reflex_index", exc)
+
+    return report
+
+
+def _apply(vault_root: Path, plan_obj: Plan, session) -> ApplyReport:
+    state_path = vault_root / ".mnemo" / "extraction-state.json"
+    state = session.state
+    if state is None:
+        # A state this mnemo cannot read (a newer schema) is not ours to
+        # rewrite; nothing has been touched yet.
+        raise RuntimeError(f"{state_path} is not readable by this mnemo; not applying")
     arch = vault_root / "shared" / "_archive" / f"reclassify-{plan_obj.run_id}"
     # Applying the same run twice would re-copy already-modified files over the
     # pristine originals and overwrite the manifest, silently destroying undo.
@@ -174,20 +228,11 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
     for d in (originals, merged_dir, archived_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    state_path = vault_root / ".mnemo" / "extraction-state.json"
     state_backup: Optional[str] = None
-    state: dict = {"entries": {}}
     if state_path.exists():
         backup = originals / "extraction-state.json"
         shutil.copy2(state_path, backup)
         state_backup = str(backup.relative_to(vault_root))
-        try:
-            loaded = json.loads(state_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                state = loaded
-        except (OSError, ValueError):
-            pass
-    state.setdefault("entries", {})
 
     report = ApplyReport(archive_dir=arch)
     moves: list[dict] = []
@@ -257,10 +302,13 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
                 report.notes.append(f"{v.slug}: merge target missing → demoted")
                 verdict = "demote"
 
+        src_key = _key(src_path, vault_root)
         if verdict == "keep":
-            src_path.write_text(_rewrite_keep(text, v.quote, v.source, v.link), encoding="utf-8")
-            entry = _entry_for(state, f"feedback/{v.slug}", fm_sources)
-            entry["written_hash"] = content_hash(src_path)
+            session.write(src_path, _rewrite_keep(text, v.quote, v.source, v.link))
+            if src_key not in state.entries:
+                # No entry to compare against: record the kept bytes as the
+                # extractor's, as keep always has.
+                _entry_for(state, src_key, fm_sources).written_hash = content_hash(src_path)
             to_path = src_path
             report.kept += 1
 
@@ -270,21 +318,21 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             if dest.exists():
                 clash = originals / f"reference__{v.slug}.md"
                 shutil.copy2(dest, clash)
-            dest.write_text(_rewrite_demote(text), encoding="utf-8")
+            atomic_write(dest, _rewrite_demote(text))
             src_path.unlink()
-            old = state["entries"].pop(f"feedback/{v.slug}", None) or {}
+            old = state.entries.pop(src_key, None)
             now = _now()
-            state["entries"][f"reference/{v.slug}"] = {
-                "source_files": fm_sources,
-                "source_hash": old.get("source_hash", "") or "",
-                "written_hash": content_hash(dest),
-                "written_at": now,
-                "status": "auto_promoted",
-                "last_sync": now,
+            state.entries[_key(dest, vault_root)] = StateEntry(
+                source_files=fm_sources,
+                source_hash=old.source_hash if old is not None else "",
+                written_hash=content_hash(dest),
+                written_at=now,
+                status="auto_promoted",
+                last_sync=now,
                 # Sticky: a rule reconstructed from an archived transcript stays
                 # behind the origin gate after it is demoted to reference.
-                "origin_backfill": old.get("origin_backfill", False),
-            }
+                origin_backfill=old.origin_backfill if old is not None else False,
+            )
             to_path = dest
             report.demoted += 1
 
@@ -295,9 +343,9 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             # its slug: 97% of the real vault has filename != slug, so undo
             # must restore to where the file actually lives.
             target_rel = _rel(target_path)
-            target_path.write_text(
+            session.write(
+                target_path,
                 _append_sources(target_path.read_text(encoding="utf-8"), fm_sources),
-                encoding="utf-8",
             )
             dest = merged_dir / f"{v.slug}.md"
             shutil.move(str(src_path), str(dest))
@@ -306,11 +354,10 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             # the real entry live, and the next ``mnemo extract`` writes the
             # merged-away page back. ``reclassify`` only ever grades
             # ``shared/feedback/``, so for it both lines read as they did.
-            _entry_for(state, f"{src_path.parent.name}/{v.slug}",
-                       fm_sources)["status"] = "dismissed"
-            tgt_entry = _entry_for(state, f"{target_path.parent.name}/{v.target}", [])
-            existing = tgt_entry.get("source_files") or []
-            tgt_entry["source_files"] = existing + [s for s in fm_sources if s not in existing]
+            _entry_for(state, src_key, fm_sources).status = "dismissed"
+            tgt_entry = _entry_for(state, _key(target_path, vault_root), [])
+            existing = list(tgt_entry.source_files)
+            tgt_entry.source_files = existing + [s for s in fm_sources if s not in existing]
             to_path = dest
             report.merged += 1
 
@@ -320,8 +367,7 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
             # Keyed by the page's own type, as for merge: a bulk archive of
             # ``reference`` pages must dismiss ``reference/<slug>``, or the
             # real entry stays live and the next extraction writes it back.
-            _entry_for(state, f"{src_path.parent.name}/{v.slug}",
-                       fm_sources)["status"] = "dismissed"
+            _entry_for(state, src_key, fm_sources).status = "dismissed"
             to_path = dest
             report.archived += 1
 
@@ -343,22 +389,6 @@ def apply(vault_root: Path, plan_obj: Plan, *, rebuild_indexes: bool = True) -> 
         "skipped": skipped,
         "state_backup": state_backup,
     }, indent=2), encoding="utf-8")
-
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-
-    if rebuild_indexes:
-        try:
-            from mnemo.core import rule_activation
-            rule_activation.write_index(vault_root, rule_activation.build_index(vault_root))
-        except Exception as exc:  # noqa: BLE001 — index rebuild is best-effort
-            errors.log_error(vault_root, "reclassify.rule_activation_index", exc)
-        try:
-            from mnemo.core.reflex import index as reflex_index
-            reflex_index.write_index(vault_root, reflex_index.build_index(vault_root))
-        except Exception as exc:  # noqa: BLE001
-            errors.log_error(vault_root, "reclassify.reflex_index", exc)
-
     return report
 
 

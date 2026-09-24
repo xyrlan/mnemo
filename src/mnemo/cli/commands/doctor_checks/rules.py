@@ -108,7 +108,8 @@ def _doctor_check_written_hash_drift(vault: Path) -> bool:
     A page whose bytes no longer hash to its ``written_hash`` reads as a user
     edit, and extraction diverts its next update into a ``.proposed.md``. When
     undoing a known machine edit (the fixer's ``sources:`` swap, the
-    ``reference_gate:`` stamp, the ``slug:`` stamp) reproduces the recorded
+    ``reference_gate:`` stamp, the ``slug:`` stamp; since #492 also
+    ``regen-graph-edges``' section and reclassify's keep and merge) reproduces the recorded
     hash, the drift is a tool's, not a person's: ``mnemo extract``
     re-baselines those. Seeing them again after an extract means a writer went
     around ``machine_edits.edit_session`` — which is what this line is for.

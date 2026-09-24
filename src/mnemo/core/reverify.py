@@ -314,8 +314,6 @@ def apply(vault_root: Path, report: Report, *, scratch: Path) -> ApplyReport:
     """Execute the saved dry run: keep what verified (bare source path, the
     regenerated briefing installed), demote what was re-briefed and still
     fails. Everything else is left exactly as it was."""
-    from mnemo.core import reclassify_apply as RA
-
     vault_root = Path(vault_root)
     verdicts: list = []
     for o in report.outcomes:
@@ -329,6 +327,19 @@ def apply(vault_root: Path, report: Report, *, scratch: Path) -> ApplyReport:
     arch = _archive_dir(vault_root, report.run_id)
     if (arch / "manifest.json").exists():
         raise RuntimeError(f"run {report.run_id} already applied; undo it first")
+
+    from mnemo.core.extract.machine_edits import edit_session
+
+    # The briefing swap and reclassify's apply run under one hold of the
+    # extraction lock: taken only by apply, a busy vault would refuse it
+    # after the briefings were already swapped.
+    with edit_session(vault_root, create=True) as session:
+        return _apply_locked(vault_root, report, verdicts, arch, scratch, session)
+
+
+def _apply_locked(vault_root: Path, report: Report, verdicts: list, arch: Path,
+                  scratch: Path, session) -> ApplyReport:
+    from mnemo.core import reclassify_apply as RA
 
     # Install the regenerated briefing for every session that backed a page:
     # the keep rewrites ``evidence.source`` to the bare path, and the gate must
@@ -350,7 +361,8 @@ def apply(vault_root: Path, report: Report, *, scratch: Path) -> ApplyReport:
         swaps.append({"path": rel, "original": backup.relative_to(vault_root).as_posix()
                       if backup.exists() else None})
 
-    result = RA.apply(vault_root, Plan(run_id=report.run_id, llm_calls=report.llm_calls, verdicts=verdicts))
+    result = RA.apply(vault_root, Plan(run_id=report.run_id, llm_calls=report.llm_calls,
+                                       verdicts=verdicts), session=session)
     (arch / "briefings.json").write_text(json.dumps({"swaps": swaps}, indent=2), encoding="utf-8")
     return result
 

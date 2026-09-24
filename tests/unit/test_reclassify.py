@@ -38,7 +38,7 @@ def vault(tmp_path: Path) -> Path:
     b.write_text(BRIEF, encoding="utf-8")
     (root / ".mnemo").mkdir()
     (root / ".mnemo" / "extraction-state.json").write_text(json.dumps({
-        "schema_version": 3, "last_run": None, "entries": {
+        "schema_version": 2, "last_run": None, "entries": {
             "feedback/use-yarn": {"source_files": ["bots/proj/briefings/sessions/s1.md"], "source_hash": "a",
                                    "written_hash": "b", "written_at": "r", "status": "auto_promoted"}}}), encoding="utf-8")
     return root

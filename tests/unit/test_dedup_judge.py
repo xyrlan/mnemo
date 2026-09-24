@@ -403,9 +403,11 @@ def test_merge_folds_the_sources_and_can_be_undone(monkeypatch, vault):
     run_id = out.split("mnemo reclassify --undo ")[1].strip()
 
     # The dropped page's extraction-state entry is keyed by the type it had,
-    # so the next extraction does not write it back.
+    # so the next extraction does not write it back — and by its file stem,
+    # the key extraction installs, not the frontmatter slug (#492).
     state = json.loads((vault / ".mnemo" / "extraction-state.json").read_text(encoding="utf-8"))
-    assert state["entries"]["reference/baseline-before-tuning"]["status"] == "dismissed"
+    assert state["entries"]["reference/baseline-before-tuning-file"]["status"] == "dismissed"
+    assert "reference/baseline-before-tuning" not in state["entries"]
 
     assert undo(vault, run_id)
     assert (vault / "shared" / "reference" / "baseline-before-tuning-file.md").exists()
