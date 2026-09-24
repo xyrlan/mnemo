@@ -56,7 +56,7 @@ def test_inbox_is_a_user_facing_command_with_a_handler():
     assert "inbox" in COMMANDS
     assert "inbox" not in ADVANCED_COMMANDS and "inbox" not in INTERNAL_COMMANDS
     ns = _build_parser().parse_args(["inbox", "--promote", "reference/a"])
-    assert ns.command == "inbox" and ns.promote == "reference/a"
+    assert ns.command == "inbox" and ns.promote == ["reference/a"]
 
 
 def test_listing_writes_nothing_and_says_so(tmp_vault: Path, monkeypatch):
