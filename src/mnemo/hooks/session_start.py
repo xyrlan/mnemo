@@ -293,10 +293,11 @@ def _warn_about_duplicate_install(vault) -> None:
 
 
 def _spawn_detached(args: list, cwd: str | None = None) -> None:
-    """Fire-and-forget ``mnemo <args>`` via subprocess.Popen.
+    """Fire-and-forget ``mnemo <args>`` through :func:`mnemo._detach.spawn`.
 
-    Detach semantics match session_end's briefing spawn — see
-    hooks/session_end.py:139.
+    Detach semantics match session_end's spawns. ``SessionEnd`` starts the
+    ``pr-follow`` watcher through here too, so the worker is orphaned for the
+    same reason theirs are (#475).
 
     ``cwd`` is the session's working directory, and it is not decoration: a
     spawned command picks the repo it is about with
@@ -304,21 +305,10 @@ def _spawn_detached(args: list, cwd: str | None = None) -> None:
     whatever directory the hook process was launched in. Passed only when it
     still exists — a stale path would make Popen raise before the child ran.
     """
-    import subprocess
-
-    from mnemo._detach import detach_kwargs
+    from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
 
-    kwargs: dict = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    kwargs.update(detach_kwargs())
-    kwargs["cwd"] = cwd if cwd and os.path.isdir(cwd) else None
-
-    subprocess.Popen(self_argv(*args), **kwargs)
+    spawn(self_argv(*args), cwd=cwd if cwd and os.path.isdir(cwd) else None)
 
 
 def _spawn_detached_backfill(cwd: str | None = None) -> None:

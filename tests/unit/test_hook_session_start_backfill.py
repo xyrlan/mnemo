@@ -26,6 +26,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,7 +115,7 @@ def test_the_hook_launches_no_detached_process_under_the_suite(
     def recording_popen(argv, *args, **kwargs):
         if kwargs.get("start_new_session") or kwargs.get("creationflags"):
             detached.append(argv)
-            return object()
+            return SimpleNamespace(pid=0)
         return real_popen(argv, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", recording_popen)
@@ -305,7 +306,7 @@ def test_popen_is_given_the_cwd_not_the_hooks_own(monkeypatch, tmp_path):
     def fake_popen(argv, **kwargs):
         seen["argv"] = argv
         seen["kwargs"] = kwargs
-        return object()
+        return SimpleNamespace(pid=0)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     monkeypatch.chdir(tmp_path)  # a *different* directory from the session's
@@ -323,7 +324,7 @@ def test_a_missing_cwd_falls_back_to_inheriting(monkeypatch):
 
     def fake_popen(argv, **kwargs):
         seen["kwargs"] = kwargs
-        return object()
+        return SimpleNamespace(pid=0)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     _REAL_SPAWN(cwd=None)
@@ -337,7 +338,7 @@ def test_a_vanished_cwd_is_not_passed_through(monkeypatch, tmp_path):
 
     def fake_popen(argv, **kwargs):
         seen["kwargs"] = kwargs
-        return object()
+        return SimpleNamespace(pid=0)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     _REAL_SPAWN(cwd=str(tmp_path / "gone"))
@@ -353,7 +354,7 @@ def test_the_child_is_the_capped_install_run(monkeypatch):
     def fake_popen(argv, **kwargs):
         seen["argv"] = argv
         seen["kwargs"] = kwargs
-        return object()
+        return SimpleNamespace(pid=0)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     _REAL_SPAWN(cwd=None)
@@ -368,7 +369,7 @@ def test_the_child_is_the_capped_install_run(monkeypatch):
 def test_posix_detaches_with_a_new_session(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(subprocess, "Popen",
-                        lambda argv, **kw: seen.update(kw) or object())
+                        lambda argv, **kw: seen.update(kw) or SimpleNamespace(pid=0))
     monkeypatch.setattr(sys, "platform", "linux")
 
     _REAL_SPAWN(cwd=None)
@@ -381,7 +382,7 @@ def test_posix_detaches_with_a_new_session(monkeypatch):
 def test_windows_detaches_with_creationflags(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(subprocess, "Popen",
-                        lambda argv, **kw: seen.update(kw) or object())
+                        lambda argv, **kw: seen.update(kw) or SimpleNamespace(pid=0))
     monkeypatch.setattr(sys, "platform", "win32")
 
     _REAL_SPAWN(cwd=None)

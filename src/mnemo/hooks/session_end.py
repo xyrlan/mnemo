@@ -116,27 +116,16 @@ def _lock_held(lock_path) -> bool:
 
 
 def _spawn_detached_extraction() -> None:
-    """Fire-and-forget background extraction via subprocess.Popen.
+    """Fire-and-forget background extraction.
 
-    Uses platform-specific detach flags so the child survives the hook's
-    exit. Stdio is redirected to DEVNULL because nothing reads a detached
-    subprocess's output.
+    Started through :func:`mnemo._detach.spawn`, so the worker survives the
+    hook's exit and is not a descendant of the hook when Claude Code kills a
+    hook that ran past its ``SessionEnd`` bound (#475).
     """
-    import subprocess
-
-    from mnemo._detach import detach_kwargs
+    from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
 
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    kwargs.update(detach_kwargs())
-
-    argv = self_argv("extract", "--background")
-    subprocess.Popen(argv, **kwargs)
+    spawn(self_argv("extract", "--background"))
 
 
 def _resolve_session_jsonl_path(session_id: str, cwd: str):
@@ -159,26 +148,15 @@ def _resolve_session_jsonl_path(session_id: str, cwd: str):
 
 
 def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
-    """Fire-and-forget background briefing via subprocess.Popen.
+    """Fire-and-forget background briefing.
 
     Invokes `mnemo briefing <jsonl_path> <agent>`. Detach semantics match
     _spawn_detached_extraction so the child survives the hook's exit.
     """
-    import subprocess
-
-    from mnemo._detach import detach_kwargs
+    from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
 
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    kwargs.update(detach_kwargs())
-
-    argv = self_argv("briefing", str(jsonl_path), agent)
-    subprocess.Popen(argv, **kwargs)
+    spawn(self_argv("briefing", str(jsonl_path), agent))
 
 
 def _maybe_schedule_briefing(
@@ -320,20 +298,10 @@ def _spawn_detached_unblock_consumption() -> None:
     marker runs a briefing and an extraction, both LLM-bound, and the hook
     must not hold up the session's exit for them.
     """
-    import subprocess
-
-    from mnemo._detach import detach_kwargs
+    from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
 
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    kwargs.update(detach_kwargs())
-
-    subprocess.Popen(self_argv("sessions", "--consume-unblocks"), **kwargs)
+    spawn(self_argv("sessions", "--consume-unblocks"))
 
 
 def _maybe_consume_unblocks(cfg: dict, vault_root) -> None:
@@ -464,25 +432,15 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
     """Fire-and-forget ``mnemo child-report`` (#426). Detach semantics match
     :func:`_spawn_detached_briefing`; raises when the process cannot start, so
     the caller can fall back to the one-line notice. Returns the reporter's pid."""
-    import subprocess
-
-    from mnemo._detach import detach_kwargs
+    from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
-
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    kwargs.update(detach_kwargs())
 
     argv = self_argv("child-report", short_id, "--parent", parent)
     if cwd:
         argv += ["--cwd", cwd]
     if transcript:
         argv += ["--transcript", str(transcript)]
-    return subprocess.Popen(argv, **kwargs).pid
+    return spawn(argv)
 
 
 def _maybe_notify_parent(
