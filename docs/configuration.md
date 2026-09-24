@@ -654,6 +654,14 @@ judge saw it). The judge's verdict is the measured one: it stages 30 of 31
 junk pages and 3 of 41 good ones. The other reasons for staging have no such
 number yet. `heldExpiryDays: 0` turns it off.
 
+Backfill pages (#496) expire on the same window. A page with the backfill
+origin — reconstructed from a past session by `mnemo backfill` and staged for
+review — is archived the same way 14 days after staging if nobody kept or
+dropped it: the install review asks once, and a page skipped there or never
+shown does not wait forever. The ledger records `expired`, `mnemo extract`
+counts it as `backfill expired`, `--restore` brings it back, and
+`heldExpiryDays: 0` turns this off too.
+
 ### `mnemo dedup-rules`
 
 Two dedupes, because there are two kinds of duplicate.

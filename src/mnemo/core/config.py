@@ -190,7 +190,8 @@ DEFAULTS: dict[str, Any] = {
         "offerIntervalHours": 24,
         # #429: a page the reference judge held (#417) is archived after this
         # many days untouched, offered or not; `mnemo inbox --restore KEY`
-        # brings it back. Nothing else in the queue expires. 0 turns it off.
+        # brings it back. Undecided backfill-origin pages expire on the same
+        # window (#496). Nothing else in the queue expires. 0 turns it off.
         "heldExpiryDays": 14,
     },
     "install": {

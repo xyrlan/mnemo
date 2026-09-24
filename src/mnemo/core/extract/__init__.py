@@ -8,6 +8,7 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from mnemo.core import dashboard, errors, learned, locks, llm, paths
 from mnemo.core.backfill.origin import (
@@ -206,6 +207,8 @@ class ExtractionSummary:
     reference_held: int = 0
     # #429: held pages archived this run for sitting unreviewed too long.
     reference_expired: int = 0
+    # #496: undecided backfill pages archived this run, 14 days after staging.
+    backfill_expired: int = 0
     # #470: pages whose drift a known machine edit explained, re-baselined this
     # run, and the diverted `.proposed.md` updates applied with them.
     rebaselined: int = 0
@@ -510,6 +513,8 @@ def _run_extraction_body(
     dry_run: bool,
     force: bool,
     only: str | None = None,
+    project: str | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
 ) -> None:
     # The existing-rules prompt fragment caches its vault scan; a fresh run
     # must not inherit another run's view of the vault. Invariant: the cache is
@@ -539,6 +544,21 @@ def _run_extraction_body(
                 f for f in scan_result.dirty_files if f"{f.type}/{f.slug}" == only
             ],
         )
+    # `project` scopes the run to one agent's memory (#496): the first
+    # extraction after `mnemo backfill --extract` consolidates what that
+    # backfill harvested, not every dirty file the vault happens to carry.
+    # Unlike `only` it keeps the zero-LLM project phase, whose pages are most
+    # of what a backfill produces, but it is still not a vault-wide run.
+    if project is not None:
+        scan_result = replace(
+            scan_result,
+            dirty_files=[f for f in scan_result.dirty_files if f.agent == project],
+            by_type={
+                t: [f for f in files if f.agent == project]
+                for t, files in scan_result.by_type.items()
+            },
+        )
+    vault_wide = only is None and project is None
 
     if dry_run:
         _print_estimate(scan_result, cfg)
@@ -570,7 +590,7 @@ def _run_extraction_body(
     # diverted into a `.proposed.md`. On the state this run already loaded:
     # a separate load-and-save would be overwritten by this run's own write.
     # Whole-vault, so not under a scoped run.
-    if only is None:
+    if vault_wide:
         try:
             rebased = machine_edits.rebaseline(vault_root, state)
             summary.rebaselined += len(rebased.rebaselined)
@@ -581,7 +601,7 @@ def _run_extraction_body(
     # Scoped runs never clear the whole inbox: `only` narrows this pass to one
     # file, and wiping every staged cluster page for it would destroy work the
     # user did not ask this run to touch.
-    if force and only is None:
+    if force and vault_wide:
         _force_clear_inbox_cluster_dirs(vault_root)
 
     # Phase 1: projects (zero LLM, fastest, cannot fail from network). Skipped
@@ -605,7 +625,7 @@ def _run_extraction_body(
     # file, not the vault, so advancing it would push the next automatic
     # extraction back a full interval every time the user typed `mnemo learn`.
     # The per-file state entries below still record what this run did see.
-    if only is None:
+    if vault_wide:
         state.last_run = run_id
     try:
         inbox.atomic_write_state(state, state_path)
@@ -627,6 +647,27 @@ def _run_extraction_body(
     gate_on = bool(gate_cfg.get("enabled", True))
     gate_model = str(gate_cfg.get("model") or model)
 
+    def _files_for(type_name: str) -> list:
+        files = scan_result.by_type.get(type_name, [])
+        # Filter to dirty only unless force. A scoped run always filters:
+        # `only` already narrowed dirty_files to the one key, and force must
+        # not widen it back to the whole vault.
+        if files and (not force or only is not None):
+            dirty_set = set(id(f) for f in scan_result.dirty_files)
+            files = [f for f in files if id(f) in dirty_set]
+        return files
+
+    plan = [(t, b, sp, _files_for(t)) for t, b, sp in type_plan]
+    # One tick per chunk, answered or failed, so a progress bar reaches its end.
+    chunks_total = sum(len(list(prompts.chunks_for(f, chunk_size))) for *_, f in plan)
+    chunks_done = 0
+
+    def _tick() -> None:
+        nonlocal chunks_done
+        chunks_done += 1
+        if on_chunk is not None:
+            on_chunk(chunks_done, chunks_total)
+
     def _ask_gate(prompt_text: str) -> str:
         response = provider(
             prompt_text,
@@ -640,17 +681,7 @@ def _run_extraction_body(
         _count_billing(summary, response)
         return response.text
 
-    for type_name, builder, system_prompt in type_plan:
-        files = scan_result.by_type.get(type_name, [])
-        if not files:
-            continue
-
-        # Filter to dirty only unless force. A scoped run always filters:
-        # `only` already narrowed dirty_files to the one key, and force must
-        # not widen it back to the whole vault.
-        if not force or only is not None:
-            dirty_set = set(id(f) for f in scan_result.dirty_files)
-            files = [f for f in files if id(f) in dirty_set]
+    for type_name, builder, system_prompt, files in plan:
         if not files:
             continue
 
@@ -669,6 +700,7 @@ def _run_extraction_body(
             except (llm.LLMSubprocessError, llm.LLMParseError) as exc:
                 errors.log_error(vault_root, "extract.chunk", exc)
                 summary.failed_chunks += 1
+                _tick()
                 continue
             elapsed_ms = (time.perf_counter() - t0) * 1000
             try:
@@ -708,6 +740,7 @@ def _run_extraction_body(
             except llm.LLMParseError as exc:
                 errors.log_error(vault_root, "extract.parse", exc)
                 summary.failed_chunks += 1
+                _tick()
                 continue
 
             kept: list[inbox.ExtractedPage] = []
@@ -752,6 +785,7 @@ def _run_extraction_body(
                 summary.llm_calls += 1 if any(p.judged is not None for p in kept) else 0
             all_pages.extend(kept)
             processed_files.extend(chunk)
+            _tick()
 
         if all_pages:
             deduped = inbox.dedupe_by_slug(all_pages)
@@ -791,7 +825,7 @@ def _run_extraction_body(
                 entry.source_hash = mf.source_hash
 
         if processed_files:
-            if only is None:
+            if vault_wide:
                 state.last_run = run_id
             try:
                 inbox.atomic_write_state(state, state_path)
@@ -962,6 +996,8 @@ def run_extraction(
     force: bool = False,
     background: bool = False,
     only: str | None = None,
+    project: str | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
 ) -> ExtractionSummary:
     """Consolidate the vault's dirty memory files into rule pages.
 
@@ -969,6 +1005,10 @@ def run_extraction(
     (``"<type>/<slug>"``, e.g. ``"feedback/briefing-<session-id>"``) and skips
     the project-promotion phase. Index rebuilds stay vault-wide either way —
     they are cheap, local, and a partial index is worse than none.
+
+    ``project`` narrows it to one agent's memory files, project phase included
+    (#496). ``on_chunk(done, total)`` is called after every cluster-type chunk,
+    answered or failed; ``total`` is known before the first call is sent.
     """
     start = time.monotonic()
     vault_root = paths.vault_root(cfg)
@@ -993,6 +1033,7 @@ def run_extraction(
             _run_extraction_body(
                 cfg, vault_root, state_path, summary,
                 run_id=run_id, dry_run=dry_run, force=force, only=only,
+                project=project, on_chunk=on_chunk,
             )
         except (llm.LLMSubprocessError, llm.LLMParseError, ExtractionIOError) as exc:
             caught_error = exc
@@ -1006,13 +1047,20 @@ def run_extraction(
         if not dry_run:
             # #429: after the state is saved and still under the lock, so the
             # `dismissed` this writes cannot be overwritten by the run's own
-            # save. Vault-wide housekeeping, so not on a one-file `only` run.
-            if only is None:
+            # save. Vault-wide housekeeping, so not on a scoped run.
+            if only is None and project is None:
                 from mnemo.core import inbox as inbox_queue
                 expired = inbox_queue.expire_held(
                     vault_root, days=inbox_queue.held_expiry_days(cfg),
                 )
-                summary.reference_expired = sum(1 for r in expired if r.ok)
+                summary.reference_expired = sum(
+                    1 for r in expired if r.ok and r.why == inbox_queue.WHY_HELD
+                )
+                # #496: undecided backfill pages, counted apart — the judge
+                # did not hold these, nobody reviewed them.
+                summary.backfill_expired = sum(
+                    1 for r in expired if r.ok and r.why == inbox_queue.WHY_BACKFILL
+                )
             try:
                 _cleanup_legacy_wiki_dirs(vault_root)
             except OSError as exc:
@@ -1048,7 +1096,7 @@ def run_extraction(
         # A scoped run is not an auto run: `last-auto-run.json` feeds
         # `mnemo status`'s "last run" line, which reports the vault-wide
         # sweep, not a one-file `mnemo learn`.
-        if background and not dry_run and only is None:
+        if background and not dry_run and only is None and project is None:
             exit_code = 0
             if summary.failed_chunks > 0:
                 exit_code = 1

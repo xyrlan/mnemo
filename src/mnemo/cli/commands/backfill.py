@@ -7,6 +7,12 @@ Two entry shapes:
 - everything else: an explicit sweep the user asks for, which prints an
   estimate and asks before spending.
 
+The install review (#496) drives the second shape from a caller that is not a
+person at a terminal: ``--dry-run --json`` prints the estimate as one JSON
+document, and ``--yes --extract --progress-json`` runs the sweep and then the
+first extraction for that project, printing one JSON line per step. Consent
+stays with the caller either way: without ``--yes`` it still asks.
+
 A failure caused by *this transcript* is recorded and stepped over — one
 malformed transcript must never abort a sweep. A failure caused by the
 *environment* aborts immediately and records nothing; see
@@ -15,9 +21,14 @@ malformed transcript must never abort a sweep. A failure caused by the
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
+import math
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional, TextIO
 
 from mnemo.cli.parser import command
 from mnemo.core import config as cfg_mod
@@ -145,10 +156,56 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     return code
 
 
+class _Events:
+    """The ``--progress-json`` stream: one JSON object per line, flushed.
+
+    Writes to the stdout the command was started with. Everything else the
+    run prints — the human lines here, anything extraction prints — is sent
+    to stderr while the stream is open, so a caller parsing stdout line by
+    line only ever sees these objects.
+    """
+
+    def __init__(self, out: TextIO) -> None:
+        self._out = out
+
+    def emit(self, event: str, **fields: object) -> None:
+        self._out.write(json.dumps({"event": event, **fields}, ensure_ascii=False) + "\n")
+        self._out.flush()
+
+
+def _json_mode(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "json", False) or getattr(args, "progress_json", False))
+
+
 def _run_backfill(args: argparse.Namespace) -> int:
+    if getattr(args, "json", False) and not args.dry_run:
+        print("backfill: --json goes with --dry-run; a run reports with --progress-json.",
+              file=sys.stderr)
+        return _EXIT_ABORTED
+    if not getattr(args, "progress_json", False):
+        return _run_backfill_inner(args, None)
+    events = _Events(sys.stdout)
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            return _run_backfill_inner(args, events)
+        except Exception as exc:  # noqa: BLE001 — the caller reads exit 2 and this line
+            events.emit("error", message=_first_line(exc))
+            return _EXIT_ABORTED
+
+
+def _run_backfill_inner(args: argparse.Namespace, events: Optional[_Events]) -> int:
     cfg = cfg_mod.load_config()
     backfill_cfg = cfg.get("backfill") or {}
     if not backfill_cfg.get("enabled", True):
+        if _json_mode(args):
+            # Could not run at all: a caller that asked for JSON gets exit 2
+            # and a reason, never a sentence where it expected an object.
+            message = "backfill: disabled in config (backfill.enabled = false)"
+            if events is not None:
+                events.emit("error", message=message)
+            else:
+                print(message, file=sys.stderr)
+            return _EXIT_ABORTED
         print("backfill: disabled in config (backfill.enabled = false)")
         return _EXIT_OK
 
@@ -173,18 +230,34 @@ def _run_backfill(args: argparse.Namespace) -> int:
 
     todo = [t for t in candidates if ledger.should_harvest(led, t.path)]
 
-    if not todo:
-        _report_nothing_to_do(candidates, led, vault_root)
+    if getattr(args, "json", False):
+        # Exactly one JSON document, nothing sent. Always the review run's
+        # price — harvest and first extraction — because that is the run a
+        # caller asks consent for.
+        print(json.dumps(_estimate(todo, cfg, extract=True).as_json(_json_project(args)),
+                         ensure_ascii=False))
         return _EXIT_OK
 
+    if not todo:
+        _report_nothing_to_do(candidates, led, vault_root)
+        if events is not None:
+            events.emit("harvest", done=0, of=0)
+        if events is not None or getattr(args, "extract", False):
+            # Harvested earlier, never extracted: the first extraction is
+            # still owed, and it is what a review lists.
+            return _then_extract(args, cfg, vault_root, events, harvest_failed=0,
+                                 harvest_code=_EXIT_OK)
+        return _EXIT_OK
+
+    estimate = _estimate(todo, cfg, extract=bool(getattr(args, "extract", False)))
     projects = sorted({t.agent for t in todo})
     print(
         f"backfill: {len(todo)} session(s) across {len(projects)} project(s): "
         f"{', '.join(projects)}"
     )
     print(
-        f"          ~{_fmt_tokens(_estimate_input_tokens(todo))} input tokens (rough), "
-        f"{len(todo)} LLM call(s) via your existing claude CLI."
+        f"          ~{_fmt_tokens(estimate.input_tokens)} input tokens (rough), "
+        f"{estimate.calls} LLM call(s) via your existing claude CLI."
     )
 
     if args.dry_run:
@@ -200,9 +273,124 @@ def _run_backfill(args: argparse.Namespace) -> int:
             reply = ""
         if reply not in ("y", "yes"):
             print("backfill: cancelled.")
+            if events is not None:
+                events.emit("cancelled")
             return _EXIT_OK
 
-    return _sweep(todo, cfg, vault_root, led)
+    on_session = None
+    if events is not None:
+        total = len(todo)
+
+        def on_session(done: int) -> None:
+            events.emit("harvest", done=done, of=total)
+
+    code, failed = _sweep(todo, cfg, vault_root, led, on_session=on_session)
+    if code not in (_EXIT_OK, _EXIT_SOME_FAILED):
+        if events is not None:
+            events.emit("error", message="the harvest stopped before the end; see stderr")
+        return code
+    if events is None and not getattr(args, "extract", False):
+        return code
+    return _then_extract(args, cfg, vault_root, events, harvest_failed=failed,
+                         harvest_code=code)
+
+
+def _json_project(args: argparse.Namespace) -> str | None:
+    """The project the run is scoped to, or None under ``--all``."""
+    if args.project is not None:
+        return args.project
+    if args.all:
+        return None
+    return _current_project()
+
+
+def _staged_keys(vault_root: Path) -> set[str]:
+    from mnemo.core.filters import is_proposed_sibling, iter_staged_pages
+
+    return {
+        f"{p.parent.name}/{p.stem}" for p in iter_staged_pages(Path(vault_root))
+        if not is_proposed_sibling(p)
+    }
+
+
+def _live_keys(vault_root: Path) -> set[str]:
+    shared = Path(vault_root) / "shared"
+    out: set[str] = set()
+    if not shared.is_dir():
+        return out
+    for type_dir in shared.iterdir():
+        if not type_dir.is_dir() or type_dir.name.startswith("_"):
+            continue
+        out.update(f"{type_dir.name}/{p.stem}" for p in type_dir.glob("*.md")
+                   if not p.name.endswith(".proposed.md"))
+    return out
+
+
+def _then_extract(
+    args: argparse.Namespace,
+    cfg: dict,
+    vault_root: Path,
+    events: Optional[_Events],
+    *,
+    harvest_failed: int,
+    harvest_code: int,
+) -> int:
+    """The first extraction after a sweep, scoped to the project swept.
+
+    Calls ``run_extraction`` directly — never a hook's ``main``, which would
+    bring the hook's own gates and spawns with it. The model calls go through
+    ``llm``, whose helpers carry ``MNEMO_HOOKS_OFF`` like every other.
+
+    Without ``--extract`` a ``--progress-json`` run still ends on ``done``,
+    with the harvest's counts only.
+
+    ``staged`` and ``live`` are the pages this run added to
+    ``shared/_inbox/`` and ``shared/<type>/``: counted from the directories
+    before and after, so they are what a review will find, whichever branch
+    of the pipeline put them there.
+    """
+    from mnemo.core import extract as extract_mod
+
+    if not getattr(args, "extract", False):
+        if events is not None:
+            events.emit("done", staged=0, live=0, failed=harvest_failed)
+        return _EXIT_OK if events is not None else harvest_code
+
+    project = _json_project(args)
+    staged_before, live_before = _staged_keys(vault_root), _live_keys(vault_root)
+
+    def on_chunk(done: int, total: int) -> None:
+        if events is not None:
+            events.emit("extract", done=done, of=total)
+
+    try:
+        summary = extract_mod.run_extraction(cfg, project=project, on_chunk=on_chunk)
+    except KeyboardInterrupt:
+        print("\nbackfill: extraction interrupted. `mnemo extract` finishes it.",
+              file=sys.stderr)
+        return _EXIT_INTERRUPTED
+    except Exception as exc:  # noqa: BLE001 — a lock held, a dead CLI, an unwritable vault
+        err_mod.log_error(vault_root, "backfill.extract", exc)
+        message = f"extraction could not run: {_first_line(exc)}"
+        if events is not None:
+            events.emit("error", message=message)
+        else:
+            print(f"backfill: {message}", file=sys.stderr)
+        return _EXIT_ABORTED
+
+    staged = len(_staged_keys(vault_root) - staged_before)
+    live = len(_live_keys(vault_root) - live_before)
+    if events is not None:
+        events.emit("done", staged=staged, live=live, failed=harvest_failed,
+                    failed_chunks=summary.failed_chunks)
+        # Finished, even with failures: they are counted above (#496 spec).
+        return _EXIT_OK
+    print(f"backfill: extraction staged {staged} page(s) for review, {live} live.")
+    if summary.failed_chunks:
+        print(f"          ⚠ failed_chunks: {summary.failed_chunks} "
+              f"(see {_error_log(vault_root)}; `mnemo extract` retries)", file=sys.stderr)
+        return _EXIT_SOME_FAILED
+    return harvest_code
 
 
 def _sweep(
@@ -210,7 +398,14 @@ def _sweep(
     cfg: dict,
     vault_root: Path,
     led: dict,
-) -> int:
+    *,
+    on_session: Optional[Callable[[int], None]] = None,
+) -> tuple[int, int]:
+    """Harvest *todo*. Returns ``(exit code, sessions failed)``.
+
+    ``on_session(n)`` is called after each session, harvested or failed, with
+    the number of sessions dealt with so far.
+    """
     produced = 0
     processed = 0
     barren = 0
@@ -228,7 +423,7 @@ def _sweep(
                 "Rerun to resume where it stopped.",
                 file=sys.stderr,
             )
-            return _EXIT_INTERRUPTED
+            return _EXIT_INTERRUPTED, failed
         except Exception as exc:
             err_mod.log_error(vault_root, "backfill.harvest", exc)
             if _environmental(exc):
@@ -237,6 +432,8 @@ def _sweep(
             ledger.mark_failed(led, t.path, str(exc))
             ledger.save(vault_root, led)
             failed += 1
+            if on_session is not None:
+                on_session(processed + failed)
             continue
         ledger.mark_done(led, t.path, produced=len(written))
         ledger.save(vault_root, led)
@@ -244,6 +441,8 @@ def _sweep(
         produced += len(written)
         if not written:
             barren += 1
+        if on_session is not None:
+            on_session(processed + failed)
 
     if aborted is not None:
         print(
@@ -252,10 +451,10 @@ def _sweep(
             "against the remaining transcripts. Fix the above and rerun to resume.",
             file=sys.stderr,
         )
-        return _EXIT_ABORTED
+        return _EXIT_ABORTED, failed
 
     _report_summary(processed, produced, barren, failed, vault_root)
-    return _EXIT_SOME_FAILED if failed else _EXIT_OK
+    return (_EXIT_SOME_FAILED if failed else _EXIT_OK), failed
 
 
 def _error_log(vault_root: Path) -> Path:
@@ -324,6 +523,91 @@ def _report_nothing_to_do(
     # The remedy belongs where the problem is reported: without it the only
     # way out of a terminal `attempts >= 3` is hand-editing backfill-state.json.
     print("          `mnemo backfill --retry-failed` clears them for another try.")
+
+
+#: Output tokens allowed per harvest call when pricing one. An allowance, not
+#: a measurement: a harvest answers with a few pages of JSON.
+_HARVEST_OUTPUT_TOKENS = 1_500
+#: Input and output tokens allowed per extraction call: a chunk of
+#: ``extraction.chunkSize`` memory files plus the existing-rules fragment.
+_EXTRACT_CALL_TOKENS = (15_000, 2_000)
+
+
+@dataclass(frozen=True)
+class _Estimate:
+    sessions: int
+    harvest_calls: int
+    extract_calls: int
+    input_tokens: int
+    api_price_usd: Optional[float]
+
+    @property
+    def calls(self) -> int:
+        return self.harvest_calls + self.extract_calls
+
+    def as_json(self, project: Optional[str]) -> dict:
+        return {
+            "project": project,
+            "sessions": self.sessions,
+            "calls_estimate": self.calls,
+            "api_price_estimate_usd": (
+                None if self.api_price_usd is None else round(self.api_price_usd, 2)
+            ),
+            "harvest_calls": self.harvest_calls,
+            "extract_calls_estimate": self.extract_calls,
+        }
+
+
+def _estimate(todo: list[discover.Transcript], cfg: dict, *, extract: bool) -> _Estimate:
+    """What a sweep of *todo* will send, before anything is sent.
+
+    One figure for the prompt a person answers and the JSON a caller reads.
+
+    A harvest call is made only for a session that clears
+    ``backfill.minFileMutations`` — ``harvest_session`` returns before the
+    model for the rest — so those are the calls counted, and theirs are the
+    input tokens. The extraction cannot be counted before the harvest has
+    written anything; with *extract* it is allowed for as one cluster call and
+    one reference-gate call per ``extraction.chunkSize`` harvested sessions.
+
+    ``api_price_usd`` is those tokens at the extraction model's API rate from
+    :mod:`mnemo.core.pricing` — what the calls would cost on an API key, not a
+    charge on a Claude plan — or None when the table has no rate for it.
+    """
+    from mnemo.core import pricing
+    from mnemo.core.briefing import _count_file_mutations, _load_jsonl_events
+    from mnemo.core.transcript import flatten_transcript_events
+
+    min_mutations = int((cfg.get("backfill") or {}).get("minFileMutations", 1))
+    extraction_cfg = cfg.get("extraction") or {}
+    chunk_size = max(1, int(extraction_cfg.get("chunkSize") or 10))
+    model = str(extraction_cfg.get("model") or "claude-haiku-4-5")
+
+    harvest_calls = 0
+    input_tokens = 0
+    for t in todo:
+        # _load_jsonl_events swallows OSError and bad lines, so an unreadable
+        # transcript is a session that makes no call.
+        events = _load_jsonl_events(t.path)
+        if _count_file_mutations(events) < min_mutations:
+            continue
+        harvest_calls += 1
+        input_tokens += len(flatten_transcript_events(events)) // 4
+
+    extract_calls = 2 * math.ceil(harvest_calls / chunk_size) if extract else 0
+    extract_in, extract_out = _EXTRACT_CALL_TOKENS
+    price = pricing.estimate_usd(
+        model,
+        input_tokens=input_tokens + extract_calls * extract_in,
+        output_tokens=harvest_calls * _HARVEST_OUTPUT_TOKENS + extract_calls * extract_out,
+    )
+    return _Estimate(
+        sessions=len(todo),
+        harvest_calls=harvest_calls,
+        extract_calls=extract_calls,
+        input_tokens=input_tokens + extract_calls * extract_in,
+        api_price_usd=price,
+    )
 
 
 def _estimate_input_tokens(transcripts: list[discover.Transcript]) -> int:

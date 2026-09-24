@@ -29,14 +29,18 @@ that a page had ever been put in front of anyone, so "pages resolved per week"
 and "how long from being shown to being judged" were not answerable questions.
 :func:`stats` answers them from it.
 
-The decision stays human, with one exception. A page the reference judge held
+The decision stays human, with two exceptions. A page the reference judge held
 (#417 — it carries ``reference_gate: generic|narrative``) is archived by
 :func:`expire_held` once it has sat ``inbox.heldExpiryDays`` untouched (#429):
 44 offers over four days produced 0 decisions, so without an exit "held"
-meant "kept forever, invisible". It rests on the judge's measurement, which is
-why nothing else expires — a demotion or a multi-source page waits for a human
-however old. The expiry is logged as ``expired``, never as a decision, and
-:func:`restore` undoes it (or a drop).
+meant "kept forever, invisible". It rests on the judge's measurement. The
+second is a page with the backfill origin (#496): the install review asks the
+user once to keep or drop what the backfill learned, and a page they skipped
+or never saw expires on the same clock, as the install-review spec
+(``docs/superpowers/specs/2026-09-24-install-review-design.md``) decided.
+Nothing else expires — a live-capture demotion or a multi-source page waits
+for a human however old. The expiry is logged as ``expired``, never as a
+decision, and :func:`restore` undoes it (or a drop).
 """
 from __future__ import annotations
 
@@ -66,8 +70,15 @@ DROPPED_ARCHIVE_PREFIX = "dropped-"
 #: Where an expired page is archived. Its own prefix, so an archive listing
 #: says which pages a human threw away and which ran out of time.
 EXPIRED_ARCHIVE_PREFIX = "expired-"
-#: ``inbox.heldExpiryDays`` when config does not say (#429).
+#: ``inbox.heldExpiryDays`` when config does not say (#429). The one window
+#: both expiring kinds share — judge-held and undecided backfill pages (#496) —
+#: so read it through :func:`held_expiry_days` or :func:`expires_at`, never
+#: restate it.
 HELD_EXPIRY_DAYS = 14
+
+#: Why :func:`expire_held` archived a page, on :attr:`DecisionResult.why`.
+WHY_HELD = "held"
+WHY_BACKFILL = "backfill"
 
 #: The ``reference_gate`` frontmatter values a staged page may carry: the
 #: reference judge's category, written on a page it staged (#417) or on an
@@ -109,6 +120,18 @@ class StagedPage:
     #: The judge's ``reference_gate`` verdict — one of :data:`GATE_VERDICTS`,
     #: or ``""`` when the page was never judged (#433).
     gate_verdict: str = ""
+    #: Carries the backfill origin stamp (#496), whatever else happened to it
+    #: since — :func:`expire_held` archives it once nobody decided it.
+    backfill: bool = False
+
+    @property
+    def expiry_why(self) -> str:
+        """:data:`WHY_HELD`, :data:`WHY_BACKFILL`, or ``""`` for a page that never expires."""
+        if self.gate_held:
+            return WHY_HELD
+        if self.backfill:
+            return WHY_BACKFILL
+        return ""
 
     @property
     def gate_label(self) -> str:
@@ -204,6 +227,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
     ``project``/``projects`` key). A page with no attributable project — 2 of
     194 on the real vault — is returned only when ``project`` is None.
     """
+    from mnemo.core.backfill.origin import is_backfill_frontmatter
     from mnemo.core.extract.reference_gate import is_held_frontmatter
     from mnemo.core.filters import is_proposed_sibling, iter_staged_pages, parse_frontmatter
     from mnemo.core.rule_activation.index import projects_for_rule
@@ -233,6 +257,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             mtime=_mtime(path),
             gate_held=is_held_frontmatter(fm),
             gate_verdict=_gate_verdict(fm),
+            backfill=is_backfill_frontmatter(fm),
         ))
     out.sort(key=lambda p: (p.mtime, p.key))
     return out
@@ -414,6 +439,8 @@ class DecisionResult:
     message: str
     moved_to: Path | None = None
     state_updated: bool = False
+    #: Set by :func:`expire_held`: which rule expired the page.
+    why: str = ""
 
 
 def _state_path(vault_root: Path) -> Path:
@@ -579,33 +606,62 @@ def held_expiry_days(cfg: dict) -> int:
         return HELD_EXPIRY_DAYS
 
 
+def restored_keys(vault_root: Path) -> frozenset:
+    """Keys a human pulled back out of the archive — they never expire again."""
+    return frozenset(str(r["key"]) for r in read_ledger(vault_root) if r.get("event") == RESTORED)
+
+
+def expires_at(
+    page: StagedPage, cfg: dict | None = None, *, restored: frozenset = frozenset(),
+) -> datetime | None:
+    """When :func:`expire_held` will archive *page*, or None if it never will.
+
+    The one place the rule is spelled for a reader (#496): the install-review
+    listing's ``expires_at`` comes from here, so it cannot drift from the
+    sweep. Staging time is the file's mtime, as :func:`expire_held` reads it.
+    Pass :func:`restored_keys` as *restored* so a restored page reads None.
+    The sweep runs at the end of an extraction, so a page is archived at the
+    first extraction on or after this time, not at it.
+    """
+    days = held_expiry_days(cfg or {})
+    if days <= 0 or not page.expiry_why or page.key in restored:
+        return None
+    return datetime.fromtimestamp(page.mtime) + timedelta(days=days)
+
+
 def expire_held(
     vault_root: Path, *, days: int, now: datetime | None = None,
 ) -> list[DecisionResult]:
-    """Archive every judge-held page untouched for *days* or more. Never raises.
+    """Archive every expiring page untouched for *days* or more. Never raises.
 
     "Untouched" is the file's mtime, the same age ``mnemo inbox`` lists: a
     page the extractor rewrites because its source changed starts its window
     again, since that is new evidence the judge has just looked at.
 
-    Only :attr:`StagedPage.gate_held` pages, and never one a human restored —
+    Two kinds expire, on one window: the judge-held pages
+    (:attr:`StagedPage.gate_held`, #429) and the backfill-origin pages nobody
+    decided (:attr:`StagedPage.backfill`, #496). Never one a human restored —
     pulling a page back out of the archive is a decision to keep it waiting.
     Offered or not makes no difference: at ``inbox.offerMax`` = 2 offers a
     day per project, most held pages would never be shown, and an exit gated
-    on being shown would not bound the queue.
+    on being shown would not bound the queue. Each result's ``why`` says
+    which rule archived it.
     """
     if days <= 0:
         return []
     try:
         ref = (now or datetime.now()).timestamp()
-        restored = {str(r["key"]) for r in read_ledger(vault_root) if r.get("event") == RESTORED}
+        restored = restored_keys(vault_root)
         out: list[DecisionResult] = []
         for page in staged_pages(vault_root):
-            if not page.gate_held or page.key in restored or page.age_days(ref) < days:
+            why = page.expiry_why
+            if not why or page.key in restored or page.age_days(ref) < days:
                 continue
             project = page.projects[0] if page.projects else None
-            out.append(_archive_out(vault_root, page, prefix=EXPIRED_ARCHIVE_PREFIX,
-                                    event=EXPIRED, project=project, verb="expired"))
+            result = _archive_out(vault_root, page, prefix=EXPIRED_ARCHIVE_PREFIX,
+                                  event=EXPIRED, project=project, verb="expired")
+            result.why = why
+            out.append(result)
         return out
     except Exception:  # noqa: BLE001 — runs at the end of every extraction
         return []
