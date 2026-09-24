@@ -290,8 +290,13 @@ def record(
     key: str,
     project: str | None = None,
     session_id: str | None = None,
+    via: str | None = None,
 ) -> None:
     """Append one row. Never raises — a ledger row is not worth a session.
+
+    ``via`` is written only when given (:data:`VIA_REVIEW`), so every row
+    written before it existed, and every one written without it, keeps its
+    shape.
 
     ``newline=""``: no CRLF translation on Windows. The rotation cap is a byte
     budget, and a row costing one more byte per line there would rotate the
@@ -308,6 +313,8 @@ def record(
             "project": project or "",
             "session_id": session_id or "",
         }
+        if via:
+            row["via"] = via
         with open(path, "a", encoding="utf-8", newline="") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
@@ -513,7 +520,10 @@ def _rebuild_indexes(vault_root: Path) -> None:
         errors.log_error(vault_root, "inbox.reflex_index", exc)
 
 
-def promote(vault_root: Path, page: StagedPage, *, project: str | None = None) -> DecisionResult:
+def promote(
+    vault_root: Path, page: StagedPage, *, project: str | None = None,
+    via: str | None = None, rebuild: bool = True,
+) -> DecisionResult:
     """Move a staged page into ``shared/<type>/`` and make it reachable.
 
     Refuses when a live page already holds the destination: that is two texts
@@ -524,6 +534,9 @@ def promote(vault_root: Path, page: StagedPage, *, project: str | None = None) -
     ``demoted_from:`` line and a staged one keeps ``needs-review`` in ``tags``;
     both are history, and neither decides visibility — location does
     (``filters.is_consumer_visible``), which is exactly what this changes.
+
+    ``rebuild=False`` leaves the indexes to the caller: :func:`decide_many`
+    rebuilds once after a batch rather than once per page.
     """
     vault_root = Path(vault_root)
     dest = vault_root / "shared" / page.type / f"{page.slug}.md"
@@ -543,8 +556,9 @@ def promote(vault_root: Path, page: StagedPage, *, project: str | None = None) -
         return DecisionResult(ok=False, message=f"could not move {page.key}: {exc}")
 
     state_updated = _update_state_entry(vault_root, page.key, status="promoted", page=dest)
-    _rebuild_indexes(vault_root)
-    record(vault_root, event=PROMOTED, key=page.key, project=project)
+    if rebuild:
+        _rebuild_indexes(vault_root)
+    record(vault_root, event=PROMOTED, key=page.key, project=project, via=via)
     return DecisionResult(
         ok=True,
         message=f"promoted {page.key} → shared/{page.type}/{page.slug}.md",
@@ -555,7 +569,7 @@ def promote(vault_root: Path, page: StagedPage, *, project: str | None = None) -
 
 def _archive_out(
     vault_root: Path, page: StagedPage, *, prefix: str, event: str,
-    project: str | None, verb: str,
+    project: str | None, verb: str, via: str | None = None,
 ) -> DecisionResult:
     """Copy *page* under ``shared/_archive/<prefix><stamp>/``, then unlink it.
 
@@ -575,7 +589,7 @@ def _archive_out(
         return DecisionResult(ok=False, message=f"could not archive {page.key}: {exc}")
 
     state_updated = _update_state_entry(vault_root, page.key, status="dismissed", page=None)
-    record(vault_root, event=event, key=page.key, project=project)
+    record(vault_root, event=event, key=page.key, project=project, via=via)
     return DecisionResult(
         ok=True,
         message=f"{verb} {page.key}; archived to {dest.relative_to(vault_root).as_posix()}",
@@ -584,7 +598,9 @@ def _archive_out(
     )
 
 
-def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> DecisionResult:
+def drop(
+    vault_root: Path, page: StagedPage, *, project: str | None = None, via: str | None = None,
+) -> DecisionResult:
     """Archive a staged page, then delete it from the queue.
 
     Archived first, always. Extraction re-derives a page from its source, so a
@@ -594,7 +610,7 @@ def drop(vault_root: Path, page: StagedPage, *, project: str | None = None) -> D
     :func:`restore` brings the archived copy back.
     """
     return _archive_out(vault_root, page, prefix=DROPPED_ARCHIVE_PREFIX,
-                        event=DROPPED, project=project, verb="dropped")
+                        event=DROPPED, project=project, verb="dropped", via=via)
 
 
 def held_expiry_days(cfg: dict) -> int:
@@ -716,6 +732,148 @@ def restore(vault_root: Path, key: str, *, project: str | None = None) -> Decisi
         moved_to=dest,
         state_updated=state_updated,
     )
+
+
+# ---------------------------------------------------------------------------
+# The review: one listing, many decisions (#495)
+# ---------------------------------------------------------------------------
+
+#: ``via`` on a ledger row a batch or terminal review wrote (#495). A single
+#: ``mnemo inbox --promote KEY`` writes no ``via``, so the install review's
+#: drain can be told apart from the one the session-start offer drives.
+VIA_REVIEW = "review"
+#: How much of a page's body the JSON listing carries (#495).
+EXCERPT_CHARS = 300
+
+
+def match(pages: list[StagedPage], key: str) -> tuple[StagedPage | None, str]:
+    """Find one page by ``<type>/<slug>`` or by a bare slug. ``(page, error)``.
+
+    A bare slug is accepted only while it is unambiguous. Two types can hold
+    the same slug — the cross-type duplicates #187 measured are exactly that —
+    and guessing between them would act on the wrong page silently.
+    """
+    exact = [p for p in pages if p.key == key]
+    if len(exact) == 1:
+        return exact[0], ""
+    by_slug = [p for p in pages if p.slug == key]
+    if len(by_slug) == 1:
+        return by_slug[0], ""
+    if len(by_slug) > 1:
+        names = ", ".join(sorted(p.key for p in by_slug))
+        return None, f"{key} is staged under more than one type: {names}"
+    return None, f"no staged page for {key}"
+
+
+def _excerpt(path: Path) -> str:
+    """The first :data:`EXCERPT_CHARS` of the body, secrets redacted.
+
+    Redacted *before* it is cut: a cut can halve a token, and half a token is
+    no longer a shape the patterns recognise but is still half a secret.
+    """
+    from mnemo.core.extract.scanner import parse_frontmatter
+    from mnemo.core.redact import redact_secrets
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    _, body = parse_frontmatter(text)
+    clean, _ = redact_secrets(body.strip())
+    return clean[:EXCERPT_CHARS]
+
+
+def page_record(page: StagedPage, *, cfg: dict, restored: frozenset) -> dict:
+    """One ``pages[]`` row of the ``--json`` listing — the shape the desktop reads.
+
+    ``expires_at`` is :func:`expires_at`'s answer, the rule the sweep itself
+    runs (#496), so the date shown is the date it happens.
+    """
+    ends = expires_at(page, cfg, restored=restored)
+    return {
+        "key": page.key,
+        "type": page.type,
+        "name": page.name,
+        "description": page.description,
+        "excerpt": _excerpt(page.path),
+        "staged_at": datetime.fromtimestamp(page.mtime).isoformat(timespec="seconds"),
+        "expires_at": ends.isoformat(timespec="seconds") if ends else None,
+    }
+
+
+def listing(
+    vault_root: Path, pages: list[StagedPage], *, project: str | None, origin: str, cfg: dict,
+) -> dict:
+    """The ``mnemo inbox --json`` document for *pages*, already scoped by the caller."""
+    restored = restored_keys(vault_root)
+    counts: dict[str, int] = {}
+    for page in pages:
+        counts[page.type] = counts.get(page.type, 0) + 1
+    return {
+        "project": project,
+        "origin": origin,
+        "pages": [page_record(p, cfg=cfg, restored=restored) for p in pages],
+        "counts": counts,
+    }
+
+
+@dataclass
+class Outcome:
+    """One key of a batch: what was asked, which page it named, what happened."""
+
+    key: str
+    page_key: str | None
+    result: DecisionResult
+
+
+def decide_many(
+    vault_root: Path, keys: list[str], *, action: str, via: str | None = VIA_REVIEW,
+) -> list[Outcome]:
+    """Promote or drop every key in *keys*, in order. Never raises.
+
+    A failure on one key never stops the rest: each is matched against the
+    queue as it stands after the ones before it, and anything a single
+    decision raises is that key's failure. A key repeated in the batch is
+    decided once. The indexes are rebuilt once at the end when anything was
+    promoted — once per page would cost a 56-page review 56 rebuilds.
+    """
+    if action not in (PROMOTED, DROPPED):
+        raise ValueError(f"action must be {PROMOTED!r} or {DROPPED!r}, got {action!r}")
+    vault_root = Path(vault_root)
+    pool = staged_pages(vault_root)
+    out: list[Outcome] = []
+    for key in dict.fromkeys(keys):
+        page, err = match(pool, key)
+        if page is None:
+            out.append(Outcome(key, None, DecisionResult(ok=False, message=err)))
+            continue
+        project = page.projects[0] if page.projects else None
+        try:
+            if action == PROMOTED:
+                result = promote(vault_root, page, project=project, via=via, rebuild=False)
+            else:
+                result = drop(vault_root, page, project=project, via=via)
+        except Exception as exc:  # noqa: BLE001 — one key's failure is that key's
+            result = DecisionResult(ok=False, message=f"could not decide {page.key}: {exc}")
+        if result.ok:
+            pool.remove(page)
+        out.append(Outcome(key, page.key, result))
+    if action == PROMOTED and any(o.result.ok for o in out):
+        _rebuild_indexes(vault_root)
+    return out
+
+
+def batch_json(action: str, outcomes: list[Outcome]) -> dict:
+    """``{"promoted"|"dropped": [...], "failed": [{"key", "error"}]}``.
+
+    A decided key is reported as the page's full ``<type>/<slug>``, even when
+    it was asked for by bare slug; a failed one as it was asked for.
+    """
+    return {
+        action: [o.page_key for o in outcomes if o.result.ok],
+        "failed": [{"key": o.key, "error": o.result.message} for o in outcomes if not o.result.ok],
+    }
+
 
 
 # ---------------------------------------------------------------------------

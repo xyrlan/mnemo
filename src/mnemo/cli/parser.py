@@ -636,12 +636,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print one staged page (e.g. reference/mnemo__briefing-is-the-channel)",
     )
     inbox_p.add_argument(
-        "--promote", metavar="KEY",
-        help="move one staged page into shared/<type>/, where recall reaches it",
+        "--promote", metavar="KEY", nargs="*",
+        help="move staged pages into shared/<type>/, where recall reaches them",
     )
     inbox_p.add_argument(
-        "--drop", metavar="KEY",
-        help="archive one staged page and take it out of the queue",
+        "--drop", metavar="KEY", nargs="*",
+        help="archive staged pages and take them out of the queue",
+    )
+    inbox_p.add_argument(
+        "--keys-stdin", dest="keys_stdin", action="store_true",
+        help="--promote/--drop: read the keys from stdin, one per line",
+    )
+    inbox_p.add_argument(
+        "--review", action="store_true",
+        help="review the queue in the terminal: everything checked, uncheck what is wrong, keep the rest",
+    )
+    inbox_p.add_argument(
+        "--origin", choices=("backfill", "any"), default="any",
+        help="list or review only pages carrying this origin (default: %(default)s)",
+    )
+    inbox_p.add_argument(
+        "--project", metavar="P",
+        help="the project whose queue to list or review (default: the one you are standing in)",
+    )
+    inbox_p.add_argument(
+        "--json", action="store_true",
+        help="the listing, or the result of --promote/--drop, as one JSON document",
     )
     inbox_p.add_argument(
         "--restore", metavar="KEY",
