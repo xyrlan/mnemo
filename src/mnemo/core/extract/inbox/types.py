@@ -39,9 +39,8 @@ class ExtractedPage:
     # unreviewed (Task 6b).
     #
     # Such pages are reconstructed from archived transcripts rather than
-    # observed live. Since #471 the flag no longer stages a fresh page — it
-    # takes the normal gates — but it keeps an already-staged one staged (see
-    # backfill/origin.stages) and it never universally promotes
+    # observed live, so they always stage in _inbox for review — see
+    # inbox/paths.py::_target_path_for_page — and never universally promote
     # (inbox/apply.py::_is_universal_promotion plus the end-of-extract
     # reconciler in extract/__init__.py).
     #

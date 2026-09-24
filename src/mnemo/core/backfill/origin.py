@@ -1,14 +1,8 @@
 """The backfill origin stamp: one spelling, one predicate, one render line.
 
-Until #471 the stamp kept every LLM-reconstructed page out of ``shared/``
-until a human reviewed it, and nobody did: a fresh install over 44 prior
-sessions staged 56 pages and made 0 live. #471 measured what the normal gates
-(evidence, reference, project) would let through from that backfill: 40 of 47
-good under two blind raters, 85.1% against a bar declared at 85%
-(``tools/measure_backfill_routes.py``). So the stamp is now provenance and
-routes nothing on its own — :func:`stages` is the one exception it keeps. It
-still blocks universal promotion, which that measurement did not cover. It is
-read on both sides of the extraction pipeline:
+The stamp is the *only* thing keeping LLM-reconstructed pages out of
+``shared/`` until a human reviews them, and it is read on both sides of the
+extraction pipeline:
 
 * **source memory files** in ``bots/<repo>/memory/`` — written by
   :mod:`mnemo.core.backfill.harvest`, which nests the stamp under
@@ -52,19 +46,6 @@ BACKFILL = "backfill"
 
 #: Frontmatter line stamped into staged pages. Top-level by construction.
 ORIGIN_LINE = f"origin: {BACKFILL}\n"
-
-
-def stages(backfill: bool, staged: Path) -> bool:
-    """True when a backfill page must stay in ``shared/_inbox/`` this run.
-
-    Only a page whose staged copy is already waiting for review (#471): the
-    review queue owns it, and routing it live would leave that copy behind
-    beside the live one (the #177 shape). A fresh backfill page takes the
-    normal gates like any other. Both routers — ``inbox/paths`` for cluster
-    pages, ``promote`` for project pages — ask this, by module attribute, so
-    there is one rule.
-    """
-    return bool(backfill) and staged.exists()
 
 
 def is_backfill_frontmatter(fm: Any) -> bool:
