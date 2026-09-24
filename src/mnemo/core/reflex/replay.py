@@ -37,7 +37,9 @@ decision only: with ``reflex.judge`` on (#412) the hook's real gate is a
 model reading the (prompt, rule) pair, and nothing here simulates it — a
 replay of that would mean sending every prompt on disk to a third party.
 ``tools/measure_reflex_gate.py`` is where that stage is measured, over a
-sample and behind its own ``--send``.
+sample and behind its own ``--send``; :func:`run` takes the stage as a
+callable (``judge=``) so a tool that has chosen to send can replay it in the
+hook's order (``tools/measure_day_one.py --judge``, #479).
 
 Composed from what already exists: transcript discovery and the
 ``sources:`` → session map are :mod:`mnemo.core.mcp.recall_sessions`'s; the
@@ -340,6 +342,8 @@ def run(
     *,
     reflex_cfg: dict,
     overrides_for: Optional[Callable[[str], dict]] = None,
+    judge: Optional[Callable[[Prompt, list], Optional[list]]] = None,
+    judge_candidates: int = 3,
 ) -> Replay:
     """Replay the prompts, oldest first, through the hook's decision.
 
@@ -348,6 +352,14 @@ def run(
     resets on the day rollover. What is *not* simulated is the export
     suppression (rules already in a tree's rules file) — the export manifest
     describes the tree as it is today, not as it was.
+
+    ``judge`` is the ``reflex.judge`` stage, in ``hooks/user_prompt_submit``'s
+    order: when the ranking is not empty, the pool is its top
+    ``judge_candidates`` minus what this session was already told, and
+    ``judge(prompt, pool)`` answers with the rules to inject, ``[]`` for
+    "none" (silenced as ``judge_none_relevant``), or ``None`` for a failure,
+    which falls back to the gates' decision. None (the default) is the stage
+    off, and nothing is sent anywhere.
     """
     overrides_for = overrides_for or (lambda _project: {})
     doc_tokens = doc_token_sets(index)
@@ -379,16 +391,31 @@ def run(
             reflex_cfg=reflex_cfg, overrides=overrides_cache[prompt.project],
             doc_tokens=doc_tokens,
         )
-        if not decision.accepted:
-            reason = decision.silence_reason or "index_missing"
-            silence[reason] = silence.get(reason, 0) + 1
-            continue
+        survivors: Optional[list] = None
+        if judge is not None and decision.scores:
+            pool = [s for s, _score in decision.scores[:judge_candidates]
+                    if (prompt.session_id, s) not in injected_cache]
+            if not pool:
+                silence["deduped"] = silence.get("deduped", 0) + 1
+                continue
+            picks = judge(prompt, pool)
+            if picks is not None:
+                if not picks:
+                    silence["judge_none_relevant"] = silence.get("judge_none_relevant", 0) + 1
+                    continue
+                survivors = list(picks)
 
-        survivors = [s for s in decision.accepted
-                     if (prompt.session_id, s) not in injected_cache]
-        if not survivors:
-            silence["deduped"] = silence.get("deduped", 0) + 1
-            continue
+        if survivors is None:
+            if not decision.accepted:
+                reason = decision.silence_reason or "index_missing"
+                silence[reason] = silence.get(reason, 0) + 1
+                continue
+
+            survivors = [s for s in decision.accepted
+                         if (prompt.session_id, s) not in injected_cache]
+            if not survivors:
+                silence["deduped"] = silence.get("deduped", 0) + 1
+                continue
 
         fired_prompts += 1
         for slug in survivors:
