@@ -51,7 +51,13 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     The stubs keep the bookkeeping the callers rely on (``mark_run``) and do
     nothing else. Tests that exercise a spawn function itself opt out with
     ``@pytest.mark.real_spawn`` and patch ``subprocess.Popen`` themselves.
+
+    Even they start their worker inline rather than from a forked intermediate
+    (#475): a ``Popen`` patched here would otherwise be called in the fork, and
+    what it recorded would die with it. ``tests/unit/test_detach.py`` binds the
+    real ``_orphaned`` at import time and puts it back.
     """
+    monkeypatch.setattr("mnemo._detach._orphaned", lambda start: start())
     if request.node.get_closest_marker("real_spawn"):
         return
     from mnemo.autopilot.core import triggers as _triggers

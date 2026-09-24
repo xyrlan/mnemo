@@ -231,6 +231,8 @@ def test_spawn_detached_extraction_posix_uses_start_new_session(monkeypatch):
     captured = {}
 
     class FakePopen:
+        pid = 0
+
         def __init__(self, argv, **kwargs):
             captured["argv"] = argv
             captured["kwargs"] = kwargs
@@ -256,6 +258,8 @@ def test_spawn_detached_extraction_windows_uses_creationflags(monkeypatch):
     captured = {}
 
     class FakePopen:
+        pid = 0
+
         def __init__(self, argv, **kwargs):
             captured["kwargs"] = kwargs
 
@@ -376,6 +380,8 @@ def test_spawn_detached_briefing_posix_uses_start_new_session(monkeypatch, tmp_p
     captured = {}
 
     class FakePopen:
+        pid = 0
+
         def __init__(self, argv, **kwargs):
             captured["argv"] = argv
             captured["kwargs"] = kwargs
