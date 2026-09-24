@@ -163,3 +163,73 @@ def test_freeze_writes_only_under_out_and_never_redraws_over_labels(tmp_vault: P
     assert {p: after[p] for p in before} == before
     assert set(after) - set(before) == {tmp_vault / "shared/_inbox/reference/late.md"}
     assert pages
+
+
+def _live(vault: Path, slug: str, *, page_type: str = "reference", origin: bool = True,
+          name: str = "", body: str = "The rule.") -> Path:
+    path = vault / "shared" / page_type / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = "origin: backfill\n" if origin else ""
+    path.write_text(
+        f"---\nname: {name or slug + ' name'}\nslug: {slug}\ndescription: d\ntype: {page_type}\n"
+        f"confidence: inferred\n{stamp}sources:\n  - bots/demo/memory/x0.md\n---\n\n{body}\n"
+        f"\n{GRAPH_SECTION_MARKER}\n## Sources\n- [[bots/demo/x0]]\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_live_mode_reads_where_the_pages_went_not_a_counterfactual(tmp_vault: Path):
+    """#477: after #471 the pages that went live are in shared/<type>/, which
+    ``population`` never walks. ``placed`` takes the page's location as its route."""
+    _live(tmp_vault, "sys-live")
+    _live(tmp_vault, "alpha__deploy", page_type="project")
+    _live(tmp_vault, "not-backfill", origin=False)
+    _staged(tmp_vault, "demoted",
+            extra=INFERRED + "demoted_from: feedback\nreference_gate: system\n")
+    _staged(tmp_vault, "gen", extra=INFERRED + "reference_gate: generic\n")
+    _staged(tmp_vault, "sys-waiting", extra=INFERRED + "reference_gate: system\n")
+    arch = tmp_vault / "shared" / "_archive" / "reference" / "old.md"
+    arch.parent.mkdir(parents=True)
+    arch.write_text("---\nname: old\norigin: backfill\n---\nx\n", encoding="utf-8")
+    rows = {r["id"]: (r["route"], r["reason"]) for r in mb.placed(tmp_vault)}
+    assert rows == {
+        "reference/sys-live": ("live", "reference: auto-promoted"),
+        "project/alpha__deploy": ("live", "project: no gate"),
+        "reference/demoted": ("staged", "evidence gate: no user quote"),
+        "reference/gen": ("staged", "reference gate: generic"),
+        "reference/sys-waiting": ("staged", "other (routing says reference gate: system)"),
+    }
+    assert mb.population(tmp_vault) and all(
+        r["id"] not in ("reference/sys-live", "project/alpha__deploy")
+        for r in mb.population(tmp_vault))
+
+
+def test_live_mode_samples_every_live_page_blind(tmp_vault: Path):
+    _live(tmp_vault, "sys-live", name="Retry the socket", body="Body text here.")
+    _live(tmp_vault, "alpha__deploy", page_type="project")
+    _staged(tmp_vault, "gen", extra=INFERRED + "reference_gate: generic\n")
+    sample = mb.draw(mb.placed(tmp_vault))
+    assert [r["id"] for r in sample] == ["project/alpha__deploy", "reference/sys-live"]
+    seen = mb.dk.rater_prompt(sample)
+    assert "Retry the socket. Body text here." in seen
+    for leak in ("backfill", "origin", "auto-promoted", "project:", "Sources", "bots/demo"):
+        assert leak not in seen
+
+
+def test_live_mode_freezes_apart_and_writes_nothing_in_the_vault(tmp_vault: Path, tmp_path: Path):
+    import pytest
+
+    _live(tmp_vault, "sys-live")
+    _staged(tmp_vault, "gen", extra=INFERRED + "reference_gate: generic\n")
+    before = {p: p.read_bytes() for p in tmp_vault.rglob("*") if p.is_file()}
+    out = tmp_path / "out"
+    frozen = mb.freeze(out, tmp_vault, {}, live=True)
+    assert frozen["mode"] == "placed"
+    assert frozen["routes"] == {"reference": {"live: reference: auto-promoted": 1,
+                                              "staged: reference gate: generic": 1}}
+    assert [r["id"] for r in frozen["sample"]] == ["reference/sys-live"]
+    with pytest.raises(SystemExit):
+        mb.freeze(out, tmp_vault, {})  # a routed rerun must not reuse a placed sample
+    after = {p: p.read_bytes() for p in tmp_vault.rglob("*") if p.is_file()}
+    assert after == before

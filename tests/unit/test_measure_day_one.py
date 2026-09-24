@@ -512,3 +512,178 @@ def test_the_dry_run_plans_arm_c_from_the_snapshot(corpus, memory, tmp_path, mon
     out = capsys.readouterr().out
     assert "2 of today's 3 file(s) present" in out and "'created after': 1" in out
     assert not (tmp_path / "w").exists()
+
+
+# --- the judge on (#479) ------------------------------------------------------------
+
+def test_pairs_bound_is_the_pool_per_request_and_the_cap_per_session():
+    assert day.pairs_bound([0, 1, 20], candidates=3, cap=10) == 3 + 12
+    assert day.pairs_bound([], candidates=3, cap=10) == 0
+
+
+def test_jev_stats_count_requests_by_ending_and_take_the_median_wall_time():
+    units = [{"judge": None}, {"judge": {"asked": 0, "status": "ok", "ms": 1}},
+             {"judge": {"asked": 2, "status": "ok", "injected": 1, "ms": 900, "fallback": False}},
+             {"judge": {"asked": 3, "status": "ok", "injected": 0, "ms": 1100, "fallback": False}},
+             {"judge": {"asked": 1, "status": "timeout", "injected": 0, "ms": 2500, "fallback": True}},
+             {"judge": {"asked": 1, "status": "error", "injected": 0, "ms": 40, "fallback": True}}]
+
+    st = day.jev_stats(units)
+
+    assert st["requests"] == 4 and st["status"] == {"ok": 2, "timeout": 1, "error": 1}
+    assert st["fallback"] == 2 and st["said_none"] == 1
+    assert st["median_ms"] == 1000.0 and st["max_ms"] == 2500
+
+
+def _live(vault, ptype, slug):
+    d = vault / "shared" / ptype
+    d.mkdir(parents=True, exist_ok=True)
+    (d / (slug + ".md")).write_text(
+        "---\nname: %s\ndescription: %s\ntype: %s\nstability: stable\nsources:\n"
+        "  - bots/repo/briefings/sessions/x.md\n---\n%s\n" % (slug, WORDS, ptype, WORDS),
+        encoding="utf-8")
+
+
+def test_rewind_keeps_the_pages_that_went_live_first_and_refuses_a_ledger_that_disagrees(tmp_path):
+    from mnemo.install import scaffold
+
+    src = tmp_path / "src"
+    scaffold.scaffold_vault(src)
+    for ptype, slug in (("feedback", "one"), ("reference", "two"), ("feedback", "three")):
+        _live(src, ptype, slug)
+    rows = [{"seq": 2, "type": "reference", "slug": "two"}, {"seq": 1, "type": "feedback", "slug": "one"},
+            {"seq": 3, "type": "feedback", "slug": "three"}, {"seq": 4, "type": "feedback", "slug": "one"}]
+    (src / ".mnemo").mkdir(exist_ok=True)
+    (src / ".mnemo" / "learned.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    order = day.learned_order(src)
+    assert order == ["feedback/one", "reference/two", "feedback/three"]
+
+    out = day.rewind(src, tmp_path / "r2" / "vault", order[:2])
+    assert sorted(p.name for p in out.glob("shared/*/*.md")) == ["one.md", "two.md"]
+    assert sorted(json.loads((out / ".mnemo" / "reflex-index.json").read_text(encoding="utf-8"))["docs"]) == ["one", "two"]
+    assert json.loads((out / "mnemo.config.json").read_text(encoding="utf-8"))["vaultRoot"] == str(out)
+    assert len(list(src.glob("shared/*/*.md"))) == 3, "the source vault is left alone"
+
+    with pytest.raises(SystemExit, match="disagree"):
+        day.rewind(src, tmp_path / "bad" / "vault", ["feedback/one", "feedback/gone"])
+
+
+def _stub_jev(sent, *, sleep=0.0):
+    """A TypeSafe stand-in: the first rule of each request clears the bar, the rest do not."""
+    import threading
+
+    def client(state, questions):
+        sent.append((state, questions))
+        if sleep:
+            # conftest makes time.sleep a no-op; a wait on an event still waits.
+            threading.Event().wait(sleep)
+        return {"answers": {k: {"noul": 0.9 if k == "r0" else 0.1} for k in questions}}
+
+    return client
+
+
+@pytest.fixture
+def judged(corpus, tmp_path, monkeypatch):
+    """Arms (a) and (b) run judge-off, then a TypeSafe stub and key in place of the real ones."""
+    from mnemo.core import llm
+    from mnemo.core.mcp import rerank
+    from mnemo.core.reflex import judge
+
+    calls = []
+    monkeypatch.setattr(llm, "call", _stub(calls))
+    work = tmp_path / "work"
+    assert day.main(["--send", "--arm", "both", "--corpus", str(corpus), "--work", str(work),
+                     "--install-after", "3", "--prompts", "4", "--budget", "60"]) == 0
+    sent = []
+    made = []
+
+    def client_for(key, *, model, timeout):
+        made.append((key, model, timeout))
+        return _stub_jev(sent)
+
+    monkeypatch.setattr(rerank, "typesafe_client", client_for)
+    monkeypatch.setattr(judge, "resolve_key", lambda chosen: ("sk-test", "env"))
+    return {"work": work, "sent": sent, "made": made, "calls": calls,
+            "args": ["--judge", "--corpus", str(corpus), "--work", str(work)]}
+
+
+def test_judge_dry_run_bounds_requests_and_labels_and_sends_nothing(judged, capsys):
+    capsys.readouterr()
+    assert day.main(judged["args"] + ["--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert judged["sent"] == [] and judged["made"] == []
+    assert "injectAt 0.4, timeout 2.5s, pool top 3" in out
+    assert "arm (a): 4 prompt(s)" in out and "6 of 6 session(s) fit" in out
+    assert "of a 1000 budget" in out and "of a 40 budget" in out
+    assert not (judged["work"] / day.JUDGE_NAME).exists()
+
+
+def test_judge_replays_each_arm_as_the_hook_would_and_a_rerun_sends_nothing(judged, capsys):
+    from mnemo.core.reflex import judge
+
+    work = judged["work"]
+    assert day.main(judged["args"] + ["--send"]) == 0
+
+    state = json.loads((work / day.JUDGE_NAME).read_text(encoding="utf-8"))
+    assert judged["made"] == [("sk-test", judge.DEFAULT_MODEL, judge.DEFAULT_TIMEOUT_S)]
+    assert state["requests"] == len(judged["sent"]) > 0
+    # What left the machine is what the stage sends, and nothing else.
+    for body, questions in judged["sent"]:
+        assert set(body) == {"developer_message"} and len(body["developer_message"]) <= 1200
+        assert len(questions) <= 3
+    a, b = state["arms"]["a"], state["arms"]["b"]
+    # The judge-off replay here reproduces the arms' own record, prompt for prompt.
+    assert a["off_check"] == [4, 4]
+    assert all(r["off_check"][0] == r["off_check"][1] for r in b["rows"])
+    assert [r["live"] for r in b["rows"]][:2] == [0, 0]
+    # With the stub, one rule per asked prompt clears the bar, so a prompt that
+    # was asked injects exactly its judge pick.
+    for u in a["units"] + [u for r in b["rows"] for u in r["units"]]:
+        if u["judge"] and u["judge"]["asked"]:
+            assert len(u["pool"]) == 1 and u["judge"]["status"] == "ok" and not u["judge"]["fallback"]
+    out = capsys.readouterr().out
+    assert "BAR (declared in #479)" in out and "arm (b), judge on:" in out
+    # Every injected pair, judge on and off, carries a label.
+    data = day.judge_report(state, day.judge_sources(work, work, Path(judged["args"][2])),
+                            json.loads((work / "labels.json").read_text(encoding="utf-8"))[
+                                day.mrr.column(day.DEFAULT_RATER)])
+    for arm in ("a", "b"):
+        for mode in ("off", "on"):
+            assert data["arms"][arm][mode]["labelled"] == data["arms"][arm][mode]["pairs"] > 0
+
+    spent, labelled = len(judged["sent"]), len(judged["calls"])
+    assert day.main(judged["args"] + ["--send"]) == 0
+    assert len(judged["sent"]) == spent and len(judged["calls"]) == labelled
+    assert day.main(judged["args"]) == 0
+    assert "Jev: %d request(s)" % spent in capsys.readouterr().out
+
+
+def test_a_slow_judge_falls_back_to_the_gates_and_is_counted(judged, monkeypatch):
+    from mnemo.core.mcp import rerank
+
+    shipped = day.shipped_judge()
+    monkeypatch.setattr(day, "shipped_judge", lambda: dict(shipped, timeoutSeconds=0.05))
+    monkeypatch.setattr(rerank, "typesafe_client",
+                        lambda key, **kw: _stub_jev(judged["sent"], sleep=0.3))
+
+    assert day.main(judged["args"] + ["--send", "--arm", "a"]) == 0
+
+    a = json.loads((judged["work"] / day.JUDGE_NAME).read_text(encoding="utf-8"))["arms"]["a"]
+    asked = [u for u in a["units"] if u["judge"] and u["judge"]["asked"]]
+    assert asked and all(u["judge"]["status"] == "timeout" and u["judge"]["fallback"] for u in asked)
+    # Every fallback is the gates' answer, so judge on equals judge off.
+    assert [u["pool"] for u in a["units"]] == [u["pool"] for u in a["off_units"]]
+    assert day.jev_stats(a["units"])["fallback"] == len(asked)
+
+
+def test_arm_b_stops_before_a_session_the_jev_budget_cannot_cover(judged):
+    assert day.main(judged["args"] + ["--send", "--arm", "b", "--jev-budget", "2",
+                                      "--label-budget", "0"]) == 0
+
+    state = json.loads((judged["work"] / day.JUDGE_NAME).read_text(encoding="utf-8"))
+    b = state["arms"]["b"]
+    assert b["stopped"].startswith("budget: session %d" % (len(b["rows"]) + 1))
+    assert len(judged["sent"]) <= 2 and state.get("label_calls", 0) == 0
