@@ -1179,12 +1179,30 @@ def _spawn_into(
     # child whose id was read back can be looked up by it, hence after the
     # ContractBroken branch above.
     parents.record(short_id)
+    # A watcher for this child's stop, in case its SessionEnd never runs
+    # (#502). Here as well as at SessionStart because the child's own start
+    # can come before the link above is written.
+    _ensure_notice_watcher()
     # The prompt already granted it; this only lets the queue say so (#317).
     grants.record(short_id, may)
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
         model=model, effort=effort, may=may, read_only=read_only,
     )
+
+
+def _ensure_notice_watcher() -> None:
+    """Start ``mnemo child-notices`` unless one runs. Never raises: a missing
+    watcher costs a notice that the hook usually sends anyway, never a
+    dispatch."""
+    try:
+        from mnemo.core import config, paths
+        from mnemo.core.sessions import child_notices
+
+        cfg = config.load_config()
+        child_notices.ensure_watcher(cfg, vault_root=paths.vault_root(cfg))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def dispatch_issue(
