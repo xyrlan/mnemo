@@ -68,6 +68,11 @@ DEFAULTS: dict[str, Any] = {
             "attempts": 2,
             "hours": 24,
         },
+        # #503: once a dispatched child's PR has merged and the child has
+        # stopped, remove its worktree and delete its branch with `-d`. A tree
+        # that is dirty, has unpushed commits or commits the merged PR lacks
+        # is kept, and the day log says why. Turn off to remove trees by hand.
+        "removeMergedTrees": True,
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads
