@@ -512,7 +512,9 @@ def sweep(
     def _due() -> Dict[str, Dict[str, Any]]:
         return {
             sid: e for sid, e in open_entries(load_ledger(vault_root)).items()
-            if in_childs_hands(e) or moment - float(e.get("polled_at") or 0) >= poll_seconds
+            if (in_childs_hands(e) and window_over(e, s, moment))
+            or moment - float(e.get("checked_at" if in_childs_hands(e) else "polled_at")
+                              or 0) >= poll_seconds
         }
 
     if not _due():
@@ -534,10 +536,17 @@ def sweep(
         for short_id, entry in sorted(due.items()):
             try:
                 if in_childs_hands(entry):
+                    # Nothing to wake while it works, but the PR can still
+                    # merge under it, and the window closes on what the PR
+                    # shows now, not on what it showed at the wake (#500).
+                    report.polled += 1
                     if window_over(entry, s, moment):
-                        _close(vault_root, short_id, entry, "window",
-                               list(entry.get("last_events") or []),
-                               s=s, now=moment, tell=tell, report=report)
+                        _one(cfg, vault_root, short_id, entry, roster.get(short_id),
+                             s=s, now=moment, run=run, wake_fn=wake_fn, tell=tell,
+                             report=report, announce=announce)
+                    else:
+                        _check_in_hands(vault_root, short_id, entry, now=moment,
+                                        run=run, s=s, tell=tell, report=report)
                     continue
                 if wakes >= MAX_WAKES_PER_PASS:
                     report.remaining += 1
@@ -609,6 +618,30 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
                   f"🔧 mnemo woke {short_id} for {_pr_label(entry)} "
                   f"({', '.join(decision.events)}; attempt {attempt}/{s['attempts']})")
     return True
+
+
+def _check_in_hands(vault_root: Path, short_id: str, entry: Dict[str, Any], *,
+                    now: float, run, s, tell, report: PassReport) -> None:
+    """A woken child's PR, looked at only for the end it may reach meanwhile.
+
+    Merged or closed ends the follow quietly. Anything else waits for the
+    child's stop or the window: this never wakes, and it leaves
+    ``polled_at`` and ``last_events`` to the look that can.
+    """
+    card = report_card.gather(short_id, cwd=entry.get("cwd"), run=run)
+    if card.pr is not None:
+        entry["pr"], entry["pr_number"] = card.pr.url, card.pr.number
+
+    def checked(d: Dict[str, Any]) -> None:
+        e = d.get("children", {}).get(short_id)
+        if isinstance(e, dict):
+            e["checked_at"] = now
+            e["pr"], e["pr_number"] = entry.get("pr"), entry.get("pr_number")
+
+    _update(vault_root, checked)
+    if card.pr is not None and card.pr.state in ("MERGED", "CLOSED"):
+        _close(vault_root, short_id, entry, card.pr.state.lower(), [],
+               s=s, now=now, tell=tell, report=report)
 
 
 def _close(vault_root: Path, short_id: str, entry: Dict[str, Any], reason: str,
