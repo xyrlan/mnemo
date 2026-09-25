@@ -535,3 +535,15 @@ def test_the_watcher_retires_rather_than_outliving_its_own_version(bench, monkey
                           lifetime=300.0)
     assert report.stopped == "retired"
     assert 300.0 <= state["now"] - NOW < 400.0
+
+
+def test_wakes_in_the_childs_tree_from_the_watchers_cwd(bench, monkeypatch):
+    """#506: the watcher runs in the vault; the wake still goes to the tree."""
+    seen = []
+    monkeypatch.chdir(bench["vault"])
+    sessions = [child("594436f2", bench["trees"][380])]
+    report = rewake.sweep(CFG, vault_root=bench["vault"], sessions=sessions,
+                          stalls={"594436f2": FREE}, now=NOW,
+                          wake_fn=lambda sid, *, cwd, **kw: seen.append(cwd))
+    assert len(report.woken) == 1
+    assert seen == [str(bench["trees"][380])]

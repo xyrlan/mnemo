@@ -311,6 +311,39 @@ def _spawn_detached(args: list, cwd: str | None = None) -> None:
     spawn(self_argv(*args), cwd=cwd if cwd and os.path.isdir(cwd) else None)
 
 
+def watcher_cwd() -> str:
+    """The working directory for a long-lived watcher (#506).
+
+    ``pr-follow``, ``child-notices`` and ``resume --watch`` live for up to a
+    day, and a process's cwd pins its directory: the merged-tree sweep (#503)
+    keeps any tree some process has its cwd in (``lsof -d cwd``). Inheriting
+    the hook's cwd — usually a dispatched child's worktree — kept merged trees
+    on disk for as long as the watcher lived. None of the three reads its cwd
+    for the repo: every child it acts on carries its own ``cwd``.
+
+    What the cwd does decide is the config: ``load_config`` prefers
+    ``<cwd>/.mnemo/mnemo.config.json`` (``mnemo init --project``). So the
+    watcher runs where that lookup finds what it finds from here — the
+    project root that holds this process's local config, else the vault
+    root, where only the global config resolves. The home directory if the
+    vault is not there yet.
+    """
+    from mnemo.core import config, paths
+
+    try:
+        # ``MNEMO_CONFIG_PATH`` wins over the local lookup and the watcher
+        # inherits the environment, so only without it does the cwd matter.
+        local = None if os.environ.get("MNEMO_CONFIG_PATH") else config._find_local_config()
+        if local is not None:
+            return str(local.parent.parent)
+        vault = paths.vault_root(config.load_config())
+        if vault.is_dir():
+            return str(vault)
+    except Exception:  # noqa: BLE001 — a cwd must always come back
+        pass
+    return os.path.expanduser("~")
+
+
 def _spawn_detached_backfill(cwd: str | None = None) -> None:
     """Fire-and-forget background install backfill: ``mnemo backfill --install-run``."""
     _spawn_detached(["backfill", "--install-run"], cwd=cwd)
