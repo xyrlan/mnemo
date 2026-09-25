@@ -395,3 +395,106 @@ def test_session_end_does_not_follow_a_child_granted_nothing(
     )
     assert session_end.main() == 0
     assert pr_follow.load_ledger(hook_env)["children"] == {}
+
+
+# --- #502: the backstop and the hook tell a parent once ------------------
+
+
+def _transcript_with_turn(tmp_path: Path, when: str) -> Path:
+    path = tmp_path / "child.jsonl"
+    path.write_text(json.dumps({
+        "type": "assistant", "timestamp": when,
+        "message": {"content": [{"type": "text", "text": "report"}]},
+    }) + "\n", encoding="utf-8")
+    return path
+
+
+def _backstop_row(vault: Path, short_id: str, at: float) -> None:
+    import time
+
+    from mnemo.core.sessions import report_card
+
+    path = vault / ".mnemo" / report_card.LOG_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(at)),
+            "short_id": short_id, "event": "spawned", "via": "backstop",
+        }) + "\n")
+
+
+def test_session_end_stands_down_when_the_backstop_already_told_this_stop(
+    hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A hook that runs after the backstop answered the same stop sends
+    nothing: the parent is told once."""
+    from datetime import datetime, timezone
+
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    turn = datetime(2026, 9, 25, 3, 0, 0, tzinfo=timezone.utc)
+    transcript = _transcript_with_turn(tmp_path, "2026-09-25T03:00:00.000Z")
+    _backstop_row(hook_env, child[:8], turn.timestamp() + 130)
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda *a, **k: pytest.fail("the backstop already told the parent"),
+    )
+    monkeypatch.setattr(inbox, "post", lambda *a, **k: pytest.fail("must not send"))
+    payload = {"session_id": child, "reason": "other", "transcript_path": str(transcript)}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+    assert session_end.main() == 0
+
+
+def test_session_end_still_tells_a_later_stop_than_the_backstops(
+    hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from datetime import datetime, timezone
+
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    turn = datetime(2026, 9, 25, 3, 0, 0, tzinfo=timezone.utc)
+    transcript = _transcript_with_turn(tmp_path, "2026-09-25T03:00:00.000Z")
+    _backstop_row(hook_env, child[:8], turn.timestamp() - 3600)  # an earlier stop
+    spawned = []
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda short_id, **kw: spawned.append(short_id),
+    )
+    payload = {"session_id": child, "reason": "other", "transcript_path": str(transcript)}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+
+    assert session_end.main() == 0
+    assert spawned == [child[:8]]
+    assert "via" not in _report_rows(hook_env)[-1]
+
+
+def test_session_end_tells_the_parent_before_the_slow_work(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#502: a lean child's hook runs under a 1.5 s bound. The parent's notice
+    and the PR follow come before the schedulers and the session sweep, so a
+    hook killed there has already said the one thing only it could say."""
+    from mnemo.core.sessions import inbox
+
+    child = _dispatched_child(hook_env, parent="0ff9d810-e54d-41f3-a045-b0ccff6c5186")
+    order = []
+    monkeypatch.setattr(inbox, "is_live", lambda a: True)
+    monkeypatch.setattr(session_end, "_spawn_detached_child_report",
+                        lambda *a, **k: order.append("notice"))
+    monkeypatch.setattr(session_end, "_maybe_follow_pr", lambda *a, **k: order.append("follow"))
+    for name in ("_maybe_schedule_extraction", "_maybe_schedule_briefing",
+                 "_maybe_sweep_sessions", "_maybe_consume_unblocks", "_maybe_schedule_propose"):
+        monkeypatch.setattr(session_end, name, lambda *a, _n=name, **k: order.append(_n))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"session_id": child})))
+
+    assert session_end.main() == 0
+    assert order[:2] == ["notice", "follow"]
+    assert set(order[2:]) == {
+        "_maybe_schedule_extraction", "_maybe_schedule_briefing", "_maybe_sweep_sessions",
+        "_maybe_consume_unblocks", "_maybe_schedule_propose",
+    }
