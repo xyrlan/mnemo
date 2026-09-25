@@ -400,3 +400,15 @@ def test_ensure_watcher_goes_through_the_hooks_chokepoint(tmp_vault, monkeypatch
     monkeypatch.setattr(session_start, "_spawn_detached", lambda args, cwd=None: seen.append(args))
     assert cn.ensure_watcher(ON, vault_root=tmp_vault) == "spawned"
     assert seen == [["child-notices"]]
+
+
+def test_sweep_tells_the_same_stop_from_the_watchers_cwd(tmp_vault, tmp_path, monkeypatch):
+    """#506: the watcher runs in the vault; the stop it tells carries the
+    child's own tree, never the watcher's cwd."""
+    monkeypatch.chdir(tmp_vault)
+    _link(tmp_vault)
+    cn.armed_at(tmp_vault, now=T0 - 10_000)
+    report, told = _sweep(tmp_vault, [S(updated_at=_iso(T0))], now=T0 + 500,
+                          transcript=_transcript(tmp_path, [T0 - 3]))
+    assert report.told == [SHORT]
+    assert [d.cwd for d in told] == ["/x/app-wt-7"]

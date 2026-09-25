@@ -720,18 +720,21 @@ def _spawn_watcher() -> None:
 
     Detached exactly as ``session_end``'s briefing and extraction spawns are,
     and for a stronger reason: this one outlives the session that started it
-    on purpose. Its whole value is being alive after everything else is dead.
+    on purpose. Its whole value is being alive after everything else is dead
+    — which is why it must not run inside a child's tree and pin it (#506).
     """
     import subprocess
 
     from mnemo._detach import detach_kwargs
     from mnemo._selfexec import self_argv
+    from mnemo.hooks.session_start import watcher_cwd
 
     kwargs: Dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
+        "cwd": watcher_cwd(),
     }
     kwargs.update(detach_kwargs())
     subprocess.Popen(self_argv("resume", "--watch"), **kwargs)

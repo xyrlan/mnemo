@@ -518,10 +518,11 @@ def watch(
 
 
 def _spawn_watcher() -> None:
-    """``mnemo child-notices``, detached, through the hooks' one chokepoint."""
-    from mnemo.hooks.session_start import _spawn_detached
+    """``mnemo child-notices``, detached, through the hooks' one chokepoint —
+    outside any child's tree, which it would otherwise pin for a day (#506)."""
+    from mnemo.hooks.session_start import _spawn_detached, watcher_cwd
 
-    _spawn_detached(["child-notices"])
+    _spawn_detached(["child-notices"], cwd=watcher_cwd())
 
 
 def ensure_watcher(cfg: Optional[Dict[str, Any]], *, vault_root: Path,

@@ -545,3 +545,14 @@ def test_a_second_watcher_exits_on_the_lock(vault, tree) -> None:
     _follow(vault, tree)
     (vault / ".mnemo" / pr_follow.WATCH_LOCK_NAME).mkdir()
     assert pr_follow.watch({}, vault_root=vault) == "locked"
+
+
+def test_the_pass_does_the_same_work_from_the_watchers_cwd(vault, tree, monkeypatch) -> None:
+    """#506: the watcher runs in the vault, not the child's tree. Nothing in
+    the pass reads its own cwd: the child is woken in the tree on its entry."""
+    monkeypatch.chdir(vault)
+    _follow(vault, tree)
+    waker = Waker()
+    report = _sweep(vault, _world(buckets=("fail", "pass")), now=T0 + 400, waker=waker)
+    assert report.woken == [SHORT]
+    assert waker.calls[0]["cwd"] == str(tree)

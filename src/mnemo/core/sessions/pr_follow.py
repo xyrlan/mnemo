@@ -719,11 +719,12 @@ def watch(
 # ---------------------------------------------------------------------------
 
 
-def _spawn_watcher(cwd: Optional[str] = None) -> None:
-    """``mnemo pr-follow``, detached, through the hooks' one chokepoint."""
-    from mnemo.hooks.session_start import _spawn_detached
+def _spawn_watcher() -> None:
+    """``mnemo pr-follow``, detached, through the hooks' one chokepoint —
+    outside any child's tree, which it would otherwise pin for a day (#506)."""
+    from mnemo.hooks.session_start import _spawn_detached, watcher_cwd
 
-    _spawn_detached(["pr-follow"], cwd=cwd)
+    _spawn_detached(["pr-follow"], cwd=watcher_cwd())
 
 
 def on_session_end(cfg: Optional[Dict[str, Any]], *, vault_root: Path,
