@@ -54,6 +54,7 @@ INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "pr-follow",
     "statusline",
     "statusline-compose",
+    "tree-sweep",
 })
 
 
@@ -469,6 +470,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # #436: spawned detached by a dispatched child's SessionEnd (and restarted
     # by SessionStart); never typed. Takes no arguments: its work is the ledger.
     sub.add_parser("pr-follow")
+    # #503: spawned detached by SessionStart at most every half hour per repo.
+    # Typed by hand it prints what it did to each dispatch tree of this repo.
+    sub.add_parser("tree-sweep")
 
     briefing = sub.add_parser("briefing")
     # Positionals are optional so `mnemo briefing --prune` parses; the

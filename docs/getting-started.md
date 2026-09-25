@@ -602,6 +602,19 @@ wakes a child at most `dispatch.followPR.attempts` times (2) within
 comes back to you the same way. Every wake is also a notice to the parent and
 a line in the day log, and the ledger is `.mnemo/pr-follow.json`.
 
+Once a child's PR has merged, mnemo removes its worktree and deletes its
+branch (`dispatch.removeMergedTrees`, on by default). A session start spawns
+the sweep in the background, at most every half hour per repo, so it works for
+any child, whether or not it was granted `push` or its SessionEnd ran. The
+tree must pass these checks first. The child must be `stopped` and quiet for
+15 minutes, never `working`, `done` or blocked. No process may be working in
+the tree. The tree must be clean, with nothing unpushed and nothing the merged
+PR lacks. The branch goes with `git branch -d`, never `-D`. A tree that still
+holds work is kept, and the day log and the dispatching session are told why,
+once. A losing twin has no PR, so its tree is left for you. Run
+`mnemo tree-sweep` in a repo to sweep it now and see what happened to each
+tree.
+
 That note corrects one seam. The rest of the loop — which verbs a session may
 run itself, which are yours, what a socket message from another session is
 worth, and that the SessionStart briefing is the last session and not a task —

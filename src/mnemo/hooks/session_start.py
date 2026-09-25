@@ -1197,6 +1197,16 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.pr_follow", e)
 
+        # #503: remove the worktrees of dispatched children whose PR merged.
+        # Here, not on the child's SessionEnd, which #502 measured missing for
+        # 1 child in 4. A ledger read; at most every half hour per repo, one
+        # detached `mnemo tree-sweep` does the `git` and `gh` calls.
+        try:
+            from mnemo.core.sessions import tree_sweep
+            tree_sweep.on_session_start(cfg, vault_root=vault, cwd=cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_start.tree_sweep", e)
+
         # autopilot — fire any due hook-driven operations. Always best-effort:
         # any failure here is logged + swallowed, must never block the session.
         try:
