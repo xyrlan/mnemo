@@ -98,3 +98,15 @@ def test_a_broken_rewake_never_costs_the_session_its_start(monkeypatch, vault, t
     _run_hook(monkeypatch, vault, tmp_path,
               {"vaultRoot": str(vault), "resume": {"auto": True}})
     assert (vault / ".errors.log").exists()
+
+
+def test_the_hook_asks_child_notices_to_make_sure_a_watcher_exists(monkeypatch, vault, tmp_path):
+    """#502: a dispatched child's stop is noticed outside its own SessionEnd."""
+    from mnemo.core.sessions import child_notices
+
+    seen: list = []
+    monkeypatch.setattr(child_notices, "on_session_start",
+                        lambda cfg, **kw: seen.append(kw) or "nothing")
+    _run_hook(monkeypatch, vault, tmp_path,
+              {"vaultRoot": str(vault), "dispatch": {"notifyParent": True}})
+    assert seen and seen[0]["vault_root"] == vault

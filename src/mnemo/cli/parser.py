@@ -48,6 +48,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
 # only by hooks, MCP server, statusLine composer, briefing pipeline).
 INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "briefing",
+    "child-notices",
     "child-report",
     "hook",
     "mcp-server",
@@ -473,6 +474,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # #503: spawned detached by SessionStart at most every half hour per repo.
     # Typed by hand it prints what it did to each dispatch tree of this repo.
     sub.add_parser("tree-sweep")
+
+    # #502: spawned detached by SessionStart and `mnemo dispatch`; never typed.
+    # Tells a parent about a child that stopped without its SessionEnd notice.
+    sub.add_parser("child-notices")
 
     briefing = sub.add_parser("briefing")
     # Positionals are optional so `mnemo briefing --prune` parses; the

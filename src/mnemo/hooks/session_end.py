@@ -444,7 +444,7 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
 
 
 def _maybe_notify_parent(
-    cfg, vault, *, session_id: str, cwd: str = "", transcript=None,
+    cfg, vault, *, session_id: str, cwd: str = "", transcript=None, via: str = "",
 ) -> None:
     """Tell the dispatching session that this child finished (#357).
 
@@ -458,10 +458,16 @@ def _maybe_notify_parent(
     ``gh`` calls behind it (and the wait for checks that follows) must not hold
     this hook open. If that process cannot start, the one-line notice goes out
     here instead, as before.
+
+    Since #502 this is also what :mod:`mnemo.core.sessions.child_notices`
+    runs for a child that stopped with no notice — the hook never ran, or was
+    killed before it got here. That caller passes ``via``, which every row it
+    writes carries. The hook, in turn, stands down when such a row already
+    answers this stop, so a hook that runs late never sends a second notice.
     """
     if not bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
         return
-    from mnemo.core.sessions import inbox, parents, report_card
+    from mnemo.core.sessions import child_notices, inbox, parents, report_card
 
     short_id = (session_id or "")[:8]
     if not short_id or short_id == "unknown"[:8]:
@@ -469,7 +475,11 @@ def _maybe_notify_parent(
     parent = parents.read(vault).get(short_id)
     if not parent:
         return
+    if not via and child_notices.told_by_backstop(vault, short_id, transcript):
+        return
     row = {"short_id": short_id, "parent": parent, "event": "finished"}
+    if via:
+        row["via"] = via
     # A parent that has exited cannot be told anything; spawning a reporter
     # (and a half-hour watch) for it would be work with no reader. It is
     # still said, in the log (#454): this return used to be silent, and three
@@ -568,6 +578,24 @@ def main() -> int:
             _ss.evict_session(vault, sid)
         except Exception as e:
             errors.log_error(vault, "session_end.evict_reflex_state", e)
+        # The parent's notice and the PR follow go first of the scheduled work
+        # (#502): the hook runs under a 1.5 s bound on a lean child, and the
+        # sweep and schedulers below read every session's state. What a hook
+        # killed past this point loses is a briefing, not the parent's news —
+        # and a stop whose hook never got here is child_notices' to report.
+        try:
+            cwd = str(payload.get("cwd") or os.getcwd())
+            transcript = payload.get("transcript_path") or _resolve_session_jsonl_path(sid, cwd)
+            _maybe_notify_parent(
+                cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
+            )
+        except Exception as e:
+            errors.log_error(vault, "session_end.notify_parent", e)
+        try:
+            cwd = str(payload.get("cwd") or os.getcwd())
+            _maybe_follow_pr(cfg, vault, session_id=sid, cwd=cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_end.follow_pr", e)
         try:
             _maybe_schedule_extraction(cfg, vault, agent_name)
         except Exception as e:
@@ -583,19 +611,6 @@ def main() -> int:
             _maybe_sweep_sessions(vault)
         except Exception as e:
             errors.log_error(vault, "session_end.sweep_sessions_wrap", e)
-        try:
-            cwd = str(payload.get("cwd") or os.getcwd())
-            transcript = payload.get("transcript_path") or _resolve_session_jsonl_path(sid, cwd)
-            _maybe_notify_parent(
-                cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
-            )
-        except Exception as e:
-            errors.log_error(vault, "session_end.notify_parent", e)
-        try:
-            cwd = str(payload.get("cwd") or os.getcwd())
-            _maybe_follow_pr(cfg, vault, session_id=sid, cwd=cwd)
-        except Exception as e:
-            errors.log_error(vault, "session_end.follow_pr", e)
         try:
             _maybe_consume_unblocks(cfg, vault)
         except Exception as e:

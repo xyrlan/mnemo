@@ -238,3 +238,24 @@ def test_an_unavailable_vault_still_prints_every_row(monkeypatch, capsys) -> Non
 
     (row,) = json.loads(capsys.readouterr().out)
     assert row["parent_session"] is None
+
+
+@pytest.mark.real_spawn
+def test_dispatch_starts_the_stop_watcher_once_the_link_is_written(
+    repo: Path, vault: Path, tmp_jobs_dir: Path, monkeypatch
+) -> None:
+    """#502: the child's own SessionStart can come before its link exists, so
+    the dispatcher makes sure a watcher is up for the child's stop."""
+    from mnemo.core.sessions import child_notices
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", PARENT)
+    _fake_claude(monkeypatch, tmp_jobs_dir)
+    seen = []
+    monkeypatch.setattr(child_notices, "ensure_watcher",
+                        lambda cfg, *, vault_root: seen.append(dict(parents.read(vault))))
+
+    dispatch.dispatch_issue(
+        502, repo_root=repo,
+        fetch=lambda n, repo_root: dispatch.Issue(number=n, title="t", body="b"),
+    )
+    assert seen == [{"a1b2c3d4": PARENT}]

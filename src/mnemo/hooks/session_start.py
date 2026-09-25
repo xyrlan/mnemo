@@ -1197,6 +1197,15 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.pr_follow", e)
 
+        # #502: something outside the child's own SessionEnd has to notice a
+        # dispatched child stop, because on 2026-09-24 22 of 95 stopped with
+        # that hook never running. A roster read; the watcher does the rest.
+        try:
+            from mnemo.core.sessions import child_notices
+            child_notices.on_session_start(cfg, vault_root=vault)
+        except Exception as e:
+            errors.log_error(vault, "session_start.child_notices", e)
+
         # #503: remove the worktrees of dispatched children whose PR merged.
         # Here, not on the child's SessionEnd, which #502 measured missing for
         # 1 child in 4. A ledger read; at most every half hour per repo, one
