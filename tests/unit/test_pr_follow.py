@@ -259,6 +259,76 @@ def test_the_child_stopping_again_hands_the_pr_back_to_the_watcher(vault, tree) 
     assert not _entry(vault)["closed"]
 
 
+def _woken_and_never_stopped(vault: Path, tree: Path, waker: Waker) -> None:
+    _follow(vault, tree)
+    _sweep(vault, _world(buckets=("fail",)), now=T0 + 400, waker=waker)
+    assert pr_follow.in_childs_hands(_entry(vault))
+
+
+def test_a_window_close_reports_the_pr_as_it_is_now_not_as_it_was_at_the_wake(
+        vault, tree) -> None:
+    # #500, the #474 shape: woken for ci-red, the child fixed it but never
+    # stopped, and the PR merged green before the window ran out.
+    waker, told = Waker(), Told()
+    _woken_and_never_stopped(vault, tree, waker)
+    told.sent.clear()
+
+    report = _sweep(vault, _world(state="MERGED", buckets=("pass",) * 14),
+                    now=T0 + 25 * 3600, roster=[Row(state="working")],
+                    waker=waker, told=told)
+    assert report.closed == [(SHORT, "merged")]
+    assert told.sent == [], "a merged green PR has nothing to hand back"
+    assert _entry(vault)["last_events"] == []
+    assert len(waker.calls) == 1
+
+
+def test_a_pr_that_merges_in_the_childs_hands_closes_before_the_window(vault, tree) -> None:
+    waker, told = Waker(), Told()
+    _woken_and_never_stopped(vault, tree, waker)
+    told.sent.clear()
+
+    report = _sweep(vault, _world(state="MERGED"), now=T0 + 400 + pr_follow.POLL_SECONDS,
+                    roster=[Row(state="working")], waker=waker, told=told)
+    assert report.closed == [(SHORT, "merged")]
+    assert told.sent == []
+
+
+@pytest.mark.parametrize("world,closed_with", [
+    (dict(buckets=("pass",)), []),
+    (dict(buckets=("fail",)), ["ci-red"]),
+    (dict(buckets=("pass",), mergeable="CONFLICTING"), ["conflict"]),
+])
+def test_a_window_close_in_the_childs_hands_hands_back_only_what_is_outstanding_now(
+        vault, tree, world, closed_with) -> None:
+    waker, told = Waker(), Told()
+    _woken_and_never_stopped(vault, tree, waker)
+    told.sent.clear()
+
+    report = _sweep(vault, _world(**world), now=T0 + 25 * 3600,
+                    roster=[Row(state="working")], waker=waker, told=told)
+    assert report.closed == [(SHORT, "window")]
+    assert _entry(vault)["last_events"] == closed_with
+    assert len(waker.calls) == 1, "a window close never wakes"
+    if closed_with:
+        (_, text), = told.sent
+        assert f'state="{",".join(closed_with)}" event="follow-stopped"' in text
+    else:
+        assert told.sent == [], "green now: no 'checks failing' notice"
+
+
+def test_an_open_pr_in_the_childs_hands_is_looked_at_but_never_woken(vault, tree) -> None:
+    waker = Waker()
+    _woken_and_never_stopped(vault, tree, waker)
+    run = _world(buckets=("fail",))
+    # The roster may already say done before its SessionEnd lands: still no wake.
+    report = _sweep(vault, run, now=T0 + 400 + pr_follow.POLL_SECONDS, waker=waker)
+    assert report.closed == [] and len(waker.calls) == 1
+    assert _entry(vault)["polled_at"] == T0 + 400, "the waking look's stamp is kept"
+    calls = len(run.calls)
+    _sweep(vault, run, now=T0 + 460 + pr_follow.POLL_SECONDS, waker=waker)
+    assert len(run.calls) == calls, "looked at once per poll, not every tick"
+
+
 def test_attempts_are_bounded_and_the_last_hands_back_to_the_parent(vault, tree) -> None:
     _follow(vault, tree)
     waker, told = Waker(), Told()
