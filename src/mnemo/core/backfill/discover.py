@@ -124,8 +124,8 @@ def agent_for_cwd(cwd: str) -> str:
     still encodes the repo, so a gone tree is folded to its sibling repo
     first, exactly as ``mnemo sessions`` folds it for scoping. Only the shapes
     dispatch itself writes are folded, and only when the repo is there to
-    resolve, so a hand-made ``clubinho-old`` is never filed under
-    ``clubinho``.
+    resolve, so a hand-made ``repo-a-old`` is never filed under
+    ``repo-a``.
     """
     return _agent_for_cwd(fold_gone_dispatch_tree(cwd))
 

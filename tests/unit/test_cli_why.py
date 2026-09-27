@@ -57,14 +57,14 @@ def test_it_prints_the_recent_decisions(vault, capsys):
 
 
 def test_it_is_scoped_to_the_current_repo_by_default(vault, capsys):
-    _log(vault, [_entry(project="clubinho", candidates=[["other-repo", 9.0]])])
+    _log(vault, [_entry(project="repo-a", candidates=[["other-repo", 9.0]])])
 
     cmd.cmd_why(_args())
     assert "other-repo" not in capsys.readouterr().out
 
 
 def test_all_projects_drops_the_scope(vault, capsys):
-    _log(vault, [_entry(project="clubinho", candidates=[["other-repo", 9.0]])])
+    _log(vault, [_entry(project="repo-a", candidates=[["other-repo", 9.0]])])
 
     cmd.cmd_why(_args(all_projects=True))
     assert "other-repo" in capsys.readouterr().out

@@ -43,7 +43,7 @@ def _blocked(path: Path | None = None, *, needs: str | None = None) -> Session:
     return Session(
         short_id="594436f2", state="blocked", tempo="blocked", needs=needs,
         link_scan_path=None if path is None else str(path),
-        cwd="/Users/xyrlan/github/mnemo-wt-380",
+        cwd="/Users/you/github/mnemo-wt-380",
         session_id="594436f2-a282-4a1c-b04a-08441296047e", live=False,
     )
 

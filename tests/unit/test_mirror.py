@@ -20,7 +20,7 @@ def _make_claude_project(home: Path, encoded_name: str, files: dict[str, str]) -
 
 
 def test_extracts_agent_name_from_encoded_dir():
-    assert mirror._agent_from_project_dir("-home-user-github-sg-imports") == "sg-imports"
+    assert mirror._agent_from_project_dir("-home-user-github-repo-d") == "repo-d"
     assert mirror._agent_from_project_dir("-Users-foo-Code-app") == "app"
     assert mirror._agent_from_project_dir("-") == "root"
     assert mirror._agent_from_project_dir("") == "root"
@@ -88,13 +88,13 @@ def test_decode_resolves_to_real_git_root(tmp_path: Path):
     """When the encoded path corresponds to a real filesystem path with .git, use git-root basename.
 
     Regression: previously, the encoded path was parsed via a brittle 'skip first 3 components'
-    heuristic that produced 'refactor-sg-imports' for /home/xyrlan/github/refactor/sg-imports
-    when the real git-root basename is 'sg-imports'.
+    heuristic that produced 'refactor-repo-d' for /home/you/github/refactor/repo-d
+    when the real git-root basename is 'repo-d'.
     """
-    repo = tmp_path / "github" / "refactor" / "sg-imports"
+    repo = tmp_path / "github" / "refactor" / "repo-d"
     (repo / ".git").mkdir(parents=True)
     encoded = "-" + str(repo).lstrip("/").replace("/", "-")
-    assert mirror._agent_from_project_dir(encoded) == "sg-imports"
+    assert mirror._agent_from_project_dir(encoded) == "repo-d"
 
 
 def test_decode_handles_repo_with_internal_dashes(tmp_path: Path):

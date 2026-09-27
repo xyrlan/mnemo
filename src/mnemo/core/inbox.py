@@ -37,7 +37,7 @@ meant "kept forever, invisible". It rests on the judge's measurement. The
 second is a page with the backfill origin (#496): the install review asks the
 user once to keep or drop what the backfill learned, and a page they skipped
 or never saw expires on the same clock, as the install-review spec
-(``docs/superpowers/specs/2026-09-24-install-review-design.md``) decided.
+(``design/specs/2026-09-24-install-review-design.md``) decided.
 Nothing else expires — a live-capture demotion or a multi-source page waits
 for a human however old. The expiry is logged as ``expired``, never as a
 decision, and :func:`restore` undoes it (or a drop).

@@ -348,7 +348,7 @@ def test_guardrail_redirects_drifted_slug_to_existing(tmp_path):
     encoding="utf-8")
     state = _mkstate(**{
         f"feedback/{existing_slug}": StateEntry(
-            source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+            source_files=["bots/repo-d/memory/feedback_react_patterns.md"],
             source_hash="sha256:oldhash",
             written_hash="sha256:wr1",
             written_at="2026-04-14T10:00:00",
@@ -369,7 +369,7 @@ def test_guardrail_redirects_drifted_slug_to_existing(tmp_path):
             "inside them survive. If you need to reset local state when "
             "upstream data changes, encode meaningful data into the key prop."
         ),
-        source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+        source_files=["bots/repo-d/memory/feedback_react_patterns.md"],
         source_hash="sha256:newhash",
         tags=["react"],
     )
@@ -396,7 +396,7 @@ def test_guardrail_does_not_redirect_distinct_rule_from_same_source(tmp_path):
     encoding="utf-8")
     state = _mkstate(**{
         "feedback/react-key-remount": StateEntry(
-            source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+            source_files=["bots/repo-d/memory/feedback_react_patterns.md"],
             source_hash="sha256:a",
             written_hash="sha256:wr1",
             written_at="2026-04-14T10:00:00",
@@ -417,7 +417,7 @@ def test_guardrail_does_not_redirect_distinct_rule_from_same_source(tmp_path):
             "avoid stale hits. Derived data loses integrity when a base input "
             "changes silently."
         ),
-        source_files=["bots/sg-imports/memory/feedback_react_patterns.md"],
+        source_files=["bots/repo-d/memory/feedback_react_patterns.md"],
         source_hash="sha256:b",
         tags=["react", "caching"],
     )
@@ -465,7 +465,7 @@ def test_guardrail_skips_stale_state_entries(tmp_path):
     new write under the same slug-space."""
     state = _mkstate(**{
         "feedback/deleted-slug": StateEntry(
-            source_files=["bots/sg-imports/memory/feedback_x.md"],
+            source_files=["bots/repo-d/memory/feedback_x.md"],
             source_hash="sha256:a",
             written_hash="sha256:wr1",
             written_at="2026-04-14T10:00:00",
@@ -481,7 +481,7 @@ def test_guardrail_skips_stale_state_entries(tmp_path):
         name="new",
         description="d",
         body="some body text that would be similar enough to trigger guardrail",
-        source_files=["bots/sg-imports/memory/feedback_x.md"],
+        source_files=["bots/repo-d/memory/feedback_x.md"],
         source_hash="sha256:b",
     )
     inbox.apply_pages([new_page], state, tmp_path, run_id="2026-04-14T11:00:00")

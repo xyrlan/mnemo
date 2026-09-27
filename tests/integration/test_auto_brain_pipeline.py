@@ -10,7 +10,7 @@ import json
 # routing that happens *after* that gate, so their pages are made verifiable:
 # a briefing on disk, cited as the page's source, quoted verbatim.
 _QUOTES = {
-    "clubinho": "always use yarn, never npm install",
+    "repo-a": "always use yarn, never npm install",
     "central": "never commit without asking me first",
 }
 
@@ -73,10 +73,10 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     from mnemo.core import extract as extract_mod
 
     vault = tmp_path / "vault"
-    _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback")
+    _write_memory(vault, "repo-a", "feedback_use_yarn", "feedback")
     _write_memory(vault, "central", "feedback_no_commits", "feedback")
-    _write_memory(vault, "clubinho", "feedback_no_commit_without_permission", "feedback")
-    _write_briefing(vault, "clubinho", rule="Use yarn")
+    _write_memory(vault, "repo-a", "feedback_no_commit_without_permission", "feedback")
+    _write_briefing(vault, "repo-a", rule="Use yarn")
     _write_briefing(vault, "central", rule="Ask before committing")
 
     def fake_call(prompt, *, system, model, timeout):
@@ -89,8 +89,8 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
                 "body": "Always use yarn.",
                 # One source, so the single-source auto-promote door; the
                 # source is the briefing the evidence quote comes from.
-                "source_files": [_briefing_path("clubinho")],
-                "evidence": _evidence("clubinho"),
+                "source_files": [_briefing_path("repo-a")],
+                "evidence": _evidence("repo-a"),
             },
             {
                 "slug": "no-commits",
@@ -100,7 +100,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
                 "body": "Do not commit without permission.",
                 "source_files": [
                     _briefing_path("central"),
-                    "bots/clubinho/memory/feedback_no_commit_without_permission.md",
+                    "bots/repo-a/memory/feedback_no_commit_without_permission.md",
                 ],
                 "evidence": _evidence("central"),
             },
@@ -124,7 +124,7 @@ def test_first_auto_run_splits_single_and_multi_source(tmp_path, monkeypatch):
     assert "auto-promoted" in single_content
     assert "last_sync:" in single_content
 
-    # Multi-source page spans two distinct projects (clubinho + central), so
+    # Multi-source page spans two distinct projects (repo-a + central), so
     # it crosses universalThreshold=2 and is intercepted by the
     # universal-promotion dispatch row — landing in shared/<type>/ directly
     # instead of staging under _inbox/.
@@ -153,7 +153,7 @@ def test_second_run_unchanged_source_is_noop(tmp_path, monkeypatch):
     from mnemo.core import extract as extract_mod
 
     vault = tmp_path / "vault"
-    _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback")
+    _write_memory(vault, "repo-a", "feedback_use_yarn", "feedback")
 
     call_count = {"n": 0}
 
@@ -166,7 +166,7 @@ def test_second_run_unchanged_source_is_noop(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn.",
-                "source_files": ["bots/clubinho/memory/feedback_use_yarn.md"],
+                "source_files": ["bots/repo-a/memory/feedback_use_yarn.md"],
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call)
@@ -190,10 +190,10 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
     from mnemo.core import extract as extract_mod
 
     vault = tmp_path / "vault"
-    _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback")
+    _write_memory(vault, "repo-a", "feedback_use_yarn", "feedback")
     # The sibling bounce is only reachable once the page is in the sacred dir,
     # so the page has to clear the evidence gate: one briefing source, quoted.
-    _write_briefing(vault, "clubinho", rule="Use yarn")
+    _write_briefing(vault, "repo-a", rule="Use yarn")
 
     def fake_call_v1(prompt, *, system, model, timeout):
         return _mock_llm_response([
@@ -203,8 +203,8 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn.",
-                "source_files": [_briefing_path("clubinho")],
-                "evidence": _evidence("clubinho"),
+                "source_files": [_briefing_path("repo-a")],
+                "evidence": _evidence("repo-a"),
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call_v1)
@@ -217,7 +217,7 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
     sacred = vault / "shared" / "feedback" / "use-yarn.md"
     sacred.write_text(sacred.read_text(encoding="utf-8") + "\n\n(User addition)\n", encoding="utf-8")
 
-    _write_memory(vault, "clubinho", "feedback_use_yarn", "feedback", content_suffix=" (updated)")
+    _write_memory(vault, "repo-a", "feedback_use_yarn", "feedback", content_suffix=" (updated)")
 
     def fake_call_v2(prompt, *, system, model, timeout):
         return _mock_llm_response([
@@ -227,8 +227,8 @@ def test_user_edit_on_sacred_produces_bounced_sibling(tmp_path, monkeypatch):
                 "name": "Use yarn",
                 "description": "",
                 "body": "Always use yarn. Updated.",
-                "source_files": [_briefing_path("clubinho")],
-                "evidence": _evidence("clubinho"),
+                "source_files": [_briefing_path("repo-a")],
+                "evidence": _evidence("repo-a"),
             },
         ])
     monkeypatch.setattr(llm, "call", fake_call_v2)

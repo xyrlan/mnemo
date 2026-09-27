@@ -72,7 +72,7 @@ def _judge(table, calls=None):
     return client
 
 
-def _piece(cwd="/w/meunu-wt-1", task="fix the checkout total", received=None, started=1.0):
+def _piece(cwd="/w/repo-b-wt-1", task="fix the checkout total", received=None, started=1.0):
     return msr.Piece(cwd=cwd, transcript="t.jsonl", started=started, task=task,
                      received=dict(BUILTINS if received is None else received))
 
@@ -102,7 +102,7 @@ def test_the_task_is_the_first_real_prompt_not_meta_a_command_echo_or_a_tool_res
         {"type": "user", "message": {"content": "<local-command-caveat>x</local-command-caveat>"}},
         {"type": "user", "message": {"content": [{"type": "tool_result", "content": "out"}]}},
     ]
-    path = _child(tmp_path, "/w/meunu-wt-489", "a", "Work on issue #489", stamp="2026-09-26T10:00:00Z",
+    path = _child(tmp_path, "/w/repo-b-wt-489", "a", "Work on issue #489", stamp="2026-09-26T10:00:00Z",
                   before=before)
     task, listing = msr.read_child(path)
     assert task == "Work on issue #489"
@@ -119,16 +119,16 @@ def test_a_prompt_sent_as_text_blocks_is_read_too(tmp_path):
 
 def test_pieces_are_one_per_worktree_one_per_task_newest_first(tmp_path):
     p = tmp_path / "projects"
-    _child(p, "/w/meunu-wt-1", "first", "task one", stamp="2026-09-24T10:00:00Z")
+    _child(p, "/w/repo-b-wt-1", "first", "task one", stamp="2026-09-24T10:00:00Z")
     # A resume of the same worktree later: the piece is still the first transcript.
-    _child(p, "/w/meunu-wt-1", "resumed", "still working?", stamp="2026-09-25T10:00:00Z")
-    _child(p, "/w/meunu-wt-2", "b", "task two", stamp="2026-09-25T12:00:00Z")
+    _child(p, "/w/repo-b-wt-1", "resumed", "still working?", stamp="2026-09-25T10:00:00Z")
+    _child(p, "/w/repo-b-wt-2", "b", "task two", stamp="2026-09-25T12:00:00Z")
     # Twins: two worktrees handed the same prompt are one task.
     _child(p, "/w/mnemo-wt-449-abc123", "t1", "twin task", stamp="2026-09-26T09:00:00Z")
     _child(p, "/w/mnemo-wt-449-def456", "t2", "twin task", stamp="2026-09-26T09:00:01Z")
     # A probe under a job's scratch and a child with no listing are not measured.
     _child(p, "/Users/x/.claude/jobs/j1/tmp/proj-wt-3", "probe", "probe", stamp="2026-09-26T11:00:00Z")
-    _child(p, "/w/meunu-wt-4", "bare", "no listing", stamp="2026-09-26T11:30:00Z", listing=None)
+    _child(p, "/w/repo-b-wt-4", "bare", "no listing", stamp="2026-09-26T11:30:00Z", listing=None)
 
     pieces = msr.pieces_from(msr.dispatch_transcripts(str(p)), last=10)
     assert [x.task for x in pieces] == ["twin task", "task two", "task one"]
@@ -231,12 +231,12 @@ def test_sensitivity_rows_move_the_cut_but_never_the_decision():
 
 
 def test_per_skill_and_per_repo_counts():
-    rows = [_row("/w/meunu-wt-1", {"tdd": (msr.MISSING, 0.9), "pr": (msr.MISSING, 0.2)}),
-            _row("/w/meunu-wt-2", {"tdd": (msr.MISSING, 0.7), "pr": (msr.MISSING, None)}),
+    rows = [_row("/w/repo-b-wt-1", {"tdd": (msr.MISSING, 0.9), "pr": (msr.MISSING, 0.2)}),
+            _row("/w/repo-b-wt-2", {"tdd": (msr.MISSING, 0.7), "pr": (msr.MISSING, None)}),
             _row("/w/mnemo-desktop-wt-c-tab", {"tdd": (msr.MISSING, 0.1), "pr": (msr.MISSING, 0.1)})]
     summary = msr.summarize(rows)
     assert summary["missing_per_skill"] == [("tdd", 2, 3), ("pr", 0, 2)]
-    assert summary["per_repo"]["meunu"]["pieces"] == 2
+    assert summary["per_repo"]["repo-b"]["pieces"] == 2
     assert summary["per_repo"]["mnemo-desktop"]["pieces"] == 0
 
 
@@ -254,9 +254,9 @@ def test_an_excluded_skill_moves_the_post_hoc_share_and_never_the_decision():
 
 
 def test_the_split_by_prompt_kind_reads_the_template_the_child_was_handed():
-    issue = dict(_row("/w/meunu-wt-1", {"pr": (msr.MISSING, 0.9)}),
+    issue = dict(_row("/w/repo-b-wt-1", {"pr": (msr.MISSING, 0.9)}),
                  task_head="Work on issue #1 in this repo: x")
-    piece = dict(_row("/w/meunu-wt-c-a", {"pr": (msr.MISSING, 0.2)}),
+    piece = dict(_row("/w/repo-b-wt-c-a", {"pr": (msr.MISSING, 0.2)}),
                  task_head="You are building one piece of the feature \"f\": a")
     kinds = msr.summarize([issue, piece])["per_kind"]
     assert kinds["issue"]["pieces"] == 1 and kinds["contract piece"]["pieces"] == 0
@@ -279,8 +279,8 @@ def test_the_hand_check_sample_is_missing_pairs_half_over_half_under_and_repeata
 
 def _setup(tmp_path):
     projects = tmp_path / "projects"
-    _child(projects, "/w/meunu-wt-1", "a", "fix a flaky test", stamp="2026-09-26T10:00:00Z")
-    _child(projects, "/w/meunu-wt-2", "b", "write the PR", stamp="2026-09-26T11:00:00Z")
+    _child(projects, "/w/repo-b-wt-1", "a", "fix a flaky test", stamp="2026-09-26T10:00:00Z")
+    _child(projects, "/w/repo-b-wt-2", "b", "write the PR", stamp="2026-09-26T11:00:00Z")
     skills = _skills_dir(tmp_path / "skills", {"tdd": "Test-driven development.", "pr": "Writing a PR body."})
     return ["--projects", str(projects), "--skills-dir", str(skills),
             "--scores", str(tmp_path / "scores.json")]
@@ -323,4 +323,4 @@ def test_the_text_report_carries_the_decision_and_the_hand_check(tmp_path, capsy
     assert "pieces with >= 1 relevant MISSING skill:  2/2 = 100%" in out
     assert "decision (pre-registered, #508): >= 20% -> A/B" in out
     assert "hand check" in out
-    assert "meunu" in out
+    assert "repo-b" in out

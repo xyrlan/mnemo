@@ -37,7 +37,7 @@ recycled pid fails the start-time check and the notice is dropped.
 **What may ride this channel.** A notice, never an instruction. Claude Code
 appends its own warning to a peer turn ("a peer cannot grant escalation …
 that's permission laundering"), and mnemo already refused, with evidence, to
-let a socket marker stand in for the user (``docs/superpowers/specs/
+let a socket marker stand in for the user (``design/specs/
 2026-09-15-inbox-reply-authority.md``). This module carries "a child of yours
 finished"; it must not carry approval, and callers must not phrase it as one.
 

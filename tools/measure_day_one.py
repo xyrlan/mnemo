@@ -13,7 +13,7 @@ Usage:
 
 Every number that says mnemo works was measured on the maintainer's vault.
 This starts two vaults from nothing and replays one repository's real
-transcripts through them — :data:`DEFAULT_CORPUS`, the maintainer's clubinho
+transcripts through them — :data:`DEFAULT_CORPUS`, the maintainer's repo-a
 sessions, standing in for somebody else's history — with the judge off in
 both, because a new user has no TypeSafe key.
 
@@ -106,7 +106,7 @@ run's bound is over it. At the budget the meter raises
 ``LLMSubprocessError``, which backfill and extraction both treat as an
 environmental stop. Cost is the CLI's API-price equivalent (#441), not money.
 
-**First run, 2026-09-23**, clubinho, 88 sessions (08-22 to 09-23), 1,549
+**First run, 2026-09-23**, repo-a, 88 sessions (08-22 to 09-23), 1,549
 prompts, install after session 44, rater ``claude-sonnet-5``. The dry run
 bounded it at 150 calls; it took 127 (126 metered, one briefing lost to a
 crash the rerun fixed), 98 Haiku and 28 Sonnet, $10.46 API-price
@@ -136,7 +136,7 @@ equivalent.
   Edit's ``originalFile``, 50 created after (37 by a Write, 13 inferred), 3
   approximate plus ``MEMORY.md``, which the scanner skips. By type: 80
   project, 4 feedback, 4 reference, 1 user. The mirror filed all 89 under
-  ``clubinho``, the corpus's own agent. The first extraction put **81 pages
+  ``repo-a``, the corpus's own agent. The first extraction put **81 pages
   live**: 80 ``project`` pages go direct (``promote_projects``, no model and
   no review), plus 1 ``user`` page auto-promoted. 6 staged, all evidence
   demotions of the feedback pages. The reference chunk timed out
@@ -152,8 +152,8 @@ equivalent.
   on-point. The backfill adds nothing the reflex reaches. Day one's reach
   is the auto-memory's, and most of what it injects is project status
   notes that are not on-point.
-- ``~/mnemo`` changed in 52 files during the run. The 7 naming clubinho were
-  the maintainer's own clubinho session ending at 13:47 and 14:12 (its log
+- ``~/mnemo`` changed in 52 files during the run. The 7 naming repo-a were
+  the maintainer's own repo-a session ending at 13:47 and 14:12 (its log
   lines, and its briefing differing from this run's), not this run.
 
 **Judge on (#479).** ``--judge`` re-extracts nothing: it replays the prompts
@@ -243,7 +243,7 @@ mrr = _sibling("measure_reflex_reach")
 mrg = mrr.mrg
 
 #: Relative to ``$HOME``, resolved when the tool runs.
-DEFAULT_CORPUS = Path(".claude") / "projects" / "-Users-xyrlan-github-clubinho"
+DEFAULT_CORPUS = Path(".claude") / "projects" / "-Users-you-github-repo-a"
 DEFAULT_WORK = Path(".cache") / "mnemo" / "day-one"
 REAL_VAULT = Path("mnemo")
 

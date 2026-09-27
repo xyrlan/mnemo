@@ -13,7 +13,9 @@ the threshold on its second extraction.
 
 Discovered by the v0.15 dogfood: six rules sat in ``_inbox/feedback/`` with
 ``source_files`` already spanning two projects but with no dispatch branch
-that would move them out. See ``docs/superpowers/plans/joyful-cooking-wirth.md``.
+that would move them out. The plan that
+fixed it, ``docs/superpowers/plans/joyful-cooking-wirth.md``, left the tree
+in #510; git history keeps it.
 """
 from __future__ import annotations
 

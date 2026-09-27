@@ -81,10 +81,10 @@ def test_projects_for_rule_derives_from_bots_prefix():
 def test_projects_for_rule_multi_source_multi_project():
     """Sources from bots/a and bots/b → ['a', 'b'] sorted."""
     result = projects_for_rule([
-        "bots/sg-imports/memory/rule.md",
+        "bots/repo-d/memory/rule.md",
         "bots/agent-a/briefings/foo.md",
     ])
-    assert result == ["agent-a", "sg-imports"]
+    assert result == ["agent-a", "repo-d"]
 
 
 def test_projects_for_rule_ignores_non_bots_paths():
@@ -114,10 +114,10 @@ def test_projects_for_rule_deduplicates():
 def test_projects_for_rule_handles_absolute_paths():
     """Absolute paths (the real-world YAML shape) resolve same as relative."""
     result = projects_for_rule([
-        "/Users/x/mnemo/bots/clearframe/briefings/sessions/aaa.md",
-        "/Users/x/mnemo/bots/sg-imports/briefings/sessions/bbb.md",
+        "/Users/x/mnemo/bots/repo-c/briefings/sessions/aaa.md",
+        "/Users/x/mnemo/bots/repo-d/briefings/sessions/bbb.md",
     ])
-    assert result == ["clearframe", "sg-imports"]
+    assert result == ["repo-c", "repo-d"]
 
 
 def test_projects_for_rule_picks_last_bots_segment():

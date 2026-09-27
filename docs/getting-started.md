@@ -811,8 +811,8 @@ rehearsal fixture and a nested tree the table leaves out):
 
 | repo | channel | what happened |
 | --- | --- | --- |
-| clubinho | `CLAUDE.md`, 20/20 children | the flag it states was on **24 of 24** suite runs |
-| clubinho | nothing states the heap size | **13 of 14** children ran out of it |
+| repo-a | `CLAUDE.md`, 20/20 children | the flag it states was on **24 of 24** suite runs |
+| repo-a | nothing states the heap size | **13 of 14** children ran out of it |
 | mnemo | no `CLAUDE.md` at the time | 12 children rediscovered `PYTHONPATH=src` mid-run, **2 never did** |
 | mnemo-desktop | no `CLAUDE.md`, no memory | **33 of 35** children missed the build's environment; 10 hit `Text file busy` |
 
@@ -847,7 +847,7 @@ mnemo procedures --accept cargo-test   # appends that section; nothing else is t
 It proposes only environment, never flags, and the reason is a count: on the
 184 children on disk on 2026-09-19 the same bar over flags would have proposed
 `cargo test --nocapture` to twelve children's credit — a way of reading
-output, not a boundary. So a procedure that lives in a flag (clubinho's
+output, not a boundary. So a procedure that lives in a flag (repo-a's
 `--runInBand`) is one this cannot find, and
 `tools/measure_rediscovered_procedures.py --rejected` prints the whole
 rejected half rather than leaving the limit to be discovered later. `doctor`
@@ -963,7 +963,7 @@ in the piece's files on that ref: `✓` present, `✗` missing, `?` for a
 signature that names no identifier, such as a CLI shape.
 
 ```bash
-mnemo land docs/superpowers/contracts/2026-09-13-dispatch-last-metre.md
+mnemo land design/contracts/2026-09-13-dispatch-last-metre.md
 ```
 
 ```

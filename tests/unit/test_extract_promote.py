@@ -19,18 +19,18 @@ def _mk_project_file(tmp_vault: Path, agent: str, stem: str, body: str = "projec
 
 def test_promote_writes_direct_to_shared_project(tmp_vault: Path):
     state = scanner.ExtractionState(last_run=None, entries={})
-    f = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal_decisions")
+    f = _mk_project_file(tmp_vault, "repo-d", "project_china_portal_decisions")
     result = promote.promote_projects([f], state, tmp_vault)
-    target = tmp_vault / "shared" / "project" / "sg-imports__china-portal-decisions.md"
+    target = tmp_vault / "shared" / "project" / "repo-d__china-portal-decisions.md"
     assert target.exists()
-    assert result.written_fresh == ["project/sg-imports__china-portal-decisions"]
+    assert result.written_fresh == ["project/repo-d__china-portal-decisions"]
 
 
 def test_promote_entry_has_direct_status(tmp_vault: Path):
     state = scanner.ExtractionState(last_run=None, entries={})
-    f = _mk_project_file(tmp_vault, "clubinho", "project_shipment_rules")
+    f = _mk_project_file(tmp_vault, "repo-a", "project_shipment_rules")
     promote.promote_projects([f], state, tmp_vault)
-    entry = state.entries["project/clubinho__shipment-rules"]
+    entry = state.entries["project/repo-a__shipment-rules"]
     assert entry.status == "direct"
 
 
@@ -130,9 +130,9 @@ def test_project_page_carries_composite_slug_after_name(tmp_vault: Path):
     from mnemo.core.extract.promote import _render_project_page
     from mnemo.core.filters import parse_frontmatter
 
-    file = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal_decisions")
+    file = _mk_project_file(tmp_vault, "repo-d", "project_china_portal_decisions")
     rendered = _render_project_page(file, run_id="2026-04-18T00:00:00")
     lines = rendered.splitlines()
     assert lines[1].startswith("name: ")
-    assert lines[2] == "slug: sg-imports__china-portal-decisions"
-    assert parse_frontmatter(rendered)["slug"] == "sg-imports__china-portal-decisions"
+    assert lines[2] == "slug: repo-d__china-portal-decisions"
+    assert parse_frontmatter(rendered)["slug"] == "repo-d__china-portal-decisions"

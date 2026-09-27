@@ -1,7 +1,7 @@
 """What fills each session's context, per tool (#308).
 
 ``breakdown_image_79cf6060.jsonl`` is 17 consecutive real events from a
-clubinho session, cut on 2026-09-15: every ``usage`` block, id and event kept
+repo-a session, cut on 2026-09-15: every ``usage`` block, id and event kept
 verbatim; text, tool inputs and paths replaced by ``[redacted]``; tool-result
 text replaced by as many ``x`` (its length is what gets counted); and the
 screenshot's base64 cut to its first 32 characters, which still hold the PNG

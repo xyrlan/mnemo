@@ -212,13 +212,13 @@ def test_unlistable_jobs_dir_yields_nothing(tmp_path: Path, monkeypatch) -> None
 
 def test_a_dispatch_worktree_matches_its_repo(tmp_path: Path) -> None:
     # The bug that closed #281: the maintainer types `mnemo sessions` in
-    # ~/github/clubinho and every child lives in ~/github/clubinho-wt-<issue>.
+    # ~/github/repo-a and every child lives in ~/github/repo-a-wt-<issue>.
     # Exact-equality scoping answers "nothing is running" while a child sits
     # blocked asking for a prod query.
-    repo = tmp_path / "clubinho"
+    repo = tmp_path / "repo-a"
     repo.mkdir()
     _job(tmp_path, "child", state="blocked", tempo="blocked",
-         cwd=str(tmp_path / "clubinho-wt-213"))
+         cwd=str(tmp_path / "repo-a-wt-213"))
 
     ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(repo))]
 
@@ -237,14 +237,14 @@ def test_a_contract_piece_worktree_matches_its_repo(tmp_path: Path) -> None:
 
 
 def test_a_neighbour_repo_is_not_swept_in(tmp_path: Path) -> None:
-    # Prefix matching would file `clubinho-old` under `clubinho`. Only the two
+    # Prefix matching would file `repo-a-old` under `repo-a`. Only the two
     # shapes dispatch itself writes are admitted.
-    repo = tmp_path / "clubinho"
+    repo = tmp_path / "repo-a"
     repo.mkdir()
     _job(tmp_path, "neighbour", state="working", tempo="active",
-         cwd=str(tmp_path / "clubinho-old"))
+         cwd=str(tmp_path / "repo-a-old"))
     _job(tmp_path, "handmade", state="working", tempo="active",
-         cwd=str(tmp_path / "clubinho-wt-feature"))
+         cwd=str(tmp_path / "repo-a-wt-feature"))
 
     ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(repo))]
 
@@ -254,7 +254,7 @@ def test_a_neighbour_repo_is_not_swept_in(tmp_path: Path) -> None:
 def test_the_worktree_itself_still_sees_its_own_session(tmp_path: Path) -> None:
     # A child running `mnemo sessions` inside its own worktree must still find
     # itself: the repo rule adds reach, it never removes the exact match.
-    wt = tmp_path / "clubinho-wt-213"
+    wt = tmp_path / "repo-a-wt-213"
     wt.mkdir()
     _job(tmp_path, "child", state="working", tempo="active", cwd=str(wt))
 
@@ -266,10 +266,10 @@ def test_the_worktree_itself_still_sees_its_own_session(tmp_path: Path) -> None:
 def test_sibling_worktrees_of_the_same_repo_see_each_other(tmp_path: Path) -> None:
     # Scoping from inside one child should show its siblings: they are all one
     # repo's queue, which is the unit the maintainer is tracking.
-    wt = tmp_path / "clubinho-wt-212"
+    wt = tmp_path / "repo-a-wt-212"
     wt.mkdir()
     _job(tmp_path, "sibling", state="blocked", tempo="blocked",
-         cwd=str(tmp_path / "clubinho-wt-213"))
+         cwd=str(tmp_path / "repo-a-wt-213"))
 
     ids = [s.short_id for s in jobs.read_sessions(tmp_path, cwd=str(wt))]
 

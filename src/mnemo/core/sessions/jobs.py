@@ -316,8 +316,8 @@ def _repo_root(path: str | None) -> str | None:
     Only the two shapes dispatch itself writes are folded — the parsing is
     ``dispatch.issue_for_cwd``, whose regex is anchored so a hand-made
     ``mnemo-wt-feature`` stays its own scope. A prefix match would be the
-    obvious shortcut and is wrong: it files ``clubinho-old`` under
-    ``clubinho``, putting an unrelated repo's sessions in this queue.
+    obvious shortcut and is wrong: it files ``repo-a-old`` under
+    ``repo-a``, putting an unrelated repo's sessions in this queue.
     """
     if not path:
         return None
@@ -333,8 +333,8 @@ def in_scope(session_cwd: str | None, scope: str | None) -> bool:
     """Whether a session started in *session_cwd* belongs to *scope*'s queue.
 
     A repo and its dispatch worktrees are **one** queue: the maintainer types
-    ``mnemo sessions`` in ``~/github/clubinho`` and every child it dispatched
-    lives in ``~/github/clubinho-wt-<issue>``. Comparing the two directories
+    ``mnemo sessions`` in ``~/github/repo-a`` and every child it dispatched
+    lives in ``~/github/repo-a-wt-<issue>``. Comparing the two directories
     for equality — what this did until #281 — prints an empty queue while a
     child sits blocked asking a question, and an empty queue reads as "nothing
     is running". The bug was not that the filter was wrong; it was that being

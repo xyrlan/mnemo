@@ -1,7 +1,7 @@
 """``mnemo inbox --json``, batch decisions and ``--review`` (#495, install review M1).
 
 The JSON shapes here are a contract: mnemo-desktop's install-review screen is
-built against them (``docs/superpowers/specs/2026-09-24-install-review-design.md``),
+built against them (``design/specs/2026-09-24-install-review-design.md``),
 so each test pins a key set, not just a value.
 """
 from __future__ import annotations
@@ -87,8 +87,8 @@ def test_the_parser_takes_several_keys_stdin_origin_project_json_and_review():
     assert ns.drop == [] and ns.keys_stdin
 
     ns = _build_parser().parse_args(
-        ["inbox", "--review", "--origin", "backfill", "--project", "clubinho"])
-    assert ns.review and ns.origin == "backfill" and ns.project == "clubinho"
+        ["inbox", "--review", "--origin", "backfill", "--project", "repo-a"])
+    assert ns.review and ns.origin == "backfill" and ns.project == "repo-a"
 
     assert _build_parser().parse_args(["inbox"]).origin == "any"
     with pytest.raises(SystemExit):
@@ -207,10 +207,10 @@ def test_origin_backfill_keeps_only_stamped_pages_and_says_so(tmp_vault: Path, m
 
 def test_project_flag_and_all_scope_the_json_listing(tmp_vault: Path, monkeypatch, cfg):
     _page(tmp_vault, "shared/_inbox/project/demo__a.md")
-    _page(tmp_vault, "shared/_inbox/project/club__a.md", project="clubinho")
+    _page(tmp_vault, "shared/_inbox/project/club__a.md", project="repo-a")
 
-    doc = json.loads(_run(tmp_vault, monkeypatch, json=True, project="clubinho")[1])
-    assert doc["project"] == "clubinho"
+    doc = json.loads(_run(tmp_vault, monkeypatch, json=True, project="repo-a")[1])
+    assert doc["project"] == "repo-a"
     assert [p["key"] for p in doc["pages"]] == ["project/club__a"]
 
     doc = json.loads(_run(tmp_vault, monkeypatch, json=True, all=True)[1])

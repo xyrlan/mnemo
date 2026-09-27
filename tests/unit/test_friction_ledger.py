@@ -430,7 +430,7 @@ def test_reading_a_vault_with_no_ledger_yields_nothing(tmp_path):
 
 
 def _seed_projects(vault: Path) -> None:
-    for project, day in (("mnemo", "10"), ("clubinho", "12"), ("mnemo", "16")):
+    for project, day in (("mnemo", "10"), ("repo-a", "12"), ("mnemo", "16")):
         ledger.record(vault, _rec(
             project=project,
             session_id="{}-{}".format(project, day),

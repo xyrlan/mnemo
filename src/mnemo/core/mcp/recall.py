@@ -42,7 +42,7 @@ _DEFAULT_PAIR_WINDOW_S = 120.0
 _RANKS_REPORTED = (3, 5, 10)
 
 # ≥50 log entries unlocks Phase-3 retrieval-ranking work per
-# docs/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md:437.
+# design/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md:437.
 PHASE3_THRESHOLD = 50
 
 

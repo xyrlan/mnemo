@@ -29,30 +29,30 @@ def _index(rules: dict) -> dict:
 def test_finds_near_duplicate_across_two_projects():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"],
+            "Always run migrations before deploy", ["repo-b"],
             body="Run pending migrations before deploying or the app 500s.",
             tags=["deployment"],
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["clubinho"],
+            "Run migrations before deploying", ["repo-a"],
             body="Deploying before running migrations makes the app 500.",
             tags=["deployment"],
         ),
     })
     cands = find_universal_candidates(idx)
     assert len(cands) == 1
-    assert cands[0].projects == ["clubinho", "meunu"]
+    assert cands[0].projects == ["repo-a", "repo-b"]
     assert len(cands[0].slugs) == 2
 
 
 def test_ignores_near_duplicates_inside_one_project():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"],
+            "Always run migrations before deploy", ["repo-b"],
             body="Run pending migrations before deploying or the app 500s.",
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["meunu"],
+            "Run migrations before deploying", ["repo-b"],
             body="Deploying before running migrations makes the app 500.",
         ),
     })
@@ -62,11 +62,11 @@ def test_ignores_near_duplicates_inside_one_project():
 def test_ignores_unrelated_rules():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"],
+            "Always run migrations before deploy", ["repo-b"],
             body="Run pending migrations before deploying.",
         ),
         "Use hex color tokens in the design system": _rule(
-            "Use hex color tokens in the design system", ["clubinho"],
+            "Use hex color tokens in the design system", ["repo-a"],
             body="Never hardcode rgb values inside components.",
         ),
     })
@@ -76,11 +76,11 @@ def test_ignores_unrelated_rules():
 def test_excludes_rules_already_universal():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"], universal=True,
+            "Always run migrations before deploy", ["repo-b"], universal=True,
             body="Run pending migrations before deploying or the app 500s.",
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["clubinho"],
+            "Run migrations before deploying", ["repo-a"],
             body="Deploying before running migrations makes the app 500.",
         ),
     })
@@ -90,33 +90,33 @@ def test_excludes_rules_already_universal():
 def test_clusters_three_projects_into_one_candidate():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"],
+            "Always run migrations before deploy", ["repo-b"],
             body="Run pending migrations before deploying or the app 500s.",
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["clubinho"],
+            "Run migrations before deploying", ["repo-a"],
             body="Deploying before running migrations makes the app 500s.",
         ),
         "Run migrations before deploy": _rule(
-            "Run migrations before deploy", ["sg-imports"],
+            "Run migrations before deploy", ["repo-d"],
             body="Deploying before running migrations makes the app 500s.",
         ),
     })
     cands = find_universal_candidates(idx)
     assert len(cands) == 1
-    assert cands[0].projects == ["clubinho", "meunu", "sg-imports"]
+    assert cands[0].projects == ["repo-a", "repo-b", "repo-d"]
     assert len(cands[0].slugs) == 3
 
 
 def test_does_not_cross_rule_types():
     idx = _index({
         "Always run migrations before deploy": _rule(
-            "Always run migrations before deploy", ["meunu"],
+            "Always run migrations before deploy", ["repo-b"],
             body="Run pending migrations before deploying or the app 500s.",
             type_="feedback",
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["clubinho"],
+            "Run migrations before deploying", ["repo-a"],
             body="Deploying before running migrations makes the app 500.",
             type_="reference",
         ),
@@ -127,15 +127,15 @@ def test_does_not_cross_rule_types():
 def test_results_are_deterministic_and_ranked_by_project_count():
     idx = _index({
         "Run migrations before deploy": _rule(
-            "Run migrations before deploy", ["meunu"],
+            "Run migrations before deploy", ["repo-b"],
             body="Deploying before running migrations makes the app 500s.",
         ),
         "Run migrations before deploying": _rule(
-            "Run migrations before deploying", ["clubinho"],
+            "Run migrations before deploying", ["repo-a"],
             body="Deploying before running migrations makes the app 500s.",
         ),
         "Never hardcode api base urls": _rule(
-            "Never hardcode api base urls", ["clearframe"],
+            "Never hardcode api base urls", ["repo-c"],
             body="Read the api base url from env config instead of literals.",
         ),
         "Never hardcode api base url": _rule(
@@ -143,7 +143,7 @@ def test_results_are_deterministic_and_ranked_by_project_count():
             body="Read the api base url from env config instead of literals.",
         ),
         "Do not hardcode api base urls": _rule(
-            "Do not hardcode api base urls", ["sg-imports"],
+            "Do not hardcode api base urls", ["repo-d"],
             body="Read the api base url from env config instead of literals.",
         ),
     })

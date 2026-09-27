@@ -6,7 +6,7 @@ model names the ones the correction *contradicts*. Its own pass, not a
 question folded into the consolidation prompt: the consolidation prompt's
 ``existing_rules`` hint is a ``source_count``-ordered slice of the vault, and
 a contradiction asked against that slice would produce a ledger whose silence
-means nothing (see ``docs/superpowers/specs/2026-09-16-friction-ledger-design.md``).
+means nothing (see ``design/specs/2026-09-16-friction-ledger-design.md``).
 The consolidation prompt is untouched by this module.
 
 The response is a list of *links*, each classified, rather than a bare list

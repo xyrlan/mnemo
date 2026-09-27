@@ -68,7 +68,7 @@ def test_the_limit_keeps_the_newest(vault):
 
 
 def test_a_project_filter_excludes_other_repos(vault):
-    _write(vault, [_entry(project="mnemo"), _entry(project="clubinho")])
+    _write(vault, [_entry(project="mnemo"), _entry(project="repo-a")])
     got = receipts.read_decisions(vault, project="mnemo")
     assert [d["project"] for d in got] == ["mnemo"]
 

@@ -151,7 +151,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   worked out `PYTHONPATH=src` mid-run and 2 never did, reporting a green
   suite that had imported the main checkout. No new file format ships for
   this. Claude Code already attaches the repo's `CLAUDE.md` to every child —
-  where clubinho states a flag there, 24 of 24 runs carried it; the heap size
+  where repo-a states a flag there, 24 of 24 runs carried it; the heap size
   it states nowhere was missed by 13 of 14 children. `mnemo dispatch` holds
   no repo's procedure and is unchanged. (#385)
 
@@ -520,7 +520,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   — which the opening prompt already puts first — and the only child that ever
   refused without touching its tree needed 29 tool uses to get there. The
   refusal, its numbers and the conditions under which it should be revisited
-  are in `docs/specs/2026-09-19-dispatch-confidence-timing.md` and in
+  are in `design/specs/2026-09-19-dispatch-confidence-timing.md` and in
   `core/dispatch.py`'s module docstring. No prompt changed. (#383)
 
 - **An inferred `reference` page no longer goes live on the model's say-so.**
@@ -931,18 +931,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`tools/measure_demoted_keeps.py` checks whether the reference gate's system/technique verdict holds on the pages the evidence gate demoted.** These pages wait in `shared/_inbox/` indefinitely, while a directly emitted reference page with the same verdict goes live. The tool reads the population from frontmatter (`demoted_from: feedback` plus `reference_gate: system|technique`) and draws a seeded sample of 40. Two blind raters, `claude-opus-5-5` and `claude-fable-5-1` (neither is the gate's model), each label a page good or junk using the gate's own definitions. The report gives each rater's good rate, the good rate under both (with 95% intervals), kappa, and the verdict against a bar declared before labelling: 85% good under both. It never uses more than 20 calls, it resumes, and `--dry-run` makes no calls. It writes only under `<vault>/.mnemo/demoted-keeps/`. First run: 67 pages. 29 of 40 were good under both (72.5%, [57.2%, 83.9%]), kappa 0.43, so the bar **fails**: do not promote these pages on the gate's verdict alone. (#465)
 
-- **`tools/measure_day_one.py` measures what a new user's empty vault carries on day one, with and without Claude Code history.** It replays one repo's real transcripts through two fresh vaults, with mnemo's vault and config isolated in a temp dir and the judge off. Arm (a) runs the real `backfill --install-run`, then the first extraction, then the next 50 prompts. Arm (b) feeds sessions one at a time through the SessionEnd path (extraction when the debounce passes on the transcript's clock, then the briefing) and records live pages, the SessionStart payload, and the reflex emit and on-point rates (#411 rubric) per session. `--dry-run` bounds the calls and cost first, `--send` meters every call under a 200-call budget and resumes. First run, on 88 clubinho sessions, 127 calls: the install backfill leaves **0 live rules** (all 56 pages it yields stage for review), so the reflex fires on 0 of the next 50 prompts. Without history, the first on-point injection comes at **session 24**, and only 11 of 328 injected rules over 88 sessions are on-point. No product change. (#467)
+- **`tools/measure_day_one.py` measures what a new user's empty vault carries on day one, with and without Claude Code history.** It replays one repo's real transcripts through two fresh vaults, with mnemo's vault and config isolated in a temp dir and the judge off. Arm (a) runs the real `backfill --install-run`, then the first extraction, then the next 50 prompts. Arm (b) feeds sessions one at a time through the SessionEnd path (extraction when the debounce passes on the transcript's clock, then the briefing) and records live pages, the SessionStart payload, and the reflex emit and on-point rates (#411 rubric) per session. `--dry-run` bounds the calls and cost first, `--send` meters every call under a 200-call budget and resumes. First run, on 88 repo-a sessions, 127 calls: the install backfill leaves **0 live rules** (all 56 pages it yields stage for review), so the reflex fires on 0 of the next 50 prompts. Without history, the first on-point injection comes at **session 24**, and only 11 of 328 injected rules over 88 sessions are on-point. No product change. (#467)
 
-- **`tools/measure_day_one.py` gets an arm (c): what Claude Code's own auto-memory carries on day one, and arms (a)+(c) together.** A real SessionEnd mirrors `~/.claude/projects/<project>/memory` into the vault. Arm (c) rebuilds that directory as it stood at the install point from every transcript's Write/Edit records (`originalFile`), and reports the files it could only approximate. It runs the real `mirror_all` over that snapshot alone, then the first extraction, the SessionStart payload, and arm (a)'s 50 prompts, with the judge off. `--arm c` has its own 60-call budget, and `--dry-run` prints the bound first. On clubinho, 17 calls: 90 files at install mirror to **81 live pages**, because 80 `project` files go live directly without a model or a review. The reflex then fires on 7 of 50 prompts, and 2 of its 11 pairs are on-point. With the backfill added, arms (a)+(c) fire on 6 of 50, with the same 2 on-point pairs. No product change. (#472)
+- **`tools/measure_day_one.py` gets an arm (c): what Claude Code's own auto-memory carries on day one, and arms (a)+(c) together.** A real SessionEnd mirrors `~/.claude/projects/<project>/memory` into the vault. Arm (c) rebuilds that directory as it stood at the install point from every transcript's Write/Edit records (`originalFile`), and reports the files it could only approximate. It runs the real `mirror_all` over that snapshot alone, then the first extraction, the SessionStart payload, and arm (a)'s 50 prompts, with the judge off. `--arm c` has its own 60-call budget, and `--dry-run` prints the bound first. On repo-a, 17 calls: 90 files at install mirror to **81 live pages**, because 80 `project` files go live directly without a model or a review. The reflex then fires on 7 of 50 prompts, and 2 of its 11 pairs are on-point. With the backfill added, arms (a)+(c) fire on 6 of 50, with the same 2 on-point pairs. No product change. (#472)
 
 - **`tools/measure_backfill_routes.py --live` rates backfill pages where the
   extraction put them.** Since #471 a backfill page that clears the normal gates
   is written live, so the tool's staged-only reading could no longer see the
-  pages it was meant to rate. The second-corpus check (clearframe, 40 live
+  pages it was meant to rate. The second-corpus check (repo-c, 40 live
   pages) came out at 29/40 = 72.5% good under both raters [57.2, 83.9],
   κ 0.53, below the 85% bar #471 declared. (#477)
 
-- **`tools/measure_day_one.py --judge` measures day one with the Jev judge on.** It re-extracts nothing. It replays the saved arms' prompts through `reflex.judge` as the hook runs it (the real `judge.ask`, shipped settings, gate fallback on failure). `reflex.replay.run` gains an opt-in `judge=` stage for this, run in the hook's order. Arm (b)'s vault is rewound to each session from `learned.jsonl`. On clubinho, over 69 sessions, the judge cuts the noise in what the reflex injects from 77% to 21% (18 of 87 pairs) and doubles the on-point pairs (16 → 32). That is one pair short of the 20% bar declared beforehand. (#479)
+- **`tools/measure_day_one.py --judge` measures day one with the Jev judge on.** It re-extracts nothing. It replays the saved arms' prompts through `reflex.judge` as the hook runs it (the real `judge.ask`, shipped settings, gate fallback on failure). `reflex.replay.run` gains an opt-in `judge=` stage for this, run in the hook's order. Arm (b)'s vault is rewound to each session from `learned.jsonl`. On repo-a, over 69 sessions, the judge cuts the noise in what the reflex injects from 77% to 21% (18 of 87 pairs) and doubles the on-point pairs (16 → 32). That is one pair short of the 20% bar declared beforehand. (#479)
 
 - **`tools/measure_noise_concentration.py` measures how few rules cause the reflex's noise.**
   It reads injections and labels that already exist (day one's arms, #411, #455)
@@ -958,14 +958,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (no Jev request), types every injected rule with #480's two raters, and
   runs the counterfactual twice: the G/N rules' pairs struck out, and the
   prompts replayed with those rules retired, the judge answered from #479's
-  cached scores. On clubinho arm (b) 17 of 18 noise pairs are generic
+  cached scores. On repo-a arm (b) 17 of 18 noise pairs are generic
   `feedback` rules, but so are 20 of 32 on-point pairs; striking them clears
   the 20% bar (4.2%), yet the replay moves 468 never-scored pairs into the
   pools against a headroom of 4 noise pairs, so the bar is not decided. (#484)
 
-- **`tools/measure_project_gate.py` runs the shipped reference gate over the backfill project pages #471 and #477 already had rated.** Project pages go live with no gate, and they were the weak route on both corpora. With the gate in front of them: clubinho 26/30 = 86.7% [70.3, 94.7] good under both raters, over the 85% bar, with no good page held; clearframe 20/24 = 83.3% [64.1, 93.3], under it, holding all 4 narratives and 2 good pages. Both results are one page from the bar. No project wording was tried, because clubinho left one catchable junk page to tune on, so the routing stays as it is. (#485)
+- **`tools/measure_project_gate.py` runs the shipped reference gate over the backfill project pages #471 and #477 already had rated.** Project pages go live with no gate, and they were the weak route on both corpora. With the gate in front of them: repo-a 26/30 = 86.7% [70.3, 94.7] good under both raters, over the 85% bar, with no good page held; repo-c 20/24 = 83.3% [64.1, 93.3], under it, holding all 4 narratives and 2 good pages. Both results are one page from the bar. No project wording was tried, because repo-a left one catchable junk page to tune on, so the routing stays as it is. (#485)
 
-- **`tools/measure_day_one_gate.py` asks whether the reference gate would cut day one's noise, and it would not.** It runs the real `reference_gate.judge_pages` over the auto-memory mirror's 80 live project pages (arm (c) of #472), then replays the same 50 prompts without the pages it calls generic or narrative, judge off and on, reusing #479's Jev answers where a prompt's pool is unchanged. On clubinho the gate holds 7 of 80 (N 7, S 64, T 9): project status pages are system knowledge by its own definition. Noise moves 82% → 80% judge off and stays 29% judge on, and the one held page that carried an on-point injection is lost. Eight of the nine noise pairs come from pages the gate keeps, so day one's noise is a relevance miss, not a category the gate sorts. No extraction change. (#486)
+- **`tools/measure_day_one_gate.py` asks whether the reference gate would cut day one's noise, and it would not.** It runs the real `reference_gate.judge_pages` over the auto-memory mirror's 80 live project pages (arm (c) of #472), then replays the same 50 prompts without the pages it calls generic or narrative, judge off and on, reusing #479's Jev answers where a prompt's pool is unchanged. On repo-a the gate holds 7 of 80 (N 7, S 64, T 9): project status pages are system knowledge by its own definition. Noise moves 82% → 80% judge off and stays 29% judge on, and the one held page that carried an on-point injection is lost. Eight of the nine noise pairs come from pages the gate keeps, so day one's noise is a relevance miss, not a category the gate sorts. No extraction change. (#486)
 
 - **`tools/label_recall_pairs.py` keeps the one relevance check that does not come from a model.** Both sets of labels the ranking is graded with are a model's; the 60 pairs labelled blind on 2026-09-19 that validated the first judge lived in a session scratchpad and were deleted with it. The tool draws 60 pairs stratified by the first judge's score (12 per fifth, seeded), serves them one at a time on `127.0.0.1` with the second judge's question and 0/1/2 scale — the page shows the task and the rule, never a score, a stratum or a slug — and writes `<vault>/.mnemo/recall-labels-human.json` through a rename after every answer. Run with no flag it grades both judges against the labels so far: AUC for "should read" and "any relevance", the first judge's two confident-and-wrong counts, and the second judge's confusion. Each pair freezes the text the rater saw and the score it was drawn on, so re-judging cannot move the report, and `--sample` refuses a file that already holds a label. Nothing leaves the machine.
 
@@ -1009,7 +1009,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `.proposed.md` rewrite for `mnemo rewrites`, and one that exists under
   another type is refused by path. `mnemo export` renders an imported rule's
   quote as another contributor's, not the reader's. Built as a three-piece
-  contract (`docs/superpowers/contracts/2026-09-13-share-rules.md`) and
+  contract (`design/contracts/2026-09-13-share-rules.md`) and
   landed with `mnemo land --merge`. (#245)
 
 - **Every subcommand the parser offers now has a handler, by test.** The two
@@ -1152,11 +1152,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `Read`, and nothing rewrites it or reports the gap: over a full week, `Read`
   doubles the notes delivered (40 against 23). `mnemo doctor` now reports
   the gap and `mnemo init --hooks-only` closes it (#303). Findings and recommendation are in
-  `docs/superpowers/specs/2026-09-15-enrichment-status.md`.
+  `design/specs/2026-09-15-enrichment-status.md`.
   (channels/investigate-enrichment)
 
 - **Spec: what the inbox socket leaves behind, measured.**
-  `docs/superpowers/specs/2026-09-15-socket-reply-status.md` counts 47 socket
+  `design/specs/2026-09-15-socket-reply-status.md` counts 47 socket
   messages delivered on this machine. Every one can be recovered from the
   receiver's transcript (`origin.kind == "peer"`, or a `queued_command`
   attachment when the receiver was busy), and all 39 `SendMessage` sends pair
@@ -1266,7 +1266,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **A correction is a reaction, and the evidence gate now says so in both
   directions.** Measured on the maintainer's vault before touching anything
-  (`docs/specs/2026-09-13-extraction-corrections-measurement.md`): 100 of
+  (`design/specs/2026-09-13-extraction-corrections-measurement.md`): 100 of
   the 100 feedback pages demoted since the `## Corrections` section existed
   had no supporting correction in any source briefing — the gate was right
   every time, the extractor types *Decisions made* as feedback. Of the 64
@@ -1693,7 +1693,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Internal
 
-- **Declined to add a `check:` rule field; documented why in `docs/issue-273-findings.md`.** The field already exists as `enforce:` — with a matcher, a PreToolUse block, `mnemo list-enforced`, two `mnemo doctor` checks, and extraction-prompt guidance that defaults to omitting it. The measured gap is adoption, not schema: 1 of 1842 live rules carries a declarative check. Two findings that would have bitten an implementation are recorded there — a grep-shaped check for the rule #273 cites as its prototype reports 22 false positives on a clean tree where the AST scanner reports 0, and `mnemo publish` drops `enforce:` on purpose, because a rule that can block a tool call is not something another vault gets to install. (#273)
+- **Declined to add a `check:` rule field; documented why in `design/findings/issue-273-findings.md`.** The field already exists as `enforce:` — with a matcher, a PreToolUse block, `mnemo list-enforced`, two `mnemo doctor` checks, and extraction-prompt guidance that defaults to omitting it. The measured gap is adoption, not schema: 1 of 1842 live rules carries a declarative check. Two findings that would have bitten an implementation are recorded there — a grep-shaped check for the rule #273 cites as its prototype reports 22 false positives on a clean tree where the AST scanner reports 0, and `mnemo publish` drops `enforce:` on purpose, because a rule that can block a tool call is not something another vault gets to install. (#273)
 
 - **An unblock marker's `answer` no longer starts with Claude Code's peer
   framing.** A raw write to a session's inbox socket arrives without the
@@ -1706,7 +1706,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Declined to tell dispatch children that a marked inbox reply carries the
   maintainer's authority; documented why in
-  `docs/superpowers/specs/2026-09-15-inbox-reply-authority.md`.** Any process
+  `design/specs/2026-09-15-inbox-reply-authority.md`.** Any process
   that can write to a child's inbox socket could send the marker. On this
   machine, 6 of the 8 unwrapped socket writes came from a Claude session's Bash
   script, and exporting the marker in `sessions --json` would give it to every
@@ -1716,7 +1716,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `origin.kind == "human"`, the same as the opening prompt. That is the path
   mnemo-desktop should use for approvals. The dispatch prompt is unchanged. (#309)
 
-- **Measured why `.mnemo-shared` never ran; recorded in `docs/superpowers/specs/2026-09-15-shared-layer-status.md`.** `publish` → commit → clone → `import` → promote → re-publish → `rewrites` all work on first contact against a copy of the real vault. It never ran because it has existed for ~39 hours in no released version (the share pieces merged after the `v1.5.0` tag, PyPI's latest), with zero non-dry-run invocations in any transcript and nothing that invites a publisher before the first publish. One real defect surfaced: a promoted imported rule is invisible to the reflex — `core/reflex/index.py` calls `projects_for_rule` without `frontmatter=`, so the `projects:` fallback imported pages rely on never fires, while the MCP tools and topic list see the rule. The spec recommends fixing that line before the release that first ships `publish`/`import`, then keeping the layer and documenting the flow in `docs/getting-started.md`; removal is rejected because mnemo-desktop's marketplace pane runs both commands. (channels)
+- **Measured why `.mnemo-shared` never ran; recorded in `design/specs/2026-09-15-shared-layer-status.md`.** `publish` → commit → clone → `import` → promote → re-publish → `rewrites` all work on first contact against a copy of the real vault. It never ran because it has existed for ~39 hours in no released version (the share pieces merged after the `v1.5.0` tag, PyPI's latest), with zero non-dry-run invocations in any transcript and nothing that invites a publisher before the first publish. One real defect surfaced: a promoted imported rule is invisible to the reflex — `core/reflex/index.py` calls `projects_for_rule` without `frontmatter=`, so the `projects:` fallback imported pages rely on never fires, while the MCP tools and topic list see the rule. The spec recommends fixing that line before the release that first ships `publish`/`import`, then keeping the layer and documenting the flow in `docs/getting-started.md`; removal is rejected because mnemo-desktop's marketplace pane runs both commands. (channels)
 
 ## [1.5.0] — 2026-09-13
 
@@ -2923,7 +2923,7 @@ predates the binary build job.
   described the v0.1 key set, and both used a `/mnemo <cmd>` slash syntax that
   never existed. Config keys in the reference tables are now fully qualified
   so any row can be copied straight into `mnemo.config.json`. New
-  `docs/obsidian.md`; the v0.1 backlog moved to `docs/archive/`.
+  `docs/obsidian.md`; the v0.1 backlog moved to `design/archive/`.
 - The vault templates shipped into every new vault said background features
   were "off by default". They have been on since 0.15.0.
 - A test suite now checks the docs against the code: every referenced command
@@ -3099,13 +3099,13 @@ neither version was ever tagged on PyPI.
   schema mismatch; SessionStart and extract hooks call
   `build_index` whenever `load_index` returns `None`). First run
   after upgrade takes a few seconds longer; nothing else visible.
-  ([refactor roadmap PR E](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  ([refactor roadmap PR E](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ### Removed
 
 - `mnemo.core.mcp.counter` v0.8 backwards-compat shim. Importers must use
   `mnemo.core.mcp.session_state` directly. The shim was scheduled for
-  v0.9 removal in the v0.8 CHANGELOG. ([refactor roadmap PR D](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  v0.9 removal in the v0.8 CHANGELOG. ([refactor roadmap PR D](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ### Internal
 
@@ -3119,7 +3119,7 @@ neither version was ever tagged on PyPI.
   (single in-tree consumer at `reflex/index.py` updated atomically; no
   deprecation window). `build_index` orchestrator decomposed via a new
   `_build_rule_entry` helper (138L → <30L).
-  ([refactor roadmap PR G](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  ([refactor roadmap PR G](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 - `mnemo.core.extract.inbox` monolith (717 LOC) split into an 8-module
   package: `io.py`, `paths.py`, `types.py`, `state_io.py`, `rendering.py`,
   `dedup.py`, `apply.py`, `branches/{auto_promoted,inbox_flow,upgrade}.py`,
@@ -3157,7 +3157,7 @@ neither version was ever tagged on PyPI.
   behavior for direct-promotion entries. Deferred:
   `rule_activation.index._atomic_write_bytes` consolidation into a
   shared `io_utils.py` module (follow-up nit-PR).
-  ([refactor roadmap PR I](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  ([refactor roadmap PR I](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 - `mnemo.core.extract.prompts` monolith (529 LOC) split into a `prompts/`
   package with a `templates/` sub-package. Three near-identical
   `build_{feedback,user,reference}_prompt` builders unified into a single
@@ -3169,7 +3169,7 @@ neither version was ever tagged on PyPI.
   In-tree callers updated. Pre-v0.9 import surface preserved via the
   package's `__init__.py` shim, including the three underscore-private
   `_FEW_SHOT_*` constants that PR F1's schema regression test accesses.
-  ([refactor roadmap PR F2](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  ([refactor roadmap PR F2](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 - `mnemo.cli` monolith (1294 LOC) split into a `cli/` package:
   `parser.py` (argparse + COMMANDS registry + @command decorator),
   `runtime.py` (main + _resolve_vault + _run_open), `commands/*.py`
@@ -3182,7 +3182,7 @@ neither version was ever tagged on PyPI.
   surface preserved via the package's `__init__.py` shim (re-exports
   `main`, `COMMANDS`, `_resolve_vault` — the three names pinned by the
   public API surface test plus the single symbol the 10 in-repo
-  monkeypatches target). ([refactor roadmap PR H](docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
+  monkeypatches target). ([refactor roadmap PR H](https://github.com/xyrlan/mnemo/blob/68e3c1f/docs/superpowers/plans/2026-04-19-refactor-roadmap.md))
 
 ## v0.8.0 — 2026-04-19 — Prompt Reflex
 
@@ -3393,7 +3393,7 @@ auto-presentation (HOME dashboard + tags), v0.5 ships auto-injection.
 - `shared/<type>/**` remains sacred — extraction writes there, nothing else does.
 - Dry-run extraction never touches `HOME.md` or deletes legacy directories.
 
-**See:** `docs/superpowers/plans/` for the full v0.4 plan and
+**See:** the v0.4 plan (`docs/superpowers/plans/`, removed from the tree in #510 — git history keeps it) and
 `project_mnemo_v0.4_direction.md` for the "Shared filter specification".
 
 ## v0.3.1 — 2026-04-14 — briefings + stability + force-wipe
@@ -3444,7 +3444,7 @@ auto-presentation (HOME dashboard + tags), v0.5 ships auto-injection.
 - `shared/feedback/**`, `shared/user/**`, `shared/reference/**` are sacred —
   the plugin reads them but never writes to them.
 
-**See:** `docs/specs/2026-04-13-mnemo-v0.2-design.md` for the full design.
+**See:** `design/specs/2026-04-13-mnemo-v0.2-design.md` for the full design.
 
 ## [0.1.0] — TBD
 

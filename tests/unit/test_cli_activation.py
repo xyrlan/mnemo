@@ -683,7 +683,7 @@ def test_compose_reads_cwd_from_stdin_payload(tmp_path, monkeypatch):
     monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / ".claude.json") if p == "~/.claude.json" else p)
 
     payload = json.dumps({
-        "workspace": {"current_dir": "/home/user/projects/sg-imports"},
+        "workspace": {"current_dir": "/home/user/projects/repo-d"},
         "model": {"id": "claude-sonnet-4-6"},
     })
     stdin = io.StringIO(payload)
@@ -691,7 +691,7 @@ def test_compose_reads_cwd_from_stdin_payload(tmp_path, monkeypatch):
 
     sl.compose(out=out, stdin=stdin)
 
-    assert captured["cwd"] == "/home/user/projects/sg-imports"
+    assert captured["cwd"] == "/home/user/projects/repo-d"
 
 
 def test_compose_reads_cwd_from_top_level_field(tmp_path, monkeypatch):

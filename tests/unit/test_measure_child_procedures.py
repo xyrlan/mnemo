@@ -112,10 +112,10 @@ def test_an_export_earlier_in_the_command_carries_it(tmp_path: Path) -> None:
 
 
 def test_a_flag_after_the_command_carries_it(tmp_path: Path) -> None:
-    """clubinho's requirement is a flag, not an env var: it follows the command."""
-    _write(tmp_path, "clubinho-wt-181", [_call("t1", "npm test -- --runInBand 2>&1 | tail -8")])
+    """repo-a's requirement is a flag, not an env var: it follows the command."""
+    _write(tmp_path, "repo-a-wt-181", [_call("t1", "npm test -- --runInBand 2>&1 | tail -8")])
 
-    probes = tool.measure(str(tmp_path))["repos"]["clubinho"]["probes"]
+    probes = tool.measure(str(tmp_path))["repos"]["repo-a"]["probes"]
     assert probes["run the suite"]["missing"] == 0
     assert probes["run the suite without running out of heap"]["missing"] == 1
 
@@ -188,9 +188,9 @@ def test_a_child_that_never_carried_it_missed(tmp_path: Path) -> None:
 
 
 def test_the_channels_a_child_was_given_are_read_off_its_attachments(tmp_path: Path) -> None:
-    _write(tmp_path, "clubinho-wt-181", [
-        _instructions(("Project", "/Users/x/github/clubinho-wt-181/CLAUDE.md"),
-                      ("AutoMem", "/Users/x/.claude/projects/-x-clubinho/memory/MEMORY.md")),
+    _write(tmp_path, "repo-a-wt-181", [
+        _instructions(("Project", "/Users/x/github/repo-a-wt-181/CLAUDE.md"),
+                      ("AutoMem", "/Users/x/.claude/projects/-x-repo-a/memory/MEMORY.md")),
     ])
     _write(tmp_path, "mnemo-wt-197", [
         _instructions(("AutoMem", "/Users/x/.claude/projects/-x-mnemo/memory/MEMORY.md")),
@@ -198,7 +198,7 @@ def test_the_channels_a_child_was_given_are_read_off_its_attachments(tmp_path: P
 
     repos = tool.measure(str(tmp_path))["repos"]
 
-    assert (repos["clubinho"]["claude_md"], repos["clubinho"]["auto_mem"]) == (1, 1)
+    assert (repos["repo-a"]["claude_md"], repos["repo-a"]["auto_mem"]) == (1, 1)
     assert (repos["mnemo"]["claude_md"], repos["mnemo"]["auto_mem"]) == (0, 1)
 
 
@@ -216,10 +216,10 @@ def test_a_setup_failure_is_counted_once_per_child(tmp_path: Path) -> None:
 def test_a_transcript_with_no_probe_of_its_own_still_counts_as_a_child(tmp_path: Path) -> None:
     """A repo with no probes declared is still a population — its channels and
     the failures it hit are the measurement."""
-    _write(tmp_path, "clearframe-wt-82", [
+    _write(tmp_path, "repo-c-wt-82", [
         _call("t1", "npm run build"), _result("t1", "Cannot find module 'vite'")])
 
-    bucket = tool.measure(str(tmp_path))["repos"]["clearframe"]
+    bucket = tool.measure(str(tmp_path))["repos"]["repo-c"]
 
     assert bucket["children"] == 1 and bucket["probes"] == {}
     assert bucket["failures"] == {"worktree has no node_modules": 1}

@@ -42,7 +42,7 @@ question is asked backwards, of the transcript alone:
 **What this cannot see**, measured on the same 184 (``tools/
 measure_rediscovered_procedures.py --rejected``):
 
-- *A procedure that lives in a flag.* clubinho's ``--runInBand`` and
+- *A procedure that lives in a flag.* repo-a's ``--runInBand`` and
   ``--max-old-space-size`` are boundaries; ``cargo test --nocapture`` and
   ``npx eslint --fix`` are a task's own choice. The same bar over flags
   qualifies 11 more lines, led by ``--nocapture`` and ``--ignored`` at 12

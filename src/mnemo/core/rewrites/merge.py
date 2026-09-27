@@ -198,7 +198,7 @@ def _build(live_text: str, proposal_text: str, *, vault_root: Path) -> str:
     # An earlier draft called _rewrite_block unconditionally, and since that
     # helper appends ``key: []`` for an absent key with no values, merging two
     # pages that both lacked ``tags:`` invented one. Confirmed on real files:
-    # shared/project/clubinho__sprints-github.md and its staged proposal both
+    # shared/project/repo-a__sprints-github.md and its staged proposal both
     # have no ``tags:`` block, and the merge grew a ``tags: []`` line. Harmless
     # to every reader (``parse_frontmatter`` treats ``[]`` and absent alike) but
     # this pipeline exists because silent frontmatter churn made 35 proposals

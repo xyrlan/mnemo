@@ -1,6 +1,6 @@
 """``mnemo backfill`` run for the install review, and backfill pages that expire (#496).
 
-The install review (``docs/superpowers/specs/2026-09-24-install-review-design.md``)
+The install review (``design/specs/2026-09-24-install-review-design.md``)
 drives the backfill from the desktop, not from a person at a terminal:
 
 - ``--dry-run --json`` is the consent screen's estimate: one JSON document,

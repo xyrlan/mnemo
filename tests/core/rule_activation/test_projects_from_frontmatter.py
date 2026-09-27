@@ -20,7 +20,7 @@ def test_frontmatter_project_used_when_sources_empty():
 
 
 def test_frontmatter_projects_list_used_when_sources_empty():
-    assert projects_for_rule([], frontmatter={"projects": ["mnemo", "Meunu"]}) == ["Meunu", "mnemo"]
+    assert projects_for_rule([], frontmatter={"projects": ["mnemo", "Repo-b"]}) == ["Repo-b", "mnemo"]
 
 
 def test_frontmatter_ignored_when_sources_yield_bots_paths():
@@ -38,8 +38,8 @@ def test_empty_everything_returns_empty():
 
 def test_frontmatter_projects_list_filters_non_strings_and_empties():
     assert projects_for_rule(
-        [], frontmatter={"projects": ["mnemo", "", None, 42, "Meunu"]}
-    ) == ["Meunu", "mnemo"]
+        [], frontmatter={"projects": ["mnemo", "", None, 42, "Repo-b"]}
+    ) == ["Repo-b", "mnemo"]
 
 
 def test_mixed_sources_bots_hit_still_wins_over_frontmatter():

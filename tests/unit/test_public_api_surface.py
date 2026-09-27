@@ -1,7 +1,7 @@
 """Public API surface freeze — gate for every Wave 3 package-shim PR.
 
-PR 0 of the v0.9 refactor roadmap. See
-``docs/superpowers/plans/2026-04-19-refactor-roadmap.md``.
+PR 0 of the v0.9 refactor roadmap (removed from the tree in #510; git history
+keeps it at ``docs/superpowers/plans/2026-04-19-refactor-roadmap.md``).
 
 Wave 3 PRs (F, G, H, I) convert these four modules into packages with a
 back-compat shim in ``__init__.py``. A missed re-export is a silent
@@ -115,5 +115,5 @@ def test_public_api_surface(module_path: str, name: str) -> None:
     module = importlib.import_module(module_path)
     assert hasattr(module, name), (
         f"{module_path} must expose '{name}' — missing re-export in shim? "
-        "See docs/superpowers/plans/2026-04-19-refactor-roadmap.md PR 0."
+        "See PR 0 of the v0.9 refactor roadmap."
     )

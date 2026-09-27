@@ -119,14 +119,14 @@ def test_label_calls_never_split_a_bound_below_one_call():
 def test_real_vault_changes_are_listed_and_the_ones_naming_the_run_flagged(tmp_path):
     (tmp_path / "keep.md").write_text("a", encoding="utf-8")
     before = day.fingerprint(tmp_path)
-    (tmp_path / "bots" / "clubinho").mkdir(parents=True)
-    (tmp_path / "bots" / "clubinho" / "log.md").write_text("b", encoding="utf-8")
+    (tmp_path / "bots" / "repo-a").mkdir(parents=True)
+    (tmp_path / "bots" / "repo-a" / "log.md").write_text("b", encoding="utf-8")
     (tmp_path / "other.md").write_text("c", encoding="utf-8")
 
     diff = day.changed(before, day.fingerprint(tmp_path))
 
-    assert diff == ["bots/clubinho/log.md", "other.md"]
-    assert day.suspects(diff, ["clubinho/"]) == ["bots/clubinho/log.md"]
+    assert diff == ["bots/repo-a/log.md", "other.md"]
+    assert day.suspects(diff, ["repo-a/"]) == ["bots/repo-a/log.md"]
 
 
 # --- the meter ---------------------------------------------------------------------

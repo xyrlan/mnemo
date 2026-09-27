@@ -20,7 +20,7 @@ attempt, so each is encoded here rather than left to be rediscovered:
   maintainer" was refused: 6 of 8 unwrapped socket writes measured were a
   session's Bash script, and the desktop sends haiku's rewrite, not the
   maintainer's words
-  (``docs/superpowers/specs/2026-09-15-inbox-reply-authority.md``). This module
+  (``design/specs/2026-09-15-inbox-reply-authority.md``). This module
   deliberately does neither: a child blocks exactly when it needs human
   judgement, and a dispatcher that answers on its own re-creates the #187
   failure below, where a prescribed answer overrode a correct refusal.
@@ -85,7 +85,7 @@ their own is the regression, not the fix.
 before exploring, the child rates its confidence in the issue, and a low
 rating comments and stops instead of building. Measured over the 180 dispatch
 children on disk on 2026-09-19 (``tools/measure_refusal_timing.py``,
-``docs/specs/2026-09-19-dispatch-confidence-timing.md``): 33 recorded a
+``design/specs/2026-09-19-dispatch-confidence-timing.md``): 33 recorded a
 refusal, a corrected premise or a re-scope, and only **4** stated it within
 their first ten tool uses — three of those read it straight out of
 ``gh issue view --comments``, which ``_PROMPT`` already puts first, and the

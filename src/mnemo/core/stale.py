@@ -80,7 +80,7 @@ REPORT_NAME = "stale-report.json"
 # anything tracked and every dotfile citation reads as stale.
 # Directory segments may carry `()` and `[]`: Next.js route groups and dynamic
 # segments are real tracked directories (`src/app/(auth)/_lib/format.ts`,
-# `src/app/[id]/page.tsx`), and sg-imports has both. Excluding them silently
+# `src/app/[id]/page.tsx`), and repo-d has both. Excluding them silently
 # dropped those citations instead of checking them.
 _PATH_RE = re.compile(
     r"^(?:\.{1,2}/)*"

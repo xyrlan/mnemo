@@ -449,10 +449,10 @@ def test_proposed_siblings_are_not_consumer_visible(tmp_path: Path) -> None:
     """
     d = tmp_path / "shared" / "project"
     d.mkdir(parents=True)
-    live = d / "clubinho__deploy.md"
-    draft = d / "clubinho__deploy.proposed.md"
+    live = d / "repo-a__deploy.md"
+    draft = d / "repo-a__deploy.proposed.md"
     for p in (live, draft):
-        p.write_text("---\nname: Deploy\nslug: clubinho__deploy\ntype: project\n---\n\nbody\n", encoding="utf-8")
+        p.write_text("---\nname: Deploy\nslug: repo-a__deploy\ntype: project\n---\n\nbody\n", encoding="utf-8")
 
     assert is_consumer_visible(live, {}, tmp_path) is True
     assert is_consumer_visible(draft, {}, tmp_path) is False

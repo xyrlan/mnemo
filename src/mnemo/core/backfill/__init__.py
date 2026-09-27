@@ -5,5 +5,5 @@ package converts the Claude Code session transcripts already on disk at
 ``~/.claude/projects/<slug>/*.jsonl`` into ``bots/<repo>/memory/*.md`` files —
 the seam the existing extraction pipeline already reads from.
 
-See ``docs/superpowers/specs/2026-08-01-cold-start-backfill-design.md``.
+See ``design/specs/2026-08-01-cold-start-backfill-design.md``.
 """

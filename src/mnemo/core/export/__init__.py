@@ -1,6 +1,6 @@
 """``mnemo export`` — the project's learned rules as a file another tool loads.
 
-See docs/superpowers/specs/2026-09-02-distribution-design.md § 1. The CLI
+See design/specs/2026-09-02-distribution-design.md § 1. The CLI
 in :mod:`mnemo.cli.commands.export` only prints; every decision is here so
 ``init --host`` (PR F) and ``status`` can reuse it.
 """

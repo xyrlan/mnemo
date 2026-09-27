@@ -42,15 +42,15 @@
     "rank_at_bootstrap": 5
   },
   {
-    "id": "sg-imports:database:financial-data-immutability",
-    "project": "sg-imports",
+    "id": "repo-d:database:financial-data-immutability",
+    "project": "repo-d",
     "topic": "database",
     "expect_slug": "financial-data-immutability",
     "rank_at_bootstrap": 1
   },
   {
-    "id": "sg-imports:workflow:translate-all-three-locales-always",
-    "project": "sg-imports",
+    "id": "repo-d:workflow:translate-all-three-locales-always",
+    "project": "repo-d",
     "topic": "workflow",
     "expect_slug": "translate-all-three-locales-always",
     "rank_at_bootstrap": 1

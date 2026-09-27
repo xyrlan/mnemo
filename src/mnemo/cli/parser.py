@@ -723,7 +723,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rewrites_p.add_argument(
         "--show", metavar="KEY",
-        help="print the full diff for one rewrite (e.g. project/clubinho__sprints-github)",
+        help="print the full diff for one rewrite (e.g. project/repo-a__sprints-github)",
     )
     rewrites_p.add_argument(
         "--accept", metavar="KEY",

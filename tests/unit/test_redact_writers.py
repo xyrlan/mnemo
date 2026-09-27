@@ -25,7 +25,7 @@ PASSWORD = "Tr0ub4dor&3"
 
 
 def _memory_file(vault: Path, body: str) -> scanner.MemoryFile:
-    mem = vault / "bots" / "clubinho" / "memory"
+    mem = vault / "bots" / "repo-a" / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     path = mem / "project_onboarding_accounts.md"
     path.write_text(
@@ -33,14 +33,14 @@ def _memory_file(vault: Path, body: str) -> scanner.MemoryFile:
         f"{body}\n",
         encoding="utf-8",
     )
-    return scanner._read_memory_file(path, agent="clubinho")
+    return scanner._read_memory_file(path, agent="repo-a")
 
 
 def test_project_page_drops_the_password_and_keeps_the_login(tmp_vault: Path):
     body = f"Admin: `qa.admin@acme-corp.io` / `{PASSWORD}`\nMaps key {GOOGLE_KEY}"
     f = _memory_file(tmp_vault, body)
     promote.promote_projects([f], scanner.ExtractionState(last_run=None, entries={}), tmp_vault)
-    page = (tmp_vault / "shared" / "project" / "clubinho__onboarding-accounts.md").read_text(encoding="utf-8")
+    page = (tmp_vault / "shared" / "project" / "repo-a__onboarding-accounts.md").read_text(encoding="utf-8")
     assert PASSWORD not in page and GOOGLE_KEY not in page
     assert "qa.admin@acme-corp.io" in page
     assert page.count("[redacted]") == 2
@@ -60,7 +60,7 @@ def test_a_redacted_project_page_is_not_mistaken_for_a_user_edit(tmp_vault: Path
     state = scanner.ExtractionState(last_run=None, entries={})
     promote.promote_projects([_memory_file(tmp_vault, f"Password: `{PASSWORD}` v1")], state, tmp_vault)
     result = promote.promote_projects([_memory_file(tmp_vault, f"Password: `{PASSWORD}` v2")], state, tmp_vault)
-    assert result.overwrite_safe == ["project/clubinho__onboarding-accounts"]
+    assert result.overwrite_safe == ["project/repo-a__onboarding-accounts"]
     assert result.sibling_proposed == []
 
 

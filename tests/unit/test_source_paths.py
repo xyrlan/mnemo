@@ -17,19 +17,19 @@ from mnemo.core.extract.source_paths import vault_relative_source
 
 def test_absolute_path_under_vault_becomes_relative():
     vault = Path("/Users/x/mnemo")
-    src = "/Users/x/mnemo/bots/meunu/briefings/sessions/abc.md"
-    assert vault_relative_source(src, vault) == "bots/meunu/briefings/sessions/abc.md"
+    src = "/Users/x/mnemo/bots/repo-b/briefings/sessions/abc.md"
+    assert vault_relative_source(src, vault) == "bots/repo-b/briefings/sessions/abc.md"
 
 
 def test_pathlike_input_is_accepted():
     vault = Path("/Users/x/mnemo")
-    src = Path("/Users/x/mnemo/bots/meunu/memory/foo.md")
-    assert vault_relative_source(src, vault) == "bots/meunu/memory/foo.md"
+    src = Path("/Users/x/mnemo/bots/repo-b/memory/foo.md")
+    assert vault_relative_source(src, vault) == "bots/repo-b/memory/foo.md"
 
 
 def test_already_relative_path_is_unchanged():
     vault = Path("/Users/x/mnemo")
-    assert vault_relative_source("bots/meunu/memory/foo.md", vault) == "bots/meunu/memory/foo.md"
+    assert vault_relative_source("bots/repo-b/memory/foo.md", vault) == "bots/repo-b/memory/foo.md"
 
 
 def test_absolute_path_outside_vault_is_left_alone():
@@ -41,8 +41,8 @@ def test_absolute_path_outside_vault_is_left_alone():
 def test_relocated_by_bots_segment_when_prefix_differs():
     """A source written under an old vault location still relativizes."""
     vault = Path("/Users/x/mnemo")
-    src = "/old/home/vault/bots/clubinho/memory/bar.md"
-    assert vault_relative_source(src, vault) == "bots/clubinho/memory/bar.md"
+    src = "/old/home/vault/bots/repo-a/memory/bar.md"
+    assert vault_relative_source(src, vault) == "bots/repo-a/memory/bar.md"
 
 
 def test_posix_separators_on_all_platforms():
