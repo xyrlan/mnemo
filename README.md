@@ -17,9 +17,139 @@ Claude can call `read_mnemo_rule` over MCP for the full text; `/mnemo:doctor`
 tells you if that server is not connected. A rule that recurs in two different
 repos is promoted to universal and follows you everywhere.
 
-## The whole loop
+## Install
 
-Friday there are three issues that could be built at once:
+Inside Claude Code, type:
+
+```
+/plugin marketplace add xyrlan/mnemo
+/plugin install mnemo@mnemo-marketplace
+```
+
+That's the whole thing. No terminal, no Python, no Node — mnemo ships as a
+self-contained binary that the plugin fetches for your platform on first use.
+Restart Claude Code, and it's running.
+
+<details>
+<summary>Other ways to install</summary>
+
+**Via npm** — if you'd rather have `mnemo` on your `$PATH`:
+
+```bash
+npx @xyrlan/mnemo install              # prompts for global or project scope
+npx @xyrlan/mnemo install --yes        # global, no prompts
+npx @xyrlan/mnemo install --project --yes
+```
+
+**Via pipx / uv** — for dotfile-managed setups and CI:
+
+```bash
+pipx install mnemo-claude    # or: uv tool install mnemo-claude
+mnemo init                   # global, or `mnemo init --project`
+```
+
+Both need Python 3.8+ (uv brings its own). Details, including what `mnemo
+init` writes, how to undo it, and what to do if the plugin lands on top of an
+older install, in [docs/getting-started.md](docs/getting-started.md).
+
+</details>
+
+## Check it worked
+
+Correct Claude in your own words, run `mnemo learn`, read the output, type
+your next prompt on that subject ([the five minutes](docs/getting-started.md#five-minutes)).
+Step 3 is the whole feature:
+
+```
+read: ~/.claude/projects/-Users-you-github-app/3f2a….jsonl
+briefing: bots/app/briefings/sessions/3f2a….md (1 correction(s))
+learned: use-yarn-not-npm — Use yarn, never npm (evidence: "never use npm in this repo, always yarn")
+next prompt about this will surface it — check with `mnemo why`
+```
+
+The `evidence:` quote is your own sentence, carried back to you. A rule with a
+quote is a rule mnemo can prove you asked for.
+
+Per-prompt recall is silent by design — it injects a rule only when one
+clearly beats the rest — and `/mnemo:why` shows each decision with its
+arithmetic. Silence with a reason is the difference between "my vault has
+nothing useful" and "my thresholds are a little too tight".
+
+## Does an injected rule change the answer?
+
+Yes, when it is on point. On the maintainer's own prompts: 64 (prompt, rule)
+pairs where a blind rater said the rule applied, each answered twice by the
+same model, once as typed and once with the rule injected exactly the way the
+hook injects it, two samples per arm, then scored by a judge that cannot see
+which arm it is reading:
+
+```
+followed the rule   without it 41.0%   with it 72.1%   (61 pairs judged)
+lift                +31.1 pp   95% CI [+19.7, +42.6]
+```
+
+`claude-sonnet-5`, no tools, [`tools/measure_rule_lift.py`](tools/measure_rule_lift.py)
+([#434](https://github.com/xyrlan/mnemo/issues/434)). That measures the rule once it arrives. Whether the right rule arrives
+is the other half, and it is yours to check: `/mnemo:why` shows every
+decision with its arithmetic, and `mnemo replay` runs your own history through
+it.
+
+**Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
+through the hook's own decision and sorts every rule that would have fired by
+*when the vault learned it*. The maintainer's vault, 2026-09-14:
+
+```
+prompts replayed          2107   (219 sessions, 2026-08-03 → 2026-09-14)
+rules in the vault        1830   (78 cite a correction you typed: 18 verified by the evidence gate today, 60 label only)
+
+  reflex would have fired               230   prompts   10.9%
+  ├─ rule from an EARLIER session      116   prompts   5.5%  (95% CI 4.6–6.6%)   ← the vault's contribution
+  │    citing your own words              0   prompts   0.0%  (95% CI 0.0–0.2%)   verified by the evidence gate today
+  │    label only, gate can't check       3   prompts   a `verified` from mnemo reclassify; its briefing has no Corrections to check against
+  ├─ rule from this SAME session         24   prompts   hindsight — the vault could not have helped
+  └─ rule not learned yet                90   prompts   today's vault fires, but the rule postdates the prompt
+
+not measured: whether an injected rule changed the answer; tokens, session length, or time saved; what CLAUDE.md or auto-memory would have covered instead.
+```
+
+The earlier-session line is the only one the vault can take credit for; a
+naive replay would claim all three. A rate only once there are enough prompts.
+"Your own words" is the strongest claim on the page, so it is held to the
+evidence gate as it stands today: the quote must sit in the `## Corrections`
+of a briefing the rule was built from. A `confidence: verified` the gate
+cannot re-check — the 2026-09 `mnemo reclassify` labels cite briefings
+written before that section existed — is printed on its own line and never
+quoted as the number. The block's last line is the replay's own: it cannot
+see an answer change, which is what the lift above measures.
+
+Every number on this page comes from a command or a script in
+[`tools/`](tools/) you can run, and the design notes and measurement
+write-ups behind them are in [`design/`](design/).
+
+## Day one
+
+A fresh vault has nothing to inject, and mnemo does not go rummaging through
+your history uninvited. Your first session in a repo with harvestable
+transcripts prints one line — how many, and roughly what reading them costs —
+and nothing runs until you say so:
+
+```bash
+mnemo backfill --dry-run    # exactly what it would read, and what that costs
+mnemo backfill              # this repo
+mnemo backfill --all        # every project
+```
+
+Backfilled pages are reconstructed rather than observed, so every rule from
+them lands in `shared/_inbox/` for you to read — **never auto-promoted into
+`shared/`**. `mnemo inbox` lists what's waiting and takes the decision in one
+command — `--promote <key>` to keep a page, `--drop <key>` to throw it away —
+and mnemo names the oldest of them at session start rather than waiting for you
+to ask ([details](docs/getting-started.md#backfill)).
+
+## When you run many sessions
+
+The same vault follows every session mnemo starts for you. Friday there are
+three issues that could be built at once:
 
 ```bash
 mnemo dispatch 197 198 199    # or /mnemo:dispatch 197 198 199, from inside a session
@@ -116,46 +246,6 @@ the same order. Neither the queue nor dispatch ever reaches Claude on its own:
 no hook and no MCP tool exposes them, because a parent's context is the thing
 they exist to save. Both forms, every flag: [docs/getting-started.md](docs/getting-started.md#the-dispatch-loop).
 
-## What is measured
-
-On the maintainer's vault, 2026-09-09:
-
-```
-reflex: injected on 88 of 1131 prompts (7.8%)
-```
-
-`reflex` is the per-prompt recall. When Claude asks for rules by topic
-instead, query-aware ranking lifted the share of cases with the needed rule
-in the top five from 16% to 31% on topics with more than 20 rules (530
-evaluations).
-
-Your own numbers, with a baseline: `mnemo replay` runs every prompt you typed
-through the hook's own decision and sorts every rule that would have fired by
-*when the vault learned it*. The maintainer's vault, 2026-09-14:
-
-```
-prompts replayed          2107   (219 sessions, 2026-08-03 → 2026-09-14)
-rules in the vault        1830   (78 cite a correction you typed: 18 verified by the evidence gate today, 60 label only)
-
-  reflex would have fired               230   prompts   10.9%
-  ├─ rule from an EARLIER session      116   prompts   5.5%  (95% CI 4.6–6.6%)   ← the vault's contribution
-  │    citing your own words              0   prompts   0.0%  (95% CI 0.0–0.2%)   verified by the evidence gate today
-  │    label only, gate can't check       3   prompts   a `verified` from mnemo reclassify; its briefing has no Corrections to check against
-  ├─ rule from this SAME session         24   prompts   hindsight — the vault could not have helped
-  └─ rule not learned yet                90   prompts   today's vault fires, but the rule postdates the prompt
-
-not measured: whether an injected rule changed the answer; tokens, session length, or time saved; what CLAUDE.md or auto-memory would have covered instead.
-```
-
-The earlier-session line is the only one the vault can take credit for; a
-naive replay would claim all three. A rate only once there are enough prompts.
-"Your own words" is the strongest claim on the page, so it is held to the
-evidence gate as it stands today: the quote must sit in the `## Corrections`
-of a briefing the rule was built from. A `confidence: verified` the gate
-cannot re-check — the 2026-09 `mnemo reclassify` labels cite briefings
-written before that section existed — is printed on its own line and never
-quoted as the number.
-
 ## How it compares
 
 **CLAUDE.md** — you write it and prune it by hand, and it is loaded whole,
@@ -173,88 +263,12 @@ finished one or merges them in the order their dependencies require.
 **mnemo** — learns from your corrections and keeps a verifiable quote of what
 you actually said. Rules it can't verify stay staged for your review instead of
 entering the vault. Then it injects at most two rules per prompt — usually
-one — chosen by BM25F against the prompt text. No database, no daemon, no
-per-prompt LLM call. Dispatch gives every child a worktree and a branch, the
-queue puts the blocked ones first, each child inherits the vault, `deliver` and
+one — chosen by BM25F against the prompt text. No database, no daemon, and no
+per-prompt LLM call unless you turn on the
+[judge](docs/configuration.md#reflexjudge--an-opt-in-judge-as-the-gate).
+Dispatch gives every child a worktree and a branch, the queue puts the blocked
+ones first, each child inherits the vault, `deliver` and
 `land` finish the job, and what you answer at a blocked child goes back in.
-
-## Install
-
-Inside Claude Code, type:
-
-```
-/plugin marketplace add xyrlan/mnemo
-/plugin install mnemo@mnemo-marketplace
-```
-
-That's the whole thing. No terminal, no Python, no Node — mnemo ships as a
-self-contained binary that the plugin fetches for your platform on first use.
-Restart Claude Code, and it's running.
-
-<details>
-<summary>Other ways to install</summary>
-
-**Via npm** — if you'd rather have `mnemo` on your `$PATH`:
-
-```bash
-npx @xyrlan/mnemo install              # prompts for global or project scope
-npx @xyrlan/mnemo install --yes        # global, no prompts
-npx @xyrlan/mnemo install --project --yes
-```
-
-**Via pipx / uv** — for dotfile-managed setups and CI:
-
-```bash
-pipx install mnemo-claude    # or: uv tool install mnemo-claude
-mnemo init                   # global, or `mnemo init --project`
-```
-
-Both need Python 3.8+ (uv brings its own). Details, including what `mnemo
-init` writes, how to undo it, and what to do if the plugin lands on top of an
-older install, in [docs/getting-started.md](docs/getting-started.md).
-
-</details>
-
-## Check it worked
-
-Correct Claude in your own words, run `mnemo learn`, read the output, type
-your next prompt on that subject ([the five minutes](docs/getting-started.md#five-minutes)).
-Step 3 is the whole feature:
-
-```
-read: ~/.claude/projects/-Users-you-github-app/3f2a….jsonl
-briefing: bots/app/briefings/sessions/3f2a….md (1 correction(s))
-learned: use-yarn-not-npm — Use yarn, never npm (evidence: "never use npm in this repo, always yarn")
-next prompt about this will surface it — check with `mnemo why`
-```
-
-The `evidence:` quote is your own sentence, carried back to you. A rule with a
-quote is a rule mnemo can prove you asked for.
-
-Per-prompt recall is silent by design — it injects a rule only when one
-clearly beats the rest — and `/mnemo:why` shows each decision with its
-arithmetic. Silence with a reason is the difference between "my vault has
-nothing useful" and "my thresholds are a little too tight".
-
-## Day one
-
-A fresh vault has nothing to inject, and mnemo does not go rummaging through
-your history uninvited. Your first session in a repo with harvestable
-transcripts prints one line — how many, and roughly what reading them costs —
-and nothing runs until you say so:
-
-```bash
-mnemo backfill --dry-run    # exactly what it would read, and what that costs
-mnemo backfill              # this repo
-mnemo backfill --all        # every project
-```
-
-Backfilled pages are reconstructed rather than observed, so every rule from
-them lands in `shared/_inbox/` for you to read — **never auto-promoted into
-`shared/`**. `mnemo inbox` lists what's waiting and takes the decision in one
-command — `--promote <key>` to keep a page, `--drop <key>` to throw it away —
-and mnemo names the oldest of them at session start rather than waiting for you
-to ask ([details](docs/getting-started.md#backfill)).
 
 ## Commands
 
@@ -306,6 +320,7 @@ Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 - [Configuration](docs/configuration.md) — every knob in `mnemo.config.json`
 - [Troubleshooting](docs/troubleshooting.md) — when something looks wrong
 - [Obsidian](docs/obsidian.md) — optional: browse the vault as a graph
+- [Design notes](design/README.md) — how it was decided and measured, built in the open
 
 ## Privacy
 
