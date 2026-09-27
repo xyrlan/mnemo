@@ -70,6 +70,11 @@ LINK_NONE = "none"
 #: every branch.
 LINK_BASES = (LINK_EXTRACTOR, LINK_EXTRACTOR_INJECTED, LINK_NONE)
 
+#: Written from the full session briefing's verified ``## Corrections`` (#517).
+CAPTURE_BRIEFING = "briefing"
+#: Written by the corrections-only pass a session with no file edit gets.
+CAPTURE_CORRECTIONS_ONLY = "corrections_only"
+
 _ERROR_WHERE = "friction.ledger.record"
 _DEFAULT_MAX_BYTES = 1_048_576
 
@@ -128,6 +133,24 @@ class FrictionRecord:
     #: True when the row was recovered by the retroactive sweep rather than
     #: written as the session ended.
     backfilled: bool = False
+    #: How the session-end capture found it (#517): :data:`CAPTURE_BRIEFING`
+    #: or :data:`CAPTURE_CORRECTIONS_ONLY`. Empty on every row written any
+    #: other way (the backfill, the CI channel), and then the five fields
+    #: below are empty too and are not written to the row at all.
+    capture: str = ""
+    #: Position of the quoted turn in ``transcript.user_turns`` (0-based), or
+    #: -1 when unknown. Two corrections in one session are ordered by it.
+    turn_index: int = -1
+    #: The quoted turn's own transcript timestamp, as Claude Code wrote it.
+    #: ``ts`` is when the row was written; this is when the user said it.
+    turn_ts: str = ""
+    #: The quoted turn's event ``uuid``, which survives a resume.
+    turn_uuid: str = ""
+    #: True when the session was one ``mnemo dispatch`` started.
+    child: bool = False
+    #: The transcript's ``entrypoint`` (``cli``, ``sdk-cli``, …): ``sdk-cli``
+    #: is a program driving ``claude -p``, not a person typing.
+    entrypoint: str = ""
 
     def __post_init__(self) -> None:
         if self.link_basis not in LINK_BASES:
@@ -330,6 +353,20 @@ def _already_recorded(log_path: Path, rec: FrictionRecord) -> bool:
 
 
 def _to_row(rec: FrictionRecord) -> dict[str, Any]:
+    row = _base_row(rec)
+    if rec.capture:
+        row.update({
+            "capture": rec.capture,
+            "turn_index": rec.turn_index,
+            "turn_ts": rec.turn_ts,
+            "turn_uuid": rec.turn_uuid,
+            "child": bool(rec.child),
+            "entrypoint": rec.entrypoint,
+        })
+    return row
+
+
+def _base_row(rec: FrictionRecord) -> dict[str, Any]:
     return {
         "id": rec.id,
         "ts": rec.ts,
@@ -348,6 +385,10 @@ def _to_row(rec: FrictionRecord) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _int(value: Any, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _slugs(value: Any) -> list[str]:
@@ -375,6 +416,12 @@ def _from_row(row: dict[str, Any]) -> FrictionRecord | None:
             injected_in_session=_slugs(row.get("injected_in_session")),
             origin=_text(row.get("origin")) or ORIGIN_USER,
             backfilled=bool(row.get("backfilled", False)),
+            capture=_text(row.get("capture")),
+            turn_index=_int(row.get("turn_index"), -1),
+            turn_ts=_text(row.get("turn_ts")),
+            turn_uuid=_text(row.get("turn_uuid")),
+            child=bool(row.get("child", False)),
+            entrypoint=_text(row.get("entrypoint")),
         )
     except Exception:
         return None
@@ -405,6 +452,8 @@ def _log_failure(vault_root: Path, exc: BaseException) -> None:
 
 
 __all__ = [
+    "CAPTURE_BRIEFING",
+    "CAPTURE_CORRECTIONS_ONLY",
     "LEDGER_NAME",
     "LINK_BASES",
     "LINK_EXTRACTOR",
