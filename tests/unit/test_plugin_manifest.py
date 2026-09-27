@@ -112,3 +112,24 @@ def test_launchers_are_pinned_to_lf():
     attrs = (REPO / ".gitattributes").read_text(encoding="utf-8")
     assert "bin/launch text eol=lf" in attrs
     assert "bin/mnemo.cmd text eol=lf" in attrs
+    assert "plugin/bin/launch text eol=lf" in attrs
+    assert "plugin/bin/mnemo.cmd text eol=lf" in attrs
+
+
+def test_plugin_subfolder_is_current():
+    """plugin/ is generated (#514): a hand edit, or a root change that was not
+    synced, fails here until `tools/sync_plugin_manifest.py` is rerun."""
+    import sys
+    sys.path.insert(0, str(REPO))
+    from tools import sync_plugin_manifest as sync
+
+    sub = REPO / sync.SUBFOLDER
+    expected = set(sync._shipped_files(REPO)) | {"README.md"}
+    on_disk = {p.relative_to(sub).as_posix() for p in sub.rglob("*") if p.is_file()}
+    assert on_disk == expected, "plugin/ drifted — run tools/sync_plugin_manifest.py"
+    for rel in expected - {"README.md"}:
+        assert (sub / rel).read_bytes() == (REPO / rel).read_bytes(), (
+            f"plugin/{rel} drifted — run tools/sync_plugin_manifest.py"
+        )
+    # Text, not bytes: a core.autocrlf checkout on Windows turns it CRLF.
+    assert (sub / "README.md").read_text(encoding="utf-8") == sync.SUBFOLDER_README

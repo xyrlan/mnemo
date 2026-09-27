@@ -494,7 +494,7 @@ PLUGIN_COMMANDS: dict[str, dict[str, Any]] = {
 }
 
 
-def _frontmatter(spec: dict[str, Any]) -> str:
+def _frontmatter(spec: dict[str, Any], allowed_tools: str = "Bash") -> str:
     """The YAML block Claude Code reads a command's menu entry from.
 
     It has to be the first bytes of the file: a line above the opening
@@ -511,7 +511,7 @@ def _frontmatter(spec: dict[str, Any]) -> str:
     hint = spec.get("argument_hint")
     if hint:
         lines.append(f'argument-hint: "{hint}"')
-    lines += ["allowed-tools: Bash", "disable-model-invocation: true", "---"]
+    lines += [f"allowed-tools: {allowed_tools}", "disable-model-invocation: true", "---"]
     return "\n".join(lines) + "\n"
 
 
@@ -534,10 +534,19 @@ def render_plugin_command(spec: dict[str, Any]) -> str:
     ``${CLAUDE_PLUGIN_ROOT}`` is expanded by Claude Code at run time. The plugin
     is generated once and installed on every platform, so it cannot bake in a
     location, and the launcher is what knows where the binary actually lives.
+
+    ``allowed-tools`` grants exactly the line the command injects, not all of
+    Bash, which the Claude plugin directory flags as broad (#514). Claude Code
+    matches the rule against the same unexpanded ``${CLAUDE_PLUGIN_ROOT}``
+    form: checked live with ``--plugin-dir``, where this rule runs the line
+    and a rule naming another subcommand leaves it blocked. A command that
+    takes arguments gets the prefix form, since they vary per call.
     """
+    line = f'"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {" ".join(spec["args"])}'
+    rule = f"Bash({line}:*)" if spec.get("arguments") else f"Bash({line})"
     args = " ".join(_argv(spec))
     return (
-        _frontmatter(spec)
+        _frontmatter(spec, allowed_tools=rule)
         + "\n"
         + f'!`"${{CLAUDE_PLUGIN_ROOT}}/bin/mnemo.cmd" {args}`\n'
     )

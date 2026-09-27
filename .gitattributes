@@ -6,3 +6,5 @@ tests/fixtures/transcripts/*.jsonl text eol=lf
 # cmd.exe copes with LF here: mnemo.cmd uses no goto/call labels.
 bin/launch text eol=lf
 bin/mnemo.cmd text eol=lf
+plugin/bin/launch text eol=lf
+plugin/bin/mnemo.cmd text eol=lf

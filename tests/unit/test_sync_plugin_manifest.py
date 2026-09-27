@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,13 @@ def _plugin_dir(tmp_path: Path) -> Path:
         "name": "mnemo-marketplace",
         "plugins": [{"name": "mnemo", "source": "github:xyrlan/mnemo", "version": "0.4.0"}],
     }), encoding="utf-8")
+    (manifest.parent / "icon.svg").write_text("<svg/>", encoding="utf-8")
+    # The rest of what the plugin ships, so plugin/ can be built from it.
+    for rel in ("hooks/hooks.json", "bin/launch", "bin/mnemo.cmd", ".mcp.json", "LICENSE"):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"root copy of {rel}\n", encoding="utf-8")
+    (tmp_path / "bin" / "launch").chmod(0o755)
     return manifest.parent
 
 
@@ -120,3 +129,85 @@ def test_sync_removes_a_skill_that_left_the_package(tmp_path: Path):
     sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
 
     assert not stale.exists()
+
+
+def _files(root: Path) -> set:
+    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+
+
+def test_sync_builds_the_plugin_subfolder_from_the_root_copies(tmp_path: Path):
+    """plugin/ is what the plugin ships and nothing else (#514)."""
+    _plugin_dir(tmp_path)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    sub = tmp_path / "plugin"
+    shipped = _files(sub) - {"README.md"}
+    assert ".claude-plugin/marketplace.json" not in shipped, "the marketplace still installs the root"
+    assert {".claude-plugin/plugin.json", ".claude-plugin/icon.svg", "hooks/hooks.json",
+            "bin/launch", "bin/mnemo.cmd", ".mcp.json", "LICENSE",
+            "commands/status.md"} <= shipped
+    assert {f for f in shipped if f.startswith("skills/")}, "skills ship too"
+    for rel in shipped:
+        assert (sub / rel).read_bytes() == (tmp_path / rel).read_bytes(), rel
+    assert json.loads((sub / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"] == "0.16.0"
+
+
+def test_the_subfolder_launcher_stays_executable(tmp_path: Path):
+    _plugin_dir(tmp_path)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    assert os.access(tmp_path / "plugin" / "bin" / "launch", os.X_OK) or sys.platform == "win32"
+
+
+def test_sync_drops_what_the_subfolder_no_longer_ships(tmp_path: Path):
+    _plugin_dir(tmp_path)
+    stale = tmp_path / "plugin" / "commands" / "renamed-away.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale", encoding="utf-8")
+    (tmp_path / "plugin" / "old" / "dir").mkdir(parents=True)
+
+    sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+    assert not stale.exists()
+    assert not (tmp_path / "plugin" / "old").exists()
+
+
+def test_sync_refuses_a_subfolder_missing_a_shipped_file(tmp_path: Path):
+    _plugin_dir(tmp_path)
+    (tmp_path / ".mcp.json").unlink()
+
+    with pytest.raises(SystemExit, match=r"\.mcp\.json"):
+        sync_plugin_manifest.sync(repo_root=tmp_path, version="0.16.0")
+
+
+def test_the_subfolder_readme_links_only_absolutely():
+    """A relative link in plugin/README.md points into a folder with no docs."""
+    import re
+    readme = sync_plugin_manifest.SUBFOLDER_README
+    targets = re.findall(r"\]\(([^)]+)\)", readme)
+    assert targets
+    for target in targets:
+        assert target.startswith("https://") or target == "LICENSE", target
+    assert "## Privacy" in readme
+    for switch in ("autopilot.network.enabled", "recall.rerank.provider", "reflex.judge.provider"):
+        assert switch in readme
+    assert "/mnemo:why" in readme
+
+
+def test_plugin_commands_allow_only_the_line_they_inject():
+    """`allowed-tools: Bash` is flagged as broad by the plugin directory (#514).
+
+    The narrowed rule was checked live with `claude --plugin-dir`: this form
+    runs the injected line, and a rule naming another subcommand blocks it.
+    """
+    from mnemo.install.settings import PLUGIN_COMMANDS, render_plugin_command
+
+    root = '"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd"'
+    for name, spec in PLUGIN_COMMANDS.items():
+        body = render_plugin_command(spec)
+        sub = " ".join(spec["args"])
+        rule = f"Bash({root} {sub}:*)" if spec.get("arguments") else f"Bash({root} {sub})"
+        assert f"\nallowed-tools: {rule}\n" in body, name
+        assert "\nallowed-tools: Bash\n" not in body, name
