@@ -240,6 +240,28 @@ def test_per_skill_and_per_repo_counts():
     assert summary["per_repo"]["mnemo-desktop"]["pieces"] == 0
 
 
+def test_an_excluded_skill_moves_the_post_hoc_share_and_never_the_decision():
+    rows = [_row("/w/a-wt-1", {"pr": (msr.MISSING, 0.9), "tdd": (msr.MISSING, 0.1)}),
+            _row("/w/a-wt-2", {"pr": (msr.MISSING, 0.9), "tdd": (msr.MISSING, 0.8)})]
+    plain = msr.summarize(rows)
+    assert plain["missing_excluding"] is None
+    summary = msr.summarize(rows, ["pr"])
+    assert summary["missing"]["pieces"] == 2
+    assert summary["decision"] == "a/b"
+    assert summary["missing_excluding"]["pieces"] == 1
+    report = msr.format_report(summary, [])
+    assert "post-hoc, not the decision — excluding pr: 1/2 = 50%" in report
+
+
+def test_the_split_by_prompt_kind_reads_the_template_the_child_was_handed():
+    issue = dict(_row("/w/meunu-wt-1", {"pr": (msr.MISSING, 0.9)}),
+                 task_head="Work on issue #1 in this repo: x")
+    piece = dict(_row("/w/meunu-wt-c-a", {"pr": (msr.MISSING, 0.2)}),
+                 task_head="You are building one piece of the feature \"f\": a")
+    kinds = msr.summarize([issue, piece])["per_kind"]
+    assert kinds["issue"]["pieces"] == 1 and kinds["contract piece"]["pieces"] == 0
+
+
 def test_the_hand_check_sample_is_missing_pairs_half_over_half_under_and_repeatable():
     rows = [_row("/w/a-wt-%d" % i, {"tdd": (msr.MISSING, i / 10), "run": (msr.RECEIVED, 0.9)})
             for i in range(10)]

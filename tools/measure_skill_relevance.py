@@ -52,7 +52,11 @@ the same prompt — twins — are one task. ``--last`` keeps the newest.
   skill, because relevant is not the same as helps.
 
 The share at 0.4 and 0.69 is printed next to it as sensitivity, never as the
-decision. ``--sample`` prints seeded missing-skill pairs, half over the cut and
+decision, and so is ``--exclude``: the share without skills a hand check
+rejected, printed on its own line and labelled post-hoc. The report also
+splits by repo and by prompt kind — an issue prompt and a contract piece wrap
+the task in different boilerplate, and a judge reading the whole prompt reads
+that boilerplate too. ``--sample`` prints seeded missing-skill pairs, half over the cut and
 half under, for the hand check #508 asks for: a count from this tool is a
 judge's reading until a person has read those.
 """
@@ -335,18 +339,21 @@ def estimate(pieces: Sequence[Piece], maintainer: Mapping[str, str]) -> Dict[str
 # the report
 # --------------------------------------------------------------------------
 
-def _hits(row: Mapping[str, Any], arm: str, cut: float) -> List[str]:
+def _hits(row: Mapping[str, Any], arm: str, cut: float,
+          exclude: Sequence[str] = ()) -> List[str]:
     return sorted(name for name, s in row["skills"].items()
-                  if s["arm"] == arm and s["score"] is not None and s["score"] >= cut)
+                  if s["arm"] == arm and s["score"] is not None and s["score"] >= cut
+                  and name not in exclude)
 
 
 def _judged(row: Mapping[str, Any]) -> bool:
     return any(s["score"] is not None for s in row["skills"].values())
 
 
-def share(rows: Sequence[Mapping[str, Any]], arm: str, cut: float) -> Dict[str, Any]:
+def share(rows: Sequence[Mapping[str, Any]], arm: str, cut: float,
+          exclude: Sequence[str] = ()) -> Dict[str, Any]:
     judged = [r for r in rows if _judged(r)]
-    k = sum(1 for r in judged if _hits(r, arm, cut))
+    k = sum(1 for r in judged if _hits(r, arm, cut, exclude))
     low, high = wilson_interval(k, len(judged))
     return {"pieces": k, "of": len(judged),
             "share": round(k / len(judged), 4) if judged else None,
@@ -378,7 +385,28 @@ def per_repo(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {repo: share([r for r in rows if repo_of(r) == repo], MISSING, CUT) for repo in repos}
 
 
-def summarize(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+def prompt_kind(row: Mapping[str, Any]) -> str:
+    """Which dispatch template the child was handed. The two carry different
+    boilerplate around the task, and a judge reading the whole prompt reads
+    that too — on the first run every hit came from one of them."""
+    head = str(row.get("task_head") or "")
+    if head.startswith("You are building one piece"):
+        return "contract piece"
+    if head.startswith(("Work on issue", "Investigate issue")):
+        return "issue"
+    return "other"
+
+
+def per_kind(rows: Sequence[Mapping[str, Any]], exclude: Sequence[str] = ()) -> Dict[str, Dict[str, Any]]:
+    kinds = sorted({prompt_kind(r) for r in rows})
+    return {kind: share([r for r in rows if prompt_kind(r) == kind], MISSING, CUT, exclude)
+            for kind in kinds}
+
+
+def summarize(rows: Sequence[Mapping[str, Any]], exclude: Sequence[str] = ()) -> Dict[str, Any]:
+    """The pre-registered numbers, and — only when *exclude* names skills a
+    hand check rejected — the same share without them, kept apart: the
+    decision is always read off the registered share, never the post-hoc one."""
     missing = share(rows, MISSING, CUT)
     decision = None
     if missing["share"] is not None:
@@ -391,6 +419,10 @@ def summarize(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         "received": share(rows, RECEIVED, CUT),
         "sensitivity": {str(cut): share(rows, MISSING, cut) for cut in SENSITIVITY},
         "per_repo": per_repo(rows),
+        "per_kind": per_kind(rows),
+        "excluded": sorted(exclude),
+        "missing_excluding": share(rows, MISSING, CUT, exclude) if exclude else None,
+        "per_kind_excluding": per_kind(rows, exclude) if exclude else None,
         "missing_per_skill": per_skill(rows, MISSING, CUT),
         "received_per_skill": per_skill(rows, RECEIVED, CUT),
         "decision_share": DECISION_SHARE,
@@ -440,10 +472,19 @@ def format_report(summary: Mapping[str, Any], samples: Sequence[Mapping[str, Any
     elif summary["decision"] == "a/b":
         lines.append("decision (pre-registered, #508): >= {:.0%} -> A/B with vs without "
                      "the routed skill".format(summary["decision_share"]))
+    if summary["missing_excluding"] is not None:
+        lines.append("post-hoc, not the decision — excluding {}: {}".format(
+            ", ".join(summary["excluded"]), _pct(summary["missing_excluding"])))
     lines.append("")
     lines.append("missing, per repo:")
     for repo, block in summary["per_repo"].items():
         lines.append("  {:<16} {}".format(repo, _pct(block)))
+    lines.append("missing, per prompt kind:")
+    for kind, block in summary["per_kind"].items():
+        extra = ""
+        if summary["per_kind_excluding"] is not None:
+            extra = "   excluding: " + _pct(summary["per_kind_excluding"][kind])
+        lines.append("  {:<16} {}{}".format(kind, _pct(block), extra))
     for title, key in (("missing", "missing_per_skill"), ("received", "received_per_skill")):
         lines.append("")
         lines.append(title + " skills, relevant/judged:")
@@ -488,6 +529,9 @@ def main(argv: Optional[List[str]] = None, *, client: Optional[Client] = None) -
     parser.add_argument("--scores", help="scores file (default <vault>/.mnemo/skill-relevance-scores.json)")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--sample", type=int, default=20, help="pairs to print for the hand check")
+    parser.add_argument("--exclude", action="append", default=[], metavar="SKILL",
+                        help="also print the share without SKILL (repeatable); "
+                             "post-hoc, never the decision")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -520,7 +564,7 @@ def main(argv: Optional[List[str]] = None, *, client: Optional[Client] = None) -
         write_scores(scores_path, rows)
         print("scores written to " + str(scores_path), file=sys.stderr)
 
-    summary = summarize(rows)
+    summary = summarize(rows, args.exclude)
     samples = sample(rows, args.sample)
     if args.json:
         print(json.dumps({"summary": summary, "sample": samples}, indent=2, ensure_ascii=False))
