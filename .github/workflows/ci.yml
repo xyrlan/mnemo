@@ -115,7 +115,10 @@ jobs:
         run: |
           python3 tools/sync_npm_version.py
           python3 tools/sync_plugin_manifest.py
-          git diff --exit-code -- .claude-plugin/ commands/ skills/ npm/package.json npm/lib/bootstrap.js \
+          # plugin/ is rebuilt whole, so a file it newly ships shows up as
+          # untracked, which `git diff` alone would not see.
+          git add -N plugin/
+          git diff --exit-code -- .claude-plugin/ commands/ skills/ plugin/ npm/package.json npm/lib/bootstrap.js \
             || { echo "::error::Generated files are stale. Run tools/sync_npm_version.py and tools/sync_plugin_manifest.py, then commit."; exit 1; }
 
   windows:
