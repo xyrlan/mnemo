@@ -1,7 +1,7 @@
 """``CLAUDE.md`` is this repo's procedure, and it has to stay true (#385).
 
 Claude Code attaches the repo's ``CLAUDE.md`` to every session that opens in
-it, dispatched children included — measured across 20 clubinho children, all
+it, dispatched children included — measured across 20 repo-a children, all
 20 of which received it. That makes it the channel a dispatched child actually
 reads, and the reason ``core/dispatch.py`` holds no repo's procedure of its
 own.

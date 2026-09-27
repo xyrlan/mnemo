@@ -88,13 +88,13 @@ PROBES: Tuple[Tuple[str, str, Pattern, Pattern, str], ...] = (
         "pointed at the command-line tools",
     ),
     (
-        "clubinho", "run the suite",
+        "repo-a", "run the suite",
         re.compile(r"\bnpm (?:run )?test\b"),
         re.compile(r"--runInBand"),
         "jest in parallel freezes the machine — stated in the repo's CLAUDE.md",
     ),
     (
-        "clubinho", "run the suite without running out of heap",
+        "repo-a", "run the suite without running out of heap",
         re.compile(r"\bnpm (?:run )?test\b"),
         re.compile(r"max-old-space-size"),
         "the full suite exceeds node's default heap — not stated anywhere",

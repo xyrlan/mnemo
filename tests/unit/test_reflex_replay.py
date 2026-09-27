@@ -150,13 +150,13 @@ def test_default_project_folds_a_gone_dispatch_tree_into_its_repo(env, tmp_path)
     saw them while the tree existed — not against its basename, which no rule
     is filed under, and not against a pre-#301 briefing filed under it."""
     vault, _projects = env
-    repo = tmp_path / "src" / "clubinho"
+    repo = tmp_path / "src" / "repo-a"
     (repo / ".git").mkdir(parents=True)
-    _briefing(vault, "clubinho-wt-192", SID_B)
+    _briefing(vault, "repo-a-wt-192", SID_B)
     resolve = R.default_project_for(vault)
 
-    assert resolve(str(repo.parent / "clubinho-wt-192"), SID_B) == "clubinho"
-    assert resolve(str(repo.parent / "clubinho-wt-c-parser"), "s") == "clubinho"
+    assert resolve(str(repo.parent / "repo-a-wt-192"), SID_B) == "repo-a"
+    assert resolve(str(repo.parent / "repo-a-wt-c-parser"), "s") == "repo-a"
 
 
 def test_default_project_keeps_a_gone_tree_it_cannot_fold(env, tmp_path):

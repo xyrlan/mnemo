@@ -5,7 +5,7 @@ Claude Code 2.1.269 writes ``~/.claude/jobs/<short-id>/state.json`` for every
 to Claude Code, and an upstream schema change must degrade our render rather
 than break a command.
 
-See ``docs/superpowers/specs/2026-09-12-live-session-queue-design.md``.
+See ``design/specs/2026-09-12-live-session-queue-design.md``.
 """
 from __future__ import annotations
 

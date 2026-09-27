@@ -81,15 +81,15 @@ def test_summarize_groups_by_project():
     entries = [
         _entry(project="mnemo", result_count=2),
         _entry(project="mnemo", result_count=0),
-        _entry(project="sg-imports", result_count=5),
+        _entry(project="repo-d", result_count=5),
     ]
     result = summarize(entries)
     assert result["by_project"]["mnemo"]["calls"] == 2
     assert result["by_project"]["mnemo"]["zero_hit"] == 1
     assert result["by_project"]["mnemo"]["zero_hit_rate"] == 0.5
-    assert result["by_project"]["sg-imports"]["calls"] == 1
-    assert result["by_project"]["sg-imports"]["zero_hit"] == 0
-    assert result["by_project"]["sg-imports"]["zero_hit_rate"] == 0.0
+    assert result["by_project"]["repo-d"]["calls"] == 1
+    assert result["by_project"]["repo-d"]["zero_hit"] == 0
+    assert result["by_project"]["repo-d"]["zero_hit_rate"] == 0.0
 
 
 def test_summarize_bucketizes_null_project():

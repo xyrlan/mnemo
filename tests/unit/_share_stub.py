@@ -1,6 +1,6 @@
 """Stand-in for ``mnemo.core.share.format`` while the ``format`` piece lands elsewhere.
 
-The share-rules contract (``docs/superpowers/contracts/2026-09-13-share-rules.md``)
+The share-rules contract (``design/contracts/2026-09-13-share-rules.md``)
 splits the feature three ways; ``publish`` consumes five names from ``format``
 and is written in a worktree where that module does not exist yet.
 :func:`ensure_format_module` installs this stub **only** when the real module

@@ -22,7 +22,7 @@ not.
 
 ``--rejected`` prints the other half of the finding: the same bar applied to
 **flags** instead of environment assignments. A procedure can live in a flag —
-clubinho's ``--runInBand`` is one — but in a transcript a flag a child adopts
+repo-a's ``--runInBand`` is one — but in a transcript a flag a child adopts
 looks exactly like a flag a child chose, and the count says how badly: on
 2026-09-19, twelve children each "rediscovered" ``cargo test --nocapture``,
 which is a way of reading output and not a boundary at all. So the command
@@ -158,7 +158,7 @@ def format_report(report: Dict[str, Any], *, rejected: bool = False) -> str:
         lines.append("")
         lines.append("    A flag a child adopts and a flag a child chose are the same event")
         lines.append("    in a transcript, so none of these is proposed. What that costs is")
-        lines.append("    the procedures that do live in a flag — clubinho's --runInBand.")
+        lines.append("    the procedures that do live in a flag — repo-a's --runInBand.")
         lines.append("")
     return "\n".join(lines) + "\n"
 

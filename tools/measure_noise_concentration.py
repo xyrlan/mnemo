@@ -12,7 +12,7 @@ the reflex. Every write goes under ``<vault>/.mnemo/noise-concentration/``.
 No new (prompt, rule) label is asked for: the injections and their 0/1/2
 labels already exist. The corpora, each an injected pair with its label:
 
-- **day-one b** — #467's arm (b), clubinho replayed from an empty vault that
+- **day-one b** — #467's arm (b), repo-a replayed from an empty vault that
   grows session by session, judge off, Sonnet labels
   (``~/.cache/mnemo/day-one/``);
 - **day-one c** and **day-one ac** — #472's arms (c) and (a)+(c): the

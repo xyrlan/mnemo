@@ -49,3 +49,18 @@ the repo keeps its counters in `tools/measure_*.py`, each with unit tests over
 synthetic transcripts. Say what you ran, and prefer running the code to
 grepping it — two false bug reports in one day came from greps against code
 that was correct.
+
+## Public text never names a private repository
+
+Commits, PR bodies, issues, comments, docs, code and fixtures are public. None
+of them names a private repository or someone else's private project — use its
+alias or "a private repo". The names and their aliases live on the
+maintainer's machine at `~/mnemo/.mnemo/private-names.tsv` (`name<TAB>alias`)
+and never in the repo; grep a diff against it before publishing:
+
+```sh
+git grep -i -F -f <(cut -f1 ~/mnemo/.mnemo/private-names.tsv)
+```
+
+Home paths are the same kind of leak: write `/Users/you/…` or `~/…`, not a
+real username.

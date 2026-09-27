@@ -3,8 +3,9 @@
 Leaf module — no internal dependencies. Imported by every other
 ``inbox/*`` module (state_io, rendering, dedup, apply, branches/*).
 
-Behavior identical to the pre-v0.9 monolith ``inbox.py``; see
-``docs/superpowers/plans/2026-04-19-refactor-roadmap.md`` PR I.
+Behavior identical to the pre-v0.9 monolith ``inbox.py``; see PR I of the
+v0.9 refactor roadmap (a plan removed from the tree in #510; git history
+keeps it at ``docs/superpowers/plans/2026-04-19-refactor-roadmap.md``).
 """
 from __future__ import annotations
 

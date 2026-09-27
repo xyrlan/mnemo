@@ -34,7 +34,7 @@ PREDICATE = "calls filters.is_retired"
 DELEGATES = "reads rules only through list_rules_by_topic"
 NO_PAGES = "reads no rule page"
 
-#: The ten modules ``docs/superpowers/specs/2026-09-16-refutation-design.md``
+#: The ten modules ``design/specs/2026-09-16-refutation-design.md``
 #: lists, and the path each takes. Keep this in step with the spec: a module
 #: that starts reading rule pages belongs here.
 SURFACES = {

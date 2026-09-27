@@ -1,14 +1,14 @@
 """What a dispatched child reads and writes of the briefing: the canonical project's.
 
-The channels round (``docs/contracts/channels.md``, ``child-briefing``) started
+The channels round (``design/contracts/channels.md``, ``child-briefing``) started
 from two counts: all 20 ``bots/mnemo-wt-*`` namespaces hold no briefing, and
 0 of 2385 ``session_start.inject`` events carry a ``-wt-`` project. They read
 like "no briefing reaches a child". Measured against the children's own
-transcripts (2026-09-15, 92 dispatch children across mnemo, clubinho and
+transcripts (2026-09-15, 92 dispatch children across mnemo, repo-a and
 mnemo-desktop), that reading is wrong, and both counts are the design working:
 
 - **Read.** 71 children started on a ``[last-briefing …]`` block: 53 of 53 in
-  mnemo, 6 of 6 in clubinho, 12 of 28 in mnemo-desktop. The 16 desktop children
+  mnemo, 6 of 6 in repo-a, 12 of 28 in mnemo-desktop. The 16 desktop children
   that got none all started before that project had *any* briefing on disk
   (its first was written by a child at 13:46Z; the last unbriefed child started
   at 11:37Z). The other 5 of the 92 saw the circuit breaker's

@@ -170,7 +170,7 @@ def test_a_utc_stamp_is_not_read_as_local(bench):
 
 def test_hook_events_come_from_the_day_logs_of_every_project(bench):
     _write_log(bench, "2026-09-19", ["00:43", "06:29"])
-    other = bench["vault"] / "bots" / "clubinho" / "logs"
+    other = bench["vault"] / "bots" / "repo-a" / "logs"
     other.mkdir(parents=True)
     (other / "2026-09-19.md").write_text(
         "- **03:00** — 🔴 session ended (other)\n", encoding="utf-8")

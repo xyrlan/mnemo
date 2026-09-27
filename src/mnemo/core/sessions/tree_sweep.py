@@ -2,7 +2,7 @@
 
 Until this module, nothing did. ``dispatch.remove_worktree`` runs only on the
 rollback path of a failed spawn, and ``landing`` removes only its own
-rehearsal tree. On 2026-09-25, 13 trees across meunu and mnemo-desktop had a
+rehearsal tree. On 2026-09-25, 13 trees across repo-b and mnemo-desktop had a
 merged PR, a clean status and nothing unpushed, and were still on disk. The
 2026-09-16 spec left removal as "a later, separate decision". The maintainer
 made that decision on 2026-09-25: the tree goes, with no manual step.
@@ -34,7 +34,7 @@ worktree is never looked at. Removal needs every one of these:
   on disk (``claude rm``) counts as gone.
 - **Nothing else is in it.** No process has its cwd inside the tree. The
   check reads ``lsof -d cwd``, which took 0.17 s over 348 processes. On
-  2026-09-25 a ``mnemo resume --watch`` was running from a merged meunu tree.
+  2026-09-25 a ``mnemo resume --watch`` was running from a merged repo-b tree.
   Without ``lsof``, as on Windows, this check is skipped.
 - **Nothing is lost.** The status is clean, untracked files included. No
   commit is ahead of the upstream. The tip is contained in the merged PR's
@@ -44,7 +44,7 @@ worktree is never looked at. Removal needs every one of these:
 The tree is removed with ``git worktree remove`` and no ``--force``, so git
 makes its own last check. The branch is then deleted with ``-d``, never
 ``-D``, for the reason given in ``dispatch.remove_worktree``. ``-d`` compares
-the branch with its upstream. On meunu, all ten merged trees still had
+the branch with its upstream. On repo-b, all ten merged trees still had
 ``origin/<branch>`` at the tip, so ``-d`` succeeds. If the tracking ref has
 been pruned, ``-d`` refuses. The branch is kept and the refusal is reported.
 

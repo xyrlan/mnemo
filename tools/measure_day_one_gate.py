@@ -48,7 +48,7 @@ Jev budget, and labels only what the Claude budget has left. Only
 gets what the hook sends (a prompt's first 1,200 characters, each rule's
 first 800) — the same data #479 already sent.
 
-**First run, 2026-09-24** (clubinho, the arm (c) vault and labels #472/#479
+**First run, 2026-09-24** (repo-a, the arm (c) vault and labels #472/#479
 left; dry run bounded 9 Claude calls and 48 Jev requests). 10 Claude calls
 of 15 (9 gate, 1 label), $0.31 API-price equivalent; 21 new Jev requests of
 100, 27 prompts answered from #479's scores.

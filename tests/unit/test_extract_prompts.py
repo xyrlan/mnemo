@@ -121,7 +121,7 @@ def test_feedback_few_shot_includes_no_commits_cross_agent_merge():
     assert "no_commits" in prompt or "no-commits" in prompt
     # Both sources must appear in the merged output's source_files list
     assert "feedback_no_commits.md" in prompt
-    assert "bots/clubinho/briefings/sessions/9f1c.md" in prompt
+    assert "bots/repo-a/briefings/sessions/9f1c.md" in prompt
 
 
 # --- v0.3.1: stability schema field ------------------------------------------

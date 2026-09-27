@@ -40,7 +40,7 @@ and it reads the point estimate; the 95% Wilson interval is printed beside it.
 Budget: at most :data:`MAX_CALLS` model calls, counted across reruns in
 ``labels.json``.
 
-First run, 2026-09-23, over the arm (a) vault #467 left (clubinho, 44
+First run, 2026-09-23, over the arm (a) vault #467 left (repo-a, 44
 sessions of history, 20 harvested, 59 memory files): 56 staged backfill pages.
 Routes with the stamp off: project 32 live (the project path has no gate);
 reference 15 live on the reference gate (13 system, 2 technique; it held
@@ -56,7 +56,7 @@ G 2, N 1 and W 4 (Opus) / W 1 (Fable): a stale or self-contradicting project
 fact, more than generic advice.
 
 Second corpus, 2026-09-23 (#477), after #471 made the change: arm (a) over
-clearframe (``measure_day_one.py --arm a --install-after 14``, 29 sessions,
+repo-c (``measure_day_one.py --arm a --install-after 14``, 29 sessions,
 15 calls) put 40 backfill pages live and staged 1. ``--live`` rates the pages
 where the extraction put them, since a live page is no longer in ``_inbox``.
 Routes: project 30 live (no gate), reference 9 live and 1 staged (generic),

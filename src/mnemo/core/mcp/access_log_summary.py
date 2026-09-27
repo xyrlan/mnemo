@@ -28,7 +28,7 @@ _MCP_TOOL_NAMES: frozenset[str] = frozenset({
 })
 
 # Warn threshold for `mnemo doctor` zero-hit check. Derived from
-# docs/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md §5.3 Question B:
+# design/specs/2026-04-15-mnemo-v0.5.x-retrieval-phased.md §5.3 Question B:
 # ">30% zero-hit rate indicates ontology gaps".
 _ZERO_HIT_THRESHOLD = 0.30
 

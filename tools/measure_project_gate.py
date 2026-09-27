@@ -7,8 +7,8 @@ Usage:
     PYTHONPATH=src python3 tools/measure_project_gate.py --json
 
 **Measure only**: no routing changes, no page is written, no new rating is
-made. #471 let backfill pages take the normal gates; it passed on clubinho and
-failed on clearframe (#477), and on both the weak route was ``project``, which
+made. #471 let backfill pages take the normal gates; it passed on repo-a and
+failed on repo-c (#477), and on both the weak route was ``project``, which
 goes live with no gate. This asks what the reference gate would have done
 with those project pages.
 
@@ -19,8 +19,8 @@ each with the exact ``text`` the raters saw — the gate's own
 S/T good, G/N/W junk). Only the ``project`` rows are taken; both files are
 read, never written.
 
-- ``clubinho``: #471's run, ``~/.cache/mnemo/day-one/backfill-routes``;
-- ``clearframe``: #477's ``--live`` run, ``~/.cache/mnemo/day-one-clearframe/backfill-live``.
+- ``repo-a``: #471's run, ``~/.cache/mnemo/day-one/backfill-routes``;
+- ``repo-c``: #477's ``--live`` run, ``~/.cache/mnemo/day-one-repo-c/backfill-live``.
 
 The gate. The real one: ``reference_gate.judge_pages`` on
 ``ExtractedPage`` objects typed ``reference`` (the function only asks about
@@ -49,11 +49,11 @@ First run, 2026-09-24, ``claude-sonnet-5@5e907270``: 8 calls (7 planned, one
 reply came back unparseable and its 10 pages were asked again), API-price
 equivalent $0.17.
 
-- clubinho: no gate 26/32 = 81.2%. The gate said S 25, T 5, G 2; through it
+- repo-a: no gate 26/32 = 81.2%. The gate said S 25, T 5, G 2; through it
   **26/30 = 86.7% [70.3, 94.7] — PASS**, by one page (25/30 fails). It held
   2, both G/G by the raters: no good page lost. All 3 W pages went through;
   ceiling 26/29 = 89.7%.
-- clearframe: no gate 22/30 = 73.3%. The gate said S 18, T 6, N 5, G 1;
+- repo-c: no gate 22/30 = 73.3%. The gate said S 18, T 6, N 5, G 1;
   through it **20/24 = 83.3% [64.1, 93.3] — FAIL**, by one page (21/24
   would pass). It held 6: 4 N/N narratives ("specs updated", "smoke test
   outstanding") and 2 pages both raters called S — the good it loses. Junk
@@ -61,11 +61,11 @@ equivalent $0.17.
   22/24 = 91.7%.
 
 The gate does what the issue expected of it on narratives — it held all 4
-pages both raters called N on clearframe — and the corpus still misses the
+pages both raters called N on repo-c — and the corpus still misses the
 bar. No project
-wording was tried (#485 step 3): the only junk clubinho still lets through
+wording was tried (#485 step 3): the only junk repo-a still lets through
 that a G/N wording could catch is one page, so there was nothing to tune on,
-and the 7 calls left were exactly one clubinho + clearframe pass with no
+and the 7 calls left were exactly one repo-a + repo-c pass with no
 room to re-ask a failed reply. At ~30 pages a corpus, a gate that caught
 every catchable junk page and lost no good one would score ~90% with a
 Wilson floor near 74%: this n cannot put any gate clearly over the bar.
@@ -95,8 +95,8 @@ dk = _sibling("measure_demoted_keeps")
 mb = _sibling("measure_backfill_routes")
 
 CORPORA = {
-    "clubinho": mb.DEFAULT_OUT,
-    "clearframe": Path.home() / ".cache" / "mnemo" / "day-one-clearframe" / "backfill-live",
+    "repo-a": mb.DEFAULT_OUT,
+    "repo-c": Path.home() / ".cache" / "mnemo" / "day-one-repo-c" / "backfill-live",
 }
 DEFAULT_OUT = Path.home() / ".cache" / "mnemo" / "project-gate"
 ANSWERS_NAME = "answers.json"

@@ -353,14 +353,14 @@ def test_resolve_session_jsonl_path_dash_encodes_cwd(tmp_path, monkeypatch):
     from mnemo.hooks import session_end
 
     home = tmp_path / "home"
-    claude_dir = home / ".claude" / "projects" / "-home-xyrlan-github-mnemo"
+    claude_dir = home / ".claude" / "projects" / "-home-you-github-mnemo"
     claude_dir.mkdir(parents=True)
     expected = claude_dir / "sid42.jsonl"
     expected.write_text("{}\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Windows compatibility
 
-    resolved = session_end._resolve_session_jsonl_path("sid42", "/home/xyrlan/github/mnemo")
+    resolved = session_end._resolve_session_jsonl_path("sid42", "/home/you/github/mnemo")
     assert resolved == expected
 
 

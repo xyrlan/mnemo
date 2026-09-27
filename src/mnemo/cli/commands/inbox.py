@@ -179,7 +179,7 @@ def _decide_batch(vault, action: str, keys: list, *, as_json: bool) -> int:
 
 
 #: Group order on the review checklist — the three types a backfill stages
-#: most of (32/9/15 on clubinho), then the rest alphabetically.
+#: most of (32/9/15 on repo-a), then the rest alphabetically.
 _REVIEW_ORDER = ("project", "feedback", "reference")
 
 

@@ -135,13 +135,13 @@ def test_send_uses_the_shipped_gate_and_stops_at_the_budget(tmp_path: Path, monk
     cfg = config.load_config()
     out = tmp_path / "out"
     monkeypatch.setattr(mp, "MAX_CALLS", 1)
-    argv = ["--corpus", "clubinho", "--dir", "clubinho=%s" % d, "--out", str(out), "--send"]
+    argv = ["--corpus", "repo-a", "--dir", "repo-a=%s" % d, "--out", str(out), "--send"]
     assert mp.main(argv) == 0
     store = json.loads((out / "answers.json").read_text(encoding="utf-8"))
     assert store["calls"] == 1
     assert calls == [(reference_gate.SYSTEM_PROMPT, cfg["extraction"]["referenceGate"]["model"])]
     col = mp.column(calls[0][1], reference_gate.SYSTEM_PROMPT)
-    assert len(store["answers"]["clubinho"][col]) == 10
+    assert len(store["answers"]["repo-a"][col]) == 10
     assert {p.name: p.read_bytes() for p in d.iterdir()} == before
 
 

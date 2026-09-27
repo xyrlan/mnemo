@@ -37,7 +37,7 @@ stability: stable
 confidence: verified
 last_sync: 2026-08-19T16:41:05
 sources:
-  - bots/clubinho/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9.md
+  - bots/repo-a/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9.md
 tags:
   - auto-promoted
   - data-integrity
@@ -45,7 +45,7 @@ tags:
   - testing
 evidence:
   quote: 'No nosso @painel/ em ativacao do app ajustar contendo a quantidade de ativações por plano.'
-  source: 'briefing: bots/clubinho/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9.md — user turns, turn 1'
+  source: 'briefing: bots/repo-a/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9.md — user turns, turn 1'
 ---
 
 In reports where a single entity can appear across multiple rows, the total row must use the global aggregate figures, NOT the sum of the individual line items.
@@ -54,7 +54,7 @@ In reports where a single entity can appear across multiple rows, the total row 
 
 <!-- mnemo:graph-section -->
 ## Sources
-- [[bots/clubinho/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9]]
+- [[bots/repo-a/briefings/sessions/887285b2-cfc0-4b0a-88cf-63b8d4be69b9]]
 """
 
 # A demoted page carrying every local-only block the contract says must not travel.
@@ -72,7 +72,7 @@ last_sync: 2026-06-09T14:09:02
 promoted_without_enforce: true
 runtime: false
 sources:
-  - bots/central-inteligencia-frontend/briefings/sessions/06ecbace.md
+  - bots/repo-e/briefings/sessions/06ecbace.md
 enforce:
   tool: Bash
   deny_pattern: '(?:^|&&|;|\\|)\\s*(?:sudo\\s+)?(?:npm|bun)\\s+(?:install|ci|i|add|remove|uninstall)\\b'
@@ -92,7 +92,7 @@ Always use yarn (classic, v1+) for JS/TS package management.
 
 <!-- mnemo:graph-section -->
 ## Sources
-- [[bots/central-inteligencia-frontend/briefings/sessions/06ecbace]]
+- [[bots/repo-e/briefings/sessions/06ecbace]]
 """
 
 
@@ -145,7 +145,7 @@ def test_to_portable_drops_every_local_only_key(tmp_vault: Path):
 
 
 def test_to_portable_strips_managed_tags_and_keeps_topics():
-    out = to_portable(REAL_PAGE, vault="v", project="clubinho", today=TODAY)
+    out = to_portable(REAL_PAGE, vault="v", project="repo-a", today=TODAY)
     fm = parse_frontmatter(out)
     assert fm["tags"] == ["data-integrity", "reporting", "testing"]
     assert topic_tags(fm) == fm["tags"]
@@ -235,7 +235,7 @@ def test_from_portable_round_trips_what_to_portable_wrote(tmp_vault: Path):
 
 
 def test_from_portable_reads_the_real_page():
-    rule = from_portable(to_portable(REAL_PAGE, vault="v", project="clubinho", today=TODAY))
+    rule = from_portable(to_portable(REAL_PAGE, vault="v", project="repo-a", today=TODAY))
     assert rule.confidence == "verified"
     assert rule.tags == ("data-integrity", "reporting", "testing")
     assert rule.published_at == "2026-08-19"
@@ -336,12 +336,12 @@ def test_to_vault_page_survives_the_flat_parser_too(tmp_vault: Path):
 
 
 def test_hop_preserves_the_first_vaults_provenance():
-    first = to_portable(REAL_PAGE, vault="vault-a", project="clubinho", today="2026-09-01")
+    first = to_portable(REAL_PAGE, vault="vault-a", project="repo-a", today="2026-09-01")
     staged = to_vault_page(from_portable(first), project="mine", today="2026-09-05")
     second = to_portable(staged, vault="vault-b", project="mine", today="2026-09-13")
     hop = from_portable(second)
     assert hop.vault == "vault-a"
-    assert hop.project == "clubinho"
+    assert hop.project == "repo-a"
     assert hop.published_at == "2026-08-19"
     assert hop.source_count == 1
     assert hop.confidence == "verified"
@@ -351,7 +351,7 @@ def test_hop_preserves_the_first_vaults_provenance():
 
 
 def test_hop_is_byte_identical_to_the_first_publish():
-    first = to_portable(REAL_PAGE, vault="vault-a", project="clubinho", today="2026-09-01")
+    first = to_portable(REAL_PAGE, vault="vault-a", project="repo-a", today="2026-09-01")
     staged = to_vault_page(from_portable(first), project="mine", today="2026-09-05")
     assert to_portable(staged, vault="vault-b", project="mine", today="2026-09-13") == first
 

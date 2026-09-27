@@ -457,7 +457,7 @@ def _briefing(tmp_path: Path, project: str, sid: str) -> Path:
 def test_relocates_source_instead_of_stripping(tmp_path: Path) -> None:
     """Legacy vault-relative path: the briefing moved under bots/<project>/."""
     sid = "b8f895ca-9f90-4070-88ce-2e3888afb0d3"
-    _briefing(tmp_path, "meunu", sid)
+    _briefing(tmp_path, "repo-b", sid)
     rule = _make_rule(tmp_path, "moved", [f"briefings/sessions/{sid}.md"])
 
     warnings = detect_fixable(vault_root=tmp_path)
@@ -465,24 +465,24 @@ def test_relocates_source_instead_of_stripping(tmp_path: Path) -> None:
     fix_warning(warnings[0], vault_root=tmp_path)
 
     text = rule.read_text(encoding="utf-8")
-    assert f"  - bots/meunu/briefings/sessions/{sid}.md" in text
+    assert f"  - bots/repo-b/briefings/sessions/{sid}.md" in text
     assert f"  - briefings/sessions/{sid}.md" not in text
 
 
 def test_relocation_corrects_wrong_project_attribution(tmp_path: Path) -> None:
     """A source under the wrong project orphans the rule from real scoping."""
     sid = "aa41cbf4-257c-4168-be43-dee4d718fad6"
-    _briefing(tmp_path, "clearframe", sid)
+    _briefing(tmp_path, "repo-c", sid)
     rule = _make_rule(
         tmp_path, "misattributed",
-        [f"bots/clubinho/briefings/sessions/{sid}.md"],
+        [f"bots/repo-a/briefings/sessions/{sid}.md"],
     )
 
     warnings = detect_fixable(vault_root=tmp_path)
     assert [w.kind for w in warnings] == ["source_path_moved"]
     fix_warning(warnings[0], vault_root=tmp_path)
 
-    assert f"bots/clearframe/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+    assert f"bots/repo-c/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
 
 
 def test_ambiguous_relocation_is_not_auto_fixed(tmp_path: Path) -> None:
@@ -497,7 +497,7 @@ def test_ambiguous_relocation_is_not_auto_fixed(tmp_path: Path) -> None:
 def test_empty_sources_healed_via_relocated_state_path(tmp_path: Path) -> None:
     """State's recorded path is stale, but the briefing is still findable."""
     sid = "4282f958-8ffd-4385-9733-330028ae68f2"
-    _briefing(tmp_path, "sg-imports", sid)
+    _briefing(tmp_path, "repo-d", sid)
     rule = _make_rule(tmp_path, "orphan-relocatable", [])
     _write_state(tmp_path, {
         "feedback/orphan-relocatable": {
@@ -509,20 +509,20 @@ def test_empty_sources_healed_via_relocated_state_path(tmp_path: Path) -> None:
     assert [w.kind for w in warnings] == ["sources_empty"]
     fix_warning(warnings[0], vault_root=tmp_path)
 
-    assert f"  - bots/sg-imports/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+    assert f"  - bots/repo-d/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
 
 
 def test_relocates_extensionless_source_path(tmp_path: Path) -> None:
     """Some state entries recorded the session id without the .md suffix."""
     sid = "f1186308-b629-488d-896c-adeaf74f4b59"
-    _briefing(tmp_path, "sg-imports", sid)
+    _briefing(tmp_path, "repo-d", sid)
     rule = _make_rule(tmp_path, "noext", [f"briefings/sessions/{sid}"])
 
     warnings = detect_fixable(vault_root=tmp_path)
     assert [w.kind for w in warnings] == ["source_path_moved"]
     fix_warning(warnings[0], vault_root=tmp_path)
 
-    assert f"bots/sg-imports/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
+    assert f"bots/repo-d/briefings/sessions/{sid}.md" in rule.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +531,7 @@ def test_relocates_extensionless_source_path(tmp_path: Path) -> None:
 
 
 def test_detects_and_relativizes_absolute_source(tmp_path: Path) -> None:
-    src_rel = "bots/meunu/briefings/sessions/s.md"
+    src_rel = "bots/repo-b/briefings/sessions/s.md"
     src_abs = str(tmp_path / src_rel)
     briefing = tmp_path / src_rel
     briefing.parent.mkdir(parents=True, exist_ok=True)

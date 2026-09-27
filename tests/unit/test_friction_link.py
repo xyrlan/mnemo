@@ -162,7 +162,7 @@ def test_rank_caps_at_contradiction_candidates(tmp_vault):
 def test_rank_pool_is_what_candidates_for_project_admits(tmp_vault):
     _merge_vault(tmp_vault)
     _write_rule(tmp_vault, "other-project-merge", "gh pr merge --admin elsewhere.",
-                sources=["bots/clubinho/memory/x.md"])
+                sources=["bots/repo-a/memory/x.md"])
     _write_rule(tmp_vault, "universal-merge", "gh pr merge --admin everywhere.",
                 sources=["bots/a/memory/x.md", "bots/b/memory/y.md"])
     _write_rule(tmp_vault, "evolving-merge", "gh pr merge --admin maybe.",

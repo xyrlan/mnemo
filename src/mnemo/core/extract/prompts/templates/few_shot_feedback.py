@@ -20,10 +20,10 @@ file paraphrases the same rule. Merge them, cite the briefing quote as
 evidence, keep both files in source_files.)
 
 Input:
-[FILE: bots/clubinho/briefings/sessions/9f1c.md]
+[FILE: bots/repo-a/briefings/sessions/9f1c.md]
 ---
 type: briefing
-agent: clubinho
+agent: repo-a
 session_id: 9f1c
 corrections: 1
 ---
@@ -33,7 +33,7 @@ corrections: 1
 ## Corrections
 - "do not commit on my behalf, I stage and commit myself" → Never run git commit unless explicitly asked
 [END]
-[FILE: bots/central-inteligencia-frontend/memory/feedback_no_commits.md]
+[FILE: bots/repo-e/memory/feedback_no_commits.md]
 ---
 name: No commits
 type: feedback
@@ -44,7 +44,7 @@ Never run `git commit` on my behalf. Only edit files.
 [END]
 
 Output (ONE merged page, both files listed in source_files, evidence quoting the briefing):
-{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" before proceeding.","source_files":["bots/clubinho/briefings/sessions/9f1c.md","bots/central-inteligencia-frontend/memory/feedback_no_commits.md"],"stability":"stable","tags":["git","workflow"],"evidence":{"quote":"do not commit on my behalf, I stage and commit myself","source":"bots/clubinho/briefings/sessions/9f1c.md"}}]}
+{"pages":[{"slug":"no-commits-without-permission","name":"Never commit without explicit permission","description":"Do not create git commits unless the user explicitly asks","type":"feedback","body":"Never run `git commit` unless the user explicitly asks you to commit.\\n\\n**Why:** the user reviews and owns their commit history; autonomous commits bypass that review.\\n\\n**How to apply:** edit and stage files freely, but stop before running `git commit`. Wait for explicit phrasing like \\"commit this\\" before proceeding.","source_files":["bots/repo-a/briefings/sessions/9f1c.md","bots/repo-e/memory/feedback_no_commits.md"],"stability":"stable","tags":["git","workflow"],"evidence":{"quote":"do not commit on my behalf, I stage and commit myself","source":"bots/repo-a/briefings/sessions/9f1c.md"}}]}
 
 Example 2 — NEGATIVE: two files about genuinely different rules → DO NOT MERGE.
 (Use yarn and no-commits-without-permission are unrelated rules — different

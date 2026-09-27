@@ -76,11 +76,11 @@ def test_real_harvest_output_stages_in_inbox(tmp_vault: Path):
 
 def test_backfill_project_file_stages_in_inbox(tmp_vault: Path):
     state = scanner.ExtractionState(last_run=None, entries={})
-    f = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal", backfill=True)
+    f = _mk_project_file(tmp_vault, "repo-d", "project_china_portal", backfill=True)
     promote.promote_projects([f], state, tmp_vault)
 
-    staged = tmp_vault / "shared" / "_inbox" / "project" / "sg-imports__china-portal.md"
-    promoted = tmp_vault / "shared" / "project" / "sg-imports__china-portal.md"
+    staged = tmp_vault / "shared" / "_inbox" / "project" / "repo-d__china-portal.md"
+    promoted = tmp_vault / "shared" / "project" / "repo-d__china-portal.md"
     assert staged.exists(), "backfill project page must stage in shared/_inbox/project/"
     assert not promoted.exists(), "backfill project page must not reach shared/project/"
 
@@ -88,14 +88,14 @@ def test_backfill_project_file_stages_in_inbox(tmp_vault: Path):
 def test_unstamped_project_file_still_promotes_directly(tmp_vault: Path):
     """Control: live project files keep the pre-Task-6c behaviour exactly."""
     state = scanner.ExtractionState(last_run=None, entries={})
-    f = _mk_project_file(tmp_vault, "sg-imports", "project_china_portal")
+    f = _mk_project_file(tmp_vault, "repo-d", "project_china_portal")
     result = promote.promote_projects([f], state, tmp_vault)
 
-    promoted = tmp_vault / "shared" / "project" / "sg-imports__china-portal.md"
-    staged = tmp_vault / "shared" / "_inbox" / "project" / "sg-imports__china-portal.md"
+    promoted = tmp_vault / "shared" / "project" / "repo-d__china-portal.md"
+    staged = tmp_vault / "shared" / "_inbox" / "project" / "repo-d__china-portal.md"
     assert promoted.exists()
     assert not staged.exists()
-    assert result.written_fresh == ["project/sg-imports__china-portal"]
+    assert result.written_fresh == ["project/repo-d__china-portal"]
 
 
 def test_staged_project_page_keeps_the_origin_stamp(tmp_vault: Path):

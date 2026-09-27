@@ -1,7 +1,7 @@
 """Frontmatter merge policy for staged rewrites (#159).
 
 Policies are not arbitrary. Measured on the real vault: ``sources[]`` deltas in
-the auto-merge set are purely the ``/Users/xyrlan/mnemo/`` absolute-path prefix
+the auto-merge set are purely the ``/Users/you/mnemo/`` absolute-path prefix
 (#163, fixed v1.3.3) — but 3 of 11 have live=2 → prop=1, so proposal-wins drops
 a source. Live ``description`` values are factually stale ("bloqueia assinante em
 dia" vs "RESOLVIDO 2026-08-11"). And ``tdd-red-green-per-feature`` flips
@@ -115,7 +115,7 @@ def test_merge_invents_no_frontmatter_key_neither_page_had(tmp_vault: Path):
 
     ``_rewrite_block`` appends ``key: []`` when the key is absent and there are
     no values, so calling it unconditionally grew a spurious ``tags: []`` line.
-    Confirmed on real files: ``shared/project/clubinho__sprints-github.md`` and
+    Confirmed on real files: ``shared/project/repo-a__sprints-github.md`` and
     its staged proposal both have no ``tags:`` block.
 
     Invisible to every reader (``parse_frontmatter`` treats ``[]`` and absent

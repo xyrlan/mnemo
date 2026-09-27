@@ -35,7 +35,7 @@ monotone in both knobs on every project with enough data** — it only ever
 falls as a threshold tightens. ``relative_gap`` vs carried:
 
 ======  ========  =====  ==========  =====
-  gap   clubinho  mnemo  clearframe  meunu
+  gap   repo-a  mnemo  repo-c  repo-b
 ======  ========  =====  ==========  =====
 1.10         237     78          57     83
 1.15         224     64          39     72

@@ -36,7 +36,7 @@ CWD = "/Users/x/github/mnemo-wt-269"
     "cat > README.md <<'EOF'\n# mnemo\nEOF",
     # #233: create a package directory and move into it.
     "mkdir -p src/mnemo/skills/x && git mv skills/x/SKILL.md src/mnemo/skills/x/SKILL.md",
-    # clubinho #191: copy a probe spec into the tree to run it there.
+    # repo-a #191: copy a probe spec into the tree to run it there.
     "cp /Users/x/.claude/jobs/fd7ed8c6/tmp/probe.spec.ts /Users/x/github/mnemo-wt-269/backend/test/probe.spec.ts",
     "sed -i '' 's/old/new/' src/mnemo/core/x.py",
     "git commit -qm 'fix'",

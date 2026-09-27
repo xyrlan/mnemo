@@ -40,8 +40,9 @@ def _encode_cwd(cwd: str) -> str:
 
 
 def test_decodes_dashed_dir_back_to_cwd():
-    encoded = "-Users-xyrlan-github-meunu"
-    assert discover.decode_project_dir(encoding=encoded) == "/Users/xyrlan/github/meunu"
+    # A dashless name: decoding turns every dash back into a separator.
+    encoded = "-Users-you-github-shop"
+    assert discover.decode_project_dir(encoding=encoded) == "/Users/you/github/shop"
 
 
 def test_decodes_windows_drive_letter_without_leading_slash():

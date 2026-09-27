@@ -21,7 +21,7 @@ from mnemo.core.sessions.render import render_queue
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "transcripts"
 
-#: ``fee17ecd``, a finished clubinho child. ``state.json`` said ``tokens:
+#: ``fee17ecd``, a finished repo-a child. ``state.json`` said ``tokens:
 #: 14540``; ``/context`` printed ``92.6k``.
 FEE17ECD = FIXTURES / "context_fee17ecd.jsonl"
 FEE17ECD_STATE_TOKENS = 14540

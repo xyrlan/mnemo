@@ -21,11 +21,11 @@ from mnemo.core import claude_cli
 from mnemo.core.sessions import residents
 
 SPARE = "/tmp/cc-daemon-501/3c0b3d77/spare"
-VERSIONS = "/Users/xyrlan/.local/share/claude/versions/2.1.270"
+VERSIONS = "/Users/you/.local/share/claude/versions/2.1.270"
 
 REAL_PS = f"""\
-36487     1 106912 01-21:27:13 /Users/xyrlan/.local/bin/claude daemon run --json-path /Users/xyrlan/.claude/daemon.json --log-file /Users/xyrlan/.claude/daemon.log --origin transient
- 5072 36487  23056 04:30:32 /Users/xyrlan/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host {SPARE}/25b53d8e.pty.sock 200 50 -- {VERSIONS} --resume /x/14fa8a4d.jsonl --model opus[1m]
+36487     1 106912 01-21:27:13 /Users/you/.local/bin/claude daemon run --json-path /Users/you/.claude/daemon.json --log-file /Users/you/.claude/daemon.log --origin transient
+ 5072 36487  23056 04:30:32 /Users/you/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host {SPARE}/25b53d8e.pty.sock 200 50 -- {VERSIONS} --resume /x/14fa8a4d.jsonl --model opus[1m]
  5090  5072 300000 04:30:30 claude --resume /x/14fa8a4d.jsonl
 22998 36487  88832    01:20 claude bg-pty-host --bg-pty-host {SPARE}/ab88f713.pty.sock 200 50 -- {VERSIONS} --bg-spare {SPARE}/ab88f713.claim.sock
 23009 22998 278432    01:20 claude bg-spare --bg-spare {SPARE}/ab88f713.claim.sock
