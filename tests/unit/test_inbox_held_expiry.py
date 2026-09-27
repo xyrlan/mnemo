@@ -7,7 +7,7 @@ meant "kept forever, invisible to recall". These pin the exit:
 
 - the verdict is written on the page, because a run-only verdict leaves
   nothing for a later sweep to find;
-- only that verdict expires a page — an evidence-gate demotion or a
+- only that verdict expires a page — an unjudged evidence-gate demotion or
   multi-source staging waits for a human however old it is;
 - expiry archives exactly like ``drop`` and says so in the ledger under its
   own name, so ``resolved`` still counts human decisions only;

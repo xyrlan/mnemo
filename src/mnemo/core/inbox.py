@@ -31,14 +31,17 @@ and "how long from being shown to being judged" were not answerable questions.
 
 The decision stays human, with two exceptions. A page the reference judge held
 (#417 — it carries ``reference_gate: generic|narrative``) is archived by
-:func:`expire_held` once it has sat ``inbox.heldExpiryDays`` untouched (#429):
-44 offers over four days produced 0 decisions, so without an exit "held"
-meant "kept forever, invisible". It rests on the judge's measurement. The
+:func:`expire_held` once ``inbox.heldExpiryDays`` have passed since it first
+entered the inbox (#429, #518): 44 offers over four days produced 0
+decisions, so without an exit "held" meant "kept forever, invisible". It
+rests on the judge's measurement, and it is the verdict, not the reason a
+page was staged, that decides: a live-capture demotion or a multi-source
+page the judge called generic or narrative expires like any other. The
 second is a page with the backfill origin (#496): the install review asks the
 user once to keep or drop what the backfill learned, and a page they skipped
 or never saw expires on the same clock, as the install-review spec
 (``design/specs/2026-09-24-install-review-design.md``) decided.
-Nothing else expires — a live-capture demotion or a multi-source page waits
+Nothing else expires — a page the judge would keep, or never judged, waits
 for a human however old. The expiry is logged as ``expired``, never as a
 decision, and :func:`restore` undoes it (or a drop).
 """
@@ -79,6 +82,11 @@ HELD_EXPIRY_DAYS = 14
 #: Why :func:`expire_held` archived a page, on :attr:`DecisionResult.why`.
 WHY_HELD = "held"
 WHY_BACKFILL = "backfill"
+
+#: Frontmatter key the extractor stamps on a page the first time it stages it
+#: (#518), and carries over on every later rewrite of the same staged key.
+#: What the expiry window is counted from; see :func:`first_staged`.
+STAGED_AT = "staged_at"
 
 #: The ``reference_gate`` frontmatter values a staged page may carry: the
 #: reference judge's category, written on a page it staged (#417) or on an
@@ -123,6 +131,15 @@ class StagedPage:
     #: Carries the backfill origin stamp (#496), whatever else happened to it
     #: since — :func:`expire_held` archives it once nobody decided it.
     backfill: bool = False
+    #: When the page first entered the inbox (#518), as :func:`first_staged`
+    #: reads it. None on a page built without one: :attr:`staged_since` then
+    #: falls back to :attr:`mtime`.
+    staged_at: float | None = None
+
+    @property
+    def staged_since(self) -> float:
+        """When the page first entered the inbox — what its expiry counts from."""
+        return self.mtime if self.staged_at is None else self.staged_at
 
     @property
     def expiry_why(self) -> str:
@@ -167,6 +184,49 @@ def _mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def first_staged(fm: dict, mtime: float) -> float:
+    """When a page first entered the inbox, as an epoch. Never raises.
+
+    Its :data:`STAGED_AT` stamp, which the extractor writes on first staging
+    and carries over on every rewrite (#518). A page staged before the stamp
+    existed has only its mtime, so that is the fallback — and the stamp a
+    later rewrite writes on it (:func:`staged_at_for`), so the two agree.
+    Never later than *mtime*: a file cannot have entered the inbox after it
+    was last written, and a hand-edited future stamp must not postpone an
+    expiry.
+    """
+    ts = _parse_ts(str((fm or {}).get(STAGED_AT) or ""))
+    if ts is None:
+        return mtime
+    try:
+        return min(ts.timestamp(), mtime)
+    except (OverflowError, OSError, ValueError):
+        return mtime
+
+
+def staged_at_for(target: Path, now: datetime | None = None) -> str:
+    """The :data:`STAGED_AT` stamp to write on *target*, which is about to be (re)staged.
+
+    A rewrite of a page already staged keeps the time it first entered the
+    inbox (#518) — its stamp, or its mtime when it has none — so re-deriving
+    a recurring lesson does not restart its expiry. A page not on disk is
+    entering the inbox now. Local time, second precision, the same spelling
+    the ledger writes.
+    """
+    from mnemo.core.filters import parse_frontmatter
+
+    target = Path(target)
+    try:
+        mtime = target.stat().st_mtime
+    except OSError:
+        return (now or datetime.now()).isoformat(timespec="seconds")
+    try:
+        fm = parse_frontmatter(target.read_text(encoding="utf-8", errors="replace")) or {}
+    except OSError:
+        fm = {}
+    return datetime.fromtimestamp(first_staged(fm, mtime)).isoformat(timespec="seconds")
 
 
 def _reason_for(fm: dict) -> str:
@@ -242,6 +302,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             continue
         page_type = path.parent.name
         slug = path.stem
+        mtime = _mtime(path)
         projects = tuple(projects_for_rule(fm.get("sources") or [], frontmatter=fm))
         if project is not None and project not in projects:
             continue
@@ -254,10 +315,11 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             description=str(fm.get("description") or ""),
             projects=projects,
             reason=_reason_for(fm),
-            mtime=_mtime(path),
+            mtime=mtime,
             gate_held=is_held_frontmatter(fm),
             gate_verdict=_gate_verdict(fm),
             backfill=is_backfill_frontmatter(fm),
+            staged_at=first_staged(fm, mtime),
         ))
     out.sort(key=lambda p: (p.mtime, p.key))
     return out
@@ -633,8 +695,10 @@ def expires_at(
     """When :func:`expire_held` will archive *page*, or None if it never will.
 
     The one place the rule is spelled for a reader (#496): the install-review
-    listing's ``expires_at`` comes from here, so it cannot drift from the
-    sweep. Staging time is the file's mtime, as :func:`expire_held` reads it.
+    listing's ``expires_at`` comes from here, and :func:`expire_held` archives
+    a page once this time has passed, so the two cannot drift. The window
+    counts from :attr:`StagedPage.staged_since` — when the page first entered
+    the inbox, not its last write (#518).
     Pass :func:`restored_keys` as *restored* so a restored page reads None.
     The sweep runs at the end of an extraction, so a page is archived at the
     first extraction on or after this time, not at it.
@@ -642,17 +706,22 @@ def expires_at(
     days = held_expiry_days(cfg or {})
     if days <= 0 or not page.expiry_why or page.key in restored:
         return None
-    return datetime.fromtimestamp(page.mtime) + timedelta(days=days)
+    return datetime.fromtimestamp(page.staged_since) + timedelta(days=days)
 
 
 def expire_held(
     vault_root: Path, *, days: int, now: datetime | None = None,
 ) -> list[DecisionResult]:
-    """Archive every expiring page untouched for *days* or more. Never raises.
+    """Archive every expiring page staged *days* or more ago. Never raises.
 
-    "Untouched" is the file's mtime, the same age ``mnemo inbox`` lists: a
-    page the extractor rewrites because its source changed starts its window
-    again, since that is new evidence the judge has just looked at.
+    Counted from when the page first entered the inbox (:func:`first_staged`),
+    not from its last write (#518). This used to be the file's mtime, on the
+    reasoning that a rewrite is new evidence the judge has just looked at. It
+    is, and the judge's new verdict is honoured — a page it now keeps stops
+    expiring — but restarting the clock on it was wrong: the extractor
+    rewrites a staged page whenever the lesson is re-derived, and the pages
+    the judge calls ``generic`` (standard practice) are the ones re-derived
+    most, so they reset their own window and never left the queue.
 
     Two kinds expire, on one window: the judge-held pages
     (:attr:`StagedPage.gate_held`, #429) and the backfill-origin pages nobody
@@ -666,13 +735,17 @@ def expire_held(
     if days <= 0:
         return []
     try:
-        ref = (now or datetime.now()).timestamp()
+        ref = now or datetime.now()
+        cfg = {"inbox": {"heldExpiryDays": days}}
         restored = restored_keys(vault_root)
         out: list[DecisionResult] = []
         for page in staged_pages(vault_root):
-            why = page.expiry_why
-            if not why or page.key in restored or page.age_days(ref) < days:
+            # The listing's own function (#496), so the sweep archives exactly
+            # what ``mnemo inbox --json`` says is due.
+            due = expires_at(page, cfg, restored=restored)
+            if due is None or due > ref:
                 continue
+            why = page.expiry_why
             project = page.projects[0] if page.projects else None
             result = _archive_out(vault_root, page, prefix=EXPIRED_ARCHIVE_PREFIX,
                                   event=EXPIRED, project=project, verb="expired")
@@ -796,7 +869,7 @@ def page_record(page: StagedPage, *, cfg: dict, restored: frozenset) -> dict:
         "name": page.name,
         "description": page.description,
         "excerpt": _excerpt(page.path),
-        "staged_at": datetime.fromtimestamp(page.mtime).isoformat(timespec="seconds"),
+        "staged_at": datetime.fromtimestamp(page.staged_since).isoformat(timespec="seconds"),
         "expires_at": ends.isoformat(timespec="seconds") if ends else None,
     }
 

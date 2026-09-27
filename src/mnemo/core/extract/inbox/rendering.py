@@ -107,7 +107,9 @@ def _same_but_for_run_stamps(old: str, new: str) -> bool:
     return strip(old) == strip(new)
 
 
-def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = False) -> str:
+def _render_page(
+    page: ExtractedPage, *, run_id: str, auto_promoted: bool = False, staged_at: str | None = None,
+) -> str:
     sources_yaml = "\n".join(f"  - {s}" for s in page.source_files)
 
     # --- enforce block ---
@@ -167,6 +169,10 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
     # an expiry reads, T/S says the judge would keep it. A live rewrite is
     # never held, so it never carries one.
     gate_line = "" if auto_promoted else held_line(page)
+    # #518: when the page first entered the inbox — what an expiry counts
+    # from. Only the inbox branch passes it, and it carries the old stamp
+    # over on a rewrite, so re-deriving a page never restarts its window.
+    staged_line = "" if auto_promoted or not staged_at else f"staged_at: {staged_at}\n"
 
     # Maintainer-facing note, written AFTER the rule text so the preview
     # (first 300 chars of the body) and the export start at the rule, not at
@@ -214,6 +220,7 @@ def _render_page(page: ExtractedPage, *, run_id: str, auto_promoted: bool = Fals
         f"confidence: {confidence}\n"
         f"{demoted_line}"
         f"{gate_line}"
+        f"{staged_line}"
         f"{origin_line}"
         f"{extras}"
         "sources:\n"
