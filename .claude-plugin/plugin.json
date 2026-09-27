@@ -1,5 +1,6 @@
 {
   "name": "mnemo",
+  "displayName": "mnemo",
   "version": "1.7.0",
   "description": "Claude Code forgets your corrections. mnemo doesn't \u2014 and the sessions it fans out for you start out knowing them.",
   "author": {
@@ -8,5 +9,17 @@
   },
   "license": "MIT",
   "homepage": "https://github.com/xyrlan/mnemo",
-  "repository": "https://github.com/xyrlan/mnemo"
+  "repository": "https://github.com/xyrlan/mnemo",
+  "keywords": [
+    "memory",
+    "corrections",
+    "rules",
+    "recall",
+    "hooks",
+    "mcp",
+    "obsidian",
+    "dispatch",
+    "worktrees",
+    "background-sessions"
+  ]
 }

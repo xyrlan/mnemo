@@ -321,6 +321,7 @@ Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 - [Troubleshooting](docs/troubleshooting.md) — when something looks wrong
 - [Obsidian](docs/obsidian.md) — optional: browse the vault as a graph
 - [Design notes](design/README.md) — how it was decided and measured, built in the open
+- [Privacy](#privacy) — what stays on your machine, and the three opt-in switches that send anything
 
 ## Privacy
 
