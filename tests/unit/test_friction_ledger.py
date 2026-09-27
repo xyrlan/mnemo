@@ -111,6 +111,7 @@ def test_record_carries_every_field_the_data_model_lists():
     assert fields == {
         "id", "ts", "session_id", "project", "quote", "rule_text", "briefing",
         "contradicts", "link_basis", "injected_in_session", "origin", "backfilled",
+        "capture", "turn_index", "turn_ts", "turn_uuid", "child", "entrypoint",
     }
 
 
@@ -211,9 +212,15 @@ def test_a_row_is_one_json_object_per_line(tmp_path, telemetry_on):
     ledger.record(tmp_path, _rec())
     ledger.record(tmp_path, _rec(session_id="other"))
 
+    ledger.record(tmp_path, _rec(session_id="live", capture=ledger.CAPTURE_BRIEFING))
+
     rows = [json.loads(ln) for ln in _lines(tmp_path)]
-    assert len(rows) == 2
-    assert set(rows[0]) == {f.name for f in FrictionRecord.__dataclass_fields__.values()}
+    assert len(rows) == 3
+    every = {f.name for f in FrictionRecord.__dataclass_fields__.values()}
+    capture_only = {"capture", "turn_index", "turn_ts", "turn_uuid", "child", "entrypoint"}
+    # The session-end capture's fields (#517) ride only on the rows it writes.
+    assert set(rows[0]) == every - capture_only
+    assert set(rows[2]) == every
 
 
 # --- the id -----------------------------------------------------------------

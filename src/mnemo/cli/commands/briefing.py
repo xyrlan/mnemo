@@ -12,7 +12,9 @@ def cmd_briefing(args: argparse.Namespace) -> int:
     """Hidden CLI entry point: `mnemo briefing <jsonl_path> <agent>`.
 
     Invoked by session_end's detached spawn. Fire-and-forget: errors are
-    logged to ~/.errors.log under the vault but never propagated.
+    logged to ~/.errors.log under the vault but never propagated. A session
+    with a file edit is briefed; one without gets the corrections-only pass.
+    Either way its verified corrections land in the friction ledger (#517).
 
     `mnemo briefing --prune [--dry-run]` runs the retention pass (#116) and
     prints its report — the one mode of this command a human runs.
@@ -48,9 +50,16 @@ def cmd_briefing(args: argparse.Namespace) -> int:
     try:
         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
             try:
-                briefing_mod.generate_session_briefing(
-                    Path(args.jsonl_path), args.agent, cfg,
+                jsonl = Path(args.jsonl_path)
+                written = briefing_mod.generate_session_briefing(
+                    jsonl, args.agent, cfg, record_corrections=True,
                 )
+                if written is None:
+                    # No file edit, so no briefing — but the user may still
+                    # have corrected the assistant (#517).
+                    from mnemo.core.friction import capture
+
+                    capture.corrections_only(jsonl, args.agent, cfg)
             except Exception as exc:
                 err_mod.log_error(vault_root, "briefing.cli", exc)
                 return 1

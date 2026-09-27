@@ -205,14 +205,34 @@ def verify(
     """
     kept: list[Correction] = []
     rejected: list[Correction] = []
-    turns = user_turns[1:] if user_turns and is_dispatch_brief(user_turns[0]) else user_turns
-    reactions = [t for t in turns if not is_shell_turn(t)]
     for item in items:
-        if any(quote_matches_turn(item.quote, t) for t in reactions):
+        if locate(item.quote, user_turns) is not None:
             kept.append(item)
         else:
             rejected.append(item)
     return kept, rejected
+
+
+def reaction_indexes(user_turns: list[str]) -> list[int]:
+    """Indexes of the turns :func:`verify` accepts a quote from.
+
+    Every turn but a dispatch brief in the opening position and a ``!``
+    shell-mode turn — the two exclusions :func:`verify` documents.
+    """
+    start = 1 if user_turns and is_dispatch_brief(user_turns[0]) else 0
+    return [i for i in range(start, len(user_turns)) if not is_shell_turn(user_turns[i])]
+
+
+def locate(quote: str, user_turns: list[str]) -> int | None:
+    """Index of the first turn :func:`verify` would accept *quote* from, or None.
+
+    The first, not the last: a correction the user repeats was said, and
+    could have been learned from, the first time (#517).
+    """
+    for i in reaction_indexes(user_turns):
+        if quote_matches_turn(quote, user_turns[i]):
+            return i
+    return None
 
 
 def render_section(items: list[Correction]) -> str:

@@ -17,6 +17,7 @@ from mnemo.core.extract.prompts.encoding import chunks_for  # noqa: F401
 from mnemo.core.extract.prompts.render import (  # noqa: F401
     build_briefing_prompt,
     build_consolidation_prompt,
+    build_corrections_prompt,
     build_feedback_prompt,
     build_harvest_prompt,
     build_reference_prompt,
@@ -24,6 +25,9 @@ from mnemo.core.extract.prompts.render import (  # noqa: F401
 )
 from mnemo.core.extract.prompts.templates.briefing import (  # noqa: F401
     BRIEFING_SYSTEM_PROMPT,
+)
+from mnemo.core.extract.prompts.templates.corrections import (  # noqa: F401
+    CORRECTIONS_SYSTEM_PROMPT,
 )
 from mnemo.core.extract.prompts.templates.harvest import (  # noqa: F401
     HARVEST_SYSTEM_PROMPT,

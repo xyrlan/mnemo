@@ -147,6 +147,7 @@ def generate_session_briefing(
     *,
     min_mutations: int = 1,
     reuse_unchanged: bool = False,
+    record_corrections: bool = False,
 ) -> Path | None:
     """Produce a briefing markdown file for one Claude Code session.
 
@@ -159,6 +160,11 @@ def generate_session_briefing(
     and is exactly the session a user runs ``mnemo learn`` on. Raises on I/O
     or LLM failure — callers that want fire-and-forget semantics should wrap
     this in a try/except.
+
+    ``record_corrections`` also writes each verified correction to the
+    friction ledger, with its turn and time (#517). Only the SessionEnd path
+    sets it: a backfill or ``mnemo learn`` re-reading the same session must
+    not count its corrections a second time as live.
     """
     events = _load_jsonl_events(jsonl_path)
 
@@ -263,6 +269,18 @@ def generate_session_briefing(
         source_sha256=source_sha,
     )
     _atomic_write(out_path, content)
+    if record_corrections and kept:
+        from mnemo.core.friction import capture, ledger
+
+        capture.record_session(
+            vault_root,
+            events=events,
+            session_id=session_id,
+            project=agent,
+            items=kept,
+            capture=ledger.CAPTURE_BRIEFING,
+            briefing=out_path.relative_to(vault_root).as_posix(),
+        )
     return out_path
 
 
