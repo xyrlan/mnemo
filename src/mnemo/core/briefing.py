@@ -226,6 +226,13 @@ def generate_session_briefing(
     try:
         proposed = corrections_mod.parse_section(body)
         kept, rejected = corrections_mod.verify(proposed, turns)
+        if kept:
+            from mnemo.core import correction_check
+            from mnemo.core.friction import capture as capture_mod
+
+            kept, _dropped = correction_check.check(
+                kept, capture_mod.exchanges(events), cfg, vault_root=vault_root, agent=agent,
+            )
         body = corrections_mod.replace_section(body, kept)
         if rejected:
             errors_mod.log_error(

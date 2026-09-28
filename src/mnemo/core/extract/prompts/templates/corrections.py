@@ -14,7 +14,8 @@ items; with the paragraph added it kept 43, and every item read as a real
 correction in the first run was still there. Both runs remain mostly
 approvals ("pode mergear"), requests and answers, by the maintainer's own
 reading. So is the full briefing's section on the same weeks. `verify`
-proves the user typed the words, not that the words correct anything (#517).
+proves the user typed the words, not that the words correct anything (#517);
+``core/correction_check.py`` is the second look measured for that (#524).
 """
 from __future__ import annotations
 
