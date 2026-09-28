@@ -104,8 +104,10 @@ def test_with_the_stage_off_nothing_imports_it_and_the_row_is_unchanged(
     assert rc == 0 and "[[use-prisma-mock]]" in stdout
     entry = _log(tmp_vault)[-1]
     assert "judge" not in entry
+    # `format`, `rule_bytes` and `rule_whole` are #542's, on every emission.
     assert set(entry) == {"session_id", "project", "prompt_hash", "emitted",
-                          "scores", "silence_reason", "candidates", "thresholds", "ts"}
+                          "scores", "silence_reason", "candidates", "thresholds", "ts",
+                          "format", "rule_bytes", "rule_whole"}
 
 
 def test_a_provider_this_version_does_not_know_is_off(

@@ -141,6 +141,7 @@ the overlap check), injected inline before Claude answers.
 |---|---|---|
 | `reflex.enabled` | `true` | Run retrieval on every prompt |
 | `reflex.maxEmissionsPerSession` | `10` | Stop injecting after this many hits in one session |
+| `reflex.body` | `"full"` | What an injected rule carries: `"full"` is the rule's whole body; `"preview"` is the 300-character line shipped before #542, kept only so a later comparison can run that arm |
 | `reflex.thresholds.termOverlapMin` | `2` | Query/rule terms that must overlap |
 | `reflex.thresholds.relativeGap` | `1.0` | How far the top hit must beat the runner-up. `1.0` turns the check off (the default since #332: a near-tie means two rules apply, and both are injected); set it above `1.0` to silence prompts without a clear winner |
 | `reflex.thresholds.absoluteFloor` | `2.0` | Minimum score to inject at all (scaled down in small vaults, see next row) |
@@ -148,6 +149,16 @@ the overlap check), injected inline before Claude answers.
 | `reflex.thresholds.minQueryTokens` | `3` | Prompts shorter than this are skipped |
 | `reflex.bm25f.k1`, `reflex.bm25f.b` | `1.5`, `0.75` | Standard BM25 parameters |
 | `reflex.bm25f.fieldWeights.*` | see note | `name` 3.0, `topic_tags` 3.0, `aliases` 2.5, `evidence` 2.5, `description` 2.0, `body` 1.0 |
+
+**What gets injected is the rule's whole body** (#542), under its
+`• [[slug]]:` head, because #535 measured that the one-line preview did not
+help and the body did: net help +0.215 against −0.021 on the same prompts,
+a paired difference of +0.236 [+0.090, +0.396]. The block is held under
+9,000 bytes: past 10,000 characters Claude Code swaps a hook's text for a
+2 KB preview (#533). When the rules do not fit, each gets a fair share, and a
+body over its share is cut at a line break and ends with the page's path and
+a `read_mnemo_rule` pointer. On the maintainer's last 30 days that cut 7% of
+rules (`tools/measure_reflex_fit.py`).
 
 **Leave the BM25F values alone unless you're experimenting.** The autopilot
 grid-searches them against your own recall hit/miss log and will overwrite

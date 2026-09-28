@@ -10,14 +10,16 @@ What that adds over Claude Code's own memory is measured below.
 Monday, in your app repo, you tell Claude: *"never use npm in this repo, always
 yarn."* You run `mnemo learn` — or you just end the session and let it happen.
 Thursday, a new session, you ask Claude to add a dependency: that rule is
-injected before Claude answers. One or two short lines, about 150 tokens, and
-only when it clearly applies.
+injected before Claude answers, only when it clearly applies.
 
-What gets injected is a 300-character preview plus a pointer, under a
-`reflex context:` header: `• [[use-yarn-not-npm]]: Use yarn, never npm …`.
-Claude can call `read_mnemo_rule` over MCP for the full text; `/mnemo:doctor`
-tells you if that server is not connected. A rule that recurs in two different
-repos is promoted to universal and follows you everywhere.
+What gets injected is the rule's whole body, under a `reflex context:`
+header and a `• [[use-yarn-not-npm]]:` line: a median of about 300 tokens a
+rule, and never more than 9,000 bytes for the whole block, the most Claude
+Code reads inline from a hook. A body too long to fit is cut at a line break
+and ends with its page's path; Claude can call `read_mnemo_rule` over MCP for
+the rest, and `/mnemo:doctor` tells you if that server is not connected. A
+rule that recurs in two different repos is promoted to universal and follows
+you everywhere.
 
 ## Install
 
@@ -146,6 +148,19 @@ the judge's: rules the judge never selected dropped more. Each lead is ranked
 with the cheapest fresh test that would confirm or kill it. Reproduce with
 [`tools/measure_memory_panorama.py`](tools/measure_memory_panorama.py)
 ([#530](https://github.com/xyrlan/mnemo/issues/530)).
+
+**The whole rule helps where the one-line preview did not.** Until #542 the
+reflex injected a 300-character preview of the rule. On #527's reflex units,
+the same prompts were answered again with the rule's whole body in its place
+and judged by the same two blind raters against the reply without the rule.
+Net help rose from −0.02 with the preview to **+0.22 with the whole body; the
+paired difference is +0.24 [+0.09, +0.40]** over the 72 units whose rule is
+unchanged since its session, above the +0.10 bar set before measuring. Both
+record pages and advice pages help. The reflex has injected the whole body
+since #542. That reading is on old units, so a fresh check is registered for
+after 14 days of sessions with the change. Reproduce with
+[`tools/measure_full_body.py`](tools/measure_full_body.py)
+([#535](https://github.com/xyrlan/mnemo/issues/535)).
 
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by

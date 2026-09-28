@@ -226,3 +226,11 @@ def test_build_index_scopes_an_imported_promoted_rule_to_its_local_project(tmp_v
     assert idx["docs"]["use-yarn"]["universal"] is False
     assert candidates_for_project(idx, "mine") == ["use-yarn"]
     assert candidates_for_project(idx, "theirs") == []
+
+
+def test_each_doc_points_at_its_page_so_the_hook_can_read_its_body(tmp_vault):
+    """#542: the hook reads the whole body of the rules it emits from here."""
+    page = _write_rule(tmp_vault, "feedback", "use-yarn.md", name="yarn-rule", body="Use yarn.")
+    idx = build_index(tmp_vault)
+    assert idx["docs"]["yarn-rule"]["path"] == "shared/feedback/use-yarn.md"
+    assert (tmp_vault / idx["docs"]["yarn-rule"]["path"]) == page

@@ -17,6 +17,7 @@ Schema v1:
         slug: {
           "field_length": {field: int},
           "preview": str,
+          "path": str,
           "stability": "stable" | "evolving",
           "projects": list[str],
           "universal": bool,
@@ -28,6 +29,11 @@ Schema v1:
 The evidence quote is the user's own words from a feedback correction — it is
 the best lexical bridge to how they phrase the same complaint again, so it is
 indexed and scored as its own field.
+
+``path`` is the page's path under the vault root, POSIX-style: the hook reads
+the body of the rules it emits from it (#542), a handful of files per prompt
+instead of every body in an index loaded on every prompt. An index written
+before the key existed has none; the hook then emits the preview.
 
 ``retired`` is :func:`filters.is_retired` against the ledger, read here once
 per page the way ``stability`` is. A retired rule stays indexed — its postings
@@ -139,6 +145,7 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             docs[slug] = {
                 "field_length": field_length,
                 "preview": body_preview(text, max_chars=300),
+                "path": md_path.relative_to(vault_root).as_posix(),
                 "stability": fm.get("stability") or "stable",
                 "projects": projects,
                 "universal": universal,
