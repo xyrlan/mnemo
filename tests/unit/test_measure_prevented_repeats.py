@@ -363,6 +363,12 @@ def test_main_labels_rates_judges_then_reports_and_a_rerun_asks_nothing(tmp_path
     assert [s for _, s in asked].count(tool.FREQ_SYSTEM) == 2
     assert [s for _, s in asked].count(tool.DELIVERY_SYSTEM) == 2
     assert data["cost"]["mnemo"]["sessions"] == 1
+    # every unit and its outcome, for #527
+    units = json.loads((tmp_path / "out" / tool.UNITS_NAME).read_text(encoding="utf-8"))
+    assert units["rated"] == ["later002-x"] and units["sessions"]["later002-x"]["project"] == "app"
+    (row,) = units["columns"]["both"]
+    assert (row["session_id"], row["slug"], row["prompts"], row["new"], row["reflex"]) == (
+        "later002-x", "app__yarn-only", [0], True, True)
 
     asked.clear()
     assert tool.main(base + ["--send", "--json"]) == 0

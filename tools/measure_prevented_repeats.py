@@ -100,6 +100,15 @@ smoke run and a per-unit delivery pass that was stopped and replaced by the
 per-session batch. mnemo adds a median ~2.2k tokens per session; the reflex
 judge answers in a median 835 ms (p90 1,753 ms).
 
+Extended to all 265 sessions on 2026-09-28, because #527 needed about 100
+broad units and 120 sessions gave 52. **Strict, both raters: 0.0059 per session
+[0.0011, 0.019], still NULL** (5 of 114 units delivered as new; 59.6% already in
+``CLAUDE.md`` or auto-memory; the ceiling is 1 per 18 sessions). Broad: 0.162
+[0.096, 0.240], from 138 delivered-and-new units out of 1,559 relevant ones
+(reflex 18.2%), and 0.232 in the 86 sessions after the judge went live. Kappa
+was the same as at 120 sessions. The notional total over every call on file is
+Opus 5.5 $152.02 and Fable 5.1 $334.40.
+
 Only ``--send`` calls a model. Sends run on ``--workers`` threads with
 ``--pause`` seconds between one worker's calls, every answer is cached under
 ``--out`` (default ``<vault>/.mnemo/prevented-repeats``) the moment it arrives,
@@ -173,6 +182,8 @@ MAX_FAILURES = 5
 
 BOTH = "both"
 STRICT, BROAD = "strict", "broad"
+#: Every rated unit and its outcome, per column, for ``measure_broad_value`` (#527).
+UNITS_NAME = "units.json"
 CHANNELS = ("session_start", "reflex", "mcp")
 
 FREQ_SYSTEM = """\
@@ -1196,6 +1207,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     results: Dict[str, Dict[str, Any]] = {STRICT: {}, BROAD: {}}
     regimes: Dict[str, Dict[str, Any]] = {}
     diffs, lift_source = lift_diffs(vault)
+    unit_rows: Dict[str, List[Dict[str, Any]]] = {}
     for col in columns:
         session_units: Dict[str, List[Dict[str, Any]]] = {}
         for key, slugs in rel.get(col, {}).items():
@@ -1222,6 +1234,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 o["strict"] = bool(strict and slug in strict)
                 o["judged"] = judged is not None
                 flat.setdefault(sid, []).append(o)
+                unit_rows.setdefault(col, []).append(dict(o, session_id=sid, slug=slug,
+                                                          prompts=sorted(idxs)))
         for reading in (STRICT, BROAD):
             results[reading][col] = combine(per_session_counts(flat, prompts_per, reading), diffs)
         if col == columns[0]:
@@ -1283,6 +1297,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("spent $%.2f notional this run" % sender.usd, file=sys.stderr)
     data["pending"] = pending
     mrc._write(out / "report.json", data)
+    # every unit and its outcome, for #527's value arms
+    mrc._write(out / UNITS_NAME, {
+        "since": args.since, "rated": sorted(rated),
+        "sessions": {s: {k: sessions[s][k] for k in ("path", "project", "cwd", "start")} for s in sorted(rated)},
+        "columns": unit_rows})
     if args.json:
         print(json.dumps(data, indent=1))
         return 0
