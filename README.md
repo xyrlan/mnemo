@@ -2,7 +2,8 @@
 
 > mnemo keeps what your Claude Code sessions learned, puts the relevant piece
 > in front of the next prompt, and fans out sessions that start out knowing it.
-> What that adds over Claude Code's own memory is measured below.
+
+What that adds over Claude Code's own memory is measured below.
 
 ![The five-minute loop: correct Claude, run mnemo learn, the next prompt already knows](docs/assets/loop.gif)
 
