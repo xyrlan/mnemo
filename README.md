@@ -94,7 +94,7 @@ is the other half, and it is yours to check: `/mnemo:why` shows every
 decision with its arithmetic, and `mnemo replay` runs your own history through
 it.
 
-**Does it prevent a repeated correction? Not yet, measured.** mnemo's promise is
+**Does it prevent a repeated correction? No, measured.** mnemo's promise is
 that the agent does not repeat a mistake you already corrected. On the
 maintainer's own history (120 of 265 human sessions, 2026-08-26 → 09-27), two
 blind raters on different models judged, for every prompt, which rule you had
@@ -115,9 +115,12 @@ verdict                    NULL, before the reflex judge went live and after it
 The bottleneck is frequency, not delivery: Claude Code's own memory already
 held most of the corrected rules, so even if mnemo had delivered every one it
 lacked, the most it could prevent is one repeat per ~21 sessions, under the bar.
-Counting *any* vault rule instead of corrected ones, the estimate is 0.135 per
-session [0.070, 0.225], over the bar, carried mostly by the reflex. mnemo adds
-a median ~2.2k tokens per session. Reproduce with
+Counting *any* vault rule instead of corrected ones gives 0.135 per session
+[0.070, 0.225], carried mostly by the reflex. That counts answers a rule would
+change, not mistakes you corrected, and the lift it uses measures whether an
+answer follows the rule, not whether it is better. Whether those changes help
+is not measured yet ([#527](https://github.com/xyrlan/mnemo/issues/527)). mnemo
+adds a median ~2.2k tokens per session. Reproduce with
 [`tools/measure_prevented_repeats.py`](tools/measure_prevented_repeats.py)
 ([#520](https://github.com/xyrlan/mnemo/issues/520)).
 
