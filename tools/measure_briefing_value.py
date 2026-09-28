@@ -60,11 +60,28 @@ not measurably help* — CI upper bound of ``h_right`` < +0.15; *a wrong briefin
 hurts* — CI upper bound of ``h_wrong`` < 0; *ruler too weak* — kappa < 0.40:
 say so and read no verdict from it.
 
-**State on 2026-09-28, the maintainer's machine: no verdict yet.** 110 units,
-all placed (the right briefing is the raters' agreed best in 106); a newest arm
-in 70; the right briefing is cut to #533's cap in 26. 489 of the 556 answers
-are cached; the run stopped when the ``claude`` CLI lost its login, before the
-first of ~630 judge calls. ``--send`` resumes it.
+**Result, 2026-09-28/29, the maintainer's machine: a right briefing helps; a
+wrong one is not shown to hurt the reply, but it plants wrong assumptions.**
+110 units (the right briefing is the raters' agreed best in 106), a newest arm
+in 70; the right briefing is cut to #533's cap in 26. Answers on the sessions'
+own models: Opus 5 49, Opus 5.5 38, Fable 5.1 23. The ruler holds: the raters
+agree on 252 of 360 comparisons, **kappa 0.52** (#527's "better" question:
+0.24), and 0.73 on the wrong-state marks. Both raters:
+
+- ``h_right`` **+0.218 [+0.105, +0.327]** (right better 44.1%, none 22.3%,
+  tie 33.6%): **a right briefing helps** by the bar. Each rater alone clears
+  it too (Opus 5.5 +0.255, Fable 5.1 +0.205), and it holds whether the hook's
+  pick was right (+0.212, 40) or wrong (+0.221, 70), and on each answer model
+  but Fable 5.1 (+0.152 [−0.087, +0.413], 23 units);
+- ``h_wrong`` **−0.057 [−0.171, +0.064]** (newest better 22.1%, none 27.9%,
+  tie 50.0%): **not shown to hurt** — the CI upper bound is not below 0;
+- wrong-state replies: with the right briefing 5.9%, none 8.2% (difference
+  −0.023 [−0.077, +0.027]); with the wrong one 10.0% against none's 5.0% on
+  the same comparisons, **+0.050 [+0.007, +0.100]** — the one reading where the
+  wrong briefing measurably does harm, outside the bar.
+
+The notional cost of every call on file was about $164: Fable 5.1 $70, Opus
+5.5 $55, Opus 5 $39. That is subscription usage, not money.
 
 Only ``--send`` calls a model. Calls are paced and threaded
 (``measure_prevented_repeats.Sender``) from a scratch cwd, and every answer is
