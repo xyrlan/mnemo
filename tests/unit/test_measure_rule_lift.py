@@ -122,7 +122,7 @@ def test_the_injection_is_the_hooks_own_output(capsys):
     from mnemo.hooks import user_prompt_submit as ups
 
     index = _index("r-a")
-    ups._emit_reflex_context(index, ["r-a"])
+    ups._emit_reflex_context(index, ["r-a"], reflex_cfg={"body": "preview"})
     emitted = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
 
     assert mrl.injection(index, "r-a") == emitted

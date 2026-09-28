@@ -111,6 +111,8 @@ def _sibling(name: str) -> Any:
     return module
 
 
+from mnemo.core.reflex import render  # noqa: E402
+
 pano = _sibling("measure_memory_panorama")
 bv = pano.bv
 mpr = bv.mpr
@@ -130,7 +132,7 @@ PAUSE_SECONDS = bv.PAUSE_SECONDS
 WORKERS = bv.WORKERS
 BYTES_PER_TOKEN = pano.BYTES_PER_TOKEN
 #: No real rule body is this long: ``body_preview`` with it returns the body uncut.
-UNCUT = 10 ** 9
+UNCUT = render.UNCUT
 
 FULL, WITHOUT, TIE = "full", bv.WITHOUT, bv.TIE
 BOTH = bv.BOTH
@@ -142,10 +144,10 @@ _WRAP = "UserPromptSubmit hook additional context: %s\n</system-reminder>"
 # --- the arm ------------------------------------------------------------------------------
 
 def full_body(page_text: str) -> str:
-    """The rule body the reflex preview is cut from, uncut."""
-    from mnemo.core.text_utils import body_preview
-
-    return body_preview(page_text, max_chars=UNCUT)
+    """The rule body the reflex preview is cut from, uncut. The hook's own
+    function since #542 (``mnemo.core.reflex.render``), so what was measured
+    here is what ships."""
+    return render.full_body(page_text)
 
 
 def full_line(line: str, body: str) -> str:
@@ -153,7 +155,7 @@ def full_line(line: str, body: str) -> str:
     same ``[[slug]]`` header."""
     m = _HEADER.match(line)
     head = m.group(1) if m else line
-    return "%s:\n%s" % (head, body)
+    return render.full_line(head, body)
 
 
 def preview_of(line: str) -> str:

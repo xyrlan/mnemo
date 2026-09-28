@@ -164,7 +164,8 @@ def main() -> int:
                              exported=exported, judge=judge_row)
                 return 0
 
-        _emit_reflex_context(decision.index, survivors)
+        rendered, body_fmt = _emit_reflex_context(decision.index, survivors,
+                                                  vault=vault, reflex_cfg=reflex_cfg)
         for slug in survivors:
             session_state.add_injection(vault, slug=slug, sid=sid, now_ts=now_ts)
             session_state.bump_emission(vault, sid=sid, kind="reflex", now_ts=now_ts)
@@ -173,7 +174,8 @@ def main() -> int:
         _log_emission(vault, sid, project, prompt_raw, survivors,
                       scores=[score_map.get(s, 0.0) for s in survivors],
                       candidates=receipt, thresholds=gate_thresholds,
-                      exported=exported, judge=judge_row)
+                      exported=exported, judge=judge_row,
+                      body_fmt=body_fmt, rendered=rendered)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -196,21 +198,44 @@ def _judge_configured(reflex_cfg: dict) -> bool:
     return bool(provider) and str(provider).lower() != "none"
 
 
-def _emit_reflex_context(index: dict, slugs: list[str]) -> None:
-    lines = ["mnemo reflex context:"]
+def _emit_reflex_context(index: dict, slugs: list[str], vault=None,
+                         reflex_cfg: dict | None = None):
+    """Write the reflex block for ``slugs``; return what was written and its format.
+
+    Each rule carries its whole body under ``• [[slug]]:`` (#542), read from
+    the page under ``vault`` the index points at, and the block is held under
+    Claude Code's persist limit. See :mod:`mnemo.core.reflex.render`. A page
+    that cannot be read, or an index older than its ``path`` key, sends that
+    rule's preview. ``tools/measure_rule_lift.py`` calls this for #434's arm
+    with ``reflex.body: "preview"``, the shape #434 measured.
+    """
+    from mnemo.core.reflex import render
+
+    fmt = render.body_format(reflex_cfg)
     docs = index.get("docs") or {}
+    entries = []
     for slug in slugs:
-        preview = (docs.get(slug) or {}).get("preview", "")
-        preview_line = preview.replace("\n", " ").strip()
-        lines.append(f"• [[{slug}]]: {preview_line} (call read_mnemo_rule if you need the full file).")
-    text = "\n".join(lines)
+        doc = docs.get(slug) or {}
+        body, path = None, ""
+        rel = doc.get("path")
+        if rel and vault is not None:
+            page = Path(vault) / rel
+            path = str(page)
+            try:
+                body = render.full_body(page.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                body = None
+        entries.append(render.Entry(slug=slug, preview=doc.get("preview", ""),
+                                    body=body or None, path=path))
+    rendered = render.render(entries, fmt)
     sys.stdout.write(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": text,
+            "additionalContext": rendered.text,
         },
     }))
     sys.stdout.flush()
+    return rendered, fmt
 
 
 def _prompt_hash(prompt: str) -> str:
@@ -277,7 +302,9 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
                   candidates: list | None = None,
                   thresholds: dict | None = None,
                   exported: list | None = None,
-                  judge: dict | None = None) -> None:
+                  judge: dict | None = None,
+                  body_fmt: str | None = None,
+                  rendered=None) -> None:
     entry = {
         "session_id": sid,
         "project": project,
@@ -286,6 +313,14 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
         "scores": scores,
         "silence_reason": None,
     }
+    # What the agent was handed (#542), for the fresh check of the full body:
+    # the format, and per emitted rule (in `emitted` order) the bytes of its
+    # entry and whether its whole body went out or was cut to fit.
+    if body_fmt:
+        entry["format"] = body_fmt
+    if rendered is not None:
+        entry["rule_bytes"] = list(rendered.rule_bytes)
+        entry["rule_whole"] = list(rendered.rule_whole)
     if candidates:
         entry["candidates"] = candidates
     # With per-project calibration in play, "which thresholds admitted this"

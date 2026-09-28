@@ -26,7 +26,9 @@ inherits a project's ``CLAUDE.md`` or auto-memory:
 - B: the same, with the rule appended the way Claude Code delivers a
   ``UserPromptSubmit`` hook's context — a ``<system-reminder>`` carrying the
   text :func:`mnemo.hooks.user_prompt_submit._emit_reflex_context` writes, run
-  here and captured, so the injection is the hook's own bytes.
+  here and captured, so the injection is the hook's own bytes. Since #542 the
+  hook sends the rule's whole body; this keeps the one-line preview it
+  measured, ``reflex.body: "preview"``.
 
 **Judge, blind to the arm.** One rule and one answer per item, every item of
 every pair shuffled together with a fixed seed, ten a call, numbered 1..10 so
@@ -267,12 +269,13 @@ def tail(text: str, limit: int = CONTEXT_CHARS) -> str:
 
 
 def injection(index: Dict[str, Any], slug: str) -> str:
-    """The additionalContext the hook emits for *slug*, from the hook's own code."""
+    """The additionalContext the hook emits for *slug*, from the hook's own code,
+    in the preview format #434 measured."""
     from mnemo.hooks import user_prompt_submit as ups
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        ups._emit_reflex_context(index, [slug])
+        ups._emit_reflex_context(index, [slug], reflex_cfg={"body": "preview"})
     return json.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"]
 
 

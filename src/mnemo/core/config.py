@@ -236,6 +236,12 @@ DEFAULTS: dict[str, Any] = {
     "reflex": {
         "enabled": True,  # v0.8.0 stable — flip to False in mnemo.config.json to disable
         "maxEmissionsPerSession": 10,
+        # #542: what an emitted rule carries. "full" is the rule's whole body,
+        # held with the rest of the block under the hook persist limit (#533);
+        # "preview" is the 300-character line shipped before, kept only so a
+        # later comparison can run that arm (#535 measured full at +0.236
+        # [+0.090, +0.396] over it). Not an opt-in.
+        "body": "full",
         # #412: an opt-in judge that reads the (prompt, rule) pair and decides
         # what is injected, *replacing* the accept step rather than stacking on
         # it. Off by default, and with its own switch rather than

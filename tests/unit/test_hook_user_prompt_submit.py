@@ -261,3 +261,94 @@ def _enable_reflex(vault, monkeypatch, thresholds=None):
         "vaultRoot": str(vault),
         "reflex": reflex,
     }), encoding="utf-8")
+
+
+# --- #542: the rule's full body, under the persist limit ---------------------------
+
+PRISMA_PROMPT = "How do I mock prisma in a jest test with typescript"
+
+
+def _context(stdout: str) -> str:
+    return json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+def _set_reflex(vault, **keys):
+    path = vault / "mnemo.config.json"
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg["reflex"].update(keys)
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+
+
+def test_an_emitted_rule_carries_its_whole_body_and_no_suffix(
+    tmp_vault, monkeypatch, synthetic_index
+):
+    """The shape #535 measured: `• [[slug]]:` and the body under it."""
+    _enable_reflex(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    page = tmp_vault / "shared" / "feedback" / "use-prisma-mock.md"
+    page.write_text(page.read_text(encoding="utf-8")
+                    + "\n**Why:** the real client needs a database.\n", encoding="utf-8")
+
+    _, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PRISMA_PROMPT})
+
+    assert _context(stdout) == (
+        "mnemo reflex context:\n"
+        "• [[use-prisma-mock]]:\n"
+        "Mock the Prisma client in tests using jest-mock-extended.\n\n"
+        "**Why:** the real client needs a database.")
+    entry = _log_entries(tmp_vault)[-1]
+    assert entry["format"] == "full"
+    assert entry["rule_whole"] == [True]
+    assert entry["rule_bytes"] == [len(_context(stdout).split("\n", 1)[1].encode("utf-8"))]
+
+
+def test_the_preview_format_writes_the_old_line(tmp_vault, monkeypatch, synthetic_index):
+    _enable_reflex(tmp_vault, monkeypatch)
+    _set_reflex(tmp_vault, body="preview")
+    synthetic_index(tmp_vault)
+
+    _, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PRISMA_PROMPT})
+
+    assert _context(stdout) == (
+        "mnemo reflex context:\n"
+        "• [[use-prisma-mock]]: Mock the Prisma client in tests using jest-mock-extended. "
+        "(call read_mnemo_rule if you need the full file).")
+    entry = _log_entries(tmp_vault)[-1]
+    assert entry["format"] == "preview"
+    assert entry["rule_whole"] == [True]
+
+
+def test_an_index_without_page_paths_sends_the_preview(tmp_vault, monkeypatch, synthetic_index):
+    """An index written before #542 has no `path`; until SessionStart rebuilds
+    it, the rule goes out as its preview rather than not at all."""
+    _enable_reflex(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    index_path = tmp_vault / ".mnemo" / "reflex-index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    for doc in index["docs"].values():
+        doc.pop("path", None)
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    _, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PRISMA_PROMPT})
+
+    assert "(call read_mnemo_rule if you need the full file)." in _context(stdout)
+    assert _log_entries(tmp_vault)[-1]["rule_whole"] == [False]
+
+
+def test_an_over_long_body_is_cut_under_the_persist_limit(tmp_vault, monkeypatch, synthetic_index):
+    from mnemo.core.hook_envelope import ENVELOPE_MAX_BYTES
+
+    _enable_reflex(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    page = tmp_vault / "shared" / "feedback" / "use-prisma-mock.md"
+    page.write_text(page.read_text(encoding="utf-8") + "".join(
+        f"- detail {i:04d} about mocking the client, long enough to count\n" for i in range(400)),
+        encoding="utf-8")
+
+    _, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PRISMA_PROMPT})
+
+    text = _context(stdout)
+    assert len(text.encode("utf-8")) <= ENVELOPE_MAX_BYTES
+    assert text.endswith(f"the full rule is at {page}] "
+                         "(call read_mnemo_rule if you need the full file).")
+    assert _log_entries(tmp_vault)[-1]["rule_whole"] == [False]
