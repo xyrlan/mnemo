@@ -120,11 +120,22 @@ lacked, the most it could prevent is one repeat per ~21 sessions, under the bar.
 Counting *any* vault rule instead of corrected ones gives 0.135 per session
 [0.070, 0.225], carried mostly by the reflex. That counts answers a rule would
 change, not mistakes you corrected, and the lift it uses measures whether an
-answer follows the rule, not whether it is better. Whether those changes help
-is not measured yet ([#527](https://github.com/xyrlan/mnemo/issues/527)). mnemo
-adds a median ~2.2k tokens per session. Reproduce with
+answer follows the rule, not whether it is better. mnemo adds a median ~2.2k
+tokens per session. Reproduce with
 [`tools/measure_prevented_repeats.py`](tools/measure_prevented_repeats.py)
 ([#520](https://github.com/xyrlan/mnemo/issues/520)).
+
+**Do those changes make the answer better? Not measurably.** The test covered
+all 265 sessions and the 138 times mnemo put a rule in context that Claude
+Code's own memory lacked. Each prompt was answered twice, with the rule and
+without its bytes, and two blind raters who never saw the rule picked the
+better reply. With the rule, the reply was better 34% of the time, worse 27%
+and tied 39%. Net help per rule is +0.07 [−0.04, +0.17], which comes to
+**0.036 helpful changes per session [−0.019, +0.094], about 1 in 28**, against
+the bar of 1 in 15. The result is inconclusive with no sessions left to extend
+into, so it counts as null. Reproduce with
+[`tools/measure_broad_value.py`](tools/measure_broad_value.py)
+([#527](https://github.com/xyrlan/mnemo/issues/527)).
 
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by
