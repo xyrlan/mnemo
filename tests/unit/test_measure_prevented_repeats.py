@@ -388,3 +388,89 @@ def test_regime_split_cuts_at_the_judge_going_live():
     sessions = {"a": {"start": cut - 1}, "b": {"start": cut}, "c": {"start": cut + 99}}
     got = tool.regime_split(sessions, {"a": 3, "b": 4, "c": 5})
     assert got == {"before the judge": {"a": 3}, "judge live": {"b": 4, "c": 5}}
+
+
+# --- reflex blocks, read by entry (#545) ------------------------------------------------------
+
+OLD_BLOCK = ("mnemo reflex context:\n"
+             "• [[app__pin-node]]: pin node 20, see [[app__nvmrc]] (call read_mnemo_rule if you need the full file).\n"
+             "• [[Keep a title with spaces]]: an old page title (call read_mnemo_rule if you need the full file).\n"
+             "• [[app__small-prs]]: keep PRs small (call read_mnemo_rule if you need the full file).")
+
+
+def _full_block(*bodies):
+    from mnemo.core.reflex import render
+
+    entries = [render.Entry(slug, body.split("\n")[0], body, "/v/%s.md" % slug) for slug, body in bodies]
+    return render.render(entries).text
+
+
+def test_full_blocks_deliver_their_heads_not_the_links_in_their_bodies():
+    block = _full_block(("app__pin-node", "Pin node 20.\n\nSee [[app__nvmrc]] and [[app__ci-matrix]].\n"
+                                          "- a list line\n• not a head: a bullet without a link"),
+                        ("app__small-prs", "Keep PRs small; [[app__pin-node]] says why."))
+    assert tool.is_full_block(block)
+    assert tool.reflex_slugs(block) == ["app__pin-node", "app__small-prs"]
+    entries = tool.reflex_entries(block)
+    assert [s for s, _ in entries] == ["app__pin-node", "app__small-prs"]
+    # an entry runs from its head through the line before the next head
+    assert entries[0][1].startswith("• [[app__pin-node]]:\nPin node 20.") and entries[0][1].endswith(
+        "• not a head: a bullet without a link")
+    assert "\n".join(["mnemo reflex context:"] + [t for _, t in entries]) == block
+
+
+def test_a_cut_entry_and_a_preview_line_in_a_full_block_are_entries_too():
+    from mnemo.core.reflex import render
+
+    long_body = "\n".join("line %d with [[app__link-%d]]" % (n, n) for n in range(600))
+    rendered = render.render([render.Entry("app__big", "line 0", long_body, "/v/big.md"),
+                              render.Entry("app__gone", "the preview", None),
+                              render.Entry("app__small", "tiny", "tiny")])
+    assert rendered.rule_whole == [False, False, True]
+    assert tool.reflex_slugs(rendered.text) == ["app__big", "app__gone", "app__small"]
+
+
+def test_old_blocks_read_as_they_always_did():
+    # every [[…]] in a one-line block, a preview's link too, and no title with spaces:
+    # the frozen #520, #527 and #535 readings rest on this
+    assert not tool.is_full_block(OLD_BLOCK)
+    assert tool.reflex_slugs(OLD_BLOCK) == tool._WIKI.findall(OLD_BLOCK) == [
+        "app__pin-node", "app__nvmrc", "app__small-prs"]
+    assert [s for s, _ in tool.reflex_entries(OLD_BLOCK)] == ["app__pin-node", "", "app__small-prs"]
+
+
+def test_no_rendered_body_line_can_pass_for_a_head():
+    # heads are unambiguous because no body line starts with "• [[" (the whole
+    # vault had none on 2026-09-28): a body line that did would split its entry
+    from mnemo.core.reflex import render
+
+    for body in ("• a bullet\n  • [[app__x]]: indented", "text [[app__x]]: inline", "•[[app__x]]: no space"):
+        text = render.render([render.Entry("app__r", "p", body)]).text
+        assert tool.reflex_slugs(text) == ["app__r"]
+    split = render.render([render.Entry("app__r", "p", "• [[app__x]]: a head-like body line")]).text
+    assert tool.reflex_slugs(split) == ["app__r", "app__x"]
+
+
+def test_walk_counts_a_full_blocks_heads_only():
+    block = _full_block(("app__pin-node", "Pin node 20; see [[app__nvmrc]]."))
+    events = [_user("set up node for me please", "2026-09-29T10:00:00Z", uuid="p0"),
+              _hook("UserPromptSubmit", block),
+              _agent("Done.", "2026-09-29T10:00:05Z")]
+    (p,) = tool.walk(events)["prompts"]
+    assert p["reflex"] == ["app__pin-node"]
+
+
+def test_collect_sessions_reads_a_timestamp_bound_by_the_instant(tmp_path):
+    projects, vault = tmp_path / "projects", tmp_path / "vault"
+    proj = projects / "-Users-you-github-app"
+    proj.mkdir(parents=True)
+    (vault / "bots").mkdir(parents=True)
+    for sid, ts in (("early001-x", "2026-09-28T22:00:00Z"), ("fresh002-x", "2026-09-28T23:30:00Z"),
+                    ("later003-x", "2026-10-02T09:00:00Z")):
+        events = [_user("please look at the build for me", ts, uuid="p" + sid), _agent("Ok.", ts)]
+        (proj / (sid + ".jsonl")).write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    assert sorted(tool.collect_sessions(projects, vault, "2026-09-28")) == [
+        "early001-x", "fresh002-x", "later003-x"]
+    assert sorted(tool.collect_sessions(projects, vault, "2026-09-28T23:09:00Z")) == ["fresh002-x", "later003-x"]
+    assert sorted(tool.collect_sessions(projects, vault, "2026-09-28T23:09:00Z",
+                                        "2026-10-01T00:00:00Z")) == ["fresh002-x"]

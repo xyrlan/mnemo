@@ -393,3 +393,67 @@ def test_units_waiting_for_520s_judge_wait_and_a_changed_outcome_is_rebuilt(tmp_
     asked.clear()
     assert tool.main(base + ["--send"]) == 0
     assert asked == []
+
+
+# --- full-format reflex blocks, read by entry (#545) -------------------------------------------
+
+def _full(*bodies):
+    from mnemo.core.reflex import render
+
+    return render.render([render.Entry(slug, body.split("\n")[0], body) for slug, body in bodies]).text
+
+
+FULL_1 = _full(("app__pin-node", "Pin node 20 in `.nvmrc`.\n\n**Why:** CI runs 20; see [[app__small-prs]].\n"
+                                 "- keep the lockfile\n"),
+               ("app__small-prs", "Keep PRs small.\n\n**How to apply:** one concern per PR, like [[app__pin-node]]."))
+
+
+def test_carries_reflex_reads_a_full_blocks_heads_not_its_body_links():
+    assert tool.carries_reflex(FULL_1, "app__small-prs", "app")
+    only_linked = _full(("app__pin-node", "Pin node 20; see [[app__lint-first]]."))
+    assert not tool.carries_reflex(only_linked, "app__lint-first", "app")
+    # a pre-rename slug in a head still names today's rule
+    assert tool.carries_reflex(_full(("pin-node", "Pin node 20.")), "app__pin-node", "app")
+
+
+def test_strip_reflex_drops_a_full_entrys_whole_body_and_nothing_else():
+    got = tool.strip_reflex(FULL_1, "app__pin-node", "app")
+    assert got == "mnemo reflex context:\n• [[app__small-prs]]:\nKeep PRs small.\n\n" \
+                  "**How to apply:** one concern per PR, like [[app__pin-node]]."
+    # its body lines, the ones with links and the ones without, all go
+    for line in ("Pin node 20", "CI runs 20", "keep the lockfile"):
+        assert line not in got
+    # the other rule's body keeps its link to the removed rule: that is the other rule's text
+    other = tool.strip_reflex(FULL_1, "app__small-prs", "app")
+    assert "Keep PRs small" not in other and "one concern per PR" not in other
+    assert other.startswith("mnemo reflex context:\n• [[app__pin-node]]:\nPin node 20")
+    assert "see [[app__small-prs]]" in other
+    # the last rule removed: nothing left
+    assert tool.strip_reflex(_full(("app__pin-node", "Pin [[app__x]].")), "app__pin-node", "app") == ""
+
+
+def test_strip_reflex_on_an_old_block_is_what_it_always_was():
+    # the line-by-line reading #527's frozen arms were built with: a preview
+    # that links the rule goes with it
+    old = ("mnemo reflex context:\n• [[app__pin-node]]: pin node 20 (call read_mnemo_rule …).\n"
+           "• [[app__small-prs]]: small, see [[app__pin-node]] (call read_mnemo_rule …).\n"
+           "• [[app__lint-first]]: lint first (call read_mnemo_rule …).")
+    assert tool.strip_reflex(old, "app__pin-node", "app") == (
+        "mnemo reflex context:\n• [[app__lint-first]]: lint first (call read_mnemo_rule …).")
+    assert tool.strip_reflex(REFLEX_1, "app__small-prs", "app") == (
+        "mnemo reflex context:\n• [[app__pin-node]]: pin node 20 (call read_mnemo_rule …).")
+
+
+def test_a_full_blocks_without_arm_holds_none_of_the_rules_body():
+    events = [
+        _instructions(("/Users/you/github/app/CLAUDE.md", "Use yarn.")),
+        _user("set node up and open the PR", "2026-09-29T10:00:00Z", uuid="p0"),
+        _hook("UserPromptSubmit", FULL_1),
+        _agent("Done.", "2026-09-29T10:00:05Z"),
+    ]
+    row = _row("app__pin-node", [0], reflex=True)
+    arms = tool.build_arms(row, tool.place(row, events, "app"), "app", [])
+    assert arms["measurable"] and arms["carriers"]["reflex"]
+    assert "CI runs 20" in arms["with"] and "keep the lockfile" in arms["with"]
+    assert "CI runs 20" not in arms["without"] and "keep the lockfile" not in arms["without"]
+    assert "one concern per PR" in arms["without"]

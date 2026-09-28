@@ -258,6 +258,51 @@ _WIKI = re.compile(r"\[\[([^\]\s|]+)\]\]")
 _SLUG_KEY = re.compile(r'"slug"\s*:\s*"([^"]+)"')
 _SHELL_TURN = re.compile(r"\s*<(bash-input|bash-stdout|bash-stderr|local-command-stdout)>")
 _MCP_TOOL = re.compile(r"mnemo.*__(read_mnemo_rule|list_rules_by_topic)$")
+#: A reflex entry's head, ``• [[slug]]:`` at the start of a line: the whole
+#: entry in the preview format, the line over the body in the full one (#542),
+#: where it stands alone. No rule body on the vault has a line that starts
+#: this way, so a block splits into entries at its heads.
+_ENTRY_HEAD = re.compile(r"• \[\[([^\]]*)\]\]:")
+_SLUG = re.compile(r"[^\]\s|]+")
+
+
+def is_full_block(text: str) -> bool:
+    """Whether a reflex block is #542's full format: some head stands alone
+    on its line, its body under it. A preview line never ends at the colon."""
+    return any(_ENTRY_HEAD.fullmatch(ln) for ln in text.splitlines())
+
+
+def reflex_entries(text: str) -> List[Tuple[str, str]]:
+    """A reflex block's entries, ``(slug, text)``: a head line through the line
+    before the next head, or the block's end. Lines before the first head
+    (the ``mnemo reflex context:`` header) belong to none. ``slug`` is ``""``
+    when the head names no slug :data:`_WIKI` reads (an old rule title with
+    spaces)."""
+    out: List[Tuple[str, List[str]]] = []
+    for ln in text.splitlines():
+        m = _ENTRY_HEAD.match(ln)
+        if m:
+            out.append((m.group(1) if _SLUG.fullmatch(m.group(1)) else "", [ln]))
+        elif out:
+            out[-1][1].append(ln)
+    return [(slug, "\n".join(lines)) for slug, lines in out]
+
+
+def reflex_slugs(text: str) -> List[str]:
+    """The rules a reflex block delivered.
+
+    In the full format, its entries' heads: a body's ``[[links]]`` name
+    rules the entry did not deliver (23% of bodies carry one). A block in
+    the old one-line format is read as it always was, every ``[[…]]`` in it,
+    so the frozen #520, #527 and #535 readings reproduce byte for byte. That
+    reading also counts a rule another rule's preview links to — on the
+    maintainer's vault on 2026-09-28, 7 of the 1,559 both-raters unit rows,
+    one of them delivered-and-new — and correcting it would move those
+    frozen numbers.
+    """
+    if is_full_block(text):
+        return [slug for slug, _ in reflex_entries(text) if slug]
+    return _WIKI.findall(text)
 
 
 def _hook_texts(att: Dict[str, Any]) -> List[str]:
@@ -320,7 +365,7 @@ def walk(events: List[dict]) -> Dict[str, Any]:
                 for text in _hook_texts(att):
                     if _REFLEX in text:
                         mnemo_chars += len(text)
-                        reflex.update(_WIKI.findall(text))
+                        reflex.update(reflex_slugs(text))
                     elif (hook.startswith("SessionStart") or not hook) and any(
                             m in text for m in _MNEMO_START):
                         if text not in session_start:
@@ -383,8 +428,20 @@ def walk(events: List[dict]) -> Dict[str, Any]:
             "session_start": session_start, "mnemo_chars": mnemo_chars}
 
 
-def collect_sessions(projects_dir: Path, vault: Path, since: str) -> Dict[str, Dict[str, Any]]:
-    """Every human session since ``since``: ``sid -> {path, project, cwd, start}``."""
+def _before(first: datetime, bound: str) -> bool:
+    """Whether a session that started at ``first`` started before ``bound``:
+    a date compares by UTC day, as #520 read its window; a timestamp (the
+    moment a change went live) by the instant."""
+    if len(bound) <= 10:
+        return first.astimezone(timezone.utc).date().isoformat() < bound
+    at = mrc.epoch(bound)
+    return at is not None and first.timestamp() < at
+
+
+def collect_sessions(projects_dir: Path, vault: Path, since: str,
+                     until: str = "") -> Dict[str, Dict[str, Any]]:
+    """Every human session started since ``since`` and, with ``until``, before
+    it: ``sid -> {path, project, cwd, start}``."""
     from mnemo.core.briefing import _load_jsonl_events
 
     parents = mcc._parents(vault)
@@ -394,7 +451,7 @@ def collect_sessions(projects_dir: Path, vault: Path, since: str) -> Dict[str, D
         if not mcc.is_human(events, path.stem, parents):
             continue
         first = mcc.first_timestamp(events)
-        if first is None or (since and first.astimezone(timezone.utc).date().isoformat() < since):
+        if first is None or (since and _before(first, since)) or (until and not _before(first, until)):
             continue
         out[path.stem] = {"path": str(path), "project": mcc._project_of(path, events),
                           "cwd": mcc.session_cwd(events), "start": first.timestamp()}
@@ -1049,7 +1106,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     from mnemo.core.briefing import _load_jsonl_events
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--since", default=SINCE)
+    ap.add_argument("--since", default=SINCE, help="a date, or an ISO timestamp")
+    ap.add_argument("--until", default="", help="only sessions started before this date or ISO timestamp")
     ap.add_argument("--sessions", type=int, default=None, help="the first N of the seeded order (default all)")
     ap.add_argument("--projects", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--claude-home", default=os.path.expanduser("~/.claude"))
@@ -1074,7 +1132,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         vault / ".mnemo" / "repeated-corrections" / "labels.json")
 
     projects = Path(args.projects)
-    sessions = collect_sessions(projects, vault, args.since)
+    sessions = collect_sessions(projects, vault, args.since, args.until)
     order = session_order(sessions)
     sample = order[:args.sessions] if args.sessions else order
     rules = Rules(vault, projects, Path(args.claude_home))

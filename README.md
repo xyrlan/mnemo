@@ -160,7 +160,10 @@ record pages and advice pages help. The reflex has injected the whole body
 since #542. That reading is on old units, so a fresh check is registered for
 after 14 days of sessions with the change. Reproduce with
 [`tools/measure_full_body.py`](tools/measure_full_body.py)
-([#535](https://github.com/xyrlan/mnemo/issues/535)).
+([#535](https://github.com/xyrlan/mnemo/issues/535)); the fresh check is
+[`tools/measure_full_body_fresh.py`](tools/measure_full_body_fresh.py), which
+will not send before it is due
+([#545](https://github.com/xyrlan/mnemo/issues/545)).
 
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by
