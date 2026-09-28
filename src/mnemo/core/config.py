@@ -34,6 +34,18 @@ DEFAULTS: dict[str, Any] = {
             "enabled": True,
             "model": "claude-sonnet-5",
         },
+        # #524: after ``corrections.verify``, ask whether each verified
+        # correction really corrects anything (``core/correction_check.py``),
+        # on the briefing's ``## Corrections`` and the corrections-only pass
+        # alike. Off: it missed the bar set before measuring. On the held-out
+        # half of #519's labelled items (tools/measure_correction_check.py)
+        # Opus kept 8 of 10 real corrections and 13 items in all, precision
+        # 61.5% where keeping everything is 20%; the bar was 80% and 90%.
+        # One call per session with a verified item, ~5 s, ~$0.02 notional.
+        "correctionCheck": {
+            "enabled": False,
+            "model": "claude-opus-5-5",
+        },
         "auto": {
             "enabled": True,
             "minNewMemories": 1,
