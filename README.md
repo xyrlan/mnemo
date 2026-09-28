@@ -137,6 +137,16 @@ into, so it counts as null. Reproduce with
 [`tools/measure_broad_value.py`](tools/measure_broad_value.py)
 ([#527](https://github.com/xyrlan/mnemo/issues/527)).
 
+**Why not? Leads, not findings yet.** A zero-model pass over what those two
+studies left on disk shows three things. Most rule bytes (78%) go to rules no
+rater found relevant. Of the relevant rules mnemo delivers, 64% are already in
+`CLAUDE.md` or auto-memory. And the agent reads the full rule behind a reflex
+line in 8 of 1,336 cases. The drop after the reflex judge went live is not
+the judge's: rules the judge never selected dropped more. Each lead is ranked
+with the cheapest fresh test that would confirm or kill it. Reproduce with
+[`tools/measure_memory_panorama.py`](tools/measure_memory_panorama.py)
+([#530](https://github.com/xyrlan/mnemo/issues/530)).
+
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by
 *when the vault learned it*. The maintainer's vault, 2026-09-14:
