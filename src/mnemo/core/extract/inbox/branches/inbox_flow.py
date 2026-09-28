@@ -20,6 +20,7 @@ from mnemo.core.extract.inbox.paths import _promoted_path, _sibling_path
 from mnemo.core.extract.inbox.rendering import _render_page
 from mnemo.core.extract.inbox.types import ApplyResult, ExtractedPage
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
+from mnemo.core.inbox import staged_at_for
 
 
 def _handle_no_entry(
@@ -159,7 +160,10 @@ def _apply_inbox(
     result: ApplyResult,
 ) -> None:
     """v0.2 _inbox/ branch, unchanged in behavior."""
-    content = _render_page(page, run_id=run_id, auto_promoted=False)
+    # A rewrite keeps the time the page first entered the inbox, so a lesson
+    # re-derived run after run does not restart its expiry (#518).
+    content = _render_page(page, run_id=run_id, auto_promoted=False,
+                           staged_at=staged_at_for(target))
     new_written_hash = content_hash(content)
     promoted_file = _promoted_path(vault_root, page)
 

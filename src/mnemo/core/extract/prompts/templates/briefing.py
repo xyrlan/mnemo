@@ -11,6 +11,29 @@ monolith in v0.9 PR F2.
 from __future__ import annotations
 
 
+#: What a correction is, and the one shape it is written in. Shared word for
+#: word with the corrections-only pass (``templates/corrections.py``, #517), so
+#: a session with no edit is held to the same definition as one briefed in full.
+CORRECTIONS_DEFINITION = (
+    "every place the USER told you to stop, change, prefer, "
+    "or never/always do something. One bullet per correction, in this exact "
+    "shape: `- \"<verbatim quote from a USER TURN>\" → <one-line rule it "
+    "establishes>`. The quote must be copied character-for-character from "
+    "the numbered USER TURNS block in the user message — never paraphrase, "
+    "never quote your own words. A correction is a reaction to something you "
+    "did or proposed. A task brief that mnemo wrote (an opening turn starting "
+    "'Work on issue #' or 'You are building one piece of the feature') is "
+    "never a correction; a first message in which the user states a standing "
+    "rule in their own words is one. NOT corrections: an approval "
+    "('go ahead', 'pode implementar', 'looks good'), a question, a feature "
+    "request, a bug report, a status update, or anything you explained, "
+    "decided alone, or inferred. The text after → is the standing rule in "
+    "imperative form ('Never X', 'Always Y before Z', 'Prefer X over Y'), "
+    "not a description of what you then did. Omit the section (header and "
+    "all) when the user corrected nothing — most sessions correct nothing."
+)
+
+
 BRIEFING_SYSTEM_PROMPT = (
     "You are writing a shift handoff briefing from a Claude Code session "
     "transcript. Metaphor: a nurse going off shift writing a short note so "
@@ -38,22 +61,9 @@ BRIEFING_SYSTEM_PROMPT = (
     "- Decisions made: architectural decisions with a **Why:** rationale, "
     "including rejected alternatives when relevant. This is the durable "
     "content that downstream extraction will mine into Tier 2 pages.\n"
-    "- Corrections: every place the USER told you to stop, change, prefer, "
-    "or never/always do something. One bullet per correction, in this exact "
-    "shape: `- \"<verbatim quote from a USER TURN>\" → <one-line rule it "
-    "establishes>`. The quote must be copied character-for-character from "
-    "the numbered USER TURNS block in the user message — never paraphrase, "
-    "never quote your own words. A correction is a reaction to something you "
-    "did or proposed. A task brief that mnemo wrote (an opening turn starting "
-    "'Work on issue #' or 'You are building one piece of the feature') is "
-    "never a correction; a first message in which the user states a standing "
-    "rule in their own words is one. NOT corrections: an approval "
-    "('go ahead', 'pode implementar', 'looks good'), a question, a feature "
-    "request, a bug report, a status update, or anything you explained, "
-    "decided alone, or inferred. The text after → is the standing rule in "
-    "imperative form ('Never X', 'Always Y before Z', 'Prefer X over Y'), "
-    "not a description of what you then did. Omit the section (header and "
-    "all) when the user corrected nothing — most sessions correct nothing.\n"
+    "- Corrections: "
+    + CORRECTIONS_DEFINITION
+    + "\n"
     "- Dead ends: what was tried and didn't work, and why.\n"
     "- Open questions: unresolved items.\n"
     "- State at end of session: branch, uncommitted files, test status, "

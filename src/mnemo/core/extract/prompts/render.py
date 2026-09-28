@@ -170,6 +170,36 @@ def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = Non
     )
 
 
+#: How much of the assistant's reply before a turn the corrections-only pass
+#: shows: its tail, which is what the user was answering.
+_CONTEXT_MAX_CHARS = 600
+
+
+def build_corrections_prompt(exchanges: list[tuple[str, str]]) -> str:
+    """Render the corrections-only prompt (#517) from ``(assistant, user)`` pairs.
+
+    One pair per user turn, in :func:`mnemo.core.transcript.user_turns`
+    order, so the numbering is the briefing's: turn ``[n]`` here is turn
+    ``[n]`` there. The assistant text is context and is shown on lines no
+    USER TURN number starts, cut to its last ``_CONTEXT_MAX_CHARS``.
+    """
+    lines: list[str] = []
+    for i, (before, turn) in enumerate(exchanges, 1):
+        before = " ".join((before or "").split())
+        if before:
+            if len(before) > _CONTEXT_MAX_CHARS:
+                before = "…" + before[-_CONTEXT_MAX_CHARS:]
+            lines.append(f"    (assistant, before turn {i}: {before})")
+        lines.append(_render_user_turn(i, turn))
+    return (
+        "Task: list the user's corrections in this Claude Code session, "
+        "following the system prompt exactly.\n\n"
+        "=== USER TURNS (verbatim, numbered — quote these for Corrections) ===\n"
+        + "\n".join(lines)
+        + "\n=== END USER TURNS ===\n"
+    )
+
+
 def build_harvest_prompt(transcript: str) -> str:
     """Render a harvest prompt from a pre-flattened transcript string.
 

@@ -10,7 +10,7 @@ The briefing caller now composes:
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 
 def flatten_transcript_events(events: list[dict]) -> str:
@@ -99,7 +99,29 @@ def user_turns(events: list[dict]) -> list[str]:
     hook context, slash-command output, tool results) is excluded — a
     correction can only be evidenced by words the person actually typed.
     """
-    out: list[str] = []
+    return [turn.text for turn in user_turn_records(events)]
+
+
+class UserTurn(NamedTuple):
+    """One of :func:`user_turns`, with where it sits in the transcript.
+
+    ``index`` is its position in :func:`user_turns` (0-based), ``timestamp``
+    and ``uuid`` are the event's own, ``""`` when the event carries none.
+    """
+
+    index: int
+    text: str
+    timestamp: str
+    uuid: str
+
+
+def user_turn_records(events: list[dict]) -> list[UserTurn]:
+    """:func:`user_turns`, each with its index, timestamp and event uuid (#517).
+
+    The same filter, so ``user_turn_records(ev)[i].text == user_turns(ev)[i]``
+    always: a correction located here names the turn the briefing was shown.
+    """
+    out: list[UserTurn] = []
     for ev in events:
         if not isinstance(ev, dict) or ev.get("type") != "user":
             continue
@@ -109,5 +131,10 @@ def user_turns(events: list[dict]) -> list[str]:
         text = plain_user_text(msg.get("content"))
         if not text or SYNTHETIC_TURN.search(text):
             continue
-        out.append(text)
+        out.append(UserTurn(
+            index=len(out),
+            text=text,
+            timestamp=str(ev.get("timestamp") or ""),
+            uuid=str(ev.get("uuid") or ""),
+        ))
     return out

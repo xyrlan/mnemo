@@ -186,6 +186,12 @@ def _maybe_schedule_briefing(
     Unlike extraction, briefings skip the count+time debounce — they are
     cheap and run on every session end so no handoff state is dropped.
 
+    The spawned ``mnemo briefing`` decides what the session gets (#517): one
+    with a file edit is briefed, one without gets the corrections-only pass,
+    and either way its verified corrections land in the friction ledger. The
+    decision reads the transcript, so it is made in the detached process and
+    not here, under the 1.5 s bound.
+
     One exception (#449): a twin's briefing is held until the maintainer
     delivers it, and the twin never delivered is never briefed — see
     :mod:`mnemo.core.twins` for why the losing run must not teach the vault.

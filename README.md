@@ -1,7 +1,9 @@
 # mnemo
 
-> Claude Code forgets your corrections. mnemo doesn't — and the sessions it
-> fans out for you start out knowing them.
+> mnemo keeps what your Claude Code sessions learned, puts the relevant piece
+> in front of the next prompt, and fans out sessions that start out knowing it.
+
+What that adds over Claude Code's own memory is measured below.
 
 ![The five-minute loop: correct Claude, run mnemo learn, the next prompt already knows](docs/assets/loop.gif)
 
@@ -93,6 +95,57 @@ lift                +31.1 pp   95% CI [+19.7, +42.6]
 is the other half, and it is yours to check: `/mnemo:why` shows every
 decision with its arithmetic, and `mnemo replay` runs your own history through
 it.
+
+**Does it prevent a repeated correction? No, measured.** mnemo's promise is
+that the agent does not repeat a mistake you already corrected. On the
+maintainer's own history (120 of 265 human sessions, 2026-08-26 → 09-27), two
+blind raters on different models judged, for every prompt, which rule you had
+*already taught by correcting the agent* applied to it. The transcript then
+showed whether mnemo had put that rule in context, and whether Claude Code's own
+`CLAUDE.md` or auto-memory already carried it. Multiplied by the lift above:
+
+```
+relevant corrected rules   0.40 per session          [0.29, 0.51]
+delivered, and new          2 of 48   4.2%            [0, 10.3%]
+   by channel               SessionStart 12.5%   reflex 0%   MCP 0%
+   already in CLAUDE.md / auto-memory                 62.5%
+lift                       +31.1 pp                  [+19.7, +42.6]
+prevented repeats          0.005 per session         [0, 0.026]    bar: 1 per 15 (0.067)
+verdict                    NULL, before the reflex judge went live and after it
+```
+
+The bottleneck is frequency, not delivery: Claude Code's own memory already
+held most of the corrected rules, so even if mnemo had delivered every one it
+lacked, the most it could prevent is one repeat per ~21 sessions, under the bar.
+Counting *any* vault rule instead of corrected ones gives 0.135 per session
+[0.070, 0.225], carried mostly by the reflex. That counts answers a rule would
+change, not mistakes you corrected, and the lift it uses measures whether an
+answer follows the rule, not whether it is better. mnemo adds a median ~2.2k
+tokens per session. Reproduce with
+[`tools/measure_prevented_repeats.py`](tools/measure_prevented_repeats.py)
+([#520](https://github.com/xyrlan/mnemo/issues/520)).
+
+**Do those changes make the answer better? Not measurably.** The test covered
+all 265 sessions and the 138 times mnemo put a rule in context that Claude
+Code's own memory lacked. Each prompt was answered twice, with the rule and
+without its bytes, and two blind raters who never saw the rule picked the
+better reply. With the rule, the reply was better 34% of the time, worse 27%
+and tied 39%. Net help per rule is +0.07 [−0.04, +0.17], which comes to
+**0.036 helpful changes per session [−0.019, +0.094], about 1 in 28**, against
+the bar of 1 in 15. The result is inconclusive with no sessions left to extend
+into, so it counts as null. Reproduce with
+[`tools/measure_broad_value.py`](tools/measure_broad_value.py)
+([#527](https://github.com/xyrlan/mnemo/issues/527)).
+
+**Why not? Leads, not findings yet.** A zero-model pass over what those two
+studies left on disk shows three things. Most rule bytes (78%) go to rules no
+rater found relevant. Of the relevant rules mnemo delivers, 64% are already in
+`CLAUDE.md` or auto-memory. And the agent reads the full rule behind a reflex
+line in 8 of 1,336 cases. The drop after the reflex judge went live is not
+the judge's: rules the judge never selected dropped more. Each lead is ranked
+with the cheapest fresh test that would confirm or kill it. Reproduce with
+[`tools/measure_memory_panorama.py`](tools/measure_memory_panorama.py)
+([#530](https://github.com/xyrlan/mnemo/issues/530)).
 
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mnemo-claude"
 version = "1.7.0"
-description = "Claude Code forgets your corrections. mnemo doesn't — and the sessions it fans out for you start out knowing them."
+description = "mnemo keeps what your Claude Code sessions learned, puts the relevant piece in front of the next prompt, and fans out sessions that start out knowing it."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }

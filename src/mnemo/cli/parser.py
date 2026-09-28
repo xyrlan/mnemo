@@ -20,8 +20,9 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {}
 # ``tests/unit/test_cli_help.py`` pins it so they can't drift again the way
 # "The Obsidian that populates itself" did from the README's actual pitch.
 TAGLINE = (
-    "Claude Code forgets your corrections. mnemo doesn't — and the "
-    "sessions it fans out for you start out knowing them."
+    "mnemo keeps what your Claude Code sessions learned, puts the relevant "
+    "piece in front of the next prompt, and fans out sessions that start out "
+    "knowing it."
 )
 
 
