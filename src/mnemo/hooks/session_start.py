@@ -22,6 +22,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 
 _PRUNE_MARKER = ".mnemo/briefings-prune.last"
@@ -103,12 +104,60 @@ def _briefing_wanted(cfg: dict, source: str) -> bool:
     return source not in _BRIEFING_ALREADY_IN_CONTEXT
 
 
+#: The most a SessionStart envelope may weigh, in UTF-8 bytes (#533).
+#:
+#: Claude Code does not hand the agent a hook's ``additionalContext`` of
+#: 10,000 characters or more: it saves it to a file and puts a 2 KB preview in
+#: context. Over every transcript on the maintainer's machine on 2026-09-28
+#: (``tools/measure_persist_threshold.py``), the largest hook text kept inline
+#: was 9,872 characters and the smallest persisted one 10,044, with no overlap,
+#: on every Claude Code version from 2.1.241 to 2.1.283. 28 of 343 envelopes in
+#: the month before were persisted, and ``[mnemo learned]`` survived the
+#: preview in none of them.
+#:
+#: Counted in bytes, which are never fewer than characters, so the cap holds
+#: whichever of the two Claude Code counts, with 10% to spare.
+ENVELOPE_MAX_BYTES = 9000
+#: The line a trimmed ``[last-briefing]`` ends with; followed by the path.
+BRIEFING_TRIMMED = "[briefing trimmed to fit the session-start limit — the full text is at "
+_BRIEFING_CLOSER = "\n[/last-briefing]"
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _fit_briefing(block: str, room: int, path: object) -> str:
+    """``block`` (a whole ``[last-briefing]`` block), cut to ``room`` bytes.
+
+    The briefing is the only block that gets cut: it is the largest thing in
+    the envelope by far and the one most readable elsewhere, since it is a
+    file in the vault. The cut falls on a line boundary, and a cut block ends
+    with one line naming that file, so the rest is one Read away. The framing
+    line and the closer always stay, so a reader still sees a well-formed
+    block, even in the pathological case where nothing of the body fits.
+    """
+    if not block or _utf8_len(block) <= room:
+        return block
+    body = block[: -len(_BRIEFING_CLOSER)] if block.endswith(_BRIEFING_CLOSER) else block
+    tail = "\n" + BRIEFING_TRIMMED + f"{path}]" + _BRIEFING_CLOSER
+    frame_end = body.find("\n", body.find("[last-briefing"))
+    if frame_end < 0:
+        frame_end = len(body)
+    budget = max(0, room - _utf8_len(tail))
+    cut = body.encode("utf-8")[:budget].decode("utf-8", "ignore")
+    newline = cut.rfind("\n")
+    cut = cut[:newline] if newline > frame_end else body[:frame_end]
+    return cut.rstrip() + tail
+
+
 def _build_injection_payload(
     vault_root: Path,
     current_project: str | None = None,
     inject_briefing: bool = False,
     session_id: str | None = None,
     source: str | None = None,
+    blocks: Sequence[str] = (),
 ) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
@@ -123,6 +172,11 @@ def _build_injection_payload(
     block (verbatim body) as the last section. The block is omitted on any
     read/parse failure or when no briefing exists. ``session_id`` and
     ``source`` describe the session receiving it, for the briefing-log row.
+
+    ``blocks`` are the hook's other blocks (notices, ``[mnemo learned]``, the
+    offer), already built, in order. They go after the topic menu and before
+    the briefing, and the briefing alone is trimmed so the whole envelope
+    stays within :data:`ENVELOPE_MAX_BYTES` (#533).
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core import rule_activation
@@ -188,6 +242,7 @@ def _build_injection_payload(
 
     # v0.10 NEW: append a briefing for current_project, if any.
     briefing_block = ""
+    briefing_path = None
     if inject_briefing and current_project:
         try:
             from mnemo.core import briefing as briefing_mod
@@ -211,6 +266,7 @@ def _build_injection_payload(
                     + rec.body.rstrip()
                     + "\n[/last-briefing]"
                 )
+                briefing_path = rec.path
                 # The hook is this builder's only caller and emits whatever it
                 # returns, so building the block is handing it to the session.
                 # Its own try: telemetry must never cost the session its briefing.
@@ -246,9 +302,16 @@ def _build_injection_payload(
         except Exception:
             preempt_block = ""
 
-    if not topic_lines and not briefing_block and not preempt_block:
+    # The briefing goes last and is the only block cut to fit: whatever sits
+    # before it is read whole, and a cut briefing still names its file.
+    head = "\n".join(topic_lines) + preempt_block
+    for block in blocks:
+        if block:
+            head = head + "\n\n" + block if head else block
+    if not head and not briefing_block:
         return ""
-    return "\n".join(topic_lines) + briefing_block + preempt_block
+    room = ENVELOPE_MAX_BYTES - _utf8_len(head)
+    return head + _fit_briefing(briefing_block, room, briefing_path)
 
 
 def _emit_injection(payload_text: str, out: object = None) -> None:
@@ -1141,57 +1204,35 @@ def main() -> int:
                 canonical_name = agent.resolve_canonical_agent(cwd).name
                 reader_sid = sid if sid != "unknown" else None
                 inject_briefing = _briefing_wanted(cfg, source)
+                # Every block but the briefing is built first, in the order it
+                # is read, and handed to the builder, which puts the briefing
+                # last and trims it alone to keep the envelope under Claude
+                # Code's persist limit (#533). Each block stands on its own:
+                # a brand-new vault has no topics and no briefing, so the
+                # payload a notice would ride along with is empty on exactly
+                # the session the notice exists for.
+                blocks = [
+                    _first_run_notice(vault, cfg, canonical_name),
+                    # What the sweep left waiting, while the vault is
+                    # otherwise empty: the only news on exactly that session.
+                    _staged_backfill_notice(vault),
+                    # Rules another contributor published into this repo,
+                    # still unimported: on a fresh clone with a fresh vault it
+                    # is the only news there is.
+                    _share_import_notice(vault, cfg, canonical_name, cwd),
+                    _learned_block(vault, cfg, canonical_name),
+                    # And the offer: one block, from whichever of the two
+                    # review queues has gone longest without the slot (#397).
+                    _offer_block(vault, cfg, canonical_name, cwd, reader_sid),
+                ]
                 payload_text = _build_injection_payload(
                     vault,
                     current_project=canonical_name,
                     inject_briefing=inject_briefing,
                     session_id=reader_sid,
                     source=source,
+                    blocks=blocks,
                 )
-                # The notice stands on its own: a brand-new vault has no
-                # topics and no briefing, so the payload it would ride along
-                # with is empty on exactly the session the notice exists for.
-                notice = _first_run_notice(vault, cfg, canonical_name)
-                if notice:
-                    payload_text = (
-                        payload_text + "\n\n" + notice if payload_text else notice
-                    )
-                # What the sweep left waiting, while the vault is otherwise
-                # empty. Same standing as the first-run notice: it is the
-                # only news on exactly the session it exists for.
-                staged_notice = _staged_backfill_notice(vault)
-                if staged_notice:
-                    payload_text = (
-                        payload_text + "\n\n" + staged_notice
-                        if payload_text else staged_notice
-                    )
-                # Rules another contributor published into this repo, still
-                # unimported. Same standing again: on a fresh clone with a
-                # fresh vault it is the only news there is.
-                share_notice = _share_import_notice(vault, cfg, canonical_name, cwd)
-                if share_notice:
-                    payload_text = (
-                        payload_text + "\n\n" + share_notice
-                        if payload_text else share_notice
-                    )
-                # Same rule as the notice: a vault whose only news is a rule it
-                # just learned still has news worth sending.
-                learned_block = _learned_block(vault, cfg, canonical_name)
-                if learned_block:
-                    payload_text = (
-                        payload_text + "\n\n" + learned_block
-                        if payload_text else learned_block
-                    )
-                # And the offer: one block, from whichever of the two review
-                # queues has gone longest without the slot (#397). Last,
-                # because it is the block a session can most afford to lose if
-                # anything above it grows.
-                offer = _offer_block(vault, cfg, canonical_name, cwd, reader_sid)
-                if offer:
-                    payload_text = (
-                        payload_text + "\n\n" + offer
-                        if payload_text else offer
-                    )
                 if payload_text:
                     _emit_injection(payload_text)
                     try:
@@ -1204,6 +1245,8 @@ def main() -> int:
                             agent=canonical_name,
                             source=source,
                             session_id=reader_sid,
+                            envelope_chars=len(payload_text),
+                            briefing_trimmed=(BRIEFING_TRIMMED in payload_text),
                         )
                     except Exception as exc:
                         errors.log_error(vault, "session_start.inject_telemetry", exc)

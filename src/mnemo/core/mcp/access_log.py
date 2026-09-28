@@ -119,6 +119,8 @@ def record_session_start_inject(
     agent: str,
     source: str | None = None,
     session_id: str | None = None,
+    envelope_chars: int | None = None,
+    briefing_trimmed: bool = False,
 ) -> None:
     """Append a `session_start.inject` entry. Never raises.
 
@@ -129,6 +131,11 @@ def record_session_start_inject(
     ``session_id`` is the session the envelope went to. One session fires
     SessionStart again on every ``/clear``, so without it a row count reads
     as a session count and is not one (#359).
+
+    ``envelope_chars`` is the size Claude Code measures against its persist
+    limit (10,000 characters, #533), and ``briefing_trimmed`` says the hook
+    cut the briefing to stay under it, so "was any envelope over the limit"
+    is a log query rather than a transcript walk.
     """
     entry = {
         "timestamp": _utc_iso_z(),
@@ -139,6 +146,8 @@ def record_session_start_inject(
         "agent": agent,
         "source": source,
         "session_id": session_id,
+        "envelope_chars": None if envelope_chars is None else int(envelope_chars),
+        "briefing_trimmed": bool(briefing_trimmed),
         "result_count": 1,
     }
     record(vault_root, entry)
