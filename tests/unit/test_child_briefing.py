@@ -128,7 +128,8 @@ def test_a_child_starts_on_the_canonical_projects_briefing(
     }, monkeypatch, capsys)
 
     context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert f"[last-briefing session={CANONICAL_SID}" in context
+    # The index (#551) lists the canonical project's briefings, not the tree's.
+    assert "[recent-briefings count=1 " in context
     assert "stopped at the channels contract" in context
 
 

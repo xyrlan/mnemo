@@ -92,16 +92,38 @@ def _maybe_repair_hook_matchers(vault: Path, cfg: dict, cwd: str | None = None) 
 _BRIEFING_ALREADY_IN_CONTEXT = frozenset({"resume", "fork", "compact"})
 
 
+#: What ``briefings.sessionStart`` may say (#551). ``index`` is the
+#: ``[recent-briefings]`` block of :mod:`mnemo.core.briefing_index`, ``last`` the
+#: newest briefing whole (``[last-briefing]``, the default until #551), ``none``
+#: nothing. ``last`` and ``none`` exist so a comparison can run the other arms.
+BRIEFING_MODES = ("index", "last", "none")
+DEFAULT_BRIEFING_MODE = "index"
+
+
+def _briefing_mode(cfg: dict, source: str) -> str:
+    """What this SessionStart carries in the briefing slot: one of :data:`BRIEFING_MODES`.
+
+    ``injectLastOnSessionStart: false``, the switch from before #551, still
+    means nothing. An unknown ``sessionStart`` value falls back to the default
+    rather than silencing the slot.
+    """
+    b = cfg.get("briefings", {}) or {}
+    if not b.get("injectLastOnSessionStart", True):
+        return "none"
+    if source in _BRIEFING_ALREADY_IN_CONTEXT:
+        return "none"
+    mode = str(b.get("sessionStart") or DEFAULT_BRIEFING_MODE).strip().lower()
+    return mode if mode in BRIEFING_MODES else DEFAULT_BRIEFING_MODE
+
+
 def _briefing_wanted(cfg: dict, source: str) -> bool:
-    """Whether this SessionStart should carry the ``[last-briefing]`` block.
+    """Whether this SessionStart should carry a briefing block at all.
 
     Only the briefing is gated. The topic envelope is a few hundred bytes and
     carries the instruction to call ``list_rules_by_topic`` at all, so it
     still goes out on a resume.
     """
-    if not cfg.get("briefings", {}).get("injectLastOnSessionStart", True):
-        return False
-    return source not in _BRIEFING_ALREADY_IN_CONTEXT
+    return _briefing_mode(cfg, source) != "none"
 
 
 #: The most a SessionStart envelope may weigh, in UTF-8 bytes (#533). It lives
@@ -148,6 +170,7 @@ def _build_injection_payload(
     session_id: str | None = None,
     source: str | None = None,
     blocks: Sequence[str] = (),
+    briefing_mode: str = "last",
 ) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
@@ -158,10 +181,13 @@ def _build_injection_payload(
     with a stable secondary sort by name.
 
     When ``inject_briefing`` is True and ``current_project`` has at least one
-    briefing on disk, appends a ``[last-briefing session=… date=… duration_minutes=…]``
-    block (verbatim body) as the last section. The block is omitted on any
-    read/parse failure or when no briefing exists. ``session_id`` and
-    ``source`` describe the session receiving it, for the briefing-log row.
+    briefing on disk, appends the briefing block as the last section:
+    ``briefing_mode="index"`` the ``[recent-briefings]`` index of the ten
+    newest briefings' TL;DRs (:mod:`mnemo.core.briefing_index`, #551),
+    ``"last"`` a ``[last-briefing session=… date=… duration_minutes=…]`` block
+    with the newest briefing verbatim. The block is omitted on any read/parse
+    failure or when no briefing exists. ``session_id`` and ``source``
+    describe the session receiving it, for the briefing-log rows.
 
     ``blocks`` are the hook's other blocks (notices, ``[mnemo learned]``, the
     offer), already built, in order. They go after the topic menu and before
@@ -230,10 +256,18 @@ def _build_injection_payload(
             'Use scope="project" for local+universal, scope="local-only" to exclude universal.'
         )
 
-    # v0.10 NEW: append a briefing for current_project, if any.
+    # v0.10 NEW: append a briefing for current_project, if any. The index is
+    # sized after the other blocks, below, since it shares out the room left.
     briefing_block = ""
     briefing_path = None
-    if inject_briefing and current_project:
+    index_records: list = []
+    if inject_briefing and current_project and briefing_mode == "index":
+        try:
+            from mnemo.core import briefing_select
+            index_records = briefing_select.recent_briefings(vault_root, current_project)
+        except Exception:
+            index_records = []
+    elif inject_briefing and current_project:
         try:
             from mnemo.core import briefing as briefing_mod
             from mnemo.core import briefing_select
@@ -263,6 +297,7 @@ def _build_injection_payload(
                 try:
                     briefing_mod.record_briefing_read(
                         vault_root, rec, reader_session_id=session_id, source=source,
+                        mode="last", entries=1,
                     )
                 except Exception:
                     pass
@@ -298,10 +333,54 @@ def _build_injection_payload(
     for block in blocks:
         if block:
             head = head + "\n\n" + block if head else block
+    room = ENVELOPE_MAX_BYTES - _utf8_len(head)
+    if index_records:
+        briefing_block = _index_block(
+            vault_root, index_records, room, session_id=session_id, source=source,
+        )
+        # An index alone opens the envelope, as #548 measured it.
+        return head + briefing_block if head else briefing_block.lstrip("\n")
     if not head and not briefing_block:
         return ""
-    room = ENVELOPE_MAX_BYTES - _utf8_len(head)
     return head + _fit_briefing(briefing_block, room, briefing_path)
+
+
+def _index_block(
+    vault_root: Path,
+    records: list,
+    room: int,
+    *,
+    session_id: str | None = None,
+    source: str | None = None,
+) -> str:
+    """The ``[recent-briefings]`` block for ``records`` in ``room`` bytes, logged.
+
+    The TL;DRs share the room fairly (#548's cut, in
+    :mod:`mnemo.core.briefing_index`); the index is never passed through
+    :func:`_fit_briefing`, which would cut its oldest entries off mid-line.
+    Each listed briefing gets its briefing-log row, newest first, so the log
+    says which briefings a session was handed, as it did for one.
+    """
+    try:
+        from mnemo.core import briefing_index
+
+        block, n, _cut = briefing_index.fit(records, room)
+    except Exception:
+        return ""
+    if not block:
+        return ""
+    try:
+        from mnemo.core import briefing as briefing_mod
+
+        index_bytes = _utf8_len(block.lstrip("\n"))
+        for rec in records[:n]:
+            briefing_mod.record_briefing_read(
+                vault_root, rec, reader_session_id=session_id, source=source,
+                mode="index", entries=n, index_bytes=index_bytes,
+            )
+    except Exception:
+        pass
+    return block
 
 
 def _emit_injection(payload_text: str, out: object = None) -> None:
@@ -1193,7 +1272,7 @@ def main() -> int:
             try:
                 canonical_name = agent.resolve_canonical_agent(cwd).name
                 reader_sid = sid if sid != "unknown" else None
-                inject_briefing = _briefing_wanted(cfg, source)
+                briefing_mode = _briefing_mode(cfg, source)
                 # Every block but the briefing is built first, in the order it
                 # is read, and handed to the builder, which puts the briefing
                 # last and trims it alone to keep the envelope under Claude
@@ -1218,10 +1297,11 @@ def main() -> int:
                 payload_text = _build_injection_payload(
                     vault,
                     current_project=canonical_name,
-                    inject_briefing=inject_briefing,
+                    inject_briefing=(briefing_mode != "none"),
                     session_id=reader_sid,
                     source=source,
                     blocks=blocks,
+                    briefing_mode=briefing_mode,
                 )
                 if payload_text:
                     _emit_injection(payload_text)
@@ -1230,7 +1310,10 @@ def main() -> int:
                         _al.record_session_start_inject(
                             vault,
                             envelope_bytes=len(payload_text.encode("utf-8")),
-                            included_briefing=("[last-briefing" in payload_text),
+                            included_briefing=(
+                                "[last-briefing" in payload_text
+                                or "[recent-briefings" in payload_text
+                            ),
                             project=canonical_name,
                             agent=canonical_name,
                             source=source,

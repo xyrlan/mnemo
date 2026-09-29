@@ -376,6 +376,12 @@ At every `SessionEnd`, mnemo writes a per-session briefing into
 next extraction — the difference between capturing ~1 file/day and capturing
 every meaningful decision.
 
+At the next `SessionStart` in that repo, the session gets an index of the ten
+newest briefings — each one's date and `## TL;DR`, newest first — so it can
+see where recent work stopped and read the one it needs in full.
+`briefings.sessionStart` switches it (`index`, `last`, `none`; see
+[configuration.md](configuration.md)).
+
 ### Injection
 
 At `SessionStart`, mnemo emits a compact topic list into Claude's

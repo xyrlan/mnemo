@@ -54,7 +54,9 @@ _REPORTED = re.compile(r"Output too large \(([\d.]+)\s*KB\)")
 _SAVED = re.compile(r"Full output saved to: (\S+)")
 #: What marks a text as mnemo's SessionStart envelope
 #: (``measure_prevented_repeats._MNEMO_START``).
-_MNEMO_START = ("mnemo://", "[last-briefing", "[mnemo learned", "[predicted-rules")
+#: ``[recent-briefings`` is the index SessionStart hands a session since #551;
+#: an envelope can be that block alone.
+_MNEMO_START = ("mnemo://", "[last-briefing", "[recent-briefings", "[mnemo learned", "[predicted-rules")
 
 
 def hook_texts(attachment: Dict[str, Any]) -> List[str]:

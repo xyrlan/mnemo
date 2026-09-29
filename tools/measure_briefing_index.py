@@ -87,7 +87,6 @@ import argparse
 import importlib.util
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -105,6 +104,7 @@ def _sibling(name: str) -> Any:
 
 
 bvl = _sibling("measure_briefing_value")
+from mnemo.core import briefing_index as bix  # noqa: E402
 bp = bvl.bp
 bv = bvl.bv
 mpr = bvl.mpr
@@ -131,89 +131,25 @@ BOTH = bvl.BOTH
 HELP_BAR = bvl.HELP_BAR
 KAPPA_BAR = bvl.KAPPA_BAR
 
-INDEX_OPEN = "[recent-briefings count=%d newest first: the TL;DR of each of this project's newest session briefings]"
-INDEX_CLOSE = "[/recent-briefings]"
-_INDEX_FRAMING = re.compile(r"\[/?recent-briefings[^\]]*\]")
-_TLDR = re.compile(r"^##\s*TL;DR[^\n]*\n(.*?)(?=^##\s|\Z)", re.S | re.M)
-ELLIPSIS = "…"
+# The index itself lives in ``mnemo.core.briefing_index``, which the SessionStart
+# hook builds it with since #551: one function, so what ships is what this measured.
+INDEX_OPEN = bix.INDEX_OPEN
+INDEX_CLOSE = bix.INDEX_CLOSE
+_INDEX_FRAMING = bix.INDEX_FRAMING
+ELLIPSIS = bix.ELLIPSIS
+_utf8 = bix._utf8
+tldr = bix.tldr
+cut_to = bix.cut_to
+fair_cut = bix.fair_cut
+entry_head = bix.entry_head
+index_block = bix.index_block
 
 
 # --- the index -----------------------------------------------------------------------------
 
-def _utf8(text: str) -> int:
-    return len(text.encode("utf-8"))
-
-
-def tldr(body: str) -> str:
-    """The briefing's ``## TL;DR`` section, else its first paragraph after the title."""
-    m = _TLDR.search(body or "")
-    if m and m.group(1).strip():
-        return m.group(1).strip()
-    text = "\n".join(ln for ln in (body or "").splitlines() if not ln.lstrip().startswith("#"))
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return paras[0] if paras else ""
-
-
 def pool_of(unit: Dict[str, Any], pool: int = POOL) -> List[Dict[str, Any]]:
     """The briefings among the ``pool`` newest at the session's start, newest first."""
     return sorted((c for c in unit["candidates"] if int(c["rank"]) < pool), key=lambda c: int(c["rank"]))
-
-
-def cut_to(text: str, budget: int) -> str:
-    """``text`` in at most ``budget`` UTF-8 bytes, cut on a word and marked."""
-    if _utf8(text) <= budget:
-        return text
-    room = budget - _utf8(ELLIPSIS)
-    if room <= 0:
-        return ""
-    head = text.encode("utf-8")[:room].decode("utf-8", "ignore")
-    space = max(head.rfind(" "), head.rfind("\n"))
-    if space > 0:
-        head = head[:space]
-    return head.rstrip() + ELLIPSIS
-
-
-def fair_cut(sizes: Sequence[int], room: int) -> List[int]:
-    """Each text's byte budget: whole when they all fit, else an equal share,
-    with what a short one leaves spread over the longer ones."""
-    budgets = [0] * len(sizes)
-    if sum(sizes) <= room:
-        return list(sizes)
-    left, room = sorted(range(len(sizes)), key=lambda i: sizes[i]), max(0, room)
-    while left:
-        share = room // len(left)
-        i = left[0]
-        if sizes[i] <= share:
-            budgets[i] = sizes[i]
-            room -= sizes[i]
-            left.pop(0)
-            continue
-        for i in left:
-            budgets[i] = share
-        break
-    return budgets
-
-
-def entry_head(meta: Dict[str, Any]) -> str:
-    return "### %s" % (meta.get("date") or "undated")
-
-
-def index_block(entries: Sequence[Tuple[Dict[str, Any], str]], room: int) -> Tuple[str, int]:
-    """(the ``[recent-briefings]`` block, starting with its blank-line
-    separator, in at most ``room`` bytes where it can be; how many TL;DRs
-    were cut). ``entries``: ``(frontmatter, TL;DR)``, newest first."""
-    if not entries:
-        return "", 0
-    heads = [entry_head(m) for m, _ in entries]
-    frame = "\n\n" + INDEX_OPEN % len(entries) + "\n"
-    close = "\n" + INDEX_CLOSE
-    # every byte but the TL;DRs themselves: framing, closer, headings, separators
-    fixed = _utf8(frame) + _utf8(close) + sum(_utf8(h) + 1 for h in heads) + 2 * (len(entries) - 1)
-    texts = [t for _, t in entries]
-    budgets = fair_cut([_utf8(t) for t in texts], room - fixed)
-    cut = [cut_to(t, b) for t, b in zip(texts, budgets)]
-    body = "\n\n".join(h + "\n" + t for h, t in zip(heads, cut))
-    return frame + body + close, sum(1 for t, c in zip(texts, cut) if c != t)
 
 
 def build_index_arm(unit: Dict[str, Any], ctx: Dict[str, Any], metas: Dict[str, Dict[str, Any]],
