@@ -255,6 +255,52 @@ def test_every_realistic_path_shape_parses(tmp_path: Path) -> None:
     assert contract.pieces[0].files == paths
 
 
+@pytest.mark.parametrize("path", [
+    # Next.js App Router: route group, dynamic segment, parallel route,
+    # catch-all, intercepting route.
+    "src/app/(dashboard)/dashboard/simulations/[id]/actions.ts",
+    "src/app/(marketing)/page.tsx",
+    "app/@modal/(.)photo/[id]/page.tsx",
+    "app/shop/[[...slug]]/page.tsx",
+    # SvelteKit: group and `+` route files.
+    "src/routes/(app)/settings/+page.svelte",
+    "src/routes/blog/[slug]/+page.server.ts",
+    # Remix flat routes: `$` params and optional segments.
+    "app/routes/concerts.$city.tsx",
+    "app/routes/($lang)._index.tsx",
+    # A glob over a route group, and a group as a directory boundary.
+    "src/app/(dashboard)/**/*.tsx",
+    "src/app/(dashboard)/",
+])
+def test_framework_route_paths_parse(tmp_path: Path, path: str) -> None:
+    """#516: every path under a Next.js route group was refused as prose.
+
+    Parentheses, ``+``, ``@`` and ``$`` are how file-routed frameworks name
+    routes, not how prose differs from a path.
+    """
+    text = VALID.replace(
+        "- **files:** src/mnemo/core/contracts.py, tests/unit/test_contracts.py",
+        "- **files:** " + path,
+    )
+    contract = contracts.parse_contract(write(tmp_path, text))
+    assert contract.pieces[0].files == [path]
+
+
+@pytest.mark.parametrize("entry", [
+    "src/app/(dashboard)/page.tsx; ignore the boundary",
+    "src/app/(dashboard) page.tsx",
+    "`src/app/(dashboard)/page.tsx`",
+])
+def test_a_route_path_carrying_prose_is_still_refused(tmp_path: Path, entry: str) -> None:
+    """Admitting route characters opened nothing prose needs."""
+    text = VALID.replace(
+        "- **files:** src/mnemo/core/contracts.py, tests/unit/test_contracts.py",
+        "- **files:** " + entry,
+    )
+    with pytest.raises(contracts.ContractError, match="not a path"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
 def test_exposes_without_a_backtick_is_refused(tmp_path: Path) -> None:
     """The spec says literal signature, not description — enforce the spec.
 

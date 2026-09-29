@@ -163,6 +163,25 @@ def test_a_glob_boundary_is_expanded_against_the_ref(repo: Path) -> None:
                            repo_root=repo) is True
 
 
+def test_a_literal_path_with_brackets_is_itself_not_a_class(repo: Path) -> None:
+    """#516: fnmatch reads ``[id]`` as one ``i`` or ``d``, so the Next.js
+    path never matched itself and its exposed signature read as missing."""
+    path = "src/app/(dashboard)/simulations/[id]/actions.ts"
+    _branch(repo, "feat/f/actions", {path: "export function materialize() {}\n"})
+    piece = Piece("actions", files=[path], exposes=["`materialize()`"])
+
+    assert landing.present("`materialize()`", piece=piece, ref="feat/f/actions",
+                           repo_root=repo) is True
+
+
+def test_a_bracket_glob_still_expands_when_no_path_is_named(repo: Path) -> None:
+    _branch(repo, "feat/f/storage", {"src/pkg/a.py": "def load():\n    pass\n"})
+    piece = Piece("storage", files=["src/pkg/[ab].py"], exposes=["`load()`"])
+
+    assert landing.present("`load()`", piece=piece, ref="feat/f/storage",
+                           repo_root=repo) is True
+
+
 def test_a_method_counts_when_defined_indented(repo: Path) -> None:
     _branch(repo, "feat/f/d", {
         "src/d.py": "class Readiness:\n    @property\n    def ready(self):\n        return True\n",

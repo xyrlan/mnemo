@@ -40,9 +40,15 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # correct boundary to satisfy a regex — so every shape this repo writes
 # (`src/mnemo/core/contracts.py`, `docs/*.md`, `src/mnemo/**/*.py`,
 # `./pyproject.toml`, `.github/workflows/ci.yml`, `a/b-c_d.py`) is admitted,
-# globs included. What it will not admit is a space, a semicolon, or a
-# backtick, which is the whole of how prose differs from a path here.
-PATH_RE = re.compile(r"^[A-Za-z0-9._*?\[\]!-]+(?:/[A-Za-z0-9._*?\[\]!-]+)*/?$")
+# globs included. So is every shape a file-routed web framework names its
+# routes with (#516): Next.js route groups `(dashboard)`, parallel routes
+# `@modal` and dynamic segments `[id]`; SvelteKit's `(group)` and
+# `+page.svelte`; Remix's `$id.tsx` and optional `($lang)`. None of those
+# characters marks prose, and refusing them refused every path under such a
+# route. What it will not admit is a space, a semicolon, or a backtick, which
+# is the whole of how prose differs from a path here.
+_PATH_SEGMENT = r"[A-Za-z0-9._*?\[\]!()+@$-]+"
+PATH_RE = re.compile(rf"^{_PATH_SEGMENT}(?:/{_PATH_SEGMENT})*/?$")
 
 # A `model` entry is a single Claude Code `--model` value: an alias
 # (`haiku`), a full id (`claude-haiku-4-5-20251001`), or either with a
