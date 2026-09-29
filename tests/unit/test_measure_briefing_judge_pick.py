@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools import measure_briefing_judge_pick as tool  # noqa: E402
 
@@ -206,7 +208,7 @@ def test_main_sends_dev_locks_scores_test_once_and_resumes(tmp_path, capsys):
     for model in tool.MODELS:
         r = test["models"][model]
         assert r["passed"] and r["score"]["precision"] == 1.0 and r["score"]["coverage"] == 1.0
-    assert test["timing"][HAIKU]["usd_per_session"] == 0.001
+    assert test["timing"][HAIKU]["usd_per_session"] == pytest.approx(0.001)
     assert "newest" in test["baselines"]
     before = (out / "test.json").read_text(encoding="utf-8")
     assert tool.main(argv + ["--score-test"], provider=stub) == 0
