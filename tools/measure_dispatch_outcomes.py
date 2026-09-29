@@ -99,8 +99,16 @@ _PASS = frozenset({"success", "neutral", "skipped"})
 _FAIL = frozenset({"failure", "cancelled", "timed_out", "action_required",
                    "startup_failure", "stale"})
 
+#: Days after a merge in which a revert or a follow-up fix counts against the
+#: PR — #556's secondary outcome, fixed before the pilot's numbers were read.
+FOLLOWUP_DAYS = 7
+
 #: ``state.json`` states of a job that will not change its work again.
 FINISHED = frozenset({"stopped", "done"})
+
+#: A last commit whose checks count as passing for the hands-off outcome: a
+#: flaky failure is the suite's, not the job's.
+PASSING = frozenset({"green", "flaky"})
 
 _PR = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 
@@ -364,6 +372,93 @@ def verdict(runs: Iterable[Sequence[Any]]) -> str:
     return "green" if all(str(c or "") in _PASS for _, c in runs) else "red"
 
 
+#: What a check run's annotation says when GitHub never started the job
+#: (a private repo whose Actions billing lapsed): no code was tested.
+_NOT_STARTED = re.compile(r"not started|spending limit|payments have failed", re.I)
+#: A failing test in a pytest log: ``FAILED tests/unit/test_x.py::test_y - …``.
+_FAILED_TEST = re.compile(r"\bFAILED ([\w./-]+\.py)::")
+
+
+def changed_files(url: str, *, run: Runner) -> Optional[set]:
+    """The files the PR at *url* changes. The same call :func:`followup` makes,
+    so a cache answers it once for both."""
+    code, out, _ = run(["gh", "pr", "view", url, "--json", "mergedAt,files,baseRefName"], None)
+    if code != 0:
+        return None
+    try:
+        data = json.loads(out or "{}") or {}
+    except ValueError:
+        return None
+    return {f.get("path") for f in data.get("files") or [] if isinstance(f, dict)}
+
+
+def failure_kind(failed: Dict[str, Any], runs: Sequence[Dict[str, Any]], *, repo: str,
+                 changed: Optional[set], run: Runner) -> Tuple[str, str]:
+    """``(kind, why)`` for one failed check run on a commit.
+
+    - ``rerun-passed``: a run of the same check on the same commit succeeded —
+      the one verdict about flakiness GitHub itself gives;
+    - ``not-run``: its annotation says the job was never started;
+    - ``flaky``: a matrix job (``<os> / <version>``) whose sibling on the same
+      OS in the same workflow run passed, and every test its log names as
+      failing lives in a file the PR does not change: the same code passed
+      the same test next door, and the change never touched the test;
+    - ``real``: anything else, including a failure whose log names no test.
+    """
+    name = str(failed.get("name") or "")
+    for other in runs:
+        if other is not failed and other.get("name") == name and other.get("conclusion") == "success":
+            return "rerun-passed", "a rerun on the same commit passed"
+    code, out, _ = run(["gh", "api", f"repos/{repo}/check-runs/{failed.get('id')}/annotations",
+                        "--jq", "[.[].message]"], None)
+    try:
+        notes = json.loads(out or "[]") if code == 0 else []
+    except ValueError:
+        notes = []
+    if any(_NOT_STARTED.search(str(n)) for n in notes or []):
+        return "not-run", "the job was never started"
+    prefix = name.split(" / ")[0] if " / " in name else None
+    if not prefix:
+        return "real", "not a matrix job"
+    siblings = [r for r in runs if r is not failed and r.get("suite") == failed.get("suite")
+                and str(r.get("name") or "").split(" / ")[0] == prefix]
+    if not any(r.get("conclusion") == "success" for r in siblings):
+        return "real", f"no other {prefix} job passed"
+    code, out, _ = run(["gh", "run", "view", "--job", str(failed.get("id")), "-R", repo,
+                        "--log-failed"], None)
+    tests = set(_FAILED_TEST.findall(out or "")) if code == 0 else set()
+    if not tests:
+        return "real", "the log names no failing test"
+    if changed is None or tests & changed:
+        return "real", "a failing test is in a file the PR changes"
+    return "flaky", f"{', '.join(sorted(tests))} failed only here; untouched by the PR"
+
+
+def classify_red(repo: str, oid: str, *, changed: Optional[set],
+                 run: Runner) -> Tuple[str, List[Dict[str, str]]]:
+    """A red commit as ``red``, ``flaky`` or ``not-run``, with each failed
+    run's kind. ``flaky`` when every failure is ``flaky`` or ``rerun-passed``;
+    ``not-run`` when none is ``real`` and at least one was never started."""
+    code, out, _ = run(["gh", "api", f"repos/{repo}/commits/{oid}/check-runs?per_page=100",
+                        "--jq", "[.check_runs[] | {id, name, status, conclusion, "
+                                "suite: .check_suite.id}]"], None)
+    try:
+        runs = json.loads(out or "[]") if code == 0 else []
+    except ValueError:
+        runs = []
+    failures = []
+    for r in runs if isinstance(runs, list) else []:
+        if str(r.get("conclusion") or "") in _FAIL:
+            kind, why = failure_kind(r, runs, repo=repo, changed=changed, run=run)
+            failures.append({"check": str(r.get("name") or ""), "kind": kind, "why": why})
+    kinds = {f["kind"] for f in failures}
+    if not failures or "real" in kinds:
+        return "red", failures
+    if "not-run" in kinds:
+        return "not-run", failures
+    return "flaky", failures
+
+
 def head_at(commits: Sequence[Tuple[float, str]], at: float) -> Optional[str]:
     """The last commit authored by *at*: the PR's head when the child stopped."""
     oid = None
@@ -499,14 +594,24 @@ def load_states(jobs: str) -> Dict[str, Dict[str, Any]]:
 
 def gather(projects: str, *, jobs: str, vault: Path,
            since: Optional[float] = None, until: Optional[float] = None,
-           run: Optional[Runner] = report_card._run) -> List[Dict[str, Any]]:
-    """One row per ``--bg`` job. *run* ``None`` reads nothing from GitHub."""
+           run: Optional[Runner] = report_card._run,
+           only: Optional[Iterable[str]] = None,
+           followup_days: Optional[int] = None,
+           now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """One row per ``--bg`` job. *run* ``None`` reads nothing from GitHub.
+
+    *only* limits the read to these short ids (a transcript is named after its
+    session id). *followup_days* adds :func:`followup` to every merged PR.
+    """
+    wanted = set(only) if only is not None else None
     parents = load_parents(vault)
     reports, log_start = load_reports(vault)
     follow = load_follow(vault)
     states = load_states(jobs)
     rows = []
     for path in sorted(glob.glob(os.path.join(projects, "*", "*.jsonl"))):
+        if wanted is not None and Path(path).stem[:8] not in wanted:
+            continue
         row = read_transcript(path)
         if row is None or not row["bg"]:
             continue
@@ -543,7 +648,87 @@ def gather(projects: str, *, jobs: str, vault: Path,
         if row["pr"] and last[row["pr"]] is not row:
             row["pr"], row["pr_source"] = None, "superseded"
         row["gh"] = outcome(row, run=run) if row["pr"] and run is not None else None
+        if row["gh"] is not None and followup_days is not None:
+            row["gh"]["followup"] = followup(row["pr"], days=followup_days, run=run,
+                                             now=now)
     return rows
+
+
+def _refers_to(text: str, number: int, repo: str) -> bool:
+    """Whether *text* names PR *number*: ``#n`` or its URL."""
+    return bool(re.search(r"(?<![\w/])#%d\b|github\.com/%s/pull/%d\b"
+                          % (number, re.escape(repo), number), text or ""))
+
+
+def followup(url: str, *, days: int = FOLLOWUP_DAYS, run: Runner,
+             now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """A revert of the merged PR at *url*, or a follow-up fix, within *days*.
+
+    ``state`` is ``found`` with what was found, ``none``, ``not-due`` while
+    the window is still open, or ``not-merged``. What counts, all readable on
+    GitHub without judgement:
+
+    - a PR merged within *days* after this one that names it (``#n`` or its
+      URL, in its title or body) and changes at least one file this one
+      changed — a fix that says what it fixes;
+    - a commit on the base branch within the window whose message starts
+      ``Revert`` and names the PR — a revert pushed without a PR.
+
+    A fix that names neither is not seen; a PR that names this one only to
+    build on it, and touches its files, is counted. Both are the same for
+    both arms of a pair.
+    """
+    match = _PR.match(url)
+    if not match:
+        return None
+    repo, number = match.group(1), int(match.group(2))
+    code, out, _ = run(["gh", "pr", "view", url, "--json",
+                        "mergedAt,files,baseRefName"], None)
+    if code != 0:
+        return None
+    try:
+        data = json.loads(out or "{}") or {}
+    except ValueError:
+        return None
+    merged = _epoch(data.get("mergedAt"))
+    if merged is None:
+        return {"state": "not-merged", "by": []}
+    end = merged + days * 86400
+    if (now if now is not None else datetime.now(timezone.utc).timestamp()) < end:
+        return {"state": "not-due", "by": [], "due": end}
+    files = {f.get("path") for f in data.get("files") or [] if isinstance(f, dict)}
+    day = lambda t: datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")  # noqa: E731
+    found: List[str] = []
+    code, out, _ = run(["gh", "pr", "list", "--repo", repo, "--state", "merged", "--limit", "100",
+                        "--search", f"{number} merged:{day(merged)}..{day(end)}",
+                        "--json", "number,title,body,mergedAt,files"], None)
+    try:
+        later = json.loads(out or "[]") if code == 0 else []
+    except ValueError:
+        later = []
+    for pr in later if isinstance(later, list) else []:
+        at = _epoch(pr.get("mergedAt"))
+        if (pr.get("number") == number or at is None or not merged < at <= end
+                or not _refers_to(f"{pr.get('title')}\n{pr.get('body')}", number, repo)):
+            continue
+        touched = {f.get("path") for f in pr.get("files") or [] if isinstance(f, dict)}
+        if touched & files:
+            found.append(f"#{pr.get('number')}")
+    code, out, _ = run(["gh", "api", f"repos/{repo}/commits?sha={data.get('baseRefName') or 'HEAD'}"
+                        f"&since={day(merged)}T00:00:00Z&until={day(end)}T23:59:59Z&per_page=100",
+                        "--jq", "[.[] | {sha: .sha, message: .commit.message, "
+                                "date: .commit.author.date}]"], None)
+    try:
+        commits = json.loads(out or "[]") if code == 0 else []
+    except ValueError:
+        commits = []
+    for c in commits if isinstance(commits, list) else []:
+        message = str(c.get("message") or "")
+        at = _epoch(c.get("date"))
+        if (message.startswith("Revert") and at is not None and merged < at <= end
+                and _refers_to(message, number, repo)):
+            found.append(str(c.get("sha") or "")[:8])
+    return {"state": "found" if found else "none", "by": found}
 
 
 def outcome(row: Dict[str, Any], *, run: Runner) -> Optional[Dict[str, Any]]:
@@ -558,16 +743,24 @@ def outcome(row: Dict[str, Any], *, run: Runner) -> Optional[Dict[str, Any]]:
     ci_handoff = check_state(row["repo"], handoff, run=run) if handoff else None
     ci_end = (ci_handoff if last == handoff
               else check_state(row["repo"], last, run=run) if last else None)
+    failures: Dict[str, List[Dict[str, str]]] = {}
+    changed: Optional[set] = None
+    if "red" in (ci_handoff, ci_end):
+        changed = changed_files(row["pr"], run=run)
+    if ci_handoff == "red" and handoff:
+        ci_handoff, failures["handoff"] = classify_red(row["repo"], handoff, changed=changed, run=run)
+    if ci_end == "red" and last:
+        ci_end, failures["end"] = classify_red(row["repo"], last, changed=changed, run=run)
     merged = facts["merged"] is not None
     hours = ((facts["merged"] - facts["created"]) / 3600.0
              if merged and facts["created"] is not None else None)
     fixed = None
     if ci_handoff == "red":
-        if ci_end == "green" and counts["by_child_later"] and not counts["after_child"]:
+        if ci_end in PASSING and counts["by_child_later"] and not counts["after_child"]:
             fixed = "child"
-        elif ci_end == "green" and counts["after_child"]:
+        elif ci_end in PASSING and counts["after_child"]:
             fixed = "someone-else"
-        elif ci_end == "green":
+        elif ci_end in PASSING:
             fixed = "rerun"
         else:
             fixed = "no"
@@ -579,6 +772,7 @@ def outcome(row: Dict[str, Any], *, run: Runner) -> Optional[Dict[str, Any]]:
         "ci_handoff": ci_handoff,
         "ci_end": ci_end,
         "red_fixed_by": fixed,
+        "failures": failures,
     }
 
 
@@ -597,10 +791,10 @@ def _median(values: Sequence[float]) -> Optional[float]:
 
 def hands_off(row: Dict[str, Any]) -> bool:
     """#556's primary outcome for one job: it opened a PR whose last commit's
-    checks are green, nobody else committed to it after the job's last turn,
+    checks pass (green, or red only by a :func:`failure_kind` flaky failure), nobody else committed to it after the job's last turn,
     and no person reached the job after its first reply."""
     g = row.get("gh")
-    return bool(row.get("pr") and g and g["ci_end"] == "green"
+    return bool(row.get("pr") and g and g["ci_end"] in PASSING
                 and not g["commits"]["after_child"]
                 and not (row["human_turns"] or row["answered_questions"]))
 
@@ -773,12 +967,150 @@ def sizing(p_dispatch: float, *, excluded: float = 0.0) -> List[Dict[str, Any]]:
     return out
 
 
+#: The full study's bar (#556), fixed before any pair of it runs. The
+#: difference is dispatch's hands-off rate minus plain's over clean pairs.
+BAR_POSITIVE = 0.10
+BAR_NULL = 0.10
+ALPHA = 0.05
+
+
+def mcnemar_exact(b: int, c: int) -> float:
+    """Two-sided exact McNemar p: the binomial test of *b* against *c*
+    discordant pairs at one half."""
+    n = b + c
+    if not n:
+        return 1.0
+    k = min(b, c)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+    return min(1.0, 2 * tail)
+
+
+def readout(table: Dict[str, int]) -> Dict[str, Any]:
+    """The full study's verdict from its paired table (:func:`pilot`'s).
+
+    - **dispatch delivers**: exact McNemar p < 0.05, dispatch ahead, and the
+      difference at least :data:`BAR_POSITIVE`;
+    - **plain delivers more**: p < 0.05 with plain ahead;
+    - **null**: the 95% interval of the difference lies inside
+      ±:data:`BAR_NULL`;
+    - **inconclusive**: anything else. It is reported as "not detectable at
+      this size", and the study is not extended to chase it.
+
+    The interval is Wald's for a paired difference of proportions,
+    ``(b - c) / n ± 1.96 · sqrt(b + c - (b - c)² / n) / n``.
+    """
+    b, c = table.get("dispatch-only", 0), table.get("plain-only", 0)
+    n = b + c + table.get("both", 0) + table.get("neither", 0)
+    if not n:
+        return {"pairs": 0, "verdict": "no pairs"}
+    diff = (b - c) / n
+    half = 1.959964 * math.sqrt(max(0.0, b + c - (b - c) ** 2 / n)) / n
+    p = mcnemar_exact(b, c)
+    if p < ALPHA and diff >= BAR_POSITIVE:
+        word = "dispatch delivers"
+    elif p < ALPHA and diff < 0:
+        word = "plain delivers more"
+    elif -BAR_NULL < diff - half and diff + half < BAR_NULL:
+        word = "null"
+    else:
+        word = "inconclusive"
+    return {"pairs": n, "difference": diff, "low": diff - half, "high": diff + half,
+            "p": p, "verdict": word}
+
+
 def format_sizing(p_dispatch: float, *, excluded: float) -> str:
     lines = [f"pairs for a two-sided McNemar test, alpha 0.05, power 0.8, dispatch "
              f"hands-off rate {p_dispatch:.0%}, {excluded:.0%} of pairs left out for a leak:"]
     for row in sizing(p_dispatch, excluded=excluded):
         lines.append(f"  plain {row['p_plain']:.0%} (−{row['difference'] * 100:.0f} pp): "
                      f"{row['clean_pairs']} clean pairs → {row['pairs_to_run']} to run")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# the pilot
+# ---------------------------------------------------------------------------
+
+
+def load_pairs(path: Path) -> List[Dict[str, Any]]:
+    """The pilot's pair ledger: one row per issue, ``dispatch`` and ``plain``
+    naming each arm's short id."""
+    return [r for r in _read_jsonl(path) if r.get("dispatch") and r.get("plain")]
+
+
+def conditions(row: Dict[str, Any], other: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """What reached one arm besides its prompt (#453's channels), read the way
+    ``mnemo twins show`` reads a twin; the sibling is the other arm's tree,
+    branch and id."""
+    from mnemo.core import twins
+
+    names = []
+    if other:
+        names = [other["short_id"], os.path.basename(other["cwd"].rstrip("/"))]
+        if other.get("branch"):
+            names.append(other["branch"])
+    return twins.conditions_of(Path(row["transcript"]), sibling=[n for n in names if n])
+
+
+def pilot(pairs: Sequence[Dict[str, Any]], rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Each pair's two arms side by side, and the paired hands-off table."""
+    by_id = {r["short_id"]: r for r in rows}
+    out = []
+    table = {"both": 0, "dispatch-only": 0, "plain-only": 0, "neither": 0, "unfinished": 0}
+    for pair in pairs:
+        d, p = by_id.get(pair["dispatch"]), by_id.get(pair["plain"])
+        arms = {}
+        for name, row, other in (("dispatch", d, p), ("plain", p, d)):
+            if row is None:
+                arms[name] = None
+                continue
+            g = row.get("gh") or {}
+            arms[name] = {
+                "short_id": row["short_id"], "pr": row["pr"], "hands_off": hands_off(row),
+                "ci_handoff": g.get("ci_handoff"), "ci_end": g.get("ci_end"),
+                "after_child": (g.get("commits") or {}).get("after_child"),
+                "merged": g.get("merged"), "followup": (g.get("followup") or {}).get("state"),
+                "wakes": row["wakes"], "human": row["human_turns"] + row["answered_questions"],
+                "tokens": row["tokens"],
+                "minutes": round((row["first_stop"] - row["started"]) / 60.0, 1),
+                "mnemo_reached": row["mnemo_hooks"] + row["mnemo_mcp_calls"],
+                "conditions": conditions(row, other),
+            }
+        if arms["dispatch"] is None or arms["plain"] is None:
+            table["unfinished"] += 1
+        else:
+            a, b = arms["dispatch"]["hands_off"], arms["plain"]["hands_off"]
+            table["both" if a and b else "dispatch-only" if a else "plain-only" if b else "neither"] += 1
+        out.append({"issue": pair.get("issue"), "repo": pair.get("repo"), **arms})
+    return {"pairs": out, "table": table}
+
+
+def format_pilot(result: Dict[str, Any]) -> str:
+    lines = []
+    for pair in result["pairs"]:
+        lines.append(f"#{pair['issue']} ({pair['repo']})")
+        for name in ("dispatch", "plain"):
+            a = pair[name]
+            if a is None:
+                lines.append(f"  {name:<8} not finished")
+                continue
+            from mnemo.core import twins
+
+            seen = twins.describe(a["conditions"]) if a["conditions"] is not None else "transcript not read"
+            lines.append(
+                f"  {name:<8} {a['short_id']}  pr {a['pr'] or '—'}  hands-off {'yes' if a['hands_off'] else 'no'}  "
+                f"ci {a['ci_handoff'] or '—'}→{a['ci_end'] or '—'}  after-child {a['after_child']}  "
+                f"merged {a['merged']}  follow-up {a['followup'] or '—'}  wakes {a['wakes']}  "
+                f"human {a['human']}  tokens {a['tokens']:,}  min {a['minutes']}  "
+                f"mnemo {a['mnemo_reached']}" + (f"  [{seen}]" if seen else ""))
+    t = result["table"]
+    lines.append(f"hands-off: both {t['both']}, dispatch only {t['dispatch-only']}, "
+                 f"plain only {t['plain-only']}, neither {t['neither']}, unfinished {t['unfinished']}")
+    r = readout(t)
+    if r["pairs"]:
+        lines.append(f"readout (the full study's bar): difference {r['difference']:+.2f} "
+                     f"[{r['low']:+.2f}, {r['high']:+.2f}], exact McNemar p {r['p']:.3f} "
+                     f"over {r['pairs']} pair(s) → {r['verdict']}")
     return "\n".join(lines) + "\n"
 
 
@@ -827,6 +1159,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "rate (0-1) and exit; reads nothing")
     parser.add_argument("--excluded", type=float, default=0.0,
                         help="with --size: the share of pairs expected to be left out")
+    parser.add_argument("--pilot", metavar="PAIRS",
+                        help="report the pairs in this ledger (JSON lines with issue, repo, "
+                             "dispatch and plain short ids) instead of every job")
+    parser.add_argument("--followups", type=int, nargs="?", const=FOLLOWUP_DAYS, metavar="DAYS",
+                        help=f"also look for a revert or follow-up fix within DAYS of each "
+                             f"merge (default {FOLLOWUP_DAYS})")
     args = parser.parse_args(argv)
     if args.size is not None:
         sys.stdout.write(format_sizing(args.size, excluded=args.excluded))
@@ -835,9 +1173,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     until = _epoch(f"{args.until}T00:00:00Z") if args.until else None
     vault = Path(args.vault).expanduser()
     run = None if args.no_gh else cached(report_card._run, args.cache)
-    rows = gather(args.projects, jobs=args.jobs, vault=vault, since=since, until=until, run=run)
-    report = measure(rows)
+    pairs = load_pairs(Path(args.pilot).expanduser()) if args.pilot else None
+    only = ([p[k] for p in pairs for k in ("dispatch", "plain")] if pairs is not None else None)
+    rows = gather(args.projects, jobs=args.jobs, vault=vault, since=since, until=until, run=run,
+                  only=only, followup_days=args.followups)
     aliases = load_aliases(vault / ".mnemo" / "private-names.tsv")
+    if pairs is not None:
+        result = pilot(pairs, rows)
+        text = (json.dumps(result, indent=2, default=str) if args.json else format_pilot(result))
+        sys.stdout.write(redact(text, aliases) + ("\n" if args.json else ""))
+        return 0
+    report = measure(rows)
     if args.json:
         text = json.dumps({"report": report, "jobs": rows}, indent=2, default=str)
     else:

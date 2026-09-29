@@ -68,13 +68,29 @@ def _child(directory: Path, sid: str, *, cwd: str = TREE, kind: str = "bg",
 
 
 class Gh:
-    """A fake ``gh``/``git``: PRs by URL, check runs by commit, branches by head."""
+    """A fake ``gh``/``git``: PRs by URL, check runs by commit, branches by
+    head, and for the red-check and follow-up calls: check-run details by
+    commit, annotations and failed-job logs by run id, merged PRs a search
+    returns and commits on the base branch."""
 
-    def __init__(self, prs: Dict[str, Dict[str, Any]], checks: Dict[str, List[List[Any]]],
+    def __init__(self, prs: Dict[str, Dict[str, Any]], checks: Dict[str, List[Any]],
                  branches: Optional[Dict[str, List[Dict[str, str]]]] = None,
-                 remote: str = "git@github.com:o/r.git") -> None:
+                 remote: str = "git@github.com:o/r.git", *,
+                 details: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+                 notes: Optional[Dict[str, List[str]]] = None,
+                 logs: Optional[Dict[str, str]] = None,
+                 merged: Sequence[Dict[str, Any]] = (),
+                 base_commits: Sequence[Dict[str, Any]] = ()) -> None:
         self.prs, self.checks, self.branches, self.remote = prs, checks, branches or {}, remote
+        self.details, self.notes, self.logs = details or {}, notes or {}, logs or {}
+        self.merged, self.base_commits = list(merged), list(base_commits)
         self.calls: List[Tuple[str, ...]] = []
+
+    def _detail(self, oid: str) -> List[Dict[str, Any]]:
+        if oid in self.details:
+            return self.details[oid]
+        return [{"id": f"{oid}{i}", "name": f"job{i}", "status": s, "conclusion": c, "suite": 1}
+                for i, (s, c) in enumerate(self.checks[oid])]
 
     def __call__(self, argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
         self.calls.append(tuple(argv))
@@ -82,20 +98,35 @@ class Gh:
             pr = self.prs.get(argv[3])
             return (0, json.dumps(pr), "") if pr is not None else (1, "", "not found")
         if argv[:2] == ["gh", "api"]:
-            oid = argv[2].split("/commits/")[1].split("/")[0]
-            if oid not in self.checks:
+            path = argv[2]
+            if "/annotations" in path:
+                rid = path.split("/check-runs/")[1].split("/")[0]
+                return 0, json.dumps(self.notes.get(rid, [])), ""
+            if "/commits?" in path:
+                return 0, json.dumps(self.base_commits), ""
+            oid = path.split("/commits/")[1].split("/")[0]
+            if oid not in self.checks and oid not in self.details:
                 return 1, "", "no"
+            if "suite" in argv[-1]:
+                return 0, json.dumps(self._detail(oid)), ""
             return 0, json.dumps(self.checks[oid]), ""
+        if argv[:3] == ["gh", "run", "view"]:
+            rid = argv[argv.index("--job") + 1]
+            return (0, self.logs[rid], "") if rid in self.logs else (1, "", "no log")
         if argv[:3] == ["gh", "pr", "list"]:
+            if "--search" in argv:
+                return 0, json.dumps(self.merged), ""
             return 0, json.dumps(self.branches.get(argv[argv.index("--head") + 1], [])), ""
         if argv[:1] == ["git"]:
             return 0, self.remote + "\n", ""
         return 1, "", "unexpected"
 
 
-def _pr(commits: Sequence[Tuple[float, str]], *, merged: Optional[float] = T0 + 7200) -> Dict[str, Any]:
+def _pr(commits: Sequence[Tuple[float, str]], *, merged: Optional[float] = T0 + 7200,
+        files: Sequence[str] = ("src/app.py", "tests/test_app.py")) -> Dict[str, Any]:
     return {"state": "MERGED" if merged else "OPEN", "createdAt": _iso(T0 + 300),
-            "mergedAt": _iso(merged) if merged else None,
+            "mergedAt": _iso(merged) if merged else None, "baseRefName": "master",
+            "files": [{"path": f} for f in files],
             "commits": [{"oid": oid, "authoredDate": _iso(at)} for at, oid in commits]}
 
 
@@ -409,3 +440,163 @@ def test_sizing_inflates_for_the_pairs_a_leak_leaves_out() -> None:
     (first, *_) = tool.sizing(0.8, excluded=0.5)
     assert first["pairs_to_run"] == 2 * first["clean_pairs"]
     assert [r["difference"] for r in tool.sizing(0.12)] == [0.10]
+
+
+# --- flaky and never-run failures -------------------------------------------
+
+
+def _matrix(oid: str, *, failing: str = "macos / py3.11", rerun: bool = False,
+            sibling: str = "success") -> List[Dict[str, Any]]:
+    runs = [{"id": "f", "name": failing, "status": "completed", "conclusion": "failure", "suite": 9},
+            {"id": "s", "name": "macos / py3.12", "status": "completed", "conclusion": sibling,
+             "suite": 9},
+            {"id": "u", "name": "ubuntu / py3.11", "status": "completed", "conclusion": "success",
+             "suite": 9}]
+    if rerun:
+        runs.append({"id": "r", "name": failing, "status": "completed", "conclusion": "success",
+                     "suite": 9})
+    return runs
+
+
+LOG = "macos / py3.11\tstep\t2026 FAILED tests/test_other.py::test_x - assert 1e-05 == 0\n"
+
+
+def _kind(**kw: Any) -> Tuple[str, List[Dict[str, str]]]:
+    gh = Gh({}, {}, details={"c": _matrix("c", **{k: v for k, v in kw.items()
+                                                  if k in ("rerun", "sibling", "failing")})},
+            logs={"f": kw.get("log", LOG)},
+            notes={rid: kw.get("notes", []) for rid in ("f", "s")})
+    return tool.classify_red("o/r", "c", changed=kw.get("changed", {"src/app.py"}), run=gh)
+
+
+def test_a_matrix_failure_in_a_test_the_pr_never_touched_is_flaky() -> None:
+    verdict, failures = _kind()
+    assert verdict == "flaky" and failures[0]["kind"] == "flaky"
+    assert "tests/test_other.py" in failures[0]["why"]
+
+
+def test_a_failure_in_a_test_file_the_pr_changed_is_real() -> None:
+    assert _kind(changed={"tests/test_other.py"})[0] == "red"
+
+
+def test_a_failure_whose_same_os_sibling_also_failed_is_real() -> None:
+    assert _kind(sibling="failure")[0] == "red"
+
+
+def test_a_failure_whose_log_names_no_test_is_real() -> None:
+    assert _kind(log="Process completed with exit code 1.\n")[0] == "red"
+
+
+def test_a_non_matrix_failure_is_real() -> None:
+    assert _kind(failing="lint")[0] == "red"
+
+
+def test_a_rerun_that_passed_on_the_same_commit_is_flaky_without_reading_a_log() -> None:
+    verdict, failures = _kind(rerun=True, log="")
+    assert verdict == "flaky" and failures[0]["kind"] == "rerun-passed"
+
+
+def test_a_job_github_never_started_is_not_run() -> None:
+    """A lapsed Actions bill fails every job with no step run: nothing was tested."""
+    notes = ["The job was not started because recent account payments have failed"]
+    verdict, failures = _kind(notes=notes, sibling="failure")
+    assert verdict == "not-run" and {f["kind"] for f in failures} == {"not-run"}
+    assert tool.hands_off(_handed(gh={"ci_end": "not-run", "commits": {"after_child": 0}})) is False
+
+
+def test_a_flaky_last_commit_still_counts_as_hands_off() -> None:
+    gh = Gh({URL: _pr([(T0 + 200, "c")])}, {"c": [["completed", "failure"]]},
+            details={"c": _matrix("c")}, logs={"f": LOG})
+    out = tool.outcome(_outcome_row(), run=gh)
+    assert out["ci_handoff"] == out["ci_end"] == "flaky"
+    assert out["failures"]["end"][0]["kind"] == "flaky"
+    assert tool.hands_off(_handed(gh=out))
+
+
+# --- the follow-up outcome --------------------------------------------------
+
+
+def _follow(merged: Sequence[Dict[str, Any]] = (), commits: Sequence[Dict[str, Any]] = (),
+            *, now: float = T0 + 30 * 86400, merged_at: Optional[float] = T0 + 7200):
+    gh = Gh({URL: _pr([(T0, "a")], merged=merged_at)}, {}, merged=merged, base_commits=commits)
+    return tool.followup(URL, days=7, run=gh, now=now)
+
+
+def _later(number: int, body: str, files: Sequence[str], at: float) -> Dict[str, Any]:
+    return {"number": number, "title": "fix", "body": body, "mergedAt": _iso(at),
+            "files": [{"path": f} for f in files]}
+
+
+def test_a_later_pr_that_names_this_one_and_touches_its_files_is_a_follow_up() -> None:
+    fix = _later(20, "Follow-up to #12: the path check", ["src/app.py"], T0 + 86400)
+    assert _follow([fix]) == {"state": "found", "by": ["#20"]}
+
+
+def test_a_later_pr_that_names_it_but_touches_other_files_or_comes_late_is_not() -> None:
+    other = _later(20, "see #12", ["docs/x.md"], T0 + 86400)
+    late = _later(21, "fixes #12", ["src/app.py"], T0 + 7200 + 8 * 86400)
+    number_only = _later(22, "fixes #123", ["src/app.py"], T0 + 86400)
+    assert _follow([other, late, number_only])["state"] == "none"
+
+
+def test_a_revert_commit_on_the_base_branch_is_a_follow_up() -> None:
+    revert = {"sha": "deadbeef99", "message": 'Revert "x (#12)"', "date": _iso(T0 + 86400)}
+    assert _follow(commits=[revert]) == {"state": "found", "by": ["deadbeef"]}
+
+
+def test_the_window_must_close_and_the_pr_must_merge() -> None:
+    assert _follow(now=T0 + 86400)["state"] == "not-due"
+    assert _follow(merged_at=None)["state"] == "not-merged"
+
+
+# --- the pilot report -------------------------------------------------------
+
+
+def test_the_pilot_puts_both_arms_of_an_issue_side_by_side(tmp_path) -> None:
+    projects = tmp_path / "projects"
+    _child(projects / "-Users-you-github-app-wt-7", "aaaaaaaa-1")
+    plain = "https://github.com/o/r/pull/20"
+    _child(projects / "-Users-you-github-app-plain-7", "dddddddd-1",
+           cwd="/Users/you/github/app-plain-7", branch="pilot/plain-7", pr=plain,
+           extra=[_assistant(T0 + 450, [{"type": "text", "text": "saw app-wt-7 running"}])])
+    gh = Gh({URL: _pr([(T0 + 200, "a")]), plain: _pr([(T0 + 250, "p")])},
+            {"a": [["completed", "failure"]], "p": GREEN})
+    rows = tool.gather(str(projects), jobs=_jobs(tmp_path, {}), vault=_vault(tmp_path), run=gh,
+                       only=["aaaaaaaa", "dddddddd"])
+    result = tool.pilot([{"issue": 7, "repo": "o/r", "dispatch": "aaaaaaaa", "plain": "dddddddd"},
+                         {"issue": 8, "repo": "o/r", "dispatch": "x", "plain": "y"}], rows)
+    first = result["pairs"][0]
+    assert first["dispatch"]["hands_off"] is False and first["plain"]["hands_off"] is True
+    assert first["plain"]["conditions"]["saw_sibling"] is True
+    assert first["dispatch"]["conditions"]["saw_sibling"] is False
+    assert result["table"] == {"both": 0, "dispatch-only": 0, "plain-only": 1, "neither": 0,
+                               "unfinished": 1}
+    assert "plain only 1" in tool.format_pilot(result)
+
+
+# --- the full study's bar ---------------------------------------------------
+
+
+def test_mcnemar_exact_is_the_two_sided_binomial_on_discordant_pairs() -> None:
+    assert tool.mcnemar_exact(0, 0) == 1.0
+    assert abs(tool.mcnemar_exact(8, 0) - 2 / 256) < 1e-12
+    assert tool.mcnemar_exact(3, 3) == 1.0
+
+
+def _t(b: int, c: int, both: int, neither: int) -> Dict[str, int]:
+    return {"dispatch-only": b, "plain-only": c, "both": both, "neither": neither}
+
+
+def test_the_bar_reads_each_verdict() -> None:
+    assert tool.readout(_t(30, 5, 40, 25))["verdict"] == "dispatch delivers"
+    assert tool.readout(_t(5, 30, 40, 25))["verdict"] == "plain delivers more"
+    assert tool.readout(_t(4, 4, 300, 100))["verdict"] == "null"
+    assert tool.readout(_t(6, 3, 10, 5))["verdict"] == "inconclusive"
+    assert tool.readout(_t(0, 0, 0, 0))["verdict"] == "no pairs"
+
+
+def test_significant_but_below_the_bar_is_not_a_win() -> None:
+    """p < 0.05 with a +8 pp difference: detectable, but under the +10 pp bar."""
+    r = tool.readout(_t(60, 28, 250, 62))
+    assert r["p"] < 0.05 and 0 < r["difference"] < tool.BAR_POSITIVE
+    assert r["verdict"] == "inconclusive"
