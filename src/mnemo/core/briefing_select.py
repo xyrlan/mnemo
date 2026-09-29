@@ -177,10 +177,17 @@ def choose(
 def recent_briefings(
     vault_root: Path, agent_name: str, limit: int = POOL_SIZE
 ) -> list[BriefingRecord]:
-    """The newest ``limit`` briefings for ``agent_name``, newest first.
+    """The newest ``limit`` briefings for ``agent_name``, newest first by mtime.
 
-    Same order as ``briefing.pick_latest_briefing``, so ``recent[0]`` is the
-    briefing the hook injected before this module existed.
+    The file's mtime is when SessionEnd wrote it, which is the order #534 and
+    #548 measured the pool in. Until #551 this sorted by frontmatter ``date``
+    and then by session id, and ``date`` has no time of day: within one day the
+    "newest" was whichever session id sorted last, a coin toss among that
+    day's sessions. Ties on mtime fall back to that old key, so the order is
+    still total.
+
+    A rewrite moves a file up: ``mnemo regen-graph-edges`` rewrites the graph
+    section of the briefings whose back-links changed.
     """
     sessions_dir = Path(vault_root) / "bots" / agent_name / "briefings" / "sessions"
     if not sessions_dir.is_dir():
@@ -189,20 +196,12 @@ def recent_briefings(
     for md in sessions_dir.glob("*.md"):
         try:
             text = md.read_text(encoding="utf-8", errors="replace")
+            mtime = md.stat().st_mtime
         except OSError:
             continue
         fm, body = parse_frontmatter(text)
         rec = BriefingRecord(path=md, frontmatter=fm, body=body.lstrip("\n"))
-        date = fm.get("date", "")
-        if date:
-            key = (1, date, fm.get("session_id", md.stem), 0.0)
-        else:
-            try:
-                mtime = md.stat().st_mtime
-            except OSError:
-                mtime = 0.0
-            key = (0, "", "", mtime)
-        keyed.append((key, rec))
+        keyed.append(((mtime, str(fm.get("date") or ""), str(fm.get("session_id") or md.stem)), rec))
     keyed.sort(key=lambda kv: kv[0], reverse=True)
     return [rec for _, rec in keyed[:limit]]
 

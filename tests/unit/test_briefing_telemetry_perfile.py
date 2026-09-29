@@ -64,7 +64,10 @@ def test_signature_is_the_contract():
     # #359: the reading side is keyword-only and optional, so the contract's
     # two-argument call still records a row.
     keyword = {n: p.default for n, p in sig.parameters.items() if p.kind is p.KEYWORD_ONLY}
-    assert keyword == {"reader_session_id": None, "source": None}
+    # #551: what the reader was handed — the briefing whole, or one entry of
+    # an index — and the index's size.
+    assert keyword == {"reader_session_id": None, "source": None, "mode": None, "entries": None,
+                       "index_bytes": None}
     # Reachable through the briefing API the injector picks with.
     assert briefing.record_briefing_read is access_log.record_briefing_read
 
@@ -85,7 +88,7 @@ def test_row_names_the_briefing_the_picker_returned(tmp_path, telemetry_on):
     assert row["timestamp"].endswith("Z")
     assert set(row) == {
         "timestamp", "project", "path", "session_id", "date", "body_bytes", "body_sha256",
-        "reader_session_id", "source",
+        "reader_session_id", "source", "mode", "entries", "index_bytes",
     }
     assert row["reader_session_id"] is None
     assert row["source"] is None

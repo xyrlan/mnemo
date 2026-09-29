@@ -165,6 +165,28 @@ after 14 days of sessions with the change. Reproduce with
 will not send before it is due
 ([#545](https://github.com/xyrlan/mnemo/issues/545)).
 
+**A session starts with an index of your recent briefings, not the last one
+whole.** Every session that ends writes a briefing. The next session used to
+get the newest one pasted in whole, a median of 6.3 KB. That was the right
+briefing for its work in only 17.6% of sessions
+([#534](https://github.com/xyrlan/mnemo/issues/534)). A right briefing helps:
+net help +0.218 [+0.105, +0.327] against none. A wrong one doubles the replies
+that assume a wrong state of the work
+([#540](https://github.com/xyrlan/mnemo/issues/540)). So since #551 a session
+starts with a `[recent-briefings]` block: the date and `## TL;DR` of the
+project's ten newest briefings, newest first, a median of about 4.6 KB.
+`SessionEnd` still writes each briefing in full. Against no briefing, the index
+scored +0.109 [+0.005, +0.218]. That is inconclusive against its own bar of
++0.15, but it matched or beat the whole newest briefing whether that briefing
+was the right one (+0.21 vs +0.22) or not (+0.05 vs −0.06), and it did not
+raise wrong-state replies (5.9% vs 6.8% with none). Reproduce with
+[`tools/measure_briefing_index.py`](tools/measure_briefing_index.py)
+([#548](https://github.com/xyrlan/mnemo/issues/548)). A fresh check on
+sessions that ran the index is registered for after 14 days and 100 sessions,
+and it will reverse the change if the whole briefing wins:
+[`tools/measure_briefing_index_fresh.py`](tools/measure_briefing_index_fresh.py).
+`briefings.sessionStart` picks `index` (the default), `last` or `none`.
+
 **Your own numbers, with a baseline.** `mnemo replay` runs every prompt you typed
 through the hook's own decision and sorts every rule that would have fired by
 *when the vault learned it*. The maintainer's vault, 2026-09-14:

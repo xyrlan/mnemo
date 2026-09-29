@@ -54,22 +54,31 @@ def _pool(target_body: str, target_at: int) -> list[BriefingRecord]:
     return [_rec(f"s{i}", b) for i, b in enumerate(bodies)]
 
 
-# --- pick() with no query is exactly today's newest-wins -------------------
+# --- pick() with no query is newest-wins, newest by mtime (#551) -------------
 
 
-def test_pick_without_query_matches_pick_latest_briefing(tmp_path: Path) -> None:
-    _write(tmp_path, "p", "aaa", date="2026-09-01", body="old")
-    _write(tmp_path, "p", "zzz", date="2026-09-03", body="tie loses on id")
-    _write(tmp_path, "p", "zzzz", date="2026-09-03", body="tie wins on id")
-    undated = _write(tmp_path, "p", "undated", date=None, body="no date")
-    os.utime(undated, (9_999_999_999, 9_999_999_999))  # newest mtime still sorts last
+def test_pick_without_query_is_the_newest_by_mtime(tmp_path: Path) -> None:
+    # Until #551 the sort was date, then session id: within one day the id
+    # decided, and an undated file sorted last whatever its mtime. #534 and
+    # #548 measured the pool by mtime, when SessionEnd wrote the file.
+    t0 = 1_700_000_000
+    for sid, date, at in (("aaa", "2026-09-01", 1), ("zzzz", "2026-09-03", 2),
+                          ("zzz", "2026-09-03", 3), ("undated", None, 4)):
+        p = _write(tmp_path, "p", sid, date=date, body=sid)
+        os.utime(p, (t0 + at, t0 + at))
 
-    expected = briefing.pick_latest_briefing(tmp_path, "p")
     got = briefing_select.pick(tmp_path, "p", query=None)
-    assert got is not None and expected is not None
-    assert got.path == expected.path
-    assert got.body == expected.body
-    assert got.frontmatter == expected.frontmatter
+    assert got is not None and got.frontmatter["session_id"] == "undated"
+    order = [r.frontmatter["session_id"] for r in briefing_select.recent_briefings(tmp_path, "p")]
+    assert order == ["undated", "zzz", "zzzz", "aaa"]
+
+
+def test_an_mtime_tie_falls_back_to_date_then_session_id(tmp_path: Path) -> None:
+    for sid, date in (("bbb", "2026-09-03"), ("aaa", "2026-09-03"), ("ccc", "2026-09-01")):
+        p = _write(tmp_path, "p", sid, date=date, body=sid)
+        os.utime(p, (1_700_000_000, 1_700_000_000))
+    order = [r.frontmatter["session_id"] for r in briefing_select.recent_briefings(tmp_path, "p")]
+    assert order == ["bbb", "aaa", "ccc"]
 
 
 def test_pick_returns_none_without_briefings(tmp_path: Path) -> None:
@@ -79,7 +88,8 @@ def test_pick_returns_none_without_briefings(tmp_path: Path) -> None:
 
 def test_recent_briefings_is_capped_and_newest_first(tmp_path: Path) -> None:
     for day in range(1, 16):
-        _write(tmp_path, "p", f"s{day:02d}", date=f"2026-09-{day:02d}", body="b")
+        p = _write(tmp_path, "p", f"s{day:02d}", date=f"2026-09-{day:02d}", body="b")
+        os.utime(p, (1_700_000_000 + day, 1_700_000_000 + day))
     recent = briefing_select.recent_briefings(tmp_path, "p")
     assert len(recent) == briefing_select.POOL_SIZE
     assert [r.frontmatter["session_id"] for r in recent[:2]] == ["s15", "s14"]
@@ -87,9 +97,11 @@ def test_recent_briefings_is_capped_and_newest_first(tmp_path: Path) -> None:
 
 def test_pick_with_query_can_reach_an_older_briefing(tmp_path: Path) -> None:
     for i, body in enumerate(_FILLER):
-        _write(tmp_path, "p", f"f{i}", date=f"2026-09-1{i}", body=body)
-    _write(tmp_path, "p", "old", date="2026-09-01",
-           body="Built the dispatch watch modes. Watch modes poll the dispatch queue.")
+        p = _write(tmp_path, "p", f"f{i}", date=f"2026-09-1{i}", body=body)
+        os.utime(p, (1_700_000_100 + i, 1_700_000_100 + i))
+    p = _write(tmp_path, "p", "old", date="2026-09-01",
+               body="Built the dispatch watch modes. Watch modes poll the dispatch queue.")
+    os.utime(p, (1_700_000_000, 1_700_000_000))
     got = briefing_select.pick(tmp_path, "p", query="feat/dispatch/watch-modes")
     assert got is not None and got.frontmatter["session_id"] == "old"
 
@@ -225,7 +237,8 @@ def test_hook_records_the_briefing_it_injects(tmp_path: Path, monkeypatch) -> No
         lambda vault_root, record, **kw: reads.append((vault_root, record, kw)),
         raising=False,
     )
-    _write(tmp_path, "p", "old", date="2026-09-01", body="old body")
+    old = _write(tmp_path, "p", "old", date="2026-09-01", body="old body")
+    os.utime(old, (1_700_000_000, 1_700_000_000))
     _write(tmp_path, "p", "new", date="2026-09-15", body="new body")
     payload = session_start._build_injection_payload(
         tmp_path, current_project="p", inject_briefing=True,
@@ -234,7 +247,7 @@ def test_hook_records_the_briefing_it_injects(tmp_path: Path, monkeypatch) -> No
     assert "new body" in payload
     assert len(reads) == 1
     vault_root, rec, kw = reads[0]
-    assert kw == {"reader_session_id": "reader", "source": "startup"}
+    assert kw == {"reader_session_id": "reader", "source": "startup", "mode": "last", "entries": 1}
     assert vault_root == tmp_path
     assert rec.frontmatter["session_id"] == "new"
     assert rec.body.rstrip() in payload

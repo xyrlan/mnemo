@@ -159,6 +159,9 @@ def briefing_read_entry(
     *,
     reader_session_id: str | None = None,
     source: str | None = None,
+    mode: str | None = None,
+    entries: int | None = None,
+    index_bytes: int | None = None,
 ) -> dict:
     """The ``briefing-log.jsonl`` row for one injected briefing.
 
@@ -175,6 +178,13 @@ def briefing_read_entry(
     ``body_sha256`` covers exactly the text the session saw, so the read stays
     attributable after ``mnemo learn`` rewrites that file or ``prune`` deletes
     it — the path alone cannot tell two versions of one briefing apart.
+
+    ``mode`` is what the session was handed (#551): ``"last"``, this briefing
+    whole, or ``"index"``, its date and TL;DR as one of ``entries`` in a
+    ``[recent-briefings]`` block of ``index_bytes`` bytes. An index writes one
+    row per entry, newest first, all with the same ``entries`` and
+    ``index_bytes``. ``body_*`` still describe the whole file, so a row names
+    the version of the briefing its TL;DR was read from.
     """
     path = Path(record.path)
     try:
@@ -198,6 +208,9 @@ def briefing_read_entry(
         "body_sha256": "sha256:" + hashlib.sha256(body).hexdigest()[:16],
         "reader_session_id": reader_session_id,
         "source": source,
+        "mode": mode,
+        "entries": None if entries is None else int(entries),
+        "index_bytes": None if index_bytes is None else int(index_bytes),
     }
 
 
@@ -207,6 +220,9 @@ def record_briefing_read(
     *,
     reader_session_id: str | None = None,
     source: str | None = None,
+    mode: str | None = None,
+    entries: int | None = None,
+    index_bytes: int | None = None,
 ) -> None:
     """Append one row to ``.mnemo/briefing-log.jsonl`` for an injected briefing.
 
@@ -224,6 +240,7 @@ def record_briefing_read(
         entry = briefing_read_entry(
             Path(vault_root), record,
             reader_session_id=reader_session_id, source=source,
+            mode=mode, entries=entries, index_bytes=index_bytes,
         )
     except Exception:
         return

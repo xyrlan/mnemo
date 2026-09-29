@@ -134,7 +134,9 @@ def test_the_hook_caps_the_envelope_and_logs_what_it_did(tmp_vault, tmp_home, tm
     cfg_path.write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "injection": {"enabled": True, "telemetry": {"enabled": True}},
-        "briefings": {"enabled": True, "injectLastOnSessionStart": True},
+        # the whole briefing is what _fit_briefing cuts; the index shares its
+        # room out itself (test_session_start_briefing_index.py)
+        "briefings": {"enabled": True, "injectLastOnSessionStart": True, "sessionStart": "last"},
         "capture": {"sessionStartEnd": False},
     }), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))

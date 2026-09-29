@@ -121,7 +121,8 @@ the notice at all.
 | Key | Default | Meaning |
 |---|---|---|
 | `briefings.enabled` | `true` | Write a briefing at `SessionEnd` |
-| `briefings.injectLastOnSessionStart` | `true` | Hand the previous briefing to the next session as context |
+| `briefings.sessionStart` | `"index"` | What a new session is handed (#551): `"index"` — the date and `## TL;DR` of the project's ten newest briefings, newest first, in a `[recent-briefings]` block; `"last"` — the newest briefing whole, in a `[last-briefing]` block (the default until #551); `"none"` — nothing. `last` and `none` exist to run the other arms of a comparison. Never on a `resume`, `fork` or `compact`, whose context already holds it. |
+| `briefings.injectLastOnSessionStart` | `true` | The switch from before #551: `false` still means `sessionStart: "none"` |
 
 ### `injection` — the session-start topic list
 
@@ -605,7 +606,8 @@ slot, and it goes to whichever has gone longest without it. Each keeps its own
 queue that wins the slot with nothing to say hands it straight back, so the
 alternation never costs you an offer. The worst case on the prompt is therefore
 one block: ~190 tokens for the staged one, ~100–140 for the procedure one,
-against a briefing that costs ~1783 tokens at 90.9% of session starts.
+against a briefing that cost ~1783 tokens at 90.9% of session starts when it
+was pasted whole (the index that replaced it in #551 is a median of ~4.6 KB).
 
 A rule mnemo wrote silently is a rule you cannot correct, which is why the
 announcement exists at all: extraction writes into the vault on its own, so

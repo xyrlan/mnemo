@@ -18,7 +18,9 @@ def test_session_start_main_emits_briefing_and_logs_telemetry(
     cfg_path.write_text(json.dumps({
         "vaultRoot": str(tmp_vault),
         "injection": {"enabled": True, "telemetry": {"enabled": True}},
-        "briefings": {"enabled": True, "injectLastOnSessionStart": True},
+        # the whole-briefing arm; the index, the default since #551, has its
+        # end-to-end test in test_session_start_briefing_index.py
+        "briefings": {"enabled": True, "injectLastOnSessionStart": True, "sessionStart": "last"},
         "capture": {"sessionStartEnd": False},
     }), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))

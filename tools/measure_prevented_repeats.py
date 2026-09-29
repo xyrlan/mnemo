@@ -252,7 +252,9 @@ def canonical(slug: str, project: str, live: Set[str]) -> str:
 
 # --- 0. what each prompt had in context ------------------------------------------------
 
-_MNEMO_START = ("mnemo://", "[last-briefing", "[mnemo learned", "[predicted-rules")
+#: ``[recent-briefings`` is the index SessionStart hands a session since #551;
+#: an envelope can be that block alone.
+_MNEMO_START = ("mnemo://", "[last-briefing", "[recent-briefings", "[mnemo learned", "[predicted-rules")
 _REFLEX = "mnemo reflex context"
 _WIKI = re.compile(r"\[\[([^\]\s|]+)\]\]")
 _SLUG_KEY = re.compile(r'"slug"\s*:\s*"([^"]+)"')

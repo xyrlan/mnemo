@@ -155,6 +155,12 @@ DEFAULTS: dict[str, Any] = {
     },
     "briefings": {
         "enabled": True,
+        # What SessionStart hands the session (#551): "index" (the date and
+        # TL;DR of the project's ten newest briefings), "last" (the newest
+        # briefing whole, the default until #551) or "none". "last" and "none"
+        # are there to run the other arms of a comparison, not as opt-ins.
+        "sessionStart": "index",
+        # The switch from before #551: false still means "none".
         "injectLastOnSessionStart": True,
         # #116: briefings are written once per session and never pruned.
         # retentionDays=0 disables pruning; keepPerAgent newest always survive.

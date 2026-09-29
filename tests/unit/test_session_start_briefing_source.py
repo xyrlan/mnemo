@@ -14,14 +14,18 @@ from pathlib import Path
 import pytest
 
 BRIEFING_FRAME = "[last-briefing session=abc123 date=2026-04-19 duration_minutes=17]"
+INDEX_FRAME = "[recent-briefings count=1 "
 
 
-def _seed(vault: Path, monkeypatch, *, inject_last: bool = True) -> None:
+def _seed(vault: Path, monkeypatch, *, inject_last: bool = True, mode: str | None = None) -> None:
     cfg_path = vault / "mnemo.config.json"
+    briefings = {"enabled": True, "injectLastOnSessionStart": inject_last}
+    if mode is not None:
+        briefings["sessionStart"] = mode
     cfg_path.write_text(json.dumps({
         "vaultRoot": str(vault),
         "injection": {"enabled": True, "telemetry": {"enabled": True}},
-        "briefings": {"enabled": True, "injectLastOnSessionStart": inject_last},
+        "briefings": briefings,
         "capture": {"sessionStartEnd": False},
     }), encoding="utf-8")
     monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))
@@ -81,13 +85,15 @@ def _run(vault: Path, monkeypatch, capsys, source: str | None) -> tuple[str, lis
 
 
 @pytest.mark.parametrize("source", ["startup", "clear", None, "some-future-source"])
+@pytest.mark.parametrize("mode, frame", [(None, INDEX_FRAME), ("last", BRIEFING_FRAME)])
 def test_fresh_context_gets_the_briefing(
-    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys, source
+    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys, source, mode, frame
 ) -> None:
-    _seed(tmp_vault, monkeypatch)
+    # #551: by default the slot is the index; "last" is the whole briefing.
+    _seed(tmp_vault, monkeypatch, mode=mode)
     context, rows = _run(tmp_vault, monkeypatch, capsys, source)
 
-    assert BRIEFING_FRAME in context
+    assert frame in context
     assert "Stopped at line 42 of auth.ts" in context
     assert len(rows) == 1
     assert rows[0]["included_briefing"] is True
@@ -95,13 +101,15 @@ def test_fresh_context_gets_the_briefing(
 
 
 @pytest.mark.parametrize("source", ["resume", "fork", "compact"])
+@pytest.mark.parametrize("mode", [None, "last"])
 def test_context_that_holds_it_gets_no_second_copy(
-    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys, source
+    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys, source, mode
 ) -> None:
-    _seed(tmp_vault, monkeypatch)
+    _seed(tmp_vault, monkeypatch, mode=mode)
     context, rows = _run(tmp_vault, monkeypatch, capsys, source)
 
     assert "[last-briefing" not in context
+    assert "[recent-briefings" not in context
     assert "Stopped at line 42" not in context
     # The topic envelope still goes out: it is what tells the model to call
     # list_rules_by_topic at all.
@@ -155,6 +163,47 @@ def test_config_off_still_wins_on_startup(
     context, _ = _run(tmp_vault, monkeypatch, capsys, "startup")
 
     assert "[last-briefing" not in context
+    assert "[recent-briefings" not in context
+    assert "Stopped at line 42" not in context
+
+
+@pytest.mark.parametrize("mode", ["index", "last"])
+def test_the_old_off_switch_beats_the_new_mode(
+    tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys, mode
+) -> None:
+    # #551: ``injectLastOnSessionStart: false`` keeps meaning "none".
+    _seed(tmp_vault, monkeypatch, inject_last=False, mode=mode)
+    context, rows = _run(tmp_vault, monkeypatch, capsys, "startup")
+
+    assert "Stopped at line 42" not in context
+    assert rows[0]["included_briefing"] is False
+
+
+def test_mode_none_injects_nothing(tmp_vault, tmp_home, tmp_tempdir, monkeypatch, capsys) -> None:
+    _seed(tmp_vault, monkeypatch, mode="none")
+    context, rows = _run(tmp_vault, monkeypatch, capsys, "startup")
+
+    assert "Stopped at line 42" not in context
+    assert context.startswith("mnemo://v1")
+    assert rows[0]["included_briefing"] is False
+    assert not (tmp_vault / ".mnemo" / "briefing-log.jsonl").exists()
+
+
+def test_briefing_mode_table() -> None:
+    from mnemo.hooks.session_start import _briefing_mode
+
+    assert _briefing_mode({}, "startup") == "index"  # the default since #551
+    assert _briefing_mode({"briefings": {"sessionStart": "last"}}, "clear") == "last"
+    assert _briefing_mode({"briefings": {"sessionStart": "none"}}, "startup") == "none"
+    assert _briefing_mode({"briefings": {"sessionStart": "LAST "}}, "startup") == "last"
+    # an unknown value is the default, not silence
+    assert _briefing_mode({"briefings": {"sessionStart": "all"}}, "startup") == "index"
+    for mode in ("index", "last"):
+        on = {"briefings": {"sessionStart": mode}}
+        for source in ("resume", "fork", "compact"):
+            assert _briefing_mode(on, source) == "none"
+        off = {"briefings": {"sessionStart": mode, "injectLastOnSessionStart": False}}
+        assert _briefing_mode(off, "startup") == "none"
 
 
 def test_briefing_wanted_table() -> None:
