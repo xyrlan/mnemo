@@ -5,6 +5,8 @@ Usage:
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py --send     # once due: rate, place, answer, judge, report
         [--force] [--workers W] [--pause S] [--limit N]
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py --json     # the report as data
+    PYTHONPATH=src python3 tools/measure_full_body_fresh.py --history [--send]
+                                        # #535's cached pairs re-judged on the grounded question
 
 #535 (``measure_full_body``) measured the full rule body against the one-line
 preview on #527's old units, answered anew. #542 (PR #543) then shipped it:
@@ -28,10 +30,30 @@ fixed this check before any data existed:
   the rule's bytes (#527's *without*: its whole entry, read by entry, so no
   body line is left behind). Both are answered on the unit's own recorded
   model, by ``measure_broad_value`` unchanged.
-- **Judge:** #527's and #535's two blind raters, rule-blind with slugs and
-  ``[[…]]`` masked, reply order seeded and flipped for the second rater, ties
-  allowed; primary reading both raters agreeing, else a tie.
-- **Bars**, each reported whatever its sign:
+- **Judge (amended 2026-09-29, see below):** two blind raters, the models
+  #527, #535 and #540 used, rule-blind with slugs and ``[[…]]`` masked in the
+  replies and everything else they see, reply order seeded and flipped for
+  the second rater, ties allowed. Two readings of the same replies:
+
+  - **grounded, the verdict** — #540's question and wrong-state marks
+    (``measure_briefing_value.JUDGE_SYSTEM``: which reply is more consistent
+    with where the work actually went, and does either assume a wrong state
+    of the work). The rater sees the agent's previous message, the unit's
+    prompt, the two replies and what the session did after that prompt: the
+    developer's later typed messages and the agent's last message in the
+    session (:func:`work_after`, #534's view). #540's rater prompt frames a
+    session's *first* message, so its first paragraph is replaced
+    (:data:`GROUNDED_SYSTEM`); the question, the marks and the reply format
+    are #540's text itself. A reply is *wrong* when both raters mark it;
+  - **preference, secondary** — #527's question (which reply better serves
+    this developer in this repository), unchanged, so the fresh result stays
+    comparable with #535's +0.215.
+
+  Each reading: both raters agreeing, else a tie; each rater alone beside it;
+  the raters' kappa on its question; the grounded one adds each arm's
+  wrong-state rate.
+- **Bars**, unchanged by the amendment, read on each reading and each
+  reported whatever its sign:
   - **confirmed** — ``h(full)`` ≥ :data:`BAR_H` with its CI lower bound > 0
     (bootstrap over units); **not confirmed** when the CI upper bound is
     under the bar;
@@ -50,13 +72,35 @@ block itself says the same: a full block has a head alone on its line, and a
 cut entry ends with the hook's ``[cut to fit the prompt limit …]`` pointer.
 The report says which source each unit's reading came from.
 
+**Amendment, 2026-09-29 (#554), before any fresh unit was judged.** PR #543
+fixed #527's question as the judge. On it the two raters agree poorly:
+kappa 0.24 in #527 and 0.37 in #535. On #540's grounded question they agreed
+at 0.52 (#540) and 0.56 (#548). The maintainer made the grounded question
+primary on 2026-09-29, and #527's stays as the secondary reading. The bars,
+units, arms and due condition do not change. No fresh unit had been judged:
+the dry run that day counted 0 fresh human sessions and 0 full-format
+emissions in them, #520 had not rated any fresh session, so there were no
+fresh units, and ``<vault>/.mnemo/full-body-fresh`` held only the log archive
+and the dry run's report, with no ``broad-value/verdicts.json`` and no
+``grounded/verdicts.json``.
+
+**#535's pairs, re-judged** (``--history``). As a check on history, #535's
+cached ``full`` vs ``without`` replies (``<vault>/.mnemo/full-body``) are
+judged again on the grounded question into ``<out>/history-535``, with #540's
+wrong-state marks. They are read next to #535's frozen +0.215 on the same
+72 units, re-read from #535's own verdicts. #535's and #527's caches are read
+and never written. #520's ``units.json`` (``--baseline``) gives each
+session's transcript, from which what the session did next is read.
+
 A session that started under :data:`SETTLE_HOURS` ago may still be running;
 #520 freezes a session's prompts the first time it reads it, so those
 sessions wait for a later run.
 
 Only ``--send`` calls a model. Every answer is cached under ``--out``
 (default ``<vault>/.mnemo/full-body-fresh``) as it arrives, so a rerun
-resumes; nothing is written to #520's, #527's or #535's caches.
+resumes. What each unit's session did next is frozen in
+``grounded/work.json`` the first time it is read. Nothing is written to
+#520's, #527's or #535's caches.
 """
 from __future__ import annotations
 
@@ -64,11 +108,14 @@ import argparse
 import contextlib
 import importlib.util
 import json
+import os
+import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 _SIBLINGS = Path(__file__).resolve().parent
 
@@ -81,8 +128,12 @@ def _sibling(name: str) -> Any:
 
 
 bv = _sibling("measure_broad_value")
+mbv = _sibling("measure_briefing_value")
+mfb = _sibling("measure_full_body")
+mja = mbv.mja
 mpr = bv.mpr
 mrc = bv.mrc
+rl = bv.rl
 
 #: When the full-body reflex went live on the maintainer's machine: the main
 #: checkout the hooks import was fast-forwarded to ``72edf85`` (#543).
@@ -103,6 +154,33 @@ CUT_MARK = "[cut to fit the prompt limit"
 #: of it (the judge answers in about a second).
 ROW_SLACK = 120
 WHOLE, CUT, UNKNOWN = "whole", "cut", "unknown"
+
+#: The two readings: #540's grounded question, primary since 2026-09-29, and
+#: #527's "which reply better serves", kept beside it for #535.
+GROUNDED, PREFERENCE = "grounded", "preference"
+#: The treatment arm's name in the grounded verdicts; the control is #540's ``none``.
+FULL = "full"
+GROUNDED_DIR = "grounded"
+HISTORY_DIR = "history-535"
+#: #535's cache and the reading this tool sets the grounded one against.
+FULL_BODY_DIR = mfb.OUT_DIR
+#: #540's ruler bar, reported (not a gate: the bars of PR #543 do not change).
+KAPPA_BAR = mbv.KAPPA_BAR
+#: The raters' agreement on each question where they were asked it before.
+KAPPA_SEEN = {PREFERENCE: "0.24 in #527, 0.37 in #535", GROUNDED: "0.52 in #540, 0.56 in #548"}
+
+#: #540's rater sees a session's *first* message; a reflex unit sits at any
+#: prompt, so its first paragraph says so and the agent's previous message is
+#: shown. The question, the wrong-state marks and the reply format are
+#: #540's own text, not a copy of it.
+_FRAME_540, _QUESTION_540 = mbv.JUDGE_SYSTEM.split("\n\n", 1)
+GROUNDED_SYSTEM = """\
+You are shown a message a developer typed during an AI coding session, the
+agent's previous message, two replies the agent could have sent to it, and
+what the session actually went on to do: the developer's later messages, in
+order, and the agent's last message.
+
+""" + _QUESTION_540
 
 
 # --- the log -------------------------------------------------------------------------------
@@ -282,6 +360,154 @@ def historical_yield(source: Optional[Dict[str, Any]],
     return {"units": units, "pairs": pairs, "per_pair": units / pairs if pairs else None}
 
 
+# --- the grounded judge --------------------------------------------------------------------
+
+def work_after(events: List[dict], i: int) -> Dict[str, Any]:
+    """What the session did after typed turn ``i``, in #534's and #540's view:
+    the developer's later typed messages (shorter ones counted, not shown)
+    and the agent's last message in the session."""
+    later = [p for p in mpr.walk(events)["prompts"] if p["i"] > i]
+    prompts, short = mja.typed_prompts(later)
+    return {"prompts": [mpr._head(t, mja.BRIEFING_PROMPT_CHARS) for t in prompts[:mja.BRIEFING_PROMPTS]],
+            "more_prompts": max(0, len(prompts) - mja.BRIEFING_PROMPTS), "short_replies": short,
+            "final": mpr._tail(mja.last_agent_text(events), mja.BRIEFING_FINAL_CHARS)}
+
+
+def masked_work(work: Dict[str, Any], slug: str) -> Dict[str, Any]:
+    """The work with the rule's slug masked, so the rater stays rule-blind."""
+    return dict(work, prompts=[bv.mask(t, slug)[0] for t in work["prompts"]],
+                final=bv.mask(work["final"], slug)[0])
+
+
+def grounded_id(uid: str, k: int) -> str:
+    return mbv.comparison_id(uid, FULL, k)
+
+
+def grounded_prompt(arms: Dict[str, Any], work: Dict[str, Any], replies: Sequence[str]) -> str:
+    """#540's judge prompt at a reflex unit's prompt, with the agent's previous
+    message before it (the prompt alone is often "ok, do it")."""
+    slug = arms["slug"]
+    return "\n\n".join([
+        "## The agent's previous message", bv.mask(arms["previous"], slug)[0] or "(none)",
+        "## The developer's message", arms["prompt"],
+        "## Reply 1", replies[0], "## Reply 2", replies[1],
+        "## What the session actually went on to do", mbv.work_text(masked_work(work, slug))])
+
+
+def grounded_comparison(arms: Dict[str, Any], work: Dict[str, Any], full: Sequence[Dict[str, Any]],
+                        without: Sequence[Dict[str, Any]], k: int, rater_index: int) -> Optional[str]:
+    """The k-th full reply against the k-th without reply, rule-blind, in
+    #540's seeded order (flipped for the second rater). None until both exist."""
+    if len(full) <= k or len(without) <= k:
+        return None
+    f = bv.mask(full[k]["text"], arms["slug"])[0]
+    wo = bv.mask(without[k]["text"], arms["slug"])[0]
+    pair = (f, wo) if mbv.treatment_first(grounded_id(arms["id"], k), rater_index) else (wo, f)
+    return grounded_prompt(arms, work, pair)
+
+
+def parse_grounded(text: str, uid: str, k: int, rater_index: int) -> Optional[Dict[str, Any]]:
+    """#540's parse: ``{"better": full|none|tie, "wrong": {full, none}, "why"}``;
+    ``none`` is the *without* arm."""
+    return mbv.parse_judge(text, FULL, grounded_id(uid, k), rater_index)
+
+
+def grounded_scores(verdicts: Dict[str, Dict[str, Dict[str, Any]]], uid: str,
+                    raters: Sequence[str]) -> Optional[Dict[str, float]]:
+    """#540's per-unit reading: ``h``, the shares, each arm's wrong-state rate."""
+    return mbv.unit_scores(verdicts, uid, FULL, raters, samples=bv.SAMPLES)
+
+
+def preference_scores(verdicts: Dict[str, Dict[str, Dict[str, str]]], uid: str,
+                      raters: Sequence[str]) -> Optional[Dict[str, float]]:
+    """#527's per-unit reading: ``h`` alone (the question has no wrong-state mark)."""
+    h = bv.unit_h(verdicts, uid, raters)
+    return None if h is None else {"h": h}
+
+
+def grounded_todo(pairs: Sequence[Tuple[Dict[str, Any], Sequence[Dict[str, Any]], Sequence[Dict[str, Any]]]],
+                  work: Dict[str, Dict[str, Any]], verdicts: Dict[str, Dict[str, Any]], raters: Sequence[str],
+                  rater: str) -> List[Tuple[str, int, str]]:
+    """``(uid, k, prompt)`` still to judge by ``rater``. ``pairs``: ``(arms,
+    full replies, without replies)`` per unit."""
+    ri = raters.index(rater)
+    todo = []
+    for arms, full, without in pairs:
+        uid = arms["id"]
+        if uid not in work:
+            continue
+        for k in range(bv.SAMPLES):
+            if grounded_id(uid, k) in verdicts[rater]:
+                continue
+            p = grounded_comparison(arms, work[uid], full, without, k, ri)
+            if p is not None:
+                todo.append((uid, k, p))
+    return todo
+
+
+def judge_grounded(pairs: Sequence[Tuple[Dict[str, Any], Sequence[Dict[str, Any]], Sequence[Dict[str, Any]]]],
+                   work: Dict[str, Dict[str, Any]], out: Path, raters: Sequence[str],
+                   send: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """The grounded verdicts cached under ``out`` (``verdicts.json``, one
+    column per rater and system), judging what is pending when ``send``
+    carries ``{provider, timeout, workers, pause, limit}``. Prints what is
+    pending and its notional cost."""
+    all_verdicts = mrc._read(out / "verdicts.json", {})
+    verdicts = {r: all_verdicts.setdefault(mrc.column(r, GROUNDED_SYSTEM), {}) for r in raters}
+    if send is not None:
+        sender = mpr.Sender(send["provider"], send["timeout"], out / "calls.jsonl", send["workers"], send["pause"])
+
+        def on_judge(r: str, uid: str, k: int) -> Callable[[str], None]:
+            def take(text: str) -> None:
+                got = parse_grounded(text, uid, k, raters.index(r))
+                if got is not None:
+                    verdicts[r][grounded_id(uid, k)] = got
+                    mrc._write(out / "verdicts.json", all_verdicts)
+            return take
+        calls = [(r, p, GROUNDED_SYSTEM, on_judge(r, uid, k)) for r in raters
+                 for uid, k, p in grounded_todo(pairs, work, verdicts, raters, r)]
+        with scratch_cwd():
+            sender.run(calls[:send["limit"]] if send.get("limit") else calls)
+        print("grounded judge: spent $%.2f notional this run (subscription usage, not money)" % sender.usd,
+              file=sys.stderr)
+    for r in raters:
+        jt = grounded_todo(pairs, work, verdicts, raters, r)
+        print("%s: pending %d grounded judge call(s); notional ~$%.2f"
+              % (r, len(jt), bv.notional(r, [(p, GROUNDED_SYSTEM) for _, _, p in jt], mbv.JUDGE_TOKENS)),
+              file=sys.stderr)
+    return verdicts
+
+
+@contextlib.contextmanager
+def scratch_cwd() -> Iterator[None]:
+    """No project CLAUDE.md or auto-memory reaches a rater."""
+    here, scratch = os.getcwd(), tempfile.mkdtemp(prefix="mnemo-full-body-fresh-")
+    os.chdir(scratch)
+    try:
+        yield
+    finally:
+        os.chdir(here)
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def agreement(verdicts: Dict[str, Dict[str, Dict[str, Any]]], uids: Sequence[str], raters: Sequence[str],
+              reading: str) -> Optional[Dict[str, Any]]:
+    """The two raters' kappa on a reading's question (and, grounded, on the
+    wrong-state marks). None without two raters."""
+    if len(raters) != 2:
+        return None
+    if reading == GROUNDED:
+        return mbv.kappa(verdicts, [grounded_id(u, k) for u in uids for k in range(bv.SAMPLES)], raters)
+    a, b = [], []
+    for u in uids:
+        for k in range(bv.SAMPLES):
+            va, vb = (verdicts.get(r, {}).get(bv.comparison_id(u, k)) for r in raters)
+            if va and vb:
+                a.append(va["better"])
+                b.append(vb["better"])
+    return {"n": len(a), "same": sum(x == y for x, y in zip(a, b)), "kappa": bv._kappa3(a, b)}
+
+
 # --- the numbers ---------------------------------------------------------------------------
 
 def h_verdict(st: Dict[str, Any], bar: float = BAR_H) -> str:
@@ -296,10 +522,18 @@ def h_verdict(st: Dict[str, Any], bar: float = BAR_H) -> str:
     return "inconclusive"
 
 
+#: What the grounded reading bootstraps beside ``h``: the shares each way
+#: (``arm`` is *full*, ``none`` is *without*) and each arm's wrong-state rate.
+GROUNDED_KEYS = ("arm", "none", "tie", "wrong_arm", "wrong_none", "wrong_diff")
+
+
 def readings(units: Sequence[Dict[str, Any]], rated: Sequence[str], arms: Dict[str, Any],
-             verdicts: Dict[str, Dict[str, Dict[str, str]]], raters: Sequence[str]) -> Dict[str, Any]:
-    """Both bars for both raters together and each alone, and the whole/cut
-    split on the primary reading. ``units``: ``{id, session_id, whole}``."""
+             verdicts: Dict[str, Dict[str, Dict[str, Any]]], raters: Sequence[str],
+             scores: Callable[..., Optional[Dict[str, float]]] = preference_scores) -> Dict[str, Any]:
+    """Both bars for both raters together and each alone, the whole/cut split
+    on the both-raters column, and — when ``scores`` reads wrong-state marks
+    (:func:`grounded_scores`) — each arm's wrong-state rate, CI over units.
+    ``units``: ``{id, session_id, whole}``."""
     columns = ([bv.BOTH] if len(raters) > 1 else []) + list(raters)
     new_units: Dict[str, List[str]] = {}
     for u in units:
@@ -308,18 +542,37 @@ def readings(units: Sequence[Dict[str, Any]], rated: Sequence[str], arms: Dict[s
     split: Dict[str, Any] = {}
     for col in columns:
         rs = list(raters) if col == bv.BOTH else [col]
-        h = {u["id"]: (bv.unit_h(verdicts, u["id"], rs) if (arms.get(u["id"]) or {}).get("measurable") else None)
-             for u in units}
+        got = {u["id"]: (scores(verdicts, u["id"], rs) if (arms.get(u["id"]) or {}).get("measurable") else None)
+               for u in units}
+        h = {uid: (s["h"] if s is not None else None) for uid, s in got.items()}
         hs = [x for x in h.values() if x is not None]
         st_h = bv.h_ci(hs)
         st_e = bv.combine(bv.per_session_rows(rated, new_units, h))
         out[col] = {"h": st_h, "h_verdict": h_verdict(st_h), "product": st_e,
                     "product_verdict": bv.verdict(st_e)}
+        marked = [dict(s, wrong_diff=s["wrong_arm"] - s["wrong_none"]) for s in got.values()
+                  if s is not None and "wrong_arm" in s]
+        if marked:
+            out[col]["wrong_state"] = mbv.bootstrap(marked, GROUNDED_KEYS)
         if col == columns[0]:
             for kind in (WHOLE, CUT):
                 split[kind] = bv.h_ci([h[u["id"]] for u in units
                                        if u["whole"] == kind and h[u["id"]] is not None])
     return {"columns": out, "split": split, "primary": columns[0]}
+
+
+def both_readings(units: Sequence[Dict[str, Any]], rated: Sequence[str], arms: Dict[str, Any],
+                  grounded: Dict[str, Dict[str, Dict[str, Any]]], preference: Dict[str, Dict[str, Dict[str, str]]],
+                  raters: Sequence[str]) -> Dict[str, Any]:
+    """The grounded reading (the verdict since 2026-09-29) and #527's beside
+    it, each with the raters' kappa on its own question."""
+    uids = [u["id"] for u in units if (arms.get(u["id"]) or {}).get("measurable")]
+    out: Dict[str, Any] = {"primary": GROUNDED}
+    for name, verdicts, scores in ((GROUNDED, grounded, grounded_scores),
+                                   (PREFERENCE, preference, preference_scores)):
+        out[name] = dict(readings(units, rated, arms, verdicts, raters, scores),
+                         kappa=agreement(verdicts, uids, raters, name))
+    return out
 
 
 # --- report --------------------------------------------------------------------------------
@@ -365,9 +618,36 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
     res = data.get("results")
     if not res:
         return lines
+    for name, title in ((GROUNDED, "GROUNDED (#540's question: which reply is more consistent with where the "
+                                    "work went; primary since 2026-09-29)"),
+                        (PREFERENCE, "PREFERENCE (#527's question: which reply better serves; secondary, "
+                                     "comparable with #535)")):
+        lines += [""] + reading_lines(res[name], name, title, name == res["primary"])
+    return lines
+
+
+def _pct(st: Dict[str, Any], key: str) -> str:
+    return "%.1f%% [%.1f%%, %.1f%%]" % (100 * st[key], 100 * st[key + "_ci"][0], 100 * st[key + "_ci"][1])
+
+
+def kappa_line(k: Optional[Dict[str, Any]], reading: str) -> Optional[str]:
+    if not k or not k.get("n"):
+        return None
+    line = "  rater agreement: %d of %d the same, kappa %s (seen before: %s; #540's ruler bar %.2f, reported, " \
+           "not a gate)" % (k["same"], k["n"], "n/a" if k["kappa"] is None else "%.2f" % k["kappa"],
+                            KAPPA_SEEN[reading], KAPPA_BAR)
+    if k.get("wrong_n"):
+        line += "; wrong-state marks kappa %s over %d" % (
+            "n/a" if k["wrong_kappa"] is None else "%.2f" % k["wrong_kappa"], k["wrong_n"])
+    return line
+
+
+def reading_lines(res: Dict[str, Any], name: str, title: str, primary: bool) -> List[str]:
+    """One reading: each column's two bars, its wrong-state rates, the
+    raters' kappa and the whole/cut split."""
+    lines = ["%s%s" % (title, "  <- the verdict" if primary else "")]
     for col, st in res["columns"].items():
-        primary = col == res["primary"]
-        lines += ["", "%s%s:" % (col, "  <- the verdict" if primary else "")]
+        lines += ["%s:" % col]
         lines.append("  h(full)   %s" % _h(st["h"]))
         lines.append("            %s   (bar: h >= %+.2f with CI lower bound > 0, bootstrap over units)"
                      % (st["h_verdict"].upper(), BAR_H))
@@ -381,10 +661,119 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
                                                              bv._per(e["E"]), ci["E"][0], ci["E"][1]))
             lines.append("            %s   (#527's bar: >= %.4f = 1 per 15, CI lower bound > 0, "
                          "bootstrap over sessions)" % (st["product_verdict"].upper(), THRESHOLD))
-    lines += ["", "h(full) by delivery (%s, rule_whole):" % res["primary"]]
+        w = st.get("wrong_state") or {}
+        if w.get("n"):
+            lines.append("  wrong-state replies: full %s, without %s; difference %+.3f [%+.3f, %+.3f] over %d units"
+                         % (_pct(w, "wrong_arm"), _pct(w, "wrong_none"), w["wrong_diff"],
+                            w["wrong_diff_ci"][0], w["wrong_diff_ci"][1], w["n"]))
+    k = kappa_line(res.get("kappa"), name)
+    if k:
+        lines.append(k)
+    lines.append("h(full) by delivery (%s, rule_whole):" % res["primary"])
     for kind in (WHOLE, CUT):
         lines.append("  %-6s %s" % (kind, _h(res["split"][kind])))
     return lines
+
+
+# --- #535's pairs, re-judged ---------------------------------------------------------------
+
+def history_columns(uids: Sequence[str], grounded: Dict[str, Dict[str, Dict[str, Any]]],
+                    frozen: Dict[str, Dict[str, Dict[str, str]]], raters: Sequence[str]) -> Dict[str, Any]:
+    """Per column, ``h(full)`` on #540's grounded question and on #527's
+    (#535's frozen verdicts), over the same units, and the grounded
+    wrong-state rates. CI over units."""
+    columns = ([bv.BOTH] if len(raters) > 1 else []) + list(raters)
+    out: Dict[str, Any] = {}
+    for col in columns:
+        rs = list(raters) if col == bv.BOTH else [col]
+        g = [x for x in (grounded_scores(grounded, u, rs) for u in uids) if x is not None]
+        p = [x for x in (mfb.unit_h(frozen, u, rs) for u in uids) if x is not None]
+        out[col] = {GROUNDED: bv.h_ci([x["h"] for x in g]), PREFERENCE: bv.h_ci(p)}
+        if g:
+            out[col]["wrong_state"] = mbv.bootstrap([dict(x, wrong_diff=x["wrong_arm"] - x["wrong_none"])
+                                                     for x in g], GROUNDED_KEYS)
+    return out
+
+
+def history_lines(data: Dict[str, Any]) -> List[str]:
+    f = data["frozen"]
+    lines = ["#535's full vs without pairs (%s, read only): %d units, %d whose rule was not rewritten (#535's "
+             "verdict set); grounded work read for %d; judged on the grounded question: %d"
+             % (data["source"], data["units"], data["consistent"], data["work"], data["judged"])]
+    if f.get("h") is not None:
+        lines.append("#535's frozen verdict (both raters, #527's question): h(full) %+.3f [%+.3f, %+.3f] over %d "
+                     "units, kappa %s; not rewritten" % (f["h"], f["ci"][0], f["ci"][1], f["n"],
+                                                         "n/a" if f.get("kappa") is None else "%.2f" % f["kappa"]))
+    for name, title in (("consistent", "the %d units #535's verdict reads" % data["consistent"]),
+                        ("all", "all %d units, rewritten rules too" % data["units"])):
+        lines += ["", "%s:" % title]
+        for col, st in data["results"][name].items():
+            lines.append("  %-20s grounded %s" % (col, _h(st[GROUNDED])))
+            lines.append("  %-20s #527's   %s" % ("", _h(st[PREFERENCE])))
+            w = st.get("wrong_state") or {}
+            if w.get("n"):
+                lines.append("  %-20s grounded shares: full better %.1f%%, without better %.1f%%, tie %.1f%%; "
+                             "wrong-state replies: full %s, without %s" % (
+                                 "", 100 * w["arm"], 100 * w["none"], 100 * w["tie"],
+                                 _pct(w, "wrong_arm"), _pct(w, "wrong_none")))
+    k = kappa_line(data.get("kappa"), GROUNDED)
+    if k:
+        lines += ["", k.strip()]
+    return lines
+
+
+def history_main(args: argparse.Namespace, cfg: Dict[str, Any], vault: Path, out: Path,
+                 raters: Sequence[str], provider: Any = None) -> int:
+    """Re-judge #535's cached ``full`` vs ``without`` replies on the grounded
+    question, into ``<out>/history-535``. #535's and #527's caches are read,
+    never written."""
+    from mnemo.core.briefing import _load_jsonl_events
+
+    fb = vault / ".mnemo" / FULL_BODY_DIR
+    src = vault / ".mnemo" / bv.OUT_DIR
+    fb_arms = mrc._read(fb / "arms.json", None)
+    if fb_arms is None:
+        raise SystemExit("error: no %s; #535 (tools/measure_full_body.py) has not run here" % (fb / "arms.json"))
+    base_file = Path(args.baseline).expanduser() if args.baseline else (
+        vault / ".mnemo" / "prevented-repeats" / mpr.UNITS_NAME)
+    sessions = (mrc._read(base_file, {}) or {}).get("sessions") or {}
+    src_arms = mrc._read(src / "arms.json", {})
+    fb_answers = mrc._read(fb / "answers.json", {}).get(mrc.column("session-model", rl.ARM_SYSTEM), {})
+    src_answers = mrc._read(src / "answers.json", {}).get(mrc.column("session-model", rl.ARM_SYSTEM), {})
+    fb_all = mrc._read(fb / "verdicts.json", {})
+    frozen = {r: fb_all.get(mrc.column(r, bv.JUDGE_SYSTEM), {}) for r in raters}
+    fb_report = mrc._read(fb / "report.json", {})
+
+    h_out = out / HISTORY_DIR
+    h_out.mkdir(parents=True, exist_ok=True)
+    uids = sorted(u for u in fb_arms if u in src_arms)
+    work = mrc._read(h_out / "work.json", {})
+    for uid in uids:
+        a = src_arms[uid]
+        path = (sessions.get(a["session_id"]) or {}).get("path")
+        if uid not in work and path and Path(path).is_file():
+            work[uid] = work_after(_load_jsonl_events(Path(path)), a["i"])
+    mrc._write(h_out / "work.json", work)
+    pairs = [(src_arms[u], fb_answers.get(u, []), (src_answers.get(u) or {}).get(bv.WITHOUT, [])) for u in uids]
+    send = send_opts(args, cfg, provider) if args.send else None
+    grounded = judge_grounded(pairs, work, h_out, raters, send)
+
+    consistent = [u for u in uids if not fb_arms[u].get("preview_drift")]
+    both = (fb_report.get("results") or {}).get(bv.BOTH) or {}
+    data = {"source": str(Path("<vault>") / ".mnemo" / FULL_BODY_DIR), "units": len(uids),
+            "consistent": len(consistent), "work": sum(1 for u in uids if u in work),
+            "judged": sum(1 for u in consistent if grounded_scores(grounded, u, raters) is not None),
+            "frozen": {"h": both.get("full"), "ci": (both.get("ci") or {}).get("full"), "n": both.get("n"),
+                       "kappa": (fb_report.get("agreement") or {}).get("kappa")},
+            "results": {"consistent": history_columns(consistent, grounded, frozen, raters),
+                        "all": history_columns(uids, grounded, frozen, raters)},
+            "kappa": agreement(grounded, consistent, raters, GROUNDED)}
+    mrc._write(h_out / "report.json", data)
+    if args.json:
+        print(json.dumps(data, indent=1))
+    else:
+        print("\n".join(history_lines(data)))
+    return 0
 
 
 # --- driver --------------------------------------------------------------------------------
@@ -393,6 +782,14 @@ def _quiet(fn: Callable[[List[str]], int], argv: List[str], log: Path) -> int:
     """Run a sibling tool's ``main`` with its report written to ``log``."""
     with log.open("w", encoding="utf-8") as fh, contextlib.redirect_stdout(fh):
         return fn(argv)
+
+
+def send_opts(args: argparse.Namespace, cfg: Dict[str, Any], provider: Any = None) -> Dict[str, Any]:
+    from mnemo.core import llm
+
+    return {"provider": provider or llm.resolve(cfg), "workers": args.workers, "pause": args.pause,
+            "limit": args.limit,
+            "timeout": max(int((cfg.get("extraction") or {}).get("subprocessTimeout") or 180), 600)}
 
 
 def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
@@ -406,7 +803,7 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     ap.add_argument("--claude-home", default=str(Path("~/.claude").expanduser()))
     ap.add_argument("--out", default="", help="cache dir (default <vault>/.mnemo/%s)" % OUT_DIR)
     ap.add_argument("--baseline", default="",
-                    help="#520's frozen units.json, for the yield estimate "
+                    help="#520's frozen units.json, for the yield estimate and --history's session paths "
                          "(default <vault>/.mnemo/prevented-repeats/units.json)")
     ap.add_argument("--rater", action="append", default=[])
     ap.add_argument("--send", action="store_true")
@@ -415,6 +812,8 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     ap.add_argument("--pause", type=float, default=bv.PAUSE_SECONDS)
     ap.add_argument("--limit", type=int, default=None, help="with --send: at most N calls per step")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--history", action="store_true",
+                    help="re-judge #535's cached full vs without pairs on the grounded question")
     args = ap.parse_args(argv)
     raters = args.rater or list(bv.RATERS)
     now = time.time() if now is None else now
@@ -423,6 +822,8 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     vault = Path(args.vault).expanduser() if args.vault else paths.vault_root(cfg)
     out = Path(args.out).expanduser() if args.out else vault / ".mnemo" / OUT_DIR
     out.mkdir(parents=True, exist_ok=True)
+    if args.history:
+        return history_main(args, cfg, vault, out, raters)
     pr_out, bv_out = out / "prevented-repeats", out / "broad-value"
 
     # the log's fresh rows, kept before the hook rotates them away
@@ -533,8 +934,23 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
                + [x for r in raters for x in ("--rater", r)], bv_out / "report.txt")
         arms = mrc._read(bv_out / "arms.json", {})
         all_verdicts = mrc._read(bv_out / "verdicts.json", {})
-        verdicts = {r: all_verdicts.get(mrc.column(r, bv.JUDGE_SYSTEM), {}) for r in raters}
-        data["results"] = readings(units, rated, arms, verdicts, raters)
+        preference = {r: all_verdicts.get(mrc.column(r, bv.JUDGE_SYSTEM), {}) for r in raters}
+
+        # step 3, the grounded judge on the same replies: what each unit's
+        # session did after its prompt, frozen the first time it is read
+        g_out = out / GROUNDED_DIR
+        g_out.mkdir(parents=True, exist_ok=True)
+        work = mrc._read(g_out / "work.json", {})
+        for u in units:
+            a = arms.get(u["id"])
+            if a and a.get("measurable") and u["id"] not in work:
+                work[u["id"]] = work_after(load(u["session_id"]), a["i"])
+        mrc._write(g_out / "work.json", work)
+        answers = mrc._read(bv_out / "answers.json", {}).get(mrc.column("session-model", rl.ARM_SYSTEM), {})
+        pairs = [(arms[u["id"]], answers.get(u["id"], {}).get(bv.WITH, []),
+                  answers.get(u["id"], {}).get(bv.WITHOUT, [])) for u in units if u["id"] in work]
+        grounded = judge_grounded(pairs, work, g_out, raters, send_opts(args, cfg) if send_arms else None)
+        data["results"] = both_readings(units, rated, arms, grounded, preference, raters)
 
     mrc._write(out / "report.json", data)
     if args.json:

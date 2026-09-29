@@ -56,6 +56,14 @@ def _session(ts, block):
             _agent("Done.", ts)]
 
 
+def _went_on(ts):
+    """What a session did after its first prompt: a short reply, a typed
+    message, and a last agent message that names the rule."""
+    return [_user("ok", ts, uuid="p1"), _agent("Opening it.", ts),
+            _user("CI failed on node 18, pin it and merge", ts, uuid="p2"),
+            _agent("Merged with node 20 pinned, as [[app__pin-node]] says.", ts)]
+
+
 # --- the log and the blocks ----------------------------------------------------------------
 
 def test_fresh_rows_are_full_format_emissions_since_go_live_and_the_archive_keeps_them():
@@ -171,6 +179,84 @@ def test_readings_give_both_bars_and_the_whole_cut_split():
     assert (got["split"]["whole"]["h"], got["split"]["cut"]["h"]) == (0.5, -0.5)
 
 
+def test_the_grounded_rater_asks_540s_question_at_any_prompt():
+    frame, question = tool.mbv.JUDGE_SYSTEM.split("\n\n", 1)
+    # #540's question, marks and format, word for word; only the frame differs
+    assert tool.GROUNDED_SYSTEM.endswith("\n\n" + question)
+    assert "first message" in frame and "first message" not in tool.GROUNDED_SYSTEM
+    assert "previous message" in tool.GROUNDED_SYSTEM and "wrong_state" in tool.GROUNDED_SYSTEM
+
+
+def test_work_after_is_the_later_typed_messages_and_the_last_agent_message():
+    events = _session("2026-09-30T10:00:00Z", _block().text) + _went_on("2026-09-30T10:05:00Z")
+    got = tool.work_after(events, 0)
+    assert got == {"prompts": ["CI failed on node 18, pin it and merge"], "more_prompts": 0, "short_replies": 1,
+                   "final": "Merged with node 20 pinned, as [[app__pin-node]] says."}
+    # at the last prompt nothing typed follows; the last message stays
+    assert tool.work_after(events, 2)["prompts"] == []
+
+
+def _arms(uid="u1"):
+    return {"id": uid, "slug": "app__pin-node", "prompt": "set node up",
+            "previous": "Should I follow app__pin-node here?"}
+
+
+def test_the_grounded_comparison_is_rule_blind_seeded_and_read_back():
+    events = _session("2026-09-30T10:00:00Z", _block().text) + _went_on("2026-09-30T10:05:00Z")
+    work = tool.work_after(events, 0)
+    full = [{"text": "pinned per [[app__pin-node]]"}] * 2
+    without = [{"text": "used node 18"}] * 2
+    one = tool.grounded_comparison(_arms(), work, full, without, 0, 0)
+    two = tool.grounded_comparison(_arms(), work, full, without, 0, 1)
+    for p in (one, two):
+        assert "pin-node" not in p and "## What the session actually went on to do" in p
+        assert "CI failed on node 18" in p and "## The agent's previous message" in p
+    # the second rater sees the other order
+    assert (one.index("pinned") < one.index("used node")) != (two.index("pinned") < two.index("used node"))
+    assert tool.grounded_comparison(_arms(), work, full[:1], without, 1, 0) is None
+    # whichever position the full reply took, the verdict reads back to it
+    for ri, p in ((0, one), (1, two)):
+        pos = "1" if p.index("pinned") < p.index("used node") else "2"
+        other = "2" if pos == "1" else "1"
+        got = tool.parse_grounded(json.dumps({"better": pos, "wrong_state": {pos: False, other: True},
+                                              "why": "w"}), "u1", 0, ri)
+        assert got["better"] == tool.FULL and got["wrong"] == {tool.FULL: False, "none": True}
+    assert tool.parse_grounded('{"better": "1"}', "u1", 0, 0) is None
+
+
+def _g(better, wrong_full=False, wrong_without=False):
+    return {"better": better, "wrong": {"full": wrong_full, "none": wrong_without}, "why": ""}
+
+
+def test_both_readings_put_the_grounded_one_first_with_wrong_state_rates_and_kappa():
+    units = [{"id": "u1", "session_id": "s1", "whole": tool.WHOLE},
+             {"id": "u2", "session_id": "s2", "whole": tool.CUT}]
+    arms = {"u1": {"measurable": True}, "u2": {"measurable": True}}
+    grounded = {"m1": {"u1|full|0": _g("full", wrong_without=True), "u1|full|1": _g("full"),
+                       "u2|full|0": _g("none", wrong_full=True), "u2|full|1": _g("tie")},
+                "m2": {"u1|full|0": _g("full", wrong_without=True), "u1|full|1": _g("tie"),
+                       "u2|full|0": _g("none", wrong_full=True), "u2|full|1": _g("tie")}}
+    pref = {r: {"u1|0": {"better": "with"}, "u1|1": {"better": "with"},
+                "u2|0": {"better": "with"}, "u2|1": {"better": "tie"}} for r in ("m1", "m2")}
+    got = tool.both_readings(units, ["s1", "s2"], arms, grounded, pref, ["m1", "m2"])
+    assert got["primary"] == tool.GROUNDED
+    g = got[tool.GROUNDED]["columns"]["both"]
+    # u1: full, tie (the raters differ) -> +0.5; u2: none, tie -> -0.5
+    assert g["h"]["h"] == 0.0 and g["h"]["n"] == 2
+    w = g["wrong_state"]
+    assert (w["wrong_arm"], w["wrong_none"], w["wrong_diff"]) == (0.25, 0.25, 0.0)
+    assert got[tool.GROUNDED]["kappa"]["n"] == 4 and got[tool.GROUNDED]["kappa"]["same"] == 3
+    p = got[tool.PREFERENCE]["columns"]["both"]
+    assert p["h"]["h"] == 0.75 and "wrong_state" not in p
+    assert got[tool.PREFERENCE]["kappa"]["same"] == 4
+    assert (got[tool.GROUNDED]["split"]["whole"]["h"], got[tool.GROUNDED]["split"]["cut"]["h"]) == (0.5, -0.5)
+    text = "\n".join(tool.report_lines({"live": tool.LIVE, "due": tool.due(LIVE, 2), "rows": {"log": 0,
+                     "archive": 0, "human": 0}, "sessions": 2, "sessions_with_full": 2,
+                     "emissions": {"n": 2, "whole": 1, "cut": 1}, "rated": 2, "units": 2, "results": got}))
+    assert text.index("GROUNDED") < text.index("<- the verdict") < text.index("PREFERENCE")
+    assert "wrong-state replies: full 25.0%" in text and "0.52 in #540" in text and "0.37 in #535" in text
+
+
 # --- end to end ----------------------------------------------------------------------------------
 
 def _setup(tmp_path):
@@ -187,8 +273,8 @@ def _setup(tmp_path):
     sessions = {"fresh001-x": ("2026-09-30T10:00:00Z", block.text),
                 "early002-x": ("2026-09-28T20:00:00Z", block.text)}
     for sid, (ts, text) in sessions.items():
-        (proj / (sid + ".jsonl")).write_text("\n".join(json.dumps(e) for e in _session(ts, text)) + "\n",
-                                             encoding="utf-8")
+        events = _session(ts, text) + _went_on(ts.replace("10:00:00", "10:05:00"))
+        (proj / (sid + ".jsonl")).write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
     log = [{"session_id": "fresh001-x", "project": "app", "prompt_hash": "sha256:1", "format": "full",
             "emitted": ["app__pin-node", "app__small-prs"], "rule_bytes": block.rule_bytes,
             "rule_whole": block.rule_whole, "ts": "2026-09-30T10:00:01Z"},
@@ -265,28 +351,113 @@ def test_main_with_force_answers_judges_and_prints_both_bars(tmp_path, capsys, m
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(tool.mpr, "main", lambda argv: 0)
     asked = []
+    monkeypatch.setattr(llm, "resolve", lambda cfg: _provider(asked))
+    assert tool.main(base + ["--send", "--force"], now=LIVE + 2 * DAY) == 0
+    data = json.loads(capsys.readouterr().out)
+    systems = [s for _, s, _ in asked]
+    assert systems.count(tool.bv.rl.ARM_SYSTEM) == 8 and systems.count(tool.bv.JUDGE_SYSTEM) == 8
+    assert systems.count(tool.GROUNDED_SYSTEM) == 8
+    # the grounded rater saw what the session did next, rule-blind
+    grounded_prompts = [p for _, s, p in asked if s == tool.GROUNDED_SYSTEM]
+    assert all("CI failed on node 18" in p and "pin-node" not in p for p in grounded_prompts)
+    res = data["results"]
+    assert res["primary"] == tool.GROUNDED
+    for name in (tool.GROUNDED, tool.PREFERENCE):
+        both = res[name]["columns"]["both"]
+        assert both["h"]["h"] == 1.0 and both["h_verdict"] in ("confirmed", "inconclusive")
+        assert (both["product"]["rate"], both["product"]["E"]) == (2.0, 2.0)
+        assert res[name]["split"]["whole"]["n"] == 1 and res[name]["split"]["cut"]["n"] == 1
+    w = res[tool.GROUNDED]["columns"]["both"]["wrong_state"]
+    assert (w["wrong_arm"], w["wrong_none"]) == (0.0, 1.0)
+    work = json.loads((tmp_path / "out" / "grounded" / "work.json").read_text(encoding="utf-8"))
+    assert len(work) == 2
 
+    # a rerun sends nothing: every answer and verdict is cached
+    asked.clear()
+    assert tool.main([a for a in base if a != "--json"], now=LIVE + 2 * DAY) == 0
+    text = capsys.readouterr().out
+    assert asked == []
+    assert "h(full)" in text and "bar: h >= +0.10" in text and "1 per 15" in text
+    assert "whole " in text and "cut " in text and "wrong-state replies" in text
+    assert text.index("GROUNDED") < text.index("PREFERENCE")
+
+
+def _replies(prompt):
+    return [sum(w in ("pinned", "small") for w in r.split())
+            for r in prompt.split("## Reply 1")[1].split("## What the session")[0].split("## Reply 2")]
+
+
+def _provider(asked):
+    """Arms that say what their rules told them; raters that prefer the reply
+    saying more of it, and mark the other as assuming a wrong state."""
     def provider(prompt, *, system, model, timeout):
-        asked.append((model, system))
+        asked.append((model, system, prompt))
         if system == tool.bv.rl.ARM_SYSTEM:
             return _resp(" ".join(w for w, cue in (("pinned", "Pin node 20"), ("small", "Keep PRs small"))
                                   if cue in prompt) or "anything")
-        assert system == tool.bv.JUDGE_SYSTEM
         assert "Pin node 20" not in prompt and "Keep PRs small" not in prompt
-        one, two = (sum(w in ("pinned", "small") for w in r.split())
-                    for r in prompt.split("## Reply 1")[1].split("## Reply 2"))
-        return _resp(json.dumps({"better": "1" if one > two else "2" if two > one else "tie", "why": "fits"}))
-    monkeypatch.setattr(llm, "resolve", lambda cfg: provider)
-    assert tool.main(base + ["--send", "--force"], now=LIVE + 2 * DAY) == 0
-    data = json.loads(capsys.readouterr().out)
-    systems = [s for _, s in asked]
-    assert systems.count(tool.bv.rl.ARM_SYSTEM) == 8 and systems.count(tool.bv.JUDGE_SYSTEM) == 8
-    both = data["results"]["columns"]["both"]
-    assert both["h"]["h"] == 1.0 and both["h_verdict"] in ("confirmed", "inconclusive")
-    assert (both["product"]["rate"], both["product"]["E"]) == (2.0, 2.0)
-    assert data["results"]["split"]["whole"]["n"] == 1 and data["results"]["split"]["cut"]["n"] == 1
+        one, two = _replies(prompt)
+        better = "1" if one > two else "2" if two > one else "tie"
+        if system == tool.bv.JUDGE_SYSTEM:
+            return _resp(json.dumps({"better": better, "why": "fits"}))
+        assert system == tool.GROUNDED_SYSTEM
+        return _resp(json.dumps({"better": better, "wrong_state": {"1": better == "2", "2": better == "1"},
+                                 "why": "fits"}))
+    return provider
 
-    assert tool.main([a for a in base if a != "--json"], now=LIVE + 2 * DAY) == 0
+
+def _snapshot(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_history_rejudges_535s_pairs_on_the_grounded_question_and_rewrites_nothing(tmp_path, capsys,
+                                                                                    monkeypatch):
+    base = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    vault = tmp_path / "vault"
+    path = str(next((tmp_path / "projects").rglob("fresh001-x.jsonl")))
+    col = tool.mrc.column("session-model", tool.rl.ARM_SYSTEM)
+
+    def write(rel, data):
+        f = vault / ".mnemo" / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data), encoding="utf-8")
+    uids = ("u1", "u2")
+    write("prevented-repeats/units.json", {"sessions": {"s1": {"path": path, "project": "app"}}})
+    write("broad-value/arms.json", {u: dict(_arms(u), session_id="s1", i=0) for u in uids})
+    write("broad-value/answers.json", {col: {u: {"without": [{"text": "anything"}] * 2} for u in uids}})
+    write("full-body/arms.json", {"u1": {"id": "u1", "preview_drift": False},
+                                  "u2": {"id": "u2", "preview_drift": True}})
+    write("full-body/answers.json", {col: {u: [{"text": "pinned"}] * 2 for u in uids}})
+    write("full-body/verdicts.json", {tool.mrc.column(r, tool.bv.JUDGE_SYSTEM): {
+        "u1|full|0": {"better": "full"}, "u1|full|1": {"better": "tie"},
+        "u2|full|0": {"better": "without"}, "u2|full|1": {"better": "without"}} for r in ("m1", "m2")})
+    write("full-body/report.json", {"results": {"both": {"full": 0.5, "ci": {"full": [0.1, 0.9]}, "n": 1}},
+                                    "agreement": {"kappa": 0.37}})
+    frozen = _snapshot(vault / ".mnemo")
+    asked = []
+    monkeypatch.setattr(llm, "resolve", lambda cfg: _provider(asked))
+    base += ["--baseline", str(vault / ".mnemo" / "prevented-repeats" / "units.json")]
+
+    # dry: nothing sent, the pending count said
+    assert tool.main(base + ["--history"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert asked == [] and data["judged"] == 0 and (data["units"], data["consistent"], data["work"]) == (2, 1, 2)
+
+    assert tool.main(base + ["--history", "--send"]) == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert {s for _, s, _ in asked} == {tool.GROUNDED_SYSTEM} and len(asked) == 8
+    cons = data["results"]["consistent"]["both"]
+    assert cons[tool.GROUNDED]["h"] == 1.0 and cons[tool.GROUNDED]["n"] == 1
+    assert cons[tool.PREFERENCE]["h"] == 0.5  # #535's own verdicts, re-read
+    assert cons["wrong_state"]["wrong_none"] == 1.0 and cons["wrong_state"]["wrong_arm"] == 0.0
+    assert data["results"]["all"]["both"][tool.PREFERENCE]["h"] == -0.25
+    assert data["frozen"]["h"] == 0.5 and data["kappa"]["n"] == 2
+    # #535's and #527's caches are read, never written
+    assert _snapshot(vault / ".mnemo") == frozen
+    assert (tmp_path / "out" / "history-535" / "verdicts.json").is_file()
+
+    assert tool.main([a for a in base if a != "--json"] + ["--history"]) == 0
     text = capsys.readouterr().out
-    assert "h(full)" in text and "bar: h >= +0.10" in text and "1 per 15" in text
-    assert "whole " in text and "cut " in text
+    assert "#535's frozen verdict" in text and "grounded h +1.000" in text and "not rewritten" in text
