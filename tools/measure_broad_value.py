@@ -36,8 +36,9 @@ the transcript recorded it:
   prompt's own reflex block.
 
 **with** is those texts as mnemo delivered them. **without** is the same
-minus the rule's bytes: its line in a reflex block or the envelope, its entry
-in a listing, the whole ``read_mnemo_rule`` result for it, and — when #520's
+minus the rule's bytes: its entry in a reflex block (the head and, in #542's
+full format, its whole body; #545), its line in the envelope, its entry in a
+listing, the whole ``read_mnemo_rule`` result for it, and — when #520's
 delivery judge found the envelope saying what the rule says without naming it
 — the envelope lines a locator call (:data:`LOCATE_SYSTEM`, both raters,
 union) says carry it. A block left with nothing but its header is dropped.
@@ -275,7 +276,10 @@ def context_at(events: List[dict], target: int) -> Optional[Dict[str, Any]]:
 
 
 def carries_reflex(text: str, slug: str, project: str) -> bool:
-    return any(same_rule(s, slug, project) for s in mpr._WIKI.findall(text))
+    """Whether a reflex block delivered the rule (``measure_prevented_repeats.reflex_slugs``):
+    in the full format an entry's head names it, not a ``[[link]]`` in
+    another rule's body."""
+    return any(same_rule(s, slug, project) for s in mpr.reflex_slugs(text))
 
 
 def carries_mcp(call: Dict[str, Any], slug: str, project: str) -> bool:
@@ -286,9 +290,22 @@ def carries_mcp(call: Dict[str, Any], slug: str, project: str) -> bool:
 
 
 def strip_reflex(text: str, slug: str, project: str) -> str:
-    """The block without the rule's line; empty when no rule is left in it."""
-    kept = [ln for ln in text.splitlines() if not carries_reflex(ln, slug, project)]
-    return "\n".join(kept) if any(mpr._WIKI.search(ln) for ln in kept) else ""
+    """The block without the rule's bytes; empty when no rule is left in it.
+
+    In the full format that is the rule's whole entry, its head and every
+    line of its body. An old one-line block loses the lines that name the
+    rule, as it always did, so #527's frozen arms rebuild byte for byte.
+    """
+    if not mpr.is_full_block(text):
+        kept = [ln for ln in text.splitlines() if not carries_reflex(ln, slug, project)]
+        return "\n".join(kept) if any(mpr._WIKI.search(ln) for ln in kept) else ""
+    lines = text.splitlines()
+    first = next(i for i, ln in enumerate(lines) if mpr._ENTRY_HEAD.match(ln))
+    entries = mpr.reflex_entries(text)
+    kept = [(s, t) for s, t in entries if not (s and same_rule(s, slug, project))]
+    if not any(s for s, _ in kept):
+        return ""
+    return "\n".join(lines[:first] + [t for _, t in kept])
 
 
 def _drop_slug(obj: Any, slug: str, project: str) -> Any:
