@@ -41,6 +41,7 @@ from mnemo.cli.parser import command
 DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("circuit_breaker",       doctor_misc._doctor_check_circuit_breaker),
     ("auto_brain",            doctor_misc._doctor_check_auto_brain),
+    ("friction_auto_retire",  doctor_misc._doctor_check_friction_auto_retire),
     ("legacy_wiki_dirs",      doctor_misc._doctor_check_legacy_wiki_dirs),
     ("background_sessions",   doctor_misc._doctor_check_background_sessions),
     ("statusline_drift",      reflex._doctor_check_statusline_drift),

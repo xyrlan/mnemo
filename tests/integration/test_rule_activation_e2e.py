@@ -114,8 +114,6 @@ def _cfg(vault: Path, *, enf: bool = False, enr: bool = False) -> dict:
         "enforcement": {"enabled": enf, "log": {"maxBytes": 1_048_576}},
         "enrichment": {
             "enabled": enr,
-            "maxRulesPerCall": 3,
-            "bodyPreviewChars": 300,
             "log": {"maxBytes": 1_048_576},
         },
     }

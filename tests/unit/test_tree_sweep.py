@@ -414,3 +414,37 @@ def test_cli_sweeps_the_repo_it_is_typed_in(world, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "removed proj-wt-7 and its branch fix/issue-7" in out
     assert "proj-wt-7: child-running" in out
+
+
+# --- the parent's copy is framed as mnemo's, not the user's (#553) -------------
+
+
+def test_the_parent_is_told_in_a_framed_notice_the_detector_skips(tmp_path, monkeypatch):
+    from mnemo.core import log_writer
+    from mnemo.core.sessions import detector, inbox, parents
+
+    vault, tree = tmp_path / "vault", tmp_path / "proj-wt-7"
+    tree.mkdir()
+    parents.log_path(vault).parent.mkdir(parents=True)
+    parents.log_path(vault).write_text(
+        json.dumps({"short_id": "c0ffee00", "parent_session": "parent-uuid"}) + "\n",
+        encoding="utf-8",
+    )
+    sent = []
+    monkeypatch.setattr(inbox, "notify", lambda root, sid, text: sent.append((sid, text)))
+    monkeypatch.setattr(log_writer, "append_line", lambda *a, **k: None)
+    v = ts.Verdict(tree, "fix/issue-7", ts.REMOVED, "#11")
+
+    ts._tell({}, vault, v, [Job(short_id="c0ffee00", cwd=str(tree))])
+
+    [(sid, text)] = sent
+    assert sid == "parent-uuid"
+    first, *_ = text.splitlines()
+    assert first == f'{inbox.NOTICE_PREFIX} id="c0ffee00" state="removed" event="tree-swept">'
+    assert ts.render(v) in text
+    assert "this is not your user speaking" in text
+    turn = {"type": "user", "message": {"role": "user", "content": text}}
+    assert detector.is_human_turn(turn) is False
+    # The bare line, as it went out before #553, is what the detector counted.
+    bare = {"type": "user", "message": {"role": "user", "content": ts.render(v)}}
+    assert detector.is_human_turn(bare) is True

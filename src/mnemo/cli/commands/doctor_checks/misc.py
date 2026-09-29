@@ -2,8 +2,10 @@
 
 Hosts :func:`_doctor_check_circuit_breaker` (every hook is silenced while
 it is open, #115), :func:`_doctor_check_legacy_wiki_dirs` (v0.4
-fossil-directory warning) and :func:`_doctor_check_auto_brain`
-(auto-extraction heartbeat + last-run-status check).
+fossil-directory warning), :func:`_doctor_check_auto_brain`
+(auto-extraction heartbeat + last-run-status check) and
+:func:`_doctor_check_friction_auto_retire` (a switch with nothing behind it,
+#553).
 """
 from __future__ import annotations
 
@@ -32,6 +34,31 @@ def _doctor_check_circuit_breaker(vault: Path) -> bool:
             )
         return True
     print(f"  ✗ {errors.remedy_line(vault)}")
+    return False
+
+
+def _doctor_check_friction_auto_retire(vault: Path) -> bool:
+    """``friction.autoRetire: true`` does nothing; say so rather than let it
+    read as on.
+
+    ``friction.retire.auto_retire`` exists and honours the key, but nothing
+    calls it: extraction never retires a rule, whatever the config says
+    (#553). Wiring it would start retiring live rules, so until that is
+    decided the doctor names the key as inert. Silent when the key is off or
+    absent — there is nothing to correct then.
+    """
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.friction import retire
+
+    try:
+        on = retire.auto_retire_enabled(cfg_mod.load_config())
+    except Exception:  # noqa: BLE001 — an unreadable config is preflight's to report
+        return True
+    if not on:
+        return True
+    print(f"  ⚠ friction.{retire.AUTO_RETIRE_KEY} is true, but it is inert: nothing calls "
+          "the automatic retirement, so no rule is retired by it")
+    print("       → no action needed; the key has no effect in this version")
     return False
 
 
