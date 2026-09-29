@@ -291,16 +291,22 @@ def _boundary_files(piece: contracts.Piece, *, ref: str, repo_root: Path | str) 
     out: list[str] = []
     for entry in piece.files:
         pattern = entry.rstrip("/")
-        if any(ch in pattern for ch in "*?["):
+        # A literal reading wins over a glob one: an entry spelled exactly as
+        # a tracked file or directory names it even when it reads as a glob.
+        # `[id]` is a Next.js dynamic segment, and as an fnmatch class it
+        # would match only `i` or `d` (#516).
+        under = [t for t in tracked if t.startswith(pattern + "/")]
+        if pattern in tracked:
+            matched = [pattern]
+        elif entry.endswith("/") and under:
+            matched = under
+        elif any(ch in pattern for ch in "*?["):
             # `**` is not special to fnmatch, but `*` already crosses `/`
             # there, so `src/**/*.py` and `src/*.py` both reach nested files.
-            out.extend(t for t in tracked if fnmatch.fnmatchcase(t, pattern)
-                       and t not in out)
-        elif entry.endswith("/"):
-            out.extend(t for t in tracked if t.startswith(pattern + "/")
-                       and t not in out)
-        elif pattern in tracked and pattern not in out:
-            out.append(pattern)
+            matched = [t for t in tracked if fnmatch.fnmatchcase(t, pattern)]
+        else:
+            matched = []
+        out.extend(t for t in matched if t not in out)
     return out
 
 
