@@ -47,6 +47,34 @@ each resample); wrong-state rates per arm; kappa; the index's size in bytes.
 briefing; *does not measurably help* — CI upper bound < +0.15; kappa < 0.40
 reads nothing. ``index`` vs ``right`` is descriptive.
 
+**Result, 2026-09-29, the maintainer's machine: inconclusive. The index helps
+a little, measurably less than the right briefing, and it plants no wrong
+assumptions.** All 110 of #540's units rebuilt their ``none`` arm byte for
+byte, so all 110 are compared. The right briefing is in the index in every
+one. The index has 10 entries in 107 units and 2 in 3. It is a median 4,623
+bytes (p90 6,298, max 6,441), and the whole envelope a median 5,461 and max
+7,781 against the 9,000 cap, so no TL;DR was cut. The ruler holds: kappa 0.56
+on "which reply" (0.57 index vs none, 0.55 index vs right), 0.65 on the
+wrong-state marks. Both raters:
+
+- ``h_index`` **+0.109 [+0.005, +0.218]** (index better 34.5%, none 23.6%,
+  tie 41.8%). The CI clears 0 but the point estimate is under +0.15 and the
+  upper bound is over it: **inconclusive** by the bar. Each rater alone gives
+  +0.118 (Opus 5.5) and +0.132 (Fable 5.1);
+- ``index`` vs ``right`` **−0.118 [−0.223, −0.018]** (index better 24.5%,
+  right 36.4%, tie 39.1%). The right briefing beats the index. On the same
+  units #540's ``h_right`` is +0.218 [+0.105, +0.327], and the index keeps
+  **50% [3%, 108%]** of it;
+- the help sits where the newest briefing was the right one: +0.212
+  [+0.013, +0.400] over 40 units, against +0.050 [−0.071, +0.171] over the
+  70 where it was not;
+- wrong-state replies: index 5.9%, none 6.8% (−0.009 [−0.045, +0.032]); index
+  5.0%, right 6.8%. Nine other TL;DRs next to the right one do not plant the
+  wrong assumptions a wrong full briefing did in #540 (5.0% → 10.0%).
+
+The notional cost of every call on file was about $114: Fable 5.1 $64, Opus
+5.5 $37, Opus 5 $13. That is subscription usage, not money.
+
 Only ``--send`` calls a model. Calls are paced and threaded
 (``measure_prevented_repeats.Sender``) from a scratch cwd, and every answer is
 cached under ``--out`` (default ``<vault>/.mnemo/briefing-index``) the moment
