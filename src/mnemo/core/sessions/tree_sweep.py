@@ -398,6 +398,25 @@ def render(v: Verdict) -> str:
     return f"🧹 kept {name}{pr}: {why}{tail}"
 
 
+def notice(v: Verdict, short_id: str) -> str:
+    """:func:`render` as it reaches the dispatching session over its inbox.
+
+    Framed like the child's report card (#553): it opens with
+    :data:`~mnemo.core.sessions.inbox.NOTICE_PREFIX`, so the unblock
+    detector does not read mnemo's own line as the maintainer answering the
+    parent, and it says in words that this is mnemo reporting, not the user.
+    The worktree log keeps the bare :func:`render` line.
+    """
+    from mnemo.core.sessions.inbox import NOTICE_PREFIX
+
+    return "\n".join([
+        f'{NOTICE_PREFIX} id="{short_id}" state="{v.outcome}" event="tree-swept">',
+        render(v),
+        f"mnemo is reporting the cleanup of {short_id}'s worktree; this is not "
+        "your user speaking.",
+    ])
+
+
 def ledger_path(vault_root: Path) -> Path:
     return Path(vault_root) / ".mnemo" / LEDGER_NAME
 
@@ -472,10 +491,11 @@ def _tell(cfg, vault_root: Path, v: Verdict, sessions: Sequence[Any]) -> None:
         for s in sessions:
             if normalize_cwd(getattr(s, "cwd", None)) != wanted:
                 continue
-            parent = links.get(getattr(s, "short_id", ""))
+            short_id = getattr(s, "short_id", "")
+            parent = links.get(short_id)
             if parent and parent not in told:
                 told.add(parent)
-                inbox.notify(vault_root, parent, text)
+                inbox.notify(vault_root, parent, notice(v, short_id))
     except Exception:
         pass
 

@@ -41,6 +41,31 @@ let a socket marker stand in for the user (``design/specs/
 2026-09-15-inbox-reply-authority.md``). This module carries "a child of yours
 finished"; it must not carry approval, and callers must not phrase it as one.
 
+**Why no token is kept (#553).** Rows used to carry the session's
+``CLAUDE_CODE_MESSAGING_TOKEN``, in plaintext, in a file nothing pruned. That
+token is not needed and not ours to present:
+
+- Claude Code requires the auth line only on Windows (``authRequired =
+  platform === "windows"`` in 2.1.284; elsewhere a peer without it is
+  "accepted: auth is optional on this platform"). On macOS and Linux Claude
+  Code chmods the socket ``0600`` (``/tmp/cc-socks`` is ``0700`` on macOS),
+  so whoever can read the vault as this user can already connect; the token
+  added no protection, only a copy of a secret on disk. ``mnemo-desktop``
+  has always replied without one (``mission.rs`` ``reply`` passes ``None``),
+  verified live 2026-09-15.
+- On Windows, where it is required, Claude Code's inbox is a named pipe
+  (``\\\\.\\pipe\\…``), not an ``AF_UNIX`` path named after a pid: mnemo
+  never had a working row there to present it with.
+- The env value is the session's *child* token — Claude Code publishes a
+  separate *peer* key under ``~/.claude/sessions/`` — and presenting it tells
+  the inbox the writer descends from that session. A sibling's ``SessionEnd``
+  does not; mnemo writes as the peer it is.
+
+So a row holds the address and nothing that authenticates, the file is
+written ``0600``, and every :func:`record` rewrites it without any legacy
+``token`` field and without rows whose pid has exited — the upgrade scrubs
+itself at the first session start.
+
 Everything here fails open. A notice that cannot be delivered costs the
 maintainer the convenience he had before this existed; it must never cost a
 session its ``SessionEnd``.
@@ -51,18 +76,31 @@ import json
 import os
 import socket
 import subprocess
+import time
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Optional, Set
 
 #: Claude Code's own names for the session's inbox, exported into its env.
+#: The token beside the socket (``CLAUDE_CODE_MESSAGING_TOKEN``) is
+#: deliberately not read: see the module docstring (#553).
 SOCKET_ENV = "CLAUDE_CODE_MESSAGING_SOCKET"
-TOKEN_ENV = "CLAUDE_CODE_MESSAGING_TOKEN"
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 
 #: One JSON object per session start, append-only like ``dispatch-parents``.
 #: Latest line for a session id wins, so a re-used id (resume) re-addresses
 #: itself rather than leaving a stale row in front.
 LOG_NAME = "session-inbox.jsonl"
+
+#: Serialises :func:`record`'s rewrite against other session starts, so a row
+#: appended by one is never dropped by another's compaction.
+LOCK_NAME = "session-inbox.lock"
+
+#: Fields a row may carry. Anything else — the ``token`` rows written before
+#: #553 above all — is dropped when the file is rewritten.
+ROW_FIELDS = ("session_id", "socket", "pid", "pid_start")
+
+#: How long :func:`record` waits for the lock before appending unlocked.
+LOCK_WAIT_SECONDS = 2.0
 
 #: Read/written under a 5s timeout: a hung peer must not hold a hook open.
 TIMEOUT_SECONDS = 5.0
@@ -104,9 +142,8 @@ def address_from_env(env: Mapping[str, str] | None = None) -> dict | None:
     """This session's inbox address, or ``None`` outside Claude Code.
 
     Returns the row shape written to the log: the session it belongs to, the
-    socket to write into, the token that authenticates the write, and the pid
-    plus its start time, which together say whether the socket name still
-    means the same process.
+    socket to write into, and the pid plus its start time, which together say
+    whether the socket name still means the same process. No token (#553).
     """
     src = os.environ if env is None else env
     sid = (src.get(SESSION_ENV) or "").strip()
@@ -122,21 +159,107 @@ def address_from_env(env: Mapping[str, str] | None = None) -> dict | None:
     return {
         "session_id": sid,
         "socket": sock,
-        "token": (src.get(TOKEN_ENV) or "").strip() or None,
         "pid": pid,
         "pid_start": pid_start(pid),
     }
 
 
+def live_pids() -> Optional[Set[int]]:
+    """Every pid running now, or ``None`` when that cannot be read.
+
+    One ``ps`` for the whole table rather than one per row. ``None`` means
+    "unknown", and callers must then keep every row: pruning on a failed read
+    would forget live parents.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid="],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    pids = set()
+    for tok in (out.stdout or "").split():
+        try:
+            pids.add(int(tok))
+        except ValueError:
+            continue
+    return pids or None
+
+
+def _clean(row: dict) -> dict:
+    return {k: row[k] for k in ROW_FIELDS if k in row}
+
+
+def compact(lines, alive: Optional[Set[int]]) -> list:
+    """The rows worth keeping from *lines*, each reduced to :data:`ROW_FIELDS`.
+
+    Drops unparsable lines, every field outside the row shape (so a legacy
+    ``token`` never survives a rewrite) and, when *alive* is known, rows whose
+    pid has exited — such a row can never pass :func:`is_live` again, since a
+    pid that comes back is a different process with a different start time.
+    """
+    kept = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(row, dict) or not row.get("session_id"):
+            continue
+        if alive is not None:
+            try:
+                if int(row.get("pid") or 0) not in alive:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        kept.append(_clean(row))
+    return kept
+
+
+def _dump(rows) -> bytes:
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8")
+
+
 def record(vault_root: Path | str, address: dict | None) -> None:
-    """Append one address row. Never raises."""
+    """Add one address row, rewriting the log clean. Never raises.
+
+    The whole file is rewritten, ``0600``, through :func:`compact` — no
+    legacy token, no row whose pid is gone — with the new row last. Under
+    :data:`LOCK_NAME`, because two sessions start at once whenever a dispatch
+    does, and an unlocked rewrite would drop the other one's row. A lock that
+    stays busy past :data:`LOCK_WAIT_SECONDS` is a stuck holder, not a
+    concurrent one; the row is then appended as before rather than lost.
+    """
     if not address:
         return
     try:
+        from mnemo.core import atomic, locks
+
+        row = _clean(address)
         path = log_path(vault_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="") as fh:
-            fh.write(json.dumps(address, ensure_ascii=False) + "\n")
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            with locks.try_lock(path.parent / LOCK_NAME, stale_after=30.0) as held:
+                if held:
+                    try:
+                        with path.open("r", encoding="utf-8", errors="replace") as fh:
+                            old = fh.read().splitlines()
+                    except FileNotFoundError:
+                        old = []
+                    rows = compact(old, live_pids())
+                    rows.append(row)
+                    atomic.atomic_write_bytes(path, _dump(rows))
+                    return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "ab") as fh:
+            fh.write(_dump([row]))
     except (OSError, TypeError, ValueError):
         return
 
@@ -241,20 +364,17 @@ def post(address: dict, text: str) -> bool:
     """Write one user turn into *address*'s inbox. True when it went out.
 
     The wire format is Claude Code's own, as ``mnemo-desktop`` already speaks
-    it (``src-tauri/src/mission.rs`` ``post_message``): an optional auth line,
-    then a newline-terminated ``stream-json`` user turn.
+    it (``src-tauri/src/mission.rs`` ``post_message``): a newline-terminated
+    ``stream-json`` user turn. No auth line: optional on every platform this
+    reaches, and the token it would need is not ours (#553, module docstring).
     """
     sock_path = (address or {}).get("socket") or ""
     if not sock_path or not text:
         return False
-    token = (address or {}).get("token")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(TIMEOUT_SECONDS)
             s.connect(sock_path)
-            if token:
-                auth = {"type": "auth", "token": token}
-                s.sendall((json.dumps(auth) + "\n").encode("utf-8"))
             msg = {
                 "type": "user",
                 "message": {"role": "user", "content": text},

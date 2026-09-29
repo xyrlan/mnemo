@@ -561,12 +561,51 @@ def _render_slash_command(name: str, spec: dict[str, Any]) -> str:
     )
 
 
+def _is_mnemo_command(text: str) -> bool:
+    """True when *text* carries :data:`SLASH_COMMAND_TAG` on a line of its own.
+
+    Stricter than a substring match on purpose: this decides what gets
+    deleted, and a user's own command that merely mentions the tag in its
+    prose is not mnemo's.
+    """
+    return any(line.strip() == SLASH_COMMAND_TAG for line in text.splitlines())
+
+
+def prune_slash_commands(commands_dir: Path) -> list[str]:
+    """Delete mnemo-tagged commands mnemo no longer ships; return their names.
+
+    ``inject_slash_commands`` only ever wrote, so a command dropped from
+    :data:`SLASH_COMMANDS` stayed on disk for good (#553: ``fix`` and ``open``
+    from an old ``mnemo init``). Old writers also put the tag *above* the
+    frontmatter, so Claude Code lists such a file with the tag as its
+    description and without ``disable-model-invocation`` — the model can
+    call it. Only files carrying mnemo's tag go; a user's own command, with
+    or without a shipped name, is never touched.
+    """
+    commands_dir = Path(commands_dir)
+    removed: list[str] = []
+    if not commands_dir.is_dir():
+        return removed
+    for path in sorted(commands_dir.glob("*.md")):
+        if path.stem in SLASH_COMMANDS:
+            continue
+        try:
+            if not _is_mnemo_command(path.read_text(encoding="utf-8", errors="replace")):
+                continue
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(path.stem)
+    return removed
+
+
 def inject_slash_commands(commands_dir: Path) -> None:
     """Write mnemo slash command files into ``commands_dir``. Idempotent.
 
     Existing mnemo-tagged files are overwritten. Third-party files (without
     the SLASH_COMMAND_TAG marker) are left alone, even when they share a
-    filename with one of mnemo's commands.
+    filename with one of mnemo's commands. Tagged files for commands mnemo
+    no longer ships are removed (:func:`prune_slash_commands`).
     """
     commands_dir = Path(commands_dir)
     commands_dir.mkdir(parents=True, exist_ok=True)
@@ -582,6 +621,7 @@ def inject_slash_commands(commands_dir: Path) -> None:
             except OSError:
                 continue
         target.write_text(_render_slash_command(name, spec), encoding="utf-8")
+    prune_slash_commands(commands_dir)
 
 
 def uninject_slash_commands(commands_dir: Path) -> None:

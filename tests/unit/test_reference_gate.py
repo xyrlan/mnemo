@@ -338,3 +338,26 @@ def test_two_projects_of_sources_do_not_promote_an_uncleared_page(tmp_path):
 
     assert _is_universal_promotion(specific, None, target, False)
     assert not _is_universal_promotion(generic, None, target, False)
+
+
+def test_the_judge_call_is_logged_with_its_spend(tmp_path, monkeypatch):
+    """#553: the gate's calls reached the run summary but never
+    ``mcp-access-log.jsonl``, so `mnemo telemetry` could not see their cost."""
+    monkeypatch.setattr(
+        "mnemo.core.mcp.access_log._load_telemetry_config", lambda: (True, 1_048_576),
+    )
+    root = _vault(tmp_path)
+    _stub(monkeypatch, _PAGES, ["G", "T"])
+
+    run_extraction(_cfg(root))
+
+    log = root / ".mnemo" / "mcp-access-log.jsonl"
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    calls = [r for r in rows if r.get("tool") == "llm.call"]
+    gate = [r for r in calls if r.get("purpose") == "reference-gate"]
+    assert len(gate) == 1
+    assert gate[0]["model"] == "judge-model"
+    assert gate[0]["usage"] == {"input_tokens": 1, "output_tokens": 1}
+    assert gate[0]["cost_usd"] == 0.0 and gate[0]["agent"] == "(extraction)"
+    # The consolidation call is still logged beside it, under its own purpose.
+    assert any(r["purpose"] == "consolidation:reference" for r in calls)

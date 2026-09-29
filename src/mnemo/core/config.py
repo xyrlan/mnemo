@@ -191,8 +191,11 @@ DEFAULTS: dict[str, Any] = {
     },
     "enrichment": {
         "enabled": True,
-        "maxRulesPerCall": 3,
-        "bodyPreviewChars": 300,
+        # No per-call or preview-length key (#553): `maxRulesPerCall` and
+        # `bodyPreviewChars` sat here unread for their whole life. The cap
+        # of 3 lives in rule_activation's matcher, and the 300-character
+        # preview is baked into rule-activation-index.json at build time,
+        # where a config change would never reach it.
         "maxEmissionsPerSession": 15,
         "log": {"maxBytes": 1_048_576},
     },

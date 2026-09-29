@@ -182,8 +182,9 @@ def test_defaults_include_activation_blocks():
 
     assert "enrichment" in DEFAULTS
     assert DEFAULTS["enrichment"]["enabled"] is True
-    assert DEFAULTS["enrichment"]["maxRulesPerCall"] == 3
-    assert DEFAULTS["enrichment"]["bodyPreviewChars"] == 300
+    # #553: never read, so gone rather than advertised.
+    assert "maxRulesPerCall" not in DEFAULTS["enrichment"]
+    assert "bodyPreviewChars" not in DEFAULTS["enrichment"]
     assert DEFAULTS["enrichment"]["log"]["maxBytes"] == 1_048_576
 
 

@@ -669,12 +669,28 @@ def _run_extraction_body(
             on_chunk(chunks_done, chunks_total)
 
     def _ask_gate(prompt_text: str) -> str:
+        t0 = time.perf_counter()
         response = provider(
             prompt_text,
             system=reference_gate.SYSTEM_PROMPT,
             model=gate_model,
             timeout=timeout,
         )
+        # #553: logged like a consolidation call, so the gate's spend is in
+        # `mnemo telemetry` and not only in this run's summary.
+        try:
+            from mnemo.core.mcp import access_log as _al
+            _al.record_llm_call(
+                vault_root=vault_root,
+                response=response,
+                purpose="reference-gate",
+                model=gate_model,
+                project=None,
+                agent="(extraction)",
+                elapsed_ms=(time.perf_counter() - t0) * 1000,
+            )
+        except Exception:
+            pass
         summary.total_cost_usd += response.total_cost_usd or 0.0
         summary.total_input_tokens += response.input_tokens or 0
         summary.total_output_tokens += response.output_tokens or 0

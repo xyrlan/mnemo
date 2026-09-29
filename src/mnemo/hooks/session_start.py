@@ -1177,10 +1177,10 @@ def main() -> int:
             errors.log_error(vault, "session_start.cache", e)
         try:
             # #357: the only moment this session's inbox address is knowable.
-            # Claude Code exports the socket and token into the session's own
-            # environment and nowhere else, and the transcript records neither,
-            # so a child that finishes later can only find its parent if the
-            # parent wrote itself down here.
+            # Claude Code exports the socket into the session's own
+            # environment and nowhere else, and the transcript does not record
+            # it, so a child that finishes later can only find its parent if
+            # the parent wrote itself down here. Never the token (#553).
             if bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
                 from mnemo.core.sessions import inbox
 

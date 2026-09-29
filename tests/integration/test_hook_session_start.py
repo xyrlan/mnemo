@@ -58,3 +58,35 @@ def test_session_start_respects_disabled_capture(hook_env: Path, tmp_path: Path,
     assert rc == 0
     log_dir = hook_env / "bots" / "r2" / "logs"
     assert not log_dir.exists() or not any(log_dir.iterdir())
+
+
+def test_session_start_records_its_inbox_without_the_messaging_token(
+    hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#553: the address is written, and the token Claude Code exports beside
+    the socket lands nowhere mnemo writes — not the address map, not a log,
+    ledger or telemetry row. Searched by value, across the whole run's tree."""
+    from mnemo.core.sessions import inbox
+
+    secret = "f00dfacecafe0123456789abcdef5553"
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S553")
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/cc-socks/4242.sock")
+    monkeypatch.setenv("CLAUDE_CODE_MESSAGING_TOKEN", secret)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "session_id": "S553", "cwd": str(repo), "source": "startup",
+    })))
+
+    assert session_start.main() == 0
+
+    row = inbox.lookup(hook_env, "S553")
+    assert row is not None and row["socket"] == "/tmp/cc-socks/4242.sock"
+    hits = []
+    for path in tmp_path.rglob("*"):
+        try:
+            if path.is_file() and secret.encode() in path.read_bytes():
+                hits.append(str(path.relative_to(tmp_path)))
+        except OSError:
+            continue
+    assert hits == []
