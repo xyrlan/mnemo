@@ -255,6 +255,36 @@ def test_every_realistic_path_shape_parses(tmp_path: Path) -> None:
     assert contract.pieces[0].files == paths
 
 
+@pytest.mark.parametrize("path", [
+    # The path #516 was refused on: a Next.js route group around a dynamic
+    # segment.
+    "src/app/(dashboard)/dashboard/simulations/[id]/actions.ts",
+    "src/app/(marketing)/page.tsx",
+    "src/app/(auth)/**/*.tsx",
+    "src/routes/(app)/settings/+page.svelte",
+    "src/app/@modal/(.)photo/[id]/page.tsx",
+    "src/routes/[...slug]/+layout.server.ts",
+])
+def test_framework_route_segments_are_admitted(tmp_path: Path, path: str) -> None:
+    """Route groups, dynamic and parallel segments are paths, not prose (#516)."""
+    text = VALID.replace(
+        "- **files:** src/mnemo/core/contracts.py, tests/unit/test_contracts.py",
+        "- **files:** " + path,
+    )
+    contract = contracts.parse_contract(write(tmp_path, text))
+    assert contract.pieces[0].files == [path]
+
+
+def test_parenthesised_prose_in_files_is_still_refused(tmp_path: Path) -> None:
+    """Admitting `(` did not admit an aside: prose still carries a space."""
+    text = VALID.replace(
+        "- **files:** src/mnemo/core/contracts.py, tests/unit/test_contracts.py",
+        "- **files:** a.py (and rewrite it with a regex)",
+    )
+    with pytest.raises(contracts.ContractError, match="not a path"):
+        contracts.parse_contract(write(tmp_path, text))
+
+
 def test_exposes_without_a_backtick_is_refused(tmp_path: Path) -> None:
     """The spec says literal signature, not description — enforce the spec.
 

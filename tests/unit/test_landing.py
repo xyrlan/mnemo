@@ -163,6 +163,32 @@ def test_a_glob_boundary_is_expanded_against_the_ref(repo: Path) -> None:
                            repo_root=repo) is True
 
 
+def test_a_dynamic_route_segment_is_a_literal_path(repo: Path) -> None:
+    """`[id]` is a directory name to Next.js and a character class to fnmatch.
+
+    The path #516 was written for names a file that exists as spelled; read as
+    a glob it matches only `.../i/actions.ts` or `.../d/actions.ts`, and the
+    piece's own definition was never looked at.
+    """
+    path = "src/app/(dashboard)/simulations/[id]/actions.ts"
+    _branch(repo, "feat/f/route", {path: "export function materialize() {}\n"})
+    piece = Piece("route", files=[path], exposes=["`materialize()`"])
+
+    assert landing.present("`materialize()`", piece=piece, ref="feat/f/route",
+                           repo_root=repo) is True
+
+
+def test_a_dynamic_route_directory_is_a_literal_path(repo: Path) -> None:
+    """The directory form of the same segment: `[id]/` is a prefix, not a class."""
+    _branch(repo, "feat/f/route", {
+        "src/app/[id]/actions.ts": "export function materialize() {}\n",
+    })
+    piece = Piece("route", files=["src/app/[id]/"], exposes=["`materialize()`"])
+
+    assert landing.present("`materialize()`", piece=piece, ref="feat/f/route",
+                           repo_root=repo) is True
+
+
 def test_a_method_counts_when_defined_indented(repo: Path) -> None:
     _branch(repo, "feat/f/d", {
         "src/d.py": "class Readiness:\n    @property\n    def ready(self):\n        return True\n",
