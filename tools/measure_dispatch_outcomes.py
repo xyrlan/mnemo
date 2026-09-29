@@ -42,7 +42,11 @@ from ``~/.claude/jobs`` is still counted. Each is one of two arms:
   child first stopped — the last commit authored by then — read from GitHub:
   ``green``, ``red``, ``pending`` or ``none``. And the same for the PR's last
   commit, *CI at the end*. What the parent was told at the first report is
-  kept beside it (``child-reports.jsonl``'s first ``finished`` state);
+  kept beside it (``child-reports.jsonl``'s first ``finished`` state). A red
+  commit is split by :func:`failure_kind`: ``flaky`` (a rerun on the same
+  commit passed, or a matrix job failed where its same-OS sibling passed, in
+  tests the PR never touched), ``not-run`` (GitHub never started the job — a
+  private repo whose Actions billing lapsed) or ``red``;
 - *woken*: ``<mnemo-pr-follow`` turns in the transcript, and whether any
   ``pr-follow.json`` attempt was for ``ci-red``. A child red at hand-off is
   **fixed by the child** when it committed after its first stop, nobody
@@ -64,7 +68,20 @@ from ``~/.claude/jobs`` is still counted. Each is one of two arms:
   measured the two equal (median ratio 1.0004 over 109 children);
 - *mnemo reached it*: mnemo hook attachments and ``mcp__mnemo__`` calls in the
   transcript. For a plain job this is the leak check: nonzero means it was
-  not plain.
+  not plain;
+- *follow-up* (``--followups``): a revert, or a later PR naming this one and
+  changing its files, within :data:`FOLLOWUP_DAYS` of the merge.
+
+**Hands-off**, #556's primary outcome for one job: a PR whose last commit's
+checks pass (green, or red only by flaky failures), no commit by anyone after
+the job's last turn, and no human input.
+
+**The two-arm study.** ``--pilot <pairs.jsonl>`` reads a ledger of issue
+pairs — one ``mnemo dispatch`` child and one plain ``claude --bg`` job on the
+same issue from the same commit — and prints both arms side by side, what
+reached each (:func:`mnemo.core.twins.conditions_of`), the paired hands-off
+table and :func:`readout`, the study's bar, fixed before it runs.
+``--size RATE`` prints the pairs it needs.
 """
 from __future__ import annotations
 
@@ -108,7 +125,7 @@ FINISHED = frozenset({"stopped", "done"})
 
 #: A last commit whose checks count as passing for the hands-off outcome: a
 #: flaky failure is the suite's, not the job's.
-PASSING = frozenset({"green", "flaky"})
+PASSING = frozenset({"green", "flaky", "non-blocking"})
 
 _PR = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 
@@ -398,6 +415,9 @@ def failure_kind(failed: Dict[str, Any], runs: Sequence[Dict[str, Any]], *, repo
 
     - ``rerun-passed``: a run of the same check on the same commit succeeded —
       the one verdict about flakiness GitHub itself gives;
+    - ``non-blocking``: the workflow run it belongs to concluded ``success``
+      with this job failing — the repo marked the job ``continue-on-error``
+      (mnemo's experimental Windows job), so its own CI does not count it;
     - ``not-run``: its annotation says the job was never started;
     - ``flaky``: a matrix job (``<os> / <version>``) whose sibling on the same
       OS in the same workflow run passed, and every test its log names as
@@ -409,6 +429,11 @@ def failure_kind(failed: Dict[str, Any], runs: Sequence[Dict[str, Any]], *, repo
     for other in runs:
         if other is not failed and other.get("name") == name and other.get("conclusion") == "success":
             return "rerun-passed", "a rerun on the same commit passed"
+    if failed.get("suite"):
+        code, out, _ = run(["gh", "api", f"repos/{repo}/check-suites/{failed.get('suite')}",
+                            "--jq", ".conclusion"], None)
+        if code == 0 and (out or "").strip() == "success":
+            return "non-blocking", "its workflow passed with it failing (continue-on-error)"
     code, out, _ = run(["gh", "api", f"repos/{repo}/check-runs/{failed.get('id')}/annotations",
                         "--jq", "[.[].message]"], None)
     try:
@@ -436,9 +461,10 @@ def failure_kind(failed: Dict[str, Any], runs: Sequence[Dict[str, Any]], *, repo
 
 def classify_red(repo: str, oid: str, *, changed: Optional[set],
                  run: Runner) -> Tuple[str, List[Dict[str, str]]]:
-    """A red commit as ``red``, ``flaky`` or ``not-run``, with each failed
-    run's kind. ``flaky`` when every failure is ``flaky`` or ``rerun-passed``;
-    ``not-run`` when none is ``real`` and at least one was never started."""
+    """A red commit as ``red``, ``not-run``, ``non-blocking`` or ``flaky``,
+    with each failed run's kind: ``red`` when any failure is ``real``;
+    ``not-run`` when one was never started; ``non-blocking`` when every one
+    is; ``flaky`` otherwise (each is flaky, rerun-passed or non-blocking)."""
     code, out, _ = run(["gh", "api", f"repos/{repo}/commits/{oid}/check-runs?per_page=100",
                         "--jq", "[.check_runs[] | {id, name, status, conclusion, "
                                 "suite: .check_suite.id}]"], None)
@@ -456,6 +482,8 @@ def classify_red(repo: str, oid: str, *, changed: Optional[set],
         return "red", failures
     if "not-run" in kinds:
         return "not-run", failures
+    if kinds == {"non-blocking"}:
+        return "non-blocking", failures
     return "flaky", failures
 
 
@@ -882,7 +910,7 @@ def format_group(name: str, s: Dict[str, Any]) -> List[str]:
         lines.append(f"  CI at hand-off: {_tally(s['ci']['ci_handoff'])}")
         lines.append(f"  CI at the end: {_tally(s['ci']['ci_end'])}")
         lines.append(f"  red at hand-off, then green by: {_tally(s['red_fixed_by'])}")
-        lines.append(f"  hands-off (PR, last commit green, nobody else's commit, no human "
+        lines.append(f"  hands-off (PR, last commit passes, nobody else's commit, no human "
                      f"input): {_pct(s['hands_off'], s['jobs'])}")
     if s["first_report"]:
         lines.append(f"  first report told the parent: {_tally(s['first_report'])}")
@@ -985,7 +1013,7 @@ def mcnemar_exact(b: int, c: int) -> float:
     return min(1.0, 2 * tail)
 
 
-def readout(table: Dict[str, int]) -> Dict[str, Any]:
+def readout(table: Dict[str, int], *, planned: Optional[int] = None) -> Dict[str, Any]:
     """The full study's verdict from its paired table (:func:`pilot`'s).
 
     - **dispatch delivers**: exact McNemar p < 0.05, dispatch ahead, and the
@@ -996,26 +1024,36 @@ def readout(table: Dict[str, int]) -> Dict[str, Any]:
     - **inconclusive**: anything else. It is reported as "not detectable at
       this size", and the study is not extended to chase it.
 
-    The interval is Wald's for a paired difference of proportions,
-    ``(b - c) / n ± 1.96 · sqrt(b + c - (b - c)² / n) / n``.
+    Before *planned* pairs the verdict is ``running``: the study is read once,
+    at its size, never peeked at into a stop.
+
+    The interval is Agresti and Min's (2005) for a paired difference of
+    proportions: Wald's, ``d ± 1.96 · sqrt(b + c - (b - c)² / n) / n``,
+    after adding one half to each of the four cells. Plain Wald has zero
+    width when no pair is discordant, and would call one concordant pair a
+    null.
     """
     b, c = table.get("dispatch-only", 0), table.get("plain-only", 0)
     n = b + c + table.get("both", 0) + table.get("neither", 0)
     if not n:
         return {"pairs": 0, "verdict": "no pairs"}
     diff = (b - c) / n
-    half = 1.959964 * math.sqrt(max(0.0, b + c - (b - c) ** 2 / n)) / n
+    b2, c2, n2 = b + 0.5, c + 0.5, n + 2
+    centre = (b2 - c2) / n2
+    half = 1.959964 * math.sqrt(max(0.0, b2 + c2 - (b2 - c2) ** 2 / n2)) / n2
     p = mcnemar_exact(b, c)
+    out = {"pairs": n, "difference": diff, "low": centre - half, "high": centre + half, "p": p}
+    if planned is not None and n < planned:
+        return {**out, "verdict": f"running ({n} of {planned})"}
     if p < ALPHA and diff >= BAR_POSITIVE:
         word = "dispatch delivers"
     elif p < ALPHA and diff < 0:
         word = "plain delivers more"
-    elif -BAR_NULL < diff - half and diff + half < BAR_NULL:
+    elif -BAR_NULL < centre - half and centre + half < BAR_NULL:
         word = "null"
     else:
         word = "inconclusive"
-    return {"pairs": n, "difference": diff, "low": diff - half, "high": diff + half,
-            "p": p, "verdict": word}
+    return {**out, "verdict": word}
 
 
 def format_sizing(p_dispatch: float, *, excluded: float) -> str:
@@ -1085,7 +1123,7 @@ def pilot(pairs: Sequence[Dict[str, Any]], rows: Sequence[Dict[str, Any]]) -> Di
     return {"pairs": out, "table": table}
 
 
-def format_pilot(result: Dict[str, Any]) -> str:
+def format_pilot(result: Dict[str, Any], *, planned: Optional[int] = None) -> str:
     lines = []
     for pair in result["pairs"]:
         lines.append(f"#{pair['issue']} ({pair['repo']})")
@@ -1106,7 +1144,7 @@ def format_pilot(result: Dict[str, Any]) -> str:
     t = result["table"]
     lines.append(f"hands-off: both {t['both']}, dispatch only {t['dispatch-only']}, "
                  f"plain only {t['plain-only']}, neither {t['neither']}, unfinished {t['unfinished']}")
-    r = readout(t)
+    r = readout(t, planned=planned)
     if r["pairs"]:
         lines.append(f"readout (the full study's bar): difference {r['difference']:+.2f} "
                      f"[{r['low']:+.2f}, {r['high']:+.2f}], exact McNemar p {r['p']:.3f} "
@@ -1165,6 +1203,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--followups", type=int, nargs="?", const=FOLLOWUP_DAYS, metavar="DAYS",
                         help=f"also look for a revert or follow-up fix within DAYS of each "
                              f"merge (default {FOLLOWUP_DAYS})")
+    parser.add_argument("--planned", type=int, metavar="N",
+                        help="with --pilot: the study's pre-registered size; before N pairs "
+                             "the readout says running")
     args = parser.parse_args(argv)
     if args.size is not None:
         sys.stdout.write(format_sizing(args.size, excluded=args.excluded))
@@ -1180,7 +1221,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     aliases = load_aliases(vault / ".mnemo" / "private-names.tsv")
     if pairs is not None:
         result = pilot(pairs, rows)
-        text = (json.dumps(result, indent=2, default=str) if args.json else format_pilot(result))
+        text = (json.dumps(result, indent=2, default=str) if args.json else format_pilot(result, planned=args.planned))
         sys.stdout.write(redact(text, aliases) + ("\n" if args.json else ""))
         return 0
     report = measure(rows)

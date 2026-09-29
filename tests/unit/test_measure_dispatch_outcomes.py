@@ -80,10 +80,12 @@ class Gh:
                  notes: Optional[Dict[str, List[str]]] = None,
                  logs: Optional[Dict[str, str]] = None,
                  merged: Sequence[Dict[str, Any]] = (),
-                 base_commits: Sequence[Dict[str, Any]] = ()) -> None:
+                 base_commits: Sequence[Dict[str, Any]] = (),
+                 suites: Optional[Dict[str, str]] = None) -> None:
         self.prs, self.checks, self.branches, self.remote = prs, checks, branches or {}, remote
         self.details, self.notes, self.logs = details or {}, notes or {}, logs or {}
         self.merged, self.base_commits = list(merged), list(base_commits)
+        self.suites = suites or {}
         self.calls: List[Tuple[str, ...]] = []
 
     def _detail(self, oid: str) -> List[Dict[str, Any]]:
@@ -99,6 +101,8 @@ class Gh:
             return (0, json.dumps(pr), "") if pr is not None else (1, "", "not found")
         if argv[:2] == ["gh", "api"]:
             path = argv[2]
+            if "/check-suites/" in path:
+                return 0, self.suites.get(path.split("/check-suites/")[1], "failure") + "\n", ""
             if "/annotations" in path:
                 rid = path.split("/check-runs/")[1].split("/")[0]
                 return 0, json.dumps(self.notes.get(rid, [])), ""
@@ -464,7 +468,7 @@ LOG = "macos / py3.11\tstep\t2026 FAILED tests/test_other.py::test_x - assert 1e
 def _kind(**kw: Any) -> Tuple[str, List[Dict[str, str]]]:
     gh = Gh({}, {}, details={"c": _matrix("c", **{k: v for k, v in kw.items()
                                                   if k in ("rerun", "sibling", "failing")})},
-            logs={"f": kw.get("log", LOG)},
+            logs={"f": kw.get("log", LOG)}, suites=kw.get("suites"),
             notes={rid: kw.get("notes", []) for rid in ("f", "s")})
     return tool.classify_red("o/r", "c", changed=kw.get("changed", {"src/app.py"}), run=gh)
 
@@ -494,6 +498,13 @@ def test_a_non_matrix_failure_is_real() -> None:
 def test_a_rerun_that_passed_on_the_same_commit_is_flaky_without_reading_a_log() -> None:
     verdict, failures = _kind(rerun=True, log="")
     assert verdict == "flaky" and failures[0]["kind"] == "rerun-passed"
+
+
+def test_a_job_whose_workflow_passed_anyway_is_non_blocking() -> None:
+    """mnemo's Windows job is continue-on-error: the job fails, the run passes."""
+    verdict, failures = _kind(failing="windows / py3.11", suites={"9": "success"}, log="")
+    assert verdict == "non-blocking" and failures[0]["kind"] == "non-blocking"
+    assert "non-blocking" in tool.PASSING
 
 
 def test_a_job_github_never_started_is_not_run() -> None:
@@ -593,6 +604,17 @@ def test_the_bar_reads_each_verdict() -> None:
     assert tool.readout(_t(4, 4, 300, 100))["verdict"] == "null"
     assert tool.readout(_t(6, 3, 10, 5))["verdict"] == "inconclusive"
     assert tool.readout(_t(0, 0, 0, 0))["verdict"] == "no pairs"
+
+
+def test_one_concordant_pair_is_not_a_null() -> None:
+    """Plain Wald has zero width here; the adjusted interval does not."""
+    r = tool.readout(_t(0, 0, 1, 0))
+    assert r["verdict"] == "inconclusive" and r["low"] < -0.5 and r["high"] > 0.5
+
+
+def test_before_its_planned_size_the_study_is_only_running() -> None:
+    assert tool.readout(_t(30, 5, 40, 25), planned=200)["verdict"] == "running (100 of 200)"
+    assert tool.readout(_t(30, 5, 40, 25), planned=100)["verdict"] == "dispatch delivers"
 
 
 def test_significant_but_below_the_bar_is_not_a_win() -> None:
