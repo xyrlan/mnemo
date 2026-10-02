@@ -267,11 +267,19 @@ def test_both_readings_put_the_grounded_one_first_with_wrong_state_rates_and_kap
     assert p["h"]["h"] == 0.75 and "wrong_state" not in p
     assert got[tool.PREFERENCE]["kappa"]["same"] == 4
     assert (got[tool.GROUNDED]["split"]["whole"]["h"], got[tool.GROUNDED]["split"]["cut"]["h"]) == (0.5, -0.5)
-    text = "\n".join(tool.report_lines({"live": tool.LIVE, "due": tool.due(LIVE, 2), "rows": {"log": 0,
-                     "archive": 0, "human": 0}, "sessions": 2, "sessions_with_full": 2,
-                     "emissions": {"n": 2, "whole": 1, "cut": 1}, "rated": 2, "units": 2, "results": got}))
-    assert text.index("GROUNDED") < text.index("<- the verdict") < text.index("PREFERENCE")
+    base = {"live": tool.LIVE, "due": tool.due(LIVE, 2), "rows": {"log": 0, "archive": 0, "human": 0},
+            "sessions": 2, "sessions_with_full": 2, "emissions": {"n": 2, "whole": 1, "cut": 1}, "rated": 2,
+            "units": 2, "native_primary": tool.NATIVE_PRIMARY}
+    text = "\n".join(tool.report_lines(dict(base, results=got, results_loaded=got, units_loaded=2)))
+    # #565: the loaded reading is the verdict, its grounded question first
+    loaded_at = text.index("what Claude Code loaded (#565)  <- the verdict")
+    grounded_at = text.index("GROUNDED", loaded_at)
+    assert grounded_at < text.index("<- the verdict", grounded_at) < text.index("PREFERENCE", grounded_at)
+    assert text.count("<- the verdict") == 2 and text.index("(#543, as registered)") > text.index("PREFERENCE")
     assert "wrong-state replies: full 25.0%" in text and "0.52 in #540" in text and "0.37 in #535" in text
+    # before #520 has produced the loaded reading, the registered one is shown and is not the verdict
+    text = "\n".join(tool.report_lines(dict(base, results=got)))
+    assert "<- the verdict" not in text and "has not produced yet" in text
 
 
 # --- end to end ----------------------------------------------------------------------------------
@@ -359,8 +367,13 @@ def test_main_counts_fresh_units_and_refuses_to_send_before_it_is_due(tmp_path, 
     assert tool.main(base + ["--send"], now=LIVE + 15 * DAY) == 0
     captured = capsys.readouterr()
     assert "refusing to answer and judge: 2 fresh unit(s)" in captured.err
-    (argv,) = rated
-    assert argv[:4] == ["--since", tool.LIVE, "--until", "2026-10-12T23:09:00Z"] and "--send" in argv
+    registered, loaded = rated
+    for argv in (registered, loaded):
+        assert argv[:4] == ["--since", tool.LIVE, "--until", "2026-10-12T23:09:00Z"] and "--send" in argv
+    # #565: the second run reads Text B as what Claude Code loaded, into its own cache
+    assert "--native" not in registered and registered[registered.index("--out") + 1].endswith("prevented-repeats")
+    assert loaded[loaded.index("--native") + 1] == "loaded"
+    assert loaded[loaded.index("--out") + 1].endswith(tool.PR_LOADED_DIR)
 
 
 def test_main_with_force_answers_judges_and_prints_both_bars(tmp_path, capsys, monkeypatch):
@@ -397,6 +410,45 @@ def test_main_with_force_answers_judges_and_prints_both_bars(tmp_path, capsys, m
     assert "h(full)" in text and "bar: h >= +0.10" in text and "1 per 15" in text
     assert "whole " in text and "cut " in text and "wrong-state replies" in text
     assert text.index("GROUNDED") < text.index("PREFERENCE")
+
+
+def test_the_loaded_reading_adds_the_units_note_bodies_hid_and_is_the_verdict(tmp_path, capsys, monkeypatch):
+    """#565: a rule the registered reading calls redundant only because an
+    auto-memory note body said it is a unit of the loaded reading. Both
+    readings' units are answered once, the due condition counts the
+    registered ones, and #520's ratings are shared, not asked again."""
+    base = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    pr = tmp_path / "out" / "prevented-repeats"
+    registered = json.loads((pr / tool.mpr.UNITS_NAME).read_text(encoding="utf-8"))
+    loaded = json.loads(json.dumps(registered))
+    for r in registered["columns"]["both"]:
+        if r["slug"] == "app__small-prs":
+            r.update(new=False, redundant=True)
+    (pr / tool.mpr.UNITS_NAME).write_text(json.dumps(registered), encoding="utf-8")
+    for name in tool.SHARED_RATINGS:
+        (pr / name).write_text(json.dumps({"rated": name}), encoding="utf-8")
+    pl = tmp_path / "out" / tool.PR_LOADED_DIR
+    pl.mkdir(parents=True)
+    (pl / tool.mpr.UNITS_NAME).write_text(json.dumps(loaded), encoding="utf-8")
+    runs = []
+    monkeypatch.setattr(tool.mpr, "main", lambda argv: runs.append(argv) or 0)
+    asked = []
+    monkeypatch.setattr(llm, "resolve", lambda cfg: _provider(asked))
+
+    assert tool.main(base + ["--send", "--force"], now=LIVE + 2 * DAY) == 0
+    data = json.loads(capsys.readouterr().out)
+
+    assert len(runs) == 2 and all(json.loads((pl / n).read_text(encoding="utf-8")) == {"rated": n}
+                                  for n in tool.SHARED_RATINGS)
+    assert (data["units"], data["units_loaded"], data["native_primary"]) == (1, 2, "loaded")
+    assert data["due"]["units"] == 1
+    # the union is answered: 2 units x 2 arms x 2 samples, judged once each
+    systems = [s for _, s, _ in asked]
+    assert systems.count(tool.bv.rl.ARM_SYSTEM) == 8 and systems.count(tool.GROUNDED_SYSTEM) == 8
+    reg = data["results"][tool.GROUNDED]["columns"]["both"]["product"]
+    lod = data["results_loaded"][tool.GROUNDED]["columns"]["both"]["product"]
+    assert (reg["rate"], lod["rate"]) == (1.0, 2.0) and (reg["h"], lod["h"]) == (1.0, 1.0)
 
 
 def _replies(prompt):
