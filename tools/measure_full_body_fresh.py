@@ -339,10 +339,13 @@ def projected(now: float, per_day: Optional[float], live: str = LIVE, days: int 
 
 
 def historical_yield(source: Optional[Dict[str, Any]],
-                     load: Callable[[str], List[dict]]) -> Optional[Dict[str, Any]]:
+                     load: Callable[[Path], List[dict]]) -> Optional[Dict[str, Any]]:
     """How many reflex emissions became a unit before the change: #520's frozen
     reflex-channel delivered-and-new units over the distinct (session, rule)
-    pairs its rated sessions' reflex blocks delivered. None without #520's file."""
+    pairs its rated sessions' reflex blocks delivered. None without #520's file.
+
+    #520 stores each session's path as a string; *load* gets a ``Path``, as
+    the briefing module's loader the dry run passes in needs."""
     if not source:
         return None
     units = sum(1 for r in source["columns"].get(mpr.BOTH) or []
@@ -350,7 +353,7 @@ def historical_yield(source: Optional[Dict[str, Any]],
     pairs = 0
     for sid in source["rated"]:
         slugs: Set[str] = set()
-        for ev in load(source["sessions"][sid]["path"]):
+        for ev in load(Path(source["sessions"][sid]["path"])):
             att = ev.get("attachment") if isinstance(ev, dict) else None
             if isinstance(att, dict) and att.get("type") == "hook_additional_context":
                 for text in mpr._hook_texts(att):
