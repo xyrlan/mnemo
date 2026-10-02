@@ -68,6 +68,25 @@ units; precision >= :data:`PRECISION_BAR`; Jev's p90 latency at that pool <=
 :data:`P90_BAR_MS` ms (the hook's budget is 2.5 s). Otherwise it fails and the
 report names the condition.
 
+**First run, 2026-10-02, the maintainer's vault (#520's units, cap 20 from
+config).** 3,877 prompts in 245 sessions, 3,100 scored, 0 failed; ranks 1-10
+labelled 93.6%; 1,513 relevant units, 565 lacked. Jev is fast at any depth:
+median / p90 363 / 400 ms at K=3, 438 / 510 at K=25, 519 / 605 at K=50, none
+past 2.5 s; a rule's score moves by a mean 0.011 between a 3-rule and a
+50-rule request. The bar fails: dev chose pool 50 at 0.7 (the only configs at
+>= 40% labelled precision are bars 0.6-0.7), and on test it reaches 27.3%
+[21.4, 34.2] of lacked units against 2 x 18.6% recorded, at 41.1% precision
+(labelled 39.8%, sample 44.1% of 127), p90 605 ms. **VERDICT: FAIL
+(coverage).** Depth moves along the precision/coverage frontier rather than
+past it: at ~40% precision, pool 3 at 0.6 reaches 24.0% on test and pool 50
+at 0.7 reaches 27.3%. Coverage near 50% needs bar 0.4, where precision is
+22-25% and the reflex injects 10-15 rules a session. Exploratory, not the
+verdict: without the session cap, pool 50 at 0.4 reaches 58.5% on test at
+20.8% precision and 22.7 injections a session; at 0.7 the cap changes
+coverage by under 1 pp. The shipped config replayed (pool 3, 0.4) already
+reaches 33.3% test / 41.9% dev against #520's recorded 18.6% / 27.0%, because
+the recorded window mixes the lexical gate before #412 with the judge after.
+
 **Sending.** ``--send`` sends typed prompts and rule texts to TypeSafe, a
 third party, with the key ``mnemo rerank --setup`` stored; the maintainer runs
 it. ``--dry-run`` prints how many requests, their size and notional cost, and
