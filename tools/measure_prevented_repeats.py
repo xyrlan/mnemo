@@ -61,6 +61,18 @@ it was recorded, #519's reconstruction as of the session's start, plus the
 closest auto-memory notes born before it — already says it (same judge),
 mnemo delivered nothing new: the unit is redundant, not delivered.
 
+``--native loaded`` (#565) reads Text B as what Claude Code actually had in
+context: no auto-memory note bodies (Claude Code loads only the ``MEMORY.md``
+index, never a note it was not asked to open), and a ``MEMORY.md`` longer than
+:data:`MEMORY_LINES` cut to its first :data:`MEMORY_LINES` lines, as Claude
+Code cuts it (the recorded attachment already is). Unit ids do not change, so
+the two readings pair unit by unit. The default, ``--native notes``, is the
+reading every number below was read with. On #520's own cache (245 sessions
+with transcripts on disk, 2026-10-02) ``loaded`` moves no strict unit (59.6%
+redundant either way) and the broad reading from 62.7% to 48.0% redundant:
+262 units flip to not redundant, 40 the other way, and delivered-and-new broad
+units go from 137 to 205.
+
 The reflex judge went live mid-window (:data:`JUDGE_LIVE`), so frequency,
 delivery and the estimate are also printed for the sessions that started
 before it and after it, beside the pooled figure the verdict reads.
@@ -216,6 +228,11 @@ Reply with JSON only, one row per rule:
 DELIVERY_BATCH = 20
 #: Closest auto-memory notes per rule added to text B.
 NOTES_PER_RULE = 2
+#: What Text B holds (#565): ``notes`` adds the closest notes' bodies;
+#: ``loaded`` is only what Claude Code loaded.
+NATIVE_MODES = ("notes", "loaded")
+#: How much of ``MEMORY.md`` Claude Code loads; it cuts the rest with a warning.
+MEMORY_LINES = 200
 
 
 # --- small helpers ---------------------------------------------------------------------
@@ -661,8 +678,22 @@ def native_files(walked_prompt: Dict[str, Any],
     return [(p, t) for p, t in walked_prompt.get("native") or []] or list(fallback())
 
 
-def native_text(files: Sequence[Tuple[str, str]], notes: Sequence[Tuple[str, str]]) -> str:
-    """Text B: the loaded files, then the auto-memory notes closest to the rules."""
+def loaded_memory(text: str, lines: int = MEMORY_LINES) -> str:
+    """``MEMORY.md`` as Claude Code loads it: the first ``lines`` lines. The
+    recorded attachment carries ``lines`` lines plus Claude Code's own
+    warning, and is left as it is."""
+    rows = text.splitlines()
+    return text if len(rows) <= lines + 2 else "\n".join(rows[:lines])
+
+
+def native_text(files: Sequence[Tuple[str, str]], notes: Sequence[Tuple[str, str]],
+                loaded: bool = False) -> str:
+    """Text B: the loaded files, then the auto-memory notes closest to the
+    rules; with ``loaded`` (#565), the files alone, ``MEMORY.md`` cut where
+    Claude Code cuts it."""
+    if loaded:
+        files = [(label, loaded_memory(text) if "MEMORY.md" in label else text) for label, text in files]
+        notes = []
     parts = ["### %s\n%s" % (label, text) for label, text in files]
     parts += ["### memory note %s\n%s" % (name, body) for name, body in notes]
     return _head("\n\n".join(parts), NATIVE_CHARS)
@@ -709,14 +740,14 @@ def delivery_batches(units: Dict[Tuple[str, str], Dict[str, Any]], done: Dict[st
     return out
 
 
-def batch_prompt(batch: Sequence[Dict[str, Any]]) -> str:
+def batch_prompt(batch: Sequence[Dict[str, Any]], loaded: bool = False) -> str:
     notes: List[Tuple[str, str]] = []
     for u in batch:
         for note in u["notes"]:
             if note not in notes:
                 notes.append(note)
     return delivery_prompt([u["rule"] for u in batch], batch[0]["ss"],
-                           native_text(batch[0]["files"], notes))
+                           native_text(batch[0]["files"], notes, loaded))
 
 
 def _named(text: str, slug: str) -> bool:
@@ -997,6 +1028,8 @@ def _per(x: Optional[float]) -> str:
 def report_lines(data: Dict[str, Any]) -> List[str]:
     lines = ["%d human sessions since %s; %d sampled, %d with every prompt rated by every rater"
              % (data["population"], data["since"], data["sampled"], data["rated"]),
+             *(["Text B: what Claude Code loaded only (--native loaded, #565): no auto-memory note bodies, "
+                "MEMORY.md cut at %d lines" % MEMORY_LINES] if data.get("native") == "loaded" else []),
              *(["PROVISIONAL: %s call(s) still pending (%s); a unit the delivery judge has not "
                 "answered counts as not delivered by content and not redundant" % (
                     sum(sum(v.values()) for v in data["pending"].values()),
@@ -1122,9 +1155,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--workers", type=int, default=WORKERS)
     ap.add_argument("--pause", type=float, default=PAUSE_SECONDS)
     ap.add_argument("--limit", type=int, default=None, help="with --send: at most N calls per step")
+    ap.add_argument("--native", choices=NATIVE_MODES, default=NATIVE_MODES[0],
+                    help="Text B: 'notes' adds the closest auto-memory note bodies (the published readings); "
+                         "'loaded' is only what Claude Code loaded (#565)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     raters = args.rater or list(RATERS)
+    loaded = args.native == "loaded"
 
     cfg = config.load_config()
     vault = Path(args.vault).expanduser() if args.vault else paths.vault_root(cfg)
@@ -1253,7 +1290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     deliv[r].update(got)
                     mrc._write(out / "delivery.json", all_deliv)
             return take
-        calls = [(r, batch_prompt(b), DELIVERY_SYSTEM, on_deliv(r, b))
+        calls = [(r, batch_prompt(b, loaded), DELIVERY_SYSTEM, on_deliv(r, b))
                  for r in raters for b in delivery_batches(units, deliv[r])]
         sender.run(calls[:args.limit] if args.limit else calls)
 
@@ -1328,7 +1365,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     primary = results[STRICT].get(BOTH if len(raters) > 1 else raters[0], {})
     lslugs = lift_slugs(vault)
     data = {
-        "since": args.since, "population": len(sessions), "sampled": len(sample), "rated": len(rated),
+        "since": args.since, "native": args.native,
+        "population": len(sessions), "sampled": len(sample), "rated": len(rated),
         "strict_size": None if strict is None else len(strict), "evidence": len(evidence),
         "evidence_off_disk": sum(1 for it in items if not it["on_disk"]),
         "strict_gate_verified": None if strict is None else sum(evidence[s]["gate_verified"] for s in strict),

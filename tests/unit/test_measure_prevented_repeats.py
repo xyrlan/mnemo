@@ -474,3 +474,33 @@ def test_collect_sessions_reads_a_timestamp_bound_by_the_instant(tmp_path):
     assert sorted(tool.collect_sessions(projects, vault, "2026-09-28T23:09:00Z")) == ["fresh002-x", "later003-x"]
     assert sorted(tool.collect_sessions(projects, vault, "2026-09-28T23:09:00Z",
                                         "2026-10-01T00:00:00Z")) == ["fresh002-x"]
+
+
+# --- #565: Text B as what Claude Code loaded ----------------------------------------------
+
+def test_the_default_text_b_still_adds_the_closest_note_bodies():
+    files = [("CLAUDE.md", "use yarn"), ("MEMORY.md", "- [Pin](pin.md) — pin node")]
+    notes = [("pin.md", "Pin node 20 because CI breaks on 18")]
+    text = tool.native_text(files, notes)
+    assert "### memory note pin.md" in text and "CI breaks on 18" in text
+    assert tool.native_text(files, notes) == tool.native_text(files, notes, loaded=False)
+
+
+def test_loaded_text_b_drops_note_bodies_and_cuts_memory_md_where_claude_code_does():
+    index = "\n".join("- [n%d](n%d.md) — line %d" % (i, i, i) for i in range(250))
+    files = [("CLAUDE.md", "use yarn"), ("/home/you/.claude/projects/p/memory/MEMORY.md", index)]
+    text = tool.native_text(files, [("n1.md", "the body of note one")], loaded=True)
+    assert "the body of note one" not in text and "memory note" not in text
+    assert "line 199" in text and "line 200" not in text and "use yarn" in text
+
+
+def test_a_recorded_memory_md_already_cut_by_claude_code_is_left_as_it_is():
+    recorded = "\n".join("- line %d" % i for i in range(200)) + "\n\n> WARNING: MEMORY.md is 250 lines"
+    assert tool.loaded_memory(recorded) == recorded
+    assert tool.loaded_memory("short") == "short"
+
+
+def test_the_batch_prompt_passes_the_reading_through():
+    unit = {"rule": "R", "ss": "start", "files": [("MEMORY.md", "idx")], "notes": [("n.md", "NOTE BODY")]}
+    assert "NOTE BODY" in tool.batch_prompt([unit])
+    assert "NOTE BODY" not in tool.batch_prompt([unit], loaded=True)

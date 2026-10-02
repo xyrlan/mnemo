@@ -84,6 +84,24 @@ fresh units, and ``<vault>/.mnemo/full-body-fresh`` held only the log archive
 and the dry run's report, with no ``broad-value/verdicts.json`` and no
 ``grounded/verdicts.json``.
 
+**Amendment, 2026-10-02 (#565), before any fresh unit was judged.** A unit
+is delivered-and-*new* when #520's delivery judge finds that what Claude Code
+loaded does not already say the rule. #520's Text B adds the bodies of the
+two auto-memory notes closest to the rule, which Claude Code never loads (it
+loads the ``MEMORY.md`` index alone). So it credits native memory with text
+that never reached the context, and undercounts the units this check
+multiplies by h: on #520's own cache, the broad reading's delivered-and-new
+units go from 137 to 205 when Text B is only what was loaded. #520 now runs
+twice on the fresh sessions: as registered (``prevented-repeats/``) and with
+``--native loaded`` (:data:`PR_LOADED_DIR`), on the same ratings
+(:data:`SHARED_RATINGS` copied over), so only delivery is judged again. Both
+readings' units are answered and judged (their union), and both bars are read
+on each. **The verdict is the loaded reading** (:data:`NATIVE_PRIMARY`;
+``results_loaded`` in the JSON); the registered reading stays beside it as
+``results``. The due condition still counts the registered reading's units,
+so the date does not move. The check's cache that day held only the log
+archive, the dry run's report and ``history-535``.
+
 **#535's pairs, re-judged** (``--history``). As a check on history, #535's
 cached ``full`` vs ``without`` replies (``<vault>/.mnemo/full-body``) are
 judged again on the grounded question into ``<out>/history-535``, with #540's
@@ -148,6 +166,13 @@ SETTLE_HOURS = 24
 OUT_DIR = "full-body-fresh"
 ROWS_NAME = "reflex-rows.jsonl"
 FRESH_UNITS_NAME = "units-fresh.json"
+#: #565's second reading of #520 on the fresh sessions: Text B = what Claude
+#: Code loaded (``measure_prevented_repeats --native loaded``), its own cache.
+PR_LOADED_DIR = "prevented-repeats-loaded"
+#: The reading the verdict reads (#565); #543's registered ``notes`` beside it.
+NATIVE_PRIMARY = "loaded"
+#: #520's ratings, shared by both readings so only delivery is judged twice.
+SHARED_RATINGS = ("chunks.json", "frequency.json", "labels.json")
 #: What ``render.cut_line`` writes under a body cut to fit.
 CUT_MARK = "[cut to fit the prompt limit"
 #: A log row is the hook's for a prompt when written within this many seconds
@@ -312,6 +337,34 @@ def unit_reading(row: Dict[str, Any], ctx: Dict[str, Any], project: str,
 
 
 # --- when it is due ------------------------------------------------------------------------
+
+def fresh_units(source: Dict[str, Any], sessions: Dict[str, Dict[str, Any]], load: Callable[[str], List[dict]],
+                archive: Sequence[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]],
+                                                            Dict[str, int], int]:
+    """One #520 reading's fresh units: its broad delivered-and-new rows in
+    fresh sessions whose reflex carried the rule in the full format.
+    Returns ``(rows, units, where whole/cut was read from, rows the delivery
+    judge has not answered yet)``."""
+    both = [r for r in source["columns"].get(mpr.BOTH) or [] if r["session_id"] in sessions]
+    cands = [r for r in both if r.get("new") and r.get("reflex") and r.get("judged", True)]
+    rows: List[Dict[str, Any]] = []
+    units: List[Dict[str, Any]] = []
+    sources: Dict[str, int] = {}
+    for r in sorted(cands, key=lambda r: r["session_id"]):
+        project = sessions[r["session_id"]]["project"]
+        ctx = bv.place(r, load(r["session_id"]), project)
+        reading = unit_reading(r, ctx, project, archive) if ctx else None
+        if reading is None:
+            continue
+        rows.append(r)
+        units.append({"id": bv.unit_id(r), "session_id": r["session_id"], "slug": r["slug"],
+                      "whole": reading["whole"], "source": reading["source"]})
+        sources[reading["source"]] = sources.get(reading["source"], 0) + 1
+        if reading["agrees"] is False:
+            sources["log and block disagree"] = sources.get("log and block disagree", 0) + 1
+    provisional = sum(1 for r in both if r.get("new") and r.get("reflex") and not r.get("judged", True))
+    return rows, units, sources, provisional
+
 
 def _iso(t: float) -> str:
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -607,6 +660,10 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
                      % (data["units"], data["rated"],
                         "; %d more wait for #520's delivery judge" % data["provisional"]
                         if data.get("provisional") else ""))
+        if data.get("units_loaded") is not None:
+            lines.append("  under #565's reading (Text B = what Claude Code loaded; the verdict's units): %d%s"
+                         % (data["units_loaded"], "; %d more wait for its delivery judge" % data["provisional_loaded"]
+                            if data.get("provisional_loaded") else ""))
         if data.get("sources"):
             lines.append("  whole/cut read from: %s" % ", ".join(
                 "%s %d" % kv for kv in sorted(data["sources"].items())))
@@ -621,11 +678,20 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
     res = data.get("results")
     if not res:
         return lines
-    for name, title in ((GROUNDED, "GROUNDED (#540's question: which reply is more consistent with where the "
-                                    "work went; primary since 2026-09-29)"),
-                        (PREFERENCE, "PREFERENCE (#527's question: which reply better serves; secondary, "
-                                     "comparable with #535)")):
-        lines += [""] + reading_lines(res[name], name, title, name == res["primary"])
+    natives = []
+    if data.get("results_loaded"):
+        natives.append(("loaded", data["results_loaded"], "UNITS: what Claude Code loaded (#565)"))
+    natives.append(("notes", res, "UNITS: plus the closest auto-memory notes (#543, as registered)"))
+    if not data.get("results_loaded"):
+        lines += ["", "the verdict reads #565's loaded reading, which #520 has not produced yet"]
+    for native, r, head in natives:
+        verdict = native == data.get("native_primary") and bool(data.get("results_loaded"))
+        lines += ["", "=== %s%s" % (head, "  <- the verdict" if verdict else "")]
+        for name, title in ((GROUNDED, "GROUNDED (#540's question: which reply is more consistent with where the "
+                                        "work went; primary since 2026-09-29)"),
+                            (PREFERENCE, "PREFERENCE (#527's question: which reply better serves; secondary, "
+                                         "comparable with #535)")):
+            lines += [""] + reading_lines(r[name], name, title, verdict and name == r["primary"])
     return lines
 
 
@@ -828,6 +894,7 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     if args.history:
         return history_main(args, cfg, vault, out, raters)
     pr_out, bv_out = out / "prevented-repeats", out / "broad-value"
+    pr_loaded = out / PR_LOADED_DIR
 
     # the log's fresh rows, kept before the hook rotates them away
     live_rows = fresh_rows(iter_rotated_rows(vault / ".mnemo" / "reflex-log.jsonl"))
@@ -863,40 +930,39 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
               % (state["date"], (state["date_at"] - now) / 86400), file=sys.stderr)
     if send_rate:
         pr_out.mkdir(parents=True, exist_ok=True)
-        _quiet(mpr.main, ["--since", LIVE, "--until", _iso(now - SETTLE_HOURS * 3600), "--projects", args.projects,
-                          "--claude-home", args.claude_home, "--vault", str(vault), "--out", str(pr_out),
-                          "--send", "--workers", str(args.workers), "--pause", str(args.pause)]
-               + (["--limit", str(args.limit)] if args.limit else [])
-               + [x for r in raters for x in ("--rater", r)], pr_out / "report.txt")
+        rate_argv = ["--since", LIVE, "--until", _iso(now - SETTLE_HOURS * 3600), "--projects", args.projects,
+                     "--claude-home", args.claude_home, "--vault", str(vault),
+                     "--send", "--workers", str(args.workers), "--pause", str(args.pause)] \
+            + (["--limit", str(args.limit)] if args.limit else []) + [x for r in raters for x in ("--rater", r)]
+        _quiet(mpr.main, rate_argv + ["--out", str(pr_out)], pr_out / "report.txt")
+        # #565: the same sessions again, Text B = what Claude Code loaded;
+        # the ratings and labels are the first run's, so only delivery is asked
+        pr_loaded.mkdir(parents=True, exist_ok=True)
+        for name in SHARED_RATINGS:
+            if (pr_out / name).is_file():
+                shutil.copy2(pr_out / name, pr_loaded / name)
+        _quiet(mpr.main, rate_argv + ["--out", str(pr_loaded), "--native", NATIVE_PRIMARY], pr_loaded / "report.txt")
 
-    # the fresh units, from #520's cache when there is one
+    # the fresh units, from #520's caches when there are some: the reading
+    # registered in #543 (notes) and #565's (loaded)
     source = mrc._read(pr_out / mpr.UNITS_NAME, None)
+    loaded_source = mrc._read(pr_loaded / mpr.UNITS_NAME, None)
     data: Dict[str, Any] = {"live": LIVE, "sessions": len(sessions), "sessions_with_full": with_full,
-                            "emissions": emissions,
+                            "emissions": emissions, "native_primary": NATIVE_PRIMARY,
                             "rows": {"log": len(live_rows), "archive": len(archive), "human": human_rows}}
     units: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
+    loaded_units: List[Dict[str, Any]] = []
+    loaded_rows: List[Dict[str, Any]] = []
     rated: List[str] = []
     if source is not None:
         rated = [s for s in source["rated"] if s in sessions]
-        both = [r for r in source["columns"].get(mpr.BOTH) or [] if r["session_id"] in sessions]
-        cands = [r for r in both if r.get("new") and r.get("reflex") and r.get("judged", True)]
-        sources: Dict[str, int] = {}
-        for r in sorted(cands, key=lambda r: r["session_id"]):
-            project = sessions[r["session_id"]]["project"]
-            ctx = bv.place(r, load(r["session_id"]), project)
-            reading = unit_reading(r, ctx, project, archive) if ctx else None
-            if reading is None:
-                continue
-            rows.append(r)
-            units.append({"id": bv.unit_id(r), "session_id": r["session_id"], "slug": r["slug"],
-                          "whole": reading["whole"], "source": reading["source"]})
-            sources[reading["source"]] = sources.get(reading["source"], 0) + 1
-            if reading["agrees"] is False:
-                sources["log and block disagree"] = sources.get("log and block disagree", 0) + 1
-        data.update(rated=len(rated), units=len(units), sources=sources,
-                    provisional=sum(1 for r in both if r.get("new") and r.get("reflex")
-                                    and not r.get("judged", True)))
+        rows, units, sources, provisional = fresh_units(source, sessions, load, archive)
+        data.update(rated=len(rated), units=len(units), sources=sources, provisional=provisional)
+    if loaded_source is not None:
+        loaded_rows, loaded_units, _, loaded_provisional = fresh_units(loaded_source, sessions, load, archive)
+        data.update(units_loaded=len(loaded_units), provisional_loaded=loaded_provisional)
+    # the due condition stays on the registered reading (#565)
     state = due(now, len(units) if source is not None else None)
     data["due"] = state
 
@@ -920,12 +986,14 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     else:
         data["projection"] = {"date": None, "how": "no full-format emission in a human session yet"}
 
-    # step 2, #527 on the fresh units
+    # step 2, #527 on the fresh units of either reading (#565: their union)
     if source is not None and units:
+        union_units = list(units) + [u for u in loaded_units if u["id"] not in {x["id"] for x in units}]
+        union_rows = list(rows) + [r for r in loaded_rows if bv.unit_id(r) not in {x["id"] for x in units}]
         mrc._write(out / FRESH_UNITS_NAME, {
             "since": LIVE, "rated": sorted(rated),
             "sessions": {s: source["sessions"][s] for s in sorted(rated)},
-            "columns": {mpr.BOTH: rows}})
+            "columns": {mpr.BOTH: union_rows}})
         send_arms = args.send and (state["due"] or args.force)
         if args.send and send_rate and not send_arms:
             print("refusing to answer and judge: %d fresh unit(s), the check needs %d (--force sends anyway)"
@@ -944,16 +1012,20 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
         g_out = out / GROUNDED_DIR
         g_out.mkdir(parents=True, exist_ok=True)
         work = mrc._read(g_out / "work.json", {})
-        for u in units:
+        for u in union_units:
             a = arms.get(u["id"])
             if a and a.get("measurable") and u["id"] not in work:
                 work[u["id"]] = work_after(load(u["session_id"]), a["i"])
         mrc._write(g_out / "work.json", work)
         answers = mrc._read(bv_out / "answers.json", {}).get(mrc.column("session-model", rl.ARM_SYSTEM), {})
         pairs = [(arms[u["id"]], answers.get(u["id"], {}).get(bv.WITH, []),
-                  answers.get(u["id"], {}).get(bv.WITHOUT, [])) for u in units if u["id"] in work]
+                  answers.get(u["id"], {}).get(bv.WITHOUT, [])) for u in union_units if u["id"] in work]
         grounded = judge_grounded(pairs, work, g_out, raters, send_opts(args, cfg) if send_arms else None)
+        # ``results`` is #543's registered reading; ``results_loaded`` is
+        # #565's, the verdict (``native_primary``) once #520 has run it
         data["results"] = both_readings(units, rated, arms, grounded, preference, raters)
+        if loaded_source is not None:
+            data["results_loaded"] = both_readings(loaded_units, rated, arms, grounded, preference, raters)
 
     mrc._write(out / "report.json", data)
     if args.json:
