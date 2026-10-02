@@ -150,6 +150,23 @@ def test_historical_yield_is_reflex_units_over_the_rules_the_reflex_delivered(tm
     assert tool.historical_yield(None, lambda p: []) is None
 
 
+def test_historical_yield_reads_the_str_path_520_stores_with_the_real_loader(tmp_path):
+    """#520's units file keeps each session's path as a string, and the dry
+    run hands ``historical_yield`` the briefing module's loader, which wants a
+    ``Path``: it raised ``'str' object has no attribute 'read_text'``."""
+    from mnemo.core.briefing import _load_jsonl_events
+
+    path = tmp_path / "s.jsonl"
+    events = _session("2026-09-21T10:00:00Z", "mnemo reflex context:\n• [[a]]: x (call …).")
+    path.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    source = {"rated": ["s"], "sessions": {"s": {"path": str(path)}},
+              "columns": {"both": [{"slug": "a", "new": True, "reflex": True}]}}
+
+    got = tool.historical_yield(source, _load_jsonl_events)
+
+    assert got == {"units": 1, "pairs": 1, "per_pair": 1.0}
+
+
 # --- the numbers -------------------------------------------------------------------------------
 
 def test_h_verdict_uses_the_bar_fixed_in_pr_543():
