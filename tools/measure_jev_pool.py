@@ -109,6 +109,19 @@ lacked units >= the baseline's + :data:`LIFT_PP`, precision (labelled +
 sampled) >= the baseline's, and p90 <= :data:`P90_BAR_MS` ms
 (:func:`verdict_lift`).
 
+First context run, 2026-10-03, the maintainer's vault: 2,342 of 3,877
+prompts carry context, 3,836 scored, 0 failed; ranks 1-10 labelled 68.2%.
+Dev chose pool 25 at 0.5. On test it reaches 41.5% of lacked units against
+the baseline's 33.3% (+8.2 pp, bar +10), at 31.2% precision (labelled 32.0%,
+sample 30.0% of 200) against the baseline's 31.6%; p90 515 ms. **VERDICT:
+FAIL (coverage < baseline + 10 pp; precision < baseline's).** The context
+does not move the frontier: in prompt mode, pool 10 at 0.5 already reaches
+45.4% on test at 29.6% labelled precision. Of the 156 lacked units prompt
+mode never ranked in the top 50, context ranks 30 (8 scored >= 0.5) and 126
+stay out; on the 320 units both modes scored, Jev's score moves by a median
++0.000 (mean +0.002). The previous message does not carry those rules'
+vocabulary, and Jev's verdict does not change with it.
+
 **Sending.** ``--send`` sends typed prompts and rule texts to TypeSafe, a
 third party, with the key ``mnemo rerank --setup`` stored; the maintainer runs
 it. ``--dry-run`` prints how many requests, their size and notional cost, and
