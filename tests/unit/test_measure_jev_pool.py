@@ -207,3 +207,82 @@ def test_sample_chunks_use_520s_shape_one_prompt_each():
     assert [c["rules"] for c in chunks] == [["a", "b"], ["c"]]
     assert chunks[0]["prompts"][0]["answered"] == "the agent said"
     assert all(len(c["prompts"]) == 1 for c in chunks)
+
+
+# --- #567: the agent's previous message --------------------------------------------------------
+
+def test_context_goes_only_to_a_short_prompt_with_a_previous_message():
+    short, prev = "can merge", "PR #12 is green; the migration adds a column."
+    assert mjp.query_text(short, prev, "prompt") == short
+    assert mjp.query_text(short, prev, "context") == short + "\n\n" + prev
+    long_prompt = "x" * mjp.CONTEXT_PROMPT_MAX
+    assert mjp.query_text(long_prompt, prev, "context") == long_prompt
+    assert mjp.query_text(short, "   ", "context") == short
+
+
+def test_the_context_is_the_end_of_the_previous_message_whitespace_collapsed():
+    prev = "start " + "word " * 400 + "the last line"
+    got = mjp.tail(prev)
+    assert len(got) == mjp.CONTEXT_TAIL and got.endswith("the last line") and "  " not in got
+
+
+def test_the_judge_state_keeps_the_shipped_field_and_adds_the_previous_message():
+    from mnemo.core.reflex import judge
+
+    assert mjp.judge_state("can merge", "PR green", "prompt") == judge.state("can merge")
+    got = mjp.judge_state("can merge", "PR green", "context")
+    assert got == dict(judge.state("can merge"), assistant_previous_message="PR green")
+    assert mjp.judge_state("y" * 500, "PR green", "context") == judge.state("y" * 500)
+
+
+class _Client:
+    def __init__(self, answers=None, exc=None):
+        self.answers, self.exc, self.calls = answers, exc, []
+
+    def __call__(self, state, questions):
+        self.calls.append((state, questions))
+        if self.exc:
+            raise self.exc
+        return {"answers": self.answers(questions)}
+
+
+def test_ask_state_sends_the_given_state_and_the_shipped_question_and_keeps_every_score():
+    from mnemo.core.reflex import judge
+
+    client = _Client(lambda qs: {k: {"noul": 0.123456 + i} for i, k in enumerate(qs)})
+    state = {"developer_message": "can merge", "assistant_previous_message": "PR green"}
+    row = mjp.ask_state(Path("."), {"timeoutSeconds": 5}, state, ["a", "empty", "b"],
+                        lambda s: "" if s == "empty" else "rule " + s, client)
+    assert row["status"] == "ok" and row["asked"] == 2 and row["scores"] == {"a": 0.1235, "b": 1.1235}
+    (sent, questions), = client.calls
+    assert sent == state and questions["r0"] == judge.question("rule a")
+
+
+def test_ask_state_reports_failures_as_statuses():
+    import socket
+
+    timeout = mjp.ask_state(Path("."), {"timeoutSeconds": 5}, {}, ["a"], lambda s: "rule", _Client(exc=socket.timeout()))
+    assert timeout["status"] == "timeout"
+    empty = mjp.ask_state(Path("."), {"timeoutSeconds": 5}, {}, ["a"], lambda s: "rule", _Client(lambda qs: {}))
+    assert empty["status"] == "error"
+
+
+def test_ask_state_without_a_key_sends_nothing(monkeypatch):
+    from mnemo.core.reflex import judge
+
+    monkeypatch.setattr(judge, "resolve_key", lambda settings: (None, "none"))
+    assert mjp.ask_state(Path("."), {}, {}, ["a"], lambda s: "rule")["status"] == "no_key"
+
+
+def test_567s_verdict_needs_ten_points_more_coverage_at_no_less_precision_and_the_latency_bar():
+    base = {"share": 0.33}
+    assert mjp.verdict_lift({"share": 0.44}, base, 0.32, 0.31, 900)["pass"]
+    failed = mjp.verdict_lift({"share": 0.42}, base, 0.30, 0.31, 1600)["failed"]
+    assert len(failed) == 3
+    assert "baseline precision not read (run #563's prompt mode first)" in \
+        mjp.verdict_lift({"share": 0.5}, base, 0.4, None, 900)["failed"]
+
+
+def test_the_dev_choice_takes_the_baselines_precision_as_its_bar():
+    rows = [_row(50, 0.4, 90, 0.25), _row(10, 0.5, 70, 0.33), _row(3, 0.4, 60, 0.40)]
+    assert (mjp.choose(rows, 0.32)["pool"], mjp.choose(rows, 0.32)["at"]) == (10, 0.5)

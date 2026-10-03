@@ -6,6 +6,7 @@ Usage:
         [--workers W] [--pause S] [--limit N]
     PYTHONPATH=src python3 tools/measure_jev_pool.py               # the report, local
     PYTHONPATH=src python3 tools/measure_jev_pool.py --json        # the same as data
+    PYTHONPATH=src python3 tools/measure_jev_pool.py --query context [--dry-run|--send]   # #567
 
 The reflex judge (#412) sees only the top :data:`SHIPPED_POOL` rules of the
 ranking. #455 found 20% of the prompts holding an on-point rule hold it only at
@@ -87,6 +88,40 @@ coverage by under 1 pp. The shipped config replayed (pool 3, 0.4) already
 reaches 33.3% test / 41.9% dev against #520's recorded 18.6% / 27.0%, because
 the recorded window mixes the lexical gate before #412 with the judge after.
 
+**#567: the agent's previous message (``--query context``).** On #563's
+replay the lacked rules are lost in two places: 28% never reach the top 50,
+almost all at a short continuation prompt (median 7.5 words), and 21% are
+seen and scored under 0.4. #520's raters judged with the agent's previous
+message in view; the ranking and the judge did not. In context mode a prompt
+under :data:`CONTEXT_PROMPT_MAX` characters is ranked as the prompt plus the
+last :data:`CONTEXT_TAIL` characters of the agent's previous message, and the
+judge's state carries that tail as ``assistant_previous_message`` beside the
+shipped ``developer_message`` (the question and rule text are unchanged,
+:func:`ask_state`). A longer prompt is read as before, so the modes differ
+only where the measured loss is. The hook could read the previous message
+from ``transcript_path``. Own cache (:data:`OUT_DIR_CONTEXT`), same population,
+labels, split, replay and rater sample. **Bar (pre-registered in #567):** the
+baseline is the shipped config (:data:`BASELINE`) replayed in prompt mode from
+#563's cache; dev chooses among context configs whose labelled precision is at
+least the baseline's dev labelled precision (highest lacked coverage, ties to
+the smaller pool, then the higher bar); on test it passes when coverage of
+lacked units >= the baseline's + :data:`LIFT_PP`, precision (labelled +
+sampled) >= the baseline's, and p90 <= :data:`P90_BAR_MS` ms
+(:func:`verdict_lift`).
+
+First context run, 2026-10-03, the maintainer's vault: 2,342 of 3,877
+prompts carry context, 3,836 scored, 0 failed; ranks 1-10 labelled 68.2%.
+Dev chose pool 25 at 0.5. On test it reaches 41.5% of lacked units against
+the baseline's 33.3% (+8.2 pp, bar +10), at 31.2% precision (labelled 32.0%,
+sample 30.0% of 200) against the baseline's 31.6%; p90 515 ms. **VERDICT:
+FAIL (coverage < baseline + 10 pp; precision < baseline's).** The context
+does not move the frontier: in prompt mode, pool 10 at 0.5 already reaches
+45.4% on test at 29.6% labelled precision. Of the 156 lacked units prompt
+mode never ranked in the top 50, context ranks 30 (8 scored >= 0.5) and 126
+stay out; on the 320 units both modes scored, Jev's score moves by a median
++0.000 (mean +0.002). The previous message does not carry those rules'
+vocabulary, and Jev's verdict does not change with it.
+
 **Sending.** ``--send`` sends typed prompts and rule texts to TypeSafe, a
 third party, with the key ``mnemo rerank --setup`` stored; the maintainer runs
 it. ``--dry-run`` prints how many requests, their size and notional cost, and
@@ -154,6 +189,19 @@ PAUSE_SECONDS = 0.5
 JEV_USD_PER_M = 0.042
 CHARS_PER_TOKEN = 4
 
+#: #567: what the ranking and the judge read. ``prompt`` is #563's reading;
+#: ``context`` adds the tail of the agent's previous message to a short prompt.
+QUERY_MODES = ("prompt", "context")
+OUT_DIR_CONTEXT = "jev-pool-context"
+#: A prompt shorter than this gets the context; a longer one is left as it is.
+CONTEXT_PROMPT_MAX = 400
+#: How much of the agent's previous message, from its end.
+CONTEXT_TAIL = 750
+#: #567's baseline: the shipped config (pool, bar), replayed in prompt mode.
+BASELINE = (SHIPPED_POOL, SHIPPED_AT)
+#: #567's bar: coverage of lacked units at least this far above the baseline's.
+LIFT_PP = 0.10
+
 DEV, TEST = "dev", "test"
 
 
@@ -181,6 +229,34 @@ def labels_from(chunks: Dict[str, List[Dict[str, Any]]],
                 shown[it["key"]] = set(ch["rules"])
                 named[it["key"]] = set.intersection(*[set(p.get(it["key"]) or []) for p in per])
     return shown, named
+
+
+def with_context(prompt: str, previous: str, mode: str) -> bool:
+    """Whether #567's context applies: context mode, a short prompt, and a
+    previous message to take it from."""
+    return mode == "context" and len(prompt or "") < CONTEXT_PROMPT_MAX and bool((previous or "").strip())
+
+
+def tail(text: str, n: int = CONTEXT_TAIL) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= n else text[-n:]
+
+
+def query_text(prompt: str, previous: str, mode: str) -> str:
+    """What the ranking reads: the prompt, plus (#567, short prompts) the end
+    of the agent's previous message."""
+    return "%s\n\n%s" % (prompt, tail(previous)) if with_context(prompt, previous, mode) else prompt
+
+
+def judge_state(prompt: str, previous: str, mode: str) -> Dict[str, str]:
+    """What the judge reads: the shipped state, plus (#567, short prompts)
+    ``assistant_previous_message``. The question is unchanged."""
+    from mnemo.core.reflex import judge
+
+    out = dict(judge.state(prompt))
+    if with_context(prompt, previous, mode):
+        out["assistant_previous_message"] = tail(previous)
+    return out
 
 
 def picks(scores: Dict[str, float], ranking: Sequence[str], pool: int, at: float) -> List[str]:
@@ -300,6 +376,27 @@ def verdict(test_cov: Dict[str, Any], baseline: Dict[str, Any], prec: Optional[f
     return {"pass": not failed, "failed": failed}
 
 
+def verdict_lift(test_cov: Dict[str, Any], base_cov: Dict[str, Any], prec: Optional[float],
+                 base_prec: Optional[float], p90: Optional[float]) -> Dict[str, Any]:
+    """#567's bar: coverage at least :data:`LIFT_PP` above the baseline's, at
+    no less precision, within the latency bar."""
+    failed = []
+    if base_cov.get("share") is None or test_cov.get("share") is None \
+            or test_cov["share"] < base_cov["share"] + LIFT_PP:
+        failed.append("coverage < baseline + %.0f pp" % (100 * LIFT_PP))
+    if prec is None:
+        failed.append("precision not read yet (rater sample pending)")
+    elif base_prec is None:
+        failed.append("baseline precision not read (run #563's prompt mode first)")
+    elif prec < base_prec:
+        failed.append("precision < baseline's")
+    if p90 is None:
+        failed.append("latency not read yet")
+    elif p90 > P90_BAR_MS:
+        failed.append("p90 latency > %d ms" % P90_BAR_MS)
+    return {"pass": not failed, "failed": failed}
+
+
 def score_drift(latency: Dict[str, Dict[str, Any]], scores: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Mean |p(K) - p(DEPTH)| over pairs scored in both requests: whether a
     rule's probability depends on the company it is asked in."""
@@ -352,9 +449,49 @@ def run_requests(jobs: Sequence[Tuple[str, Callable[[], Dict[str, Any]]]], on_do
     return state
 
 
-def jev_call(vault: Path, settings: Dict[str, Any], prompt: Dict[str, Any], slugs: Sequence[str],
-             read_text: Callable[[str], str]) -> Callable[[], Dict[str, Any]]:
+def ask_state(vault: Path, settings: Dict[str, Any], state: Dict[str, str], slugs: Sequence[str],
+              read_text: Callable[[str], str], client: Any = None) -> Dict[str, Any]:
+    """``judge.ask`` with a given state (#567): the same key, client, question,
+    rule text, wall and failure statuses; every probability is kept."""
+    from mnemo.core.mcp import rerank
     from mnemo.core.reflex import judge
+
+    started = time.time()
+    row: Dict[str, Any] = {"status": "ok", "ms": 0, "asked": 0, "scores": {}}
+    timeout = float(settings.get("timeoutSeconds") or judge.DEFAULT_TIMEOUT_S)
+    if client is None:
+        key, _source = judge.resolve_key(settings)
+        if not key:
+            return dict(row, status="no_key", ms=judge._elapsed_ms(started))
+        client = rerank.typesafe_client(key, model=str(settings.get("model") or judge.DEFAULT_MODEL),
+                                        timeout=timeout)
+    try:
+        texts = {s: read_text(s) for s in slugs}
+        asked = [s for s in slugs if texts.get(s)]
+        row["asked"] = len(asked)
+        if not asked:
+            return dict(row, ms=judge._elapsed_ms(started))
+        out = judge.within(lambda: client(state, {"r%d" % i: judge.question(texts[s])
+                                                  for i, s in enumerate(asked)}), timeout)
+    except BaseException as exc:  # noqa: BLE001 — a failure is a status, as in judge.ask
+        return dict(row, status=judge._failure(exc), ms=judge._elapsed_ms(started))
+    answers = (out or {}).get("answers") or {}
+    for i, slug in enumerate(asked):
+        value = (answers.get("r%d" % i) or {}).get("noul")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            row["scores"][slug] = round(float(value), 4)
+    if not row["scores"]:
+        row["status"] = "error"
+    return dict(row, ms=judge._elapsed_ms(started))
+
+
+def jev_call(vault: Path, settings: Dict[str, Any], prompt: Dict[str, Any], slugs: Sequence[str],
+             read_text: Callable[[str], str], mode: str = "prompt") -> Callable[[], Dict[str, Any]]:
+    from mnemo.core.reflex import judge
+
+    if mode == "context":
+        state = judge_state(prompt["text"], prompt.get("previous") or "", mode)
+        return lambda: ask_state(vault, settings, state, slugs, read_text)
 
     def call() -> Dict[str, Any]:
         _picks, info = judge.ask(vault, prompt=prompt["text"], slugs=list(slugs), chosen_settings=settings,
@@ -364,10 +501,11 @@ def jev_call(vault: Path, settings: Dict[str, Any], prompt: Dict[str, Any], slug
     return call
 
 
-def request_chars(prompt: Dict[str, Any], slugs: Sequence[str], read_text: Callable[[str], str]) -> int:
+def request_chars(prompt: Dict[str, Any], slugs: Sequence[str], read_text: Callable[[str], str],
+                  mode: str = "prompt") -> int:
     from mnemo.core.reflex import judge
 
-    body = json.dumps(judge.state(prompt["text"])) + "".join(
+    body = json.dumps(judge_state(prompt["text"], prompt.get("previous") or "", mode)) + "".join(
         json.dumps(judge.question(read_text(s))) for s in slugs if read_text(s))
     return len(body)
 
@@ -417,7 +555,8 @@ def sample_labels(chunks: Sequence[Dict[str, Any]], answers: Dict[str, Dict[str,
 
 # --- build ----------------------------------------------------------------------------------
 
-def build(vault: Path, units_file: Path, projects: Path, claude_home: Path, min_tokens: int) -> Dict[str, Any]:
+def build(vault: Path, units_file: Path, projects: Path, claude_home: Path, min_tokens: int,
+          mode: str = "prompt") -> Dict[str, Any]:
     """Every typed prompt of #520's rated sessions still on disk, ranked
     :data:`DEPTH` deep as of the prompt. Frozen by the caller."""
     from mnemo.core.briefing import _load_jsonl_events
@@ -434,12 +573,15 @@ def build(vault: Path, units_file: Path, projects: Path, claude_home: Path, min_
             continue
         for p in mpr.walk(_load_jsonl_events(path))["prompts"]:
             pool = rules.pool(meta.get("project") or "", p["ts"], sid)
+            previous = tail(p.get("answered") or "")
+            query = query_text(p["text"], previous, mode)
             out.append({"key": "%s#%d" % (sid, p["i"]), "session_id": sid, "i": p["i"], "ts": p["ts"],
                         "project": meta.get("project") or "", "text": p["text"],
-                        "answered": mpr._tail(p.get("answered") or "", mpr.CONTEXT_CHARS),
-                        "tokens_ok": len(set(tokenize_query(p["text"]))) >= min_tokens,
-                        "ranking": rules.top(p["text"], pool, DEPTH)})
-    return {"units_file": str(units_file), "depth": DEPTH, "min_tokens": min_tokens, "prompts": out}
+                        "answered": mpr._tail(p.get("answered") or "", mpr.CONTEXT_CHARS), "previous": previous,
+                        "context": with_context(p["text"], previous, mode),
+                        "tokens_ok": len(set(tokenize_query(query))) >= min_tokens,
+                        "ranking": rules.top(query, pool, DEPTH)})
+    return {"units_file": str(units_file), "depth": DEPTH, "min_tokens": min_tokens, "query": mode, "prompts": out}
 
 
 # --- report ---------------------------------------------------------------------------------
@@ -474,19 +616,27 @@ def _p(x: Optional[float]) -> str:
 
 
 def report_lines(data: Dict[str, Any]) -> List[str]:
-    lines = ["#563: %d prompts in %d sessions (%s); %d relevant units, %d the native memory lacked"
-             % (data["prompts"], data["sessions"], data["units_file"], data["units"], data["lacked"]),
+    lines = ["%s: %d prompts in %d sessions (%s); %d relevant units, %d the native memory lacked"
+             % ("#567" if data.get("query") == "context" else "#563", data["prompts"], data["sessions"],
+                data["units_file"], data["units"], data["lacked"]),
              "Jev: %d of %d scorable prompts scored, %d pending; ranks 1-10 labelled by #520: %s"
              % (data["scored"], data["scorable"], data["pending"], _p(data["top10_labelled"]))]
+    if data.get("query") == "context":
+        lines.append("query: context (#567): %d of %d prompts (under %d chars) carry the last %d chars of the agent's "
+                     "previous message; baseline: pool %d at %.1f in prompt mode (#563's cache)"
+                     % (data.get("context_prompts", 0), data["prompts"], CONTEXT_PROMPT_MAX, CONTEXT_TAIL,
+                        BASELINE[0], BASELINE[1]))
     for split in (DEV, TEST):
         part = data["splits"][split]
         lines += ["", "%s (%d sessions): #520 recorded delivery on lacked units %s (%d/%d)"
                   % (split, part["sessions"], _p(part["recorded"]["share"]), part["recorded"]["k"],
                      part["recorded"]["n"]),
                   "  pool  bar   lacked   (reflex only)  relevant  precision(lab)  unlab   inj/prompt  inj/session"]
-        for r in part["rows"]:
+        base = ((data.get("baseline") or {}).get("rows") or {}).get(split)
+        rows = ([dict(base, pool="base")] if base else []) + part["rows"]
+        for r in rows:
             pr = r["precision"]
-            lines.append("  %4d  %.1f  %7s  (%7s)      %7s   %7s         %6s   %5.2f       %5.1f" % (
+            lines.append("  %4s  %.1f  %7s  (%7s)      %7s   %7s         %6s   %5.2f       %5.1f" % (
                 r["pool"], r["at"], _p(r["coverage_lacked"]["share"]), _p(r["reflex_only_lacked"]["share"]),
                 _p(r["coverage_relevant"]["share"]), _p(pr.get("labelled_precision")), _p(pr.get("unlabelled_share")),
                 r["load"]["per_prompt"] or 0.0, r["load"]["per_session"] or 0.0))
@@ -504,6 +654,18 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
                   % _p(PRECISION_BAR)]
         return lines
     t = data["test_read"]
+    if data.get("query") == "context":
+        bc = t.get("baseline_coverage") or {}
+        lines += ["", "chosen on dev: pool %d, bar %.1f" % (ch["pool"], ch["at"]),
+                  "test read: lacked coverage %s vs baseline %s + %.0f pp; precision %s (labelled %s, unlabelled %s, "
+                  "sample %s of %s) vs baseline %s; p90 %s ms"
+                  % (_p(t["coverage"]["share"]), _p(bc.get("share")), 100 * LIFT_PP,
+                     _p(t["precision"].get("precision")), _p(t["precision"].get("labelled_precision")),
+                     t["precision"].get("unlabelled"), _p(t["precision"].get("sample_rate")),
+                     t["precision"].get("sample_n", 0), _p(t.get("baseline_precision")), t["p90"]),
+                  "VERDICT: %s%s" % ("PASS" if t["verdict"]["pass"] else "FAIL",
+                                     "" if t["verdict"]["pass"] else " (" + "; ".join(t["verdict"]["failed"]) + ")")]
+        return lines
     lines += ["", "chosen on dev: pool %d, bar %.1f" % (ch["pool"], ch["at"]),
               "test read: lacked coverage %s %s vs %.0fx recorded %s; precision %s (labelled %s, unlabelled %s, "
               "sample %s of %s); p90 %s ms"
@@ -533,15 +695,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--workers", type=int, default=WORKERS)
     ap.add_argument("--pause", type=float, default=PAUSE_SECONDS)
     ap.add_argument("--limit", type=int, default=None, help="with --send: at most N Jev requests this run")
+    ap.add_argument("--query", choices=QUERY_MODES, default=QUERY_MODES[0],
+                    help="what the ranking and the judge read: 'prompt' (#563) or 'context' (#567: a short prompt "
+                         "plus the end of the agent's previous message)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    mode = args.query
 
     cfg = config.load_config()
     vault = Path(args.vault).expanduser() if args.vault else paths.vault_root(cfg)
     src = vault / ".mnemo" / "prevented-repeats"
     units_file = Path(args.units).expanduser() if args.units else src / mpr.UNITS_NAME
     labels_dir = units_file.parent
-    out = Path(args.out).expanduser() if args.out else vault / ".mnemo" / OUT_DIR
+    out = Path(args.out).expanduser() if args.out else vault / ".mnemo" / (
+        OUT_DIR if mode == "prompt" else OUT_DIR_CONTEXT)
     out.mkdir(parents=True, exist_ok=True)
     reflex_cfg = cfg.get("reflex") or {}
     cap = int(reflex_cfg.get("maxEmissionsPerSession", 10))
@@ -549,8 +716,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     frozen = mrc._read(out / PROMPTS_NAME, None)
     if frozen is None:
-        frozen = build(vault, units_file, Path(args.projects), Path(args.claude_home), min_tokens)
+        frozen = build(vault, units_file, Path(args.projects), Path(args.claude_home), min_tokens, mode)
         mrc._write(out / PROMPTS_NAME, frozen)
+    if frozen.get("query", "prompt") != mode:
+        raise SystemExit("error: %s was built in %s mode, not %s; use another --out"
+                         % (out / PROMPTS_NAME, frozen.get("query", "prompt"), mode))
     prompts = frozen["prompts"]
     by_key = {p["key"]: p for p in prompts}
     keep = {p["session_id"] for p in prompts}
@@ -576,8 +746,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return reads[project]
 
     if args.dry_run:
-        chars = [request_chars(p, p["ranking"], read_text(p["project"])) for p in pending]
-        chars += [request_chars(p, p["ranking"][:k], read_text(p["project"])) for p, k in lat_jobs]
+        chars = [request_chars(p, p["ranking"], read_text(p["project"]), mode) for p in pending]
+        chars += [request_chars(p, p["ranking"][:k], read_text(p["project"]), mode) for p, k in lat_jobs]
         tokens = sum(chars) / CHARS_PER_TOKEN
         settings = judge.settings(cfg)
         print("would send %d Jev requests (%d scoring at K=%d, %d latency) to TypeSafe model %s; "
@@ -588,15 +758,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             p = pending[0]
             print("one request: the typed prompt (%d chars, sent up to %d) and %d rule texts, e.g. %s"
                   % (len(p["text"]), judge.PROMPT_CHARS, len(p["ranking"]), ", ".join(p["ranking"][:3])))
+        if mode == "context":
+            print("context mode: %d of %d prompts carry the end of the agent's previous message"
+                  % (sum(1 for p in prompts if p.get("context")), len(prompts)))
         print("then: a rater sample of up to %d unlabelled test pairs, %s, through core.llm (Max-plan usage)"
               % (SAMPLE_MAX, " + ".join(raters)))
         return 0
 
     if args.send:
         settings = dict(judge.settings(cfg), timeoutSeconds=MEASURE_TIMEOUT_S, injectAt=0.0)
-        jobs = [(p["key"], jev_call(vault, settings, p, p["ranking"], read_text(p["project"]))) for p in pending]
-        jobs += [("%s@%d" % (p["key"], k), jev_call(vault, settings, p, p["ranking"][:k], read_text(p["project"])))
-                 for p, k in lat_jobs]
+        jobs = [(p["key"], jev_call(vault, settings, p, p["ranking"], read_text(p["project"]), mode))
+                for p in pending]
+        jobs += [("%s@%d" % (p["key"], k), jev_call(vault, settings, p, p["ranking"][:k], read_text(p["project"]),
+                                                    mode)) for p, k in lat_jobs]
         if args.limit:
             jobs = jobs[:args.limit]
 
@@ -617,7 +791,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     data: Dict[str, Any] = {"units_file": str(units_file), "prompts": len(prompts), "sessions": len(keep),
                             "units": len(units), "lacked": sum(1 for u in units if not u.get("redundant")),
                             "scorable": len(scorable), "scored": len(scorable) - len(pending),
-                            "pending": len(pending), "splits": {}}
+                            "pending": len(pending), "splits": {}, "query": mode,
+                            "context_prompts": sum(1 for p in prompts if p.get("context"))}
     top10 = [(p["key"], s) for p in prompts for s in p["ranking"][:10]]
     data["top10_labelled"] = sum(1 for k, s in top10 if s in shown.get(k, set())) / len(top10) if top10 else None
     for split in (DEV, TEST):
@@ -635,9 +810,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     data["latency"] = {k: latency_summary(v) for k, v in lat.items()}
     data["drift"] = score_drift(latency, scores)
 
+    # #567: the shipped config replayed in prompt mode, from #563's cache
+    base_rows: Dict[str, Optional[Dict[str, Any]]] = {DEV: None, TEST: None}
+    if mode == "context":
+        base_dir = vault / ".mnemo" / OUT_DIR
+        base_frozen = mrc._read(base_dir / PROMPTS_NAME, None)
+        base_scores = mrc._read(base_dir / SCORES_NAME, {})
+        if base_frozen is not None and base_scores:
+            for split in (DEV, TEST):
+                ps = [p for p in base_frozen["prompts"] if split_of(p["session_id"]) == split]
+                us = [u for u in units if split_of(u["session_id"]) == split]
+                base_rows[split] = rows_for(ps, us, base_scores, shown, named, cap, only=BASELINE)[0]
+        data["baseline"] = {"pool": BASELINE[0], "at": BASELINE[1], "rows": base_rows}
     choice = mrc._read(out / CHOICE_NAME, None)
-    if choice is None and not pending:
-        best = choose(data["splits"][DEV]["rows"])
+    if choice is None and not pending and (mode == "prompt" or base_rows[DEV] is not None):
+        bar = PRECISION_BAR if mode == "prompt" else (
+            base_rows[DEV]["precision"].get("labelled_precision") or 0.0)
+        best = choose(data["splits"][DEV]["rows"], bar)
         if best is not None:
             choice = {"pool": best["pool"], "at": best["at"]}
             mrc._write(out / CHOICE_NAME, choice)
@@ -674,6 +863,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         data["test_read"] = {"coverage": row["coverage_lacked"], "recorded": rec, "precision": row["precision"],
                              "p90": p90, "sample_pending": len(frozen_sample["pairs"]) - len(sample),
                              "verdict": verdict(row["coverage_lacked"], rec, row["precision"].get("precision"), p90)}
+        if mode == "context":
+            base = base_rows[TEST] or {}
+            bp = base.get("precision") or {}
+            base_prec = bp.get("precision", bp.get("labelled_precision"))
+            data["test_read"].update(baseline_coverage=base.get("coverage_lacked") or {},
+                                     baseline_precision=base_prec,
+                                     verdict=verdict_lift(row["coverage_lacked"], base.get("coverage_lacked") or {},
+                                                          row["precision"].get("precision"), base_prec, p90))
     mrc._write(out / REPORT_NAME, data)
     print(json.dumps(data, indent=1, default=str) if args.json else "\n".join(report_lines(data)))
     return 0
