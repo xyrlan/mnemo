@@ -60,6 +60,7 @@ def _scan(args: argparse.Namespace, vault):
         min_children=int(cfg.get("minChildren", 2)),
         max_shape_repos=int(cfg.get("maxShapeRepos", 2)),
         ledger_rows=P.ledger_rows(vault),
+        cache=P.transcripts_cache_path(vault),
     )
     return everything, repo
 

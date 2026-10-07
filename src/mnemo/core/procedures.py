@@ -62,6 +62,7 @@ measure_rediscovered_procedures.py --rejected``):
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -95,6 +96,9 @@ CACHE_REL = ".mnemo/procedure-candidates.json"
 #: Touched *before* the refresh is spawned, so a scan that dies does not
 #: get retried on every session start for ever.
 SCAN_MARKER_REL = ".mnemo/procedure-scan.last"
+#: What :func:`scan` read out of each transcript, so the next scan re-reads
+#: only the ones that changed (#571). Safe to delete: the next scan rebuilds it.
+TRANSCRIPTS_CACHE_REL = ".mnemo/procedure-transcripts.json"
 
 #: Statement separators. A pipe counts: ``cargo test | tail`` runs one command.
 _STATEMENT = re.compile(r"(?:&&|\|\||;|\n|\|)")
@@ -232,7 +236,9 @@ def _cwd_of(path: str) -> Optional[str]:
     return None
 
 
-def dispatch_transcripts(projects: str) -> List[Tuple[str, str]]:
+def dispatch_transcripts(
+    projects: str, *, memo: Optional["_TranscriptCache"] = None
+) -> List[Tuple[str, str]]:
     """``(transcript, cwd)`` for every child that ran in a dispatch worktree.
 
     The same population ``tools/measure_child_procedures.py`` reads: named by
@@ -242,10 +248,11 @@ def dispatch_transcripts(projects: str) -> List[Tuple[str, str]]:
     """
     from mnemo.core.dispatch import issue_for_cwd
 
+    memo = memo or _TranscriptCache(None)
     out: List[Tuple[str, str]] = []
     for directory in sorted(glob.glob(os.path.join(projects, "*"))):
         for path in sorted(glob.glob(os.path.join(directory, "*.jsonl"))):
-            cwd = _cwd_of(path)
+            cwd = memo.get(path, "cwd", lambda: _cwd_of(path))
             if cwd and issue_for_cwd(cwd) is not None and not is_test_tree(cwd):
                 out.append((path, cwd))
     return out
@@ -370,6 +377,98 @@ def _first_day(path: str) -> str:
     return ""
 
 
+def transcripts_cache_path(vault_root: Path) -> Path:
+    return Path(vault_root) / TRANSCRIPTS_CACHE_REL
+
+
+def _reader_fingerprint() -> Optional[str]:
+    """A hash of the code that turns a transcript into runs, or ``None``.
+
+    Cached runs are only as right as the parser that produced them, so a
+    change to this module or to the quote/heredoc masking it borrows starts
+    the cache over — without anyone having to remember a version bump.
+    ``None`` (the source cannot be read) turns the cache off.
+    """
+    from mnemo.core.activity import exploration
+
+    digest = hashlib.sha256()
+    try:
+        for source in (__file__, exploration.__file__):
+            digest.update(Path(source).read_bytes())
+    except (OSError, TypeError):
+        return None
+    return digest.hexdigest()[:16]
+
+
+class _TranscriptCache:
+    """What one scan read from each transcript, kept for the next (#571).
+
+    The doctor row re-read every child transcript on every run: 767 of them,
+    392k JSON decodes, 8.7 s of a 19 s ``mnemo doctor``. An entry is keyed on
+    the transcript's path, size and mtime — Claude Code appends to a
+    transcript, so one that grew is re-read and one that did not is not — and
+    the file on :func:`_reader_fingerprint`. A missing, unreadable or foreign
+    file is an empty cache, never an error; with *path* ``None`` it caches
+    nothing and every value is computed.
+    """
+
+    def __init__(self, path: Optional[Path]) -> None:
+        self.path = path
+        self.fingerprint = _reader_fingerprint() if path is not None else None
+        self.entries: Dict[str, Dict[str, Any]] = {}
+        self.seen: Set[str] = set()
+        self.dirty = False
+        if self.path is None or self.fingerprint is None:
+            self.path = None
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — a bad cache is an empty one
+            return
+        if (isinstance(raw, dict) and raw.get("reader") == self.fingerprint
+                and isinstance(raw.get("transcripts"), dict)):
+            self.entries = raw["transcripts"]
+
+    def get(self, transcript: str, field: str, compute: Any) -> Any:
+        """*field* of *transcript*: cached if the file is unchanged, else ``compute()``."""
+        if self.path is None:
+            return compute()
+        try:
+            stat = os.stat(transcript)
+        except OSError:
+            return compute()
+        stamp = [stat.st_size, stat.st_mtime_ns]
+        self.seen.add(transcript)
+        entry = self.entries.get(transcript)
+        if not isinstance(entry, dict) or entry.get("stamp") != stamp:
+            entry = self.entries[transcript] = {"stamp": stamp}
+            self.dirty = True
+        if field not in entry:
+            entry[field] = compute()
+            self.dirty = True
+        return entry[field]
+
+    def save(self) -> None:
+        """Write the cache back, dropping transcripts that are gone. Never raises."""
+        if self.path is None:
+            return
+        try:
+            for transcript in [t for t in self.entries if t not in self.seen]:
+                if not os.path.exists(transcript):
+                    del self.entries[transcript]
+                    self.dirty = True
+            if not self.dirty:
+                return
+            from mnemo.core.atomic import atomic_write_bytes
+
+            payload = {"reader": self.fingerprint, "transcripts": self.entries}
+            atomic_write_bytes(self.path, json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            self.dirty = False
+        except Exception:  # noqa: BLE001 — the scan's answer does not depend on it
+            return
+
+
 def verdicts(runs: Sequence[Dict[str, str]]) -> Dict[str, str]:
     """``{carrier: "rediscovered" | "kept" | "never"}`` over one shape's runs.
 
@@ -411,18 +510,28 @@ def scan(
     repo: Optional[str] = None,
     kind: str = ENV,
     ledger_rows: Optional[Iterable[Dict[str, Any]]] = None,
+    cache: Optional[Path] = None,
 ) -> List[Candidate]:
     """Every candidate the transcripts under *projects* support, best first.
 
     *repo* narrows the result, never the population: shape ubiquity is a fact
     about every repo's children, so a scan of one repo alone would call ``git
     log`` that repo's own procedure.
+
+    *cache* (:func:`transcripts_cache_path`) keeps what each transcript read
+    as, so the next scan re-reads only the transcripts that changed. The
+    result is the same with or without it.
     """
+    memo = _TranscriptCache(cache)
     children: List[Tuple[str, str, str, str, Dict[str, List[Dict[str, str]]]]] = []
-    for path, cwd in dispatch_transcripts(projects):
+    for path, cwd in dispatch_transcripts(projects, memo=memo):
         name = os.path.basename(cwd.rstrip("/"))
-        children.append((fold_repo(name), name, cwd,
-                         _first_day(path), _runs_by_shape(path, kind)))
+        children.append((
+            fold_repo(name), name, cwd,
+            memo.get(path, "day", lambda: _first_day(path)),
+            memo.get(path, f"runs:{kind}", lambda: _runs_by_shape(path, kind)),
+        ))
+    memo.save()
 
     shape_repos: Dict[str, Set[str]] = defaultdict(set)
     shape_children: Dict[Tuple[str, str], int] = Counter()
