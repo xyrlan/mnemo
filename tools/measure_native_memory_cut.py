@@ -92,7 +92,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set,
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mnemo.core import mirror  # noqa: E402
+from mnemo.core import mirror, native_memory  # noqa: E402
 from mnemo.core.backfill.origin import is_backfill_frontmatter  # noqa: E402
 from mnemo.core.filters import parse_frontmatter  # noqa: E402
 from mnemo.core.hook_guard import is_throwaway  # noqa: E402
@@ -103,9 +103,8 @@ from mnemo.core.log_utils import iter_rotated_rows  # noqa: E402
 LIVE = "2026-09-28T23:09:00Z"
 #: Claude Code's load limits for ``MEMORY.md``: 200 lines or 25KB, whichever
 #: comes first; the 25KB measured as characters (see the module docstring).
-LINE_LIMIT = 200
-CHAR_LIMIT = 25_000
-INDEX = "MEMORY.md"
+#: Shared with the doctor's check (#573).
+LINE_LIMIT, CHAR_LIMIT, INDEX = native_memory.LINE_LIMIT, native_memory.CHAR_LIMIT, native_memory.INDEX
 #: #545's archive of the reflex rows the log has since rotated away.
 ARCHIVE = Path("full-body-fresh") / "reflex-rows.jsonl"
 #: The line Claude Code appends under a cut index.
@@ -130,17 +129,7 @@ AgentOf = Callable[[str], str]
 
 # --- the native index ----------------------------------------------------------------------
 
-def loaded_lines(text: str, *, line_limit: int = LINE_LIMIT, char_limit: int = CHAR_LIMIT) -> int:
-    """How many whole lines of an index Claude Code loads: the most lines,
-    at most ``line_limit``, whose text joined by newlines is at most
-    ``char_limit`` characters."""
-    lines = text.splitlines()
-    size = -1
-    for n, line in enumerate(lines[:line_limit], 1):
-        size += len(line) + 1
-        if size > char_limit:
-            return n - 1
-    return min(len(lines), line_limit)
+loaded_lines = native_memory.loaded_lines
 
 
 def _target(link: str) -> Optional[str]:
