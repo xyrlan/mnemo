@@ -103,10 +103,10 @@ def test_provenance_fields_redact_home_and_private_names(tmp_path: Path, repo: P
                         vault=vault, blind_spots=["skipped 3", None], root=repo, now=at)
 
     assert p["tool"] == "measure_x"
-    assert p["argv"] == ["--projects", "~/proj-a", "--json"]
+    assert p["argv"] == ["--projects", "~" + os.sep + "proj-a", "--json"]
     assert p["at"] == "2026-10-07T12:00:00Z"
     assert p["python"].count(".") == 2
-    assert p["vault"]["path"] == "~/vault" and p["vault"]["pages"] == 1
+    assert p["vault"]["path"] == "~" + os.sep + "vault" and p["vault"]["pages"] == 1
     assert p["blind_spots"] == ["skipped 3"]
     assert p["mnemo"] is None or "mnemo" in p["mnemo"]
     assert str(home) not in json.dumps(p)
