@@ -113,3 +113,31 @@ def test_the_row_is_registered_in_doctor() -> None:
     from mnemo.cli.commands.doctor import DOCTOR_CHECKS
 
     assert ("helper_processes", hp._doctor_check_helper_processes) in DOCTOR_CHECKS
+
+
+def test_the_suite_never_reads_the_host_process_table(monkeypatch, tmp_path, capsys) -> None:
+    """#570: both process rows, run the way ``mnemo doctor`` runs them (no
+    ``ps_stdout``), spawn no ``ps`` under the suite. Pinned by effect: if the
+    conftest stub stops covering the seam they read through, this goes red
+    instead of the doctor tests going red only on a busy machine."""
+    import subprocess
+
+    from mnemo.cli.commands.doctor_checks import background_processes as bp
+
+    spawned: list = []
+    real_run = subprocess.run
+
+    def _recording_run(argv, *a, **k):
+        spawned.append(argv)
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", _recording_run)
+    (tmp_path / "daemon").mkdir()
+    (tmp_path / "daemon" / "roster.json").write_text('{"workers": {}}', encoding="utf-8")
+
+    assert hp._doctor_check_helper_processes() is True
+    assert bp._doctor_check_background_processes(claude_home=tmp_path, jobs_root=tmp_path / "jobs")
+    assert not [argv for argv in spawned if argv and argv[0] == "ps"]
+    out = capsys.readouterr().out
+    assert "no mnemo helper processes running" in out
+    assert "no background claude processes" in out
