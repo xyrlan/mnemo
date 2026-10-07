@@ -92,10 +92,41 @@ _SECRET_RULES: Tuple[_Rule, ...] = (
     ), ("@",)),
     _Rule("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"), ("aiza",)),
     _Rule("OpenAI/Anthropic key", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"), ("sk-",)),
-    _Rule("GitHub token", re.compile(r"\bghp_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
-          ("ghp_", "github_pat_")),
+    # Personal (``ghp_``), OAuth (``gho_``), app user/server (``ghu_``/``ghs_``)
+    # and refresh (``ghr_``) tokens share one shape.
+    _Rule("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+          ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")),
     _Rule("Slack token", re.compile(r"\bxox[abp]-[A-Za-z0-9-]{8,}\b"), ("xox",)),
-    _Rule("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b"), ("akia",)),
+    _Rule("Stripe key", re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+          ("k_live_", "k_test_")),
+    # ``ASIA`` (temporary STS keys) is also the start of ordinary words:
+    # anchored at exactly 16 more characters, at least one of them a digit, so
+    # ``ASIAPACIFICREGION`` and its longer cousins stay prose.
+    _Rule("AWS access key", re.compile(
+        r"\bAKIA[0-9A-Z]{16}\b|\bASIA(?=[0-9A-Z]{0,15}[0-9])[0-9A-Z]{16}\b"), ("akia", "asia")),
+    # Three base64url segments, the first two JSON objects (``{"`` = ``eyJ``).
+    _Rule("JWT", re.compile(
+        r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), ("eyj",)),
+    # The body only: the BEGIN/END markers say a key was here and of what kind.
+    _Rule("private key", re.compile(
+        r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----\s*(?P<secret>\S[\s\S]*?)\s*"
+        r"-----END [A-Z0-9 ]*PRIVATE KEY-----"
+    ), ("private key-----",)),
+    # ``scheme://user:password@host`` — the password only; user and host are
+    # how a reader knows which database the rule is about. An ``@`` ends the
+    # value, so an SSH remote (``ssh://git@host``) never has one.
+    _Rule("URL credentials", re.compile(
+        r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@`'\"]+:(?P<secret>[^\s/@`'\"]+)@"
+    ), ("://",)),
+    # ``MY_SERVICE_TOKEN=…``, ``OPENAI_API_KEY: …`` — the value only, so a rule
+    # about *which* variable to set survives. Upper-case names only (the env
+    # convention); a value that is a path (``SSH_KEY=~/.ssh/id_rsa``) names
+    # where a secret lives, not the secret.
+    _Rule("secret assignment", re.compile(
+        r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD)(?![A-Za-z0-9_])"
+        r"""["'`]?[ \t]*[:=][ \t]*(?![~/]|\.\.?/)"""
+        + r"(?:(?P<secret>" + _QUOTED + r")|(?P<bare>" + _BARE + r"))"
+    ), ("_token", "_key", "_secret", "_password")),
     # Exactly 32 hex chars: Cloudflare-style account ids. Deliberately NOT
     # {32,} — that swallowed 40-char git SHAs and content digests, which are
     # public identifiers, not secrets. A dashed UUID never matches: the

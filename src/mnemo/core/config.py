@@ -228,6 +228,11 @@ DEFAULTS: dict[str, Any] = {
         # `mnemo doctor`. Set false to keep a matcher you narrowed by hand;
         # `doctor` still reports the drift either way.
         "autoRepairHooks": True,
+        # #596: Claude Code deletes transcripts older than `cleanupPeriodDays`
+        # (30 days unset), and they are what mnemo learns from. `mnemo init`
+        # raises the setting to this floor and never lowers a higher value;
+        # `doctor` warns below it. 0 opts out of both.
+        "keepTranscriptsDays": 365,
     },
     "doctor": {
         # Set ``skipStatuslineDrift`` to true to silence the statusLine

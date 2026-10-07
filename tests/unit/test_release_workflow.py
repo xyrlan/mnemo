@@ -172,3 +172,28 @@ def test_a_release_refuses_to_publish_with_changelog_fragments_pending(jobs: dic
     assert guard is not None, "publish-pypi has no changelog.d/ guard"
     publish = next(i for i, s in enumerate(steps) if s.get("name") == "Publish to PyPI")
     assert guard < publish
+
+
+def test_every_build_and_publish_job_waits_for_the_ci_gate(jobs: dict):
+    """A tag on a commit whose CI is red or never ran shipped anyway (#594).
+
+    The gate reads the tagged SHA's CI through tools/release_gate.py; every
+    other job must sit behind it, so nothing builds or publishes first.
+    """
+    assert "release-gate" in jobs
+    assert not _needs(jobs["release-gate"]), "the gate must be the first job"
+    for name in jobs:
+        if name != "release-gate":
+            assert _depends_on(jobs, name, "release-gate"), f"{name} runs before the CI gate"
+
+
+def test_the_gate_runs_the_tool_on_the_tagged_sha(jobs: dict):
+    gate = jobs["release-gate"]
+    step = next(s for s in gate["steps"] if "tools/release_gate.py" in s.get("run", ""))
+    assert "$GITHUB_SHA" in step["run"]
+    assert step["env"].get("PYTHONPATH") == "src", "the tool imports mnemo from the checkout"
+    assert "GH_TOKEN" in step["env"]
+    # A manual run builds a branch whose push CI never ran; it cannot publish.
+    assert "refs/tags/v" in step.get("if", "")
+    assert gate["permissions"].get("actions") == "read"
+    assert gate["permissions"].get("checks") == "read"

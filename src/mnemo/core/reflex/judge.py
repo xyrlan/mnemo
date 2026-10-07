@@ -3,7 +3,7 @@
 **Off by default, and the only thing on the prompt path that can leave the
 machine.** With ``reflex.judge.provider`` set, every prompt the lexical stage
 finds candidates for posts the first 1,200 characters of that prompt —
-*what the user typed* — and the first 800 characters of up to
+*what the user typed*, secrets redacted before the cut (#591) — and the first 800 characters of up to
 ``candidates`` rules to the provider, from inside the ``UserPromptSubmit``
 hook. That is a different cost from ``recall.rerank``'s (#405), which only
 ever sees a query an agent chose to type into a tool call, and it is why this
@@ -40,8 +40,9 @@ token pre-gate and a missing index are unchanged and cost no request.
 Every failure — no key, a timeout, an HTTP error, a malformed answer — is
 :func:`ask` returning ``None`` and the hook falling back to the decision the
 shipped gates made, silently to the session. A hook must never raise and
-never hang, so the request runs on a thread this module abandons at
-``timeoutSeconds``: the wall is hard even if the socket's is not.
+never hang, so the whole stage — key lookup, page reads and the request —
+runs on a thread this module abandons at ``timeoutSeconds``: the wall is hard
+even if the socket's is not, and a row's ``ms`` cannot run past it (#593).
 
 The client, the key and the TLS context are :mod:`mnemo.core.mcp.rerank`'s,
 imported rather than copied — one TypeSafe key per machine serves both stages
@@ -56,6 +57,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from mnemo.core.mcp import rerank
+from mnemo.core.redact import redact_secrets
 
 PROVIDERS = rerank.PROVIDERS
 
@@ -121,13 +123,26 @@ def question(text: str) -> Dict[str, Any]:
     }
 
 
+def message(prompt: str) -> Tuple[str, int]:
+    """The prompt as it may leave the machine, and how many secrets it lost.
+
+    Whitespace-collapsed, then redacted, then cut — in that order (#591).
+    Collapsing first means a pasted diff spends its 1,200 characters on words
+    rather than on indentation; redacting before the cut means a token that
+    straddles character 1,200 is replaced whole, where cutting first would
+    leave a head too short for any pattern to recognise and send it.
+    """
+    text, redacted = redact_secrets(" ".join((prompt or "").split()))
+    return text[:PROMPT_CHARS], redacted
+
+
 def state(prompt: str) -> Dict[str, str]:
     """What the judge is told the developer asked, and the only user text sent.
 
-    Whitespace-collapsed first, then cut: a prompt that is mostly a pasted
-    diff spends its 1,200 characters on words rather than on indentation.
+    :func:`message`'s text: redacting what it was already handed is a no-op,
+    so a caller that redacted first sends the same bytes.
     """
-    return {"developer_message": " ".join((prompt or "").split())[:PROMPT_CHARS]}
+    return {"developer_message": message(prompt)[0]}
 
 
 def _number(value: Any, fallback: float) -> float:
@@ -259,7 +274,7 @@ def within(call: Callable[[], Any], timeout: float) -> Any:
     server that dribbles a byte every two seconds holds it open forever. This
     hook runs before every prompt the user types, so the wall has to be real.
     The worker is a daemon thread and is simply abandoned — it holds a socket
-    and nothing the caller can see, and the process it would outlive is a
+    or a file read and nothing the caller can see, and the process it would outlive is a
     hook that exits in milliseconds.
     """
     box: Dict[str, Any] = {}
@@ -315,37 +330,57 @@ def ask(vault_root: Path, *, prompt: str, slugs: Sequence[str],
 
     ``info`` is the ``judge`` object of the ``reflex-log`` row and holds no
     prompt text: status, how many rules were asked about and injected, the
-    wall time in milliseconds, and the probability per slug.
+    wall time in milliseconds, the probability per slug, and ``redacted`` —
+    how many secrets were cut out of the prompt before it was sent, a count
+    and never the text (#591).
     """
     started = time.time()
+    sent, redacted = message(prompt)
     info: Dict[str, Any] = {"status": "ok", "asked": 0, "injected": 0, "ms": 0,
-                            "scores": []}
+                            "scores": [], "redacted": redacted}
     if not slugs:
         info["ms"] = _elapsed_ms(started)
         return [], info
     timeout = float(chosen_settings.get("timeoutSeconds") or DEFAULT_TIMEOUT_S)
-    if client is None:
-        key, _source = resolve_key(chosen_settings)
-        if not key:
-            info["status"] = "no_key"
-            info["ms"] = _elapsed_ms(started)
-            return None, info
-        client = rerank.typesafe_client(
-            key, model=str(chosen_settings.get("model") or DEFAULT_MODEL), timeout=timeout)
-    if read_text is None:
-        read_text = page_text(vault_root, project=project)
-    try:
-        texts = {slug: read_text(slug) for slug in slugs}
+    # The wall is the stage's, not the request's (#593): the key lookup and
+    # the page reads ran outside it, so a cold disk made ``ok`` rows of 3.5 s
+    # under a 2.5 s budget. ``seen`` is the worker's own scratch, read once
+    # when the wall falls — an abandoned worker must never write into the row
+    # this function has already returned.
+    seen: Dict[str, Any] = {}
+
+    def _stage() -> Optional[Dict[str, float]]:
+        asking = client
+        if asking is None:
+            key, _source = resolve_key(chosen_settings)
+            if not key:
+                seen["no_key"] = True
+                return None
+            asking = rerank.typesafe_client(
+                key, model=str(chosen_settings.get("model") or DEFAULT_MODEL), timeout=timeout)
+        reader = read_text if read_text is not None else page_text(vault_root, project=project)
+        texts = {slug: reader(slug) for slug in slugs}
         asked = [slug for slug in slugs if texts.get(slug)]
-        info["asked"] = len(asked)
+        seen["asked"] = len(asked)
         if not asked:
-            info["ms"] = _elapsed_ms(started)
-            return [], info
-        judged = within(lambda: scores(prompt, texts, asked, client), timeout)
+            return {}
+        return scores(sent, texts, asked, asking)
+
+    try:
+        judged = within(_stage, timeout)
     except BaseException as exc:  # noqa: BLE001 — every gap is a fallback
+        info["asked"] = int(seen.get("asked") or 0)
         info["status"] = _failure(exc)
         info["ms"] = _elapsed_ms(started)
         return None, info
+    info["asked"] = int(seen.get("asked") or 0)
+    if seen.get("no_key"):
+        info["status"] = "no_key"
+        info["ms"] = _elapsed_ms(started)
+        return None, info
+    if not info["asked"]:
+        info["ms"] = _elapsed_ms(started)
+        return [], info
     if not judged:
         # Asked, and got back nothing usable: a malformed answer is a failure,
         # not a verdict of "none of these".

@@ -168,6 +168,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="only rewrite mnemo's hooks in settings.json to this version's shape (leaves config, statusLine, MCP, commands alone)",
     )
     init.add_argument(
+        "--no-transcript-retention", dest="no_transcript_retention", action="store_true",
+        help="leave Claude Code's cleanupPeriodDays alone (remembered in mnemo's config; doctor stops warning)",
+    )
+    init.add_argument(
         "--host", choices=["claude", "cursor", "codex"], default="claude",
         help="which tool to wire: claude (default: hooks + MCP), cursor or codex (MCP + rules file only)",
     )

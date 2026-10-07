@@ -118,6 +118,17 @@ def test_what_is_sent_is_the_query_and_the_bounded_rule_text_and_nothing_else(va
     assert len(rerank.rule_text("x" * 5000)) == rerank.BODY_CHARS
 
 
+def test_the_query_is_redacted_before_it_leaves(vault):
+    """The query is model-written, but a model copies what it was shown (#591)."""
+    secret = "ghp_" + "Zq7Wv3Kp9Rt2Ym5Xn8Lc4Hd6Fj1Bs0Ga3Ue7Q"
+    judge = Judge()
+    out, info = rerank.apply(vault, _matches(), "run a script on prod with " + secret,
+                             project=None, cfg=ON, client=judge)
+    state, _questions = judge.calls[0]
+    assert state == {"developer_task": "run a script on prod with [redacted]"}
+    assert info["status"] == "ok"
+
+
 def test_without_a_query_nothing_is_sent(vault):
     judge = Judge()
     out, info = rerank.apply(vault, _matches(), None, project=None, cfg=ON, client=judge)

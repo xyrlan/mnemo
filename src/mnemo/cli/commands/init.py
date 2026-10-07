@@ -319,6 +319,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
+    # 5c'. Keep the transcripts mnemo learns from (#596)
+    try:
+        _ensure_transcript_retention(args, project=project, vault_root=vault_root, say=say)
+    except inj.SettingsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
     # 5d. Register slash commands (replaces the /plugin install dance)
     target_commands = target_settings.parent / "commands"
     say(f"Registering slash commands in {target_commands}…")
@@ -371,6 +378,51 @@ def cmd_init(args: argparse.Namespace) -> int:
         say("")
         say("Open Claude Code in any directory — mnemo is active globally.")
     return 0
+
+
+def _ensure_transcript_retention(args: argparse.Namespace, *, project: bool,
+                                 vault_root: Path, say) -> None:
+    """Raise Claude Code's ``cleanupPeriodDays`` to mnemo's floor (#596).
+
+    Always in ``~/.claude/settings.json``: Claude Code's startup sweep covers
+    every project's transcripts with the value of wherever it was launched, so
+    a project file would protect nothing launched elsewhere. A project install
+    promises not to write under ``$HOME``, so there it only says what to add.
+    ``--no-transcript-retention`` is remembered in mnemo's config, where a
+    re-run and ``doctor`` read it.
+    """
+    from mnemo.core import config as cfg_mod
+    from mnemo.install import transcript_retention as tr
+
+    cfg_path = vault_root / "mnemo.config.json" if project else None
+    if getattr(args, "no_transcript_retention", False):
+        cfg_mod.set_config_value("install.keepTranscriptsDays", 0, path=cfg_path)
+        say(f"Leaving Claude Code's {tr.SETTING} alone (--no-transcript-retention, "
+            f"remembered as {tr.CONFIG_KEY}: 0).")
+        return
+    floor = tr.floor_days(cfg_mod.load_config(cfg_path))
+    if floor == 0:
+        say(f"Leaving Claude Code's {tr.SETTING} alone ({tr.CONFIG_KEY} is 0).")
+        return
+    target = tr.user_settings_path()
+    if project:
+        state, value = tr.read_days(target)
+        if state in ("invalid", "unreadable") or (state == "valid" and value >= floor):
+            return
+        days = value if state == "valid" else tr.CLAUDE_DEFAULT_DAYS
+        say(f"NOTE: Claude Code deletes transcripts older than {days} days, and mnemo "
+            f"learns from them. A project install leaves ~/.claude alone; to keep them,")
+        say(f"      {tr.fix_line(floor)} ({tr.opt_out_line()}).")
+        return
+    outcome = tr.ensure_floor(target, floor)
+    if outcome.action == "raised":
+        before = (f"unset, so {tr.CLAUDE_DEFAULT_DAYS} days" if outcome.before is None
+                  else f"{outcome.before} days")
+        say(f"Raised {tr.SETTING} in {target} to {floor} (was {before}): Claude Code "
+            f"deletes older transcripts, and mnemo learns from them.")
+        say(f"       → {tr.opt_out_line()}")
+    elif outcome.action == "unreadable":
+        say(f"  (transcript retention skipped: {target} is not a JSON object)")
 
 
 def _autopilot_state(vault_root: Path) -> str:

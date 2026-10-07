@@ -329,3 +329,58 @@ def test_notice_prefix_stays_in_the_detectors_synthetic_list():
     """`detector` spells the prefix out to avoid importing `inbox`; this is
     the pin that keeps the two copies equal."""
     assert inbox.NOTICE_PREFIX in detector.SYNTHETIC_PREFIXES
+
+
+# --- #586: a row written while another session rewrites the log -------------
+
+def test_a_row_appended_during_anothers_rewrite_survives_it(tmp_path, monkeypatch):
+    """The 2026-10-07 restart: a resumed parent's row was missing.
+
+    Every session resumed at once, and that parent's ``SessionStart`` hook ran
+    for 38 s. Writer A holds the lock while its ``ps`` runs; writer B, the
+    parent, waits past :data:`inbox.LOCK_WAIT_SECONDS` and appends unlocked;
+    A then writes its compaction of what it read before B's append. B's pid
+    is also absent from A's ``ps`` snapshot, which A took before B existed.
+    Before #586 A's rewrite dropped B's row, and the parent never heard from
+    its children.
+    """
+    monkeypatch.setattr(inbox, "LOCK_WAIT_SECONDS", 0.05)
+    in_ps, go = threading.Event(), threading.Event()
+
+    def slow_ps():
+        in_ps.set()
+        assert go.wait(5)
+        return {1}
+
+    monkeypatch.setattr(inbox, "live_pids", slow_ps)
+    a = threading.Thread(target=inbox.record, args=(
+        tmp_path, {"session_id": "other", "socket": "/s/1.sock", "pid": 1, "pid_start": "x"},
+    ))
+    a.start()
+    assert in_ps.wait(5)
+    inbox.record(tmp_path, {"session_id": "parent", "socket": "/s/2.sock", "pid": 2, "pid_start": "y"})
+    go.set()
+    a.join(5)
+
+    assert inbox.lookup(tmp_path, "parent") == {
+        "session_id": "parent", "socket": "/s/2.sock", "pid": 2, "pid_start": "y",
+    }
+    assert inbox.lookup(tmp_path, "other") is not None
+
+
+def test_ensure_recorded_writes_the_missing_row_once(tmp_path, monkeypatch):
+    """#586: a parent with no row re-records itself before its next prompt."""
+    monkeypatch.setattr(inbox, "pid_start", lambda pid: "Wed Oct  7 13:34:27 2026")
+    monkeypatch.setattr(inbox, "live_pids", lambda: {1116})
+    env = {inbox.SESSION_ENV: "parent", inbox.SOCKET_ENV: "/tmp/cc-socks/1116.sock"}
+
+    assert inbox.ensure_recorded(tmp_path, env) is True
+    monkeypatch.setattr(inbox, "record", lambda *a, **k: pytest.fail("already recorded"))
+    assert inbox.ensure_recorded(tmp_path, env) is False
+
+    assert inbox.lookup(tmp_path, "parent")["socket"] == "/tmp/cc-socks/1116.sock"
+
+
+def test_ensure_recorded_does_nothing_outside_claude_code(tmp_path):
+    assert inbox.ensure_recorded(tmp_path, {}) is False
+    assert not inbox.log_path(tmp_path).exists()

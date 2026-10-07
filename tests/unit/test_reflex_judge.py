@@ -156,6 +156,48 @@ def test_the_prompt_is_collapsed_then_cut():
     assert "\n" not in sent
 
 
+# A GitHub token: one pattern ``redact_secrets`` knows, 40 characters long.
+SECRET = "ghp_" + "Zq7Wv3Kp9Rt2Ym5Xn8Lc4Hd6Fj1Bs0Ga3Ue7Q"
+
+
+def _fragments(secret, at_least=6):
+    """Every piece of ``secret`` long enough to be worth leaking."""
+    return {secret[i:j] for i in range(len(secret))
+            for j in range(i + at_least, len(secret) + 1)}
+
+
+def test_a_secret_straddling_the_cut_leaves_no_fragment_in_what_is_sent():
+    """Redact, then cut (#591). Cut first and the 20 characters left before
+    the edge no longer look like a token, so no pattern would catch them."""
+    head = "w " * ((judge.PROMPT_CHARS - 20) // 2)
+    prompt = head + SECRET + " and then deploy"
+    collapsed = " ".join(prompt.split())
+    assert collapsed.index(SECRET) < judge.PROMPT_CHARS < collapsed.index(SECRET) + len(SECRET)
+    client = Judge()
+    judge.scores(prompt, TEXTS, ["a"], client)
+    sent = client.calls[0][0]["developer_message"]
+    assert len(sent) <= judge.PROMPT_CHARS
+    assert "ghp_" not in sent
+    assert not [f for f in _fragments(SECRET) if f in sent]
+    assert "[redacted]" in sent
+
+
+def test_ask_counts_what_it_redacted_and_never_logs_it(tmp_path):
+    client = Judge({"Commit a script": 0.8})
+    _picks, info = judge.ask(tmp_path, prompt="deploy with " + SECRET + " now",
+                             slugs=["a"], chosen_settings=judge.settings(ON),
+                             client=client, read_text=_read)
+    assert info["redacted"] == 1
+    assert SECRET not in json.dumps(client.calls[0][0])
+    assert SECRET not in repr(info)
+
+
+def test_a_prompt_with_no_secret_is_sent_as_before(tmp_path):
+    _picks, info = _ask(tmp_path, ["a"], Judge())
+    assert info["redacted"] == 0
+    assert judge.state("how do I deploy") == {"developer_message": "how do I deploy"}
+
+
 def test_one_request_carries_every_rule():
     client = Judge()
     judge.scores("how do I deploy", TEXTS, ["a", "b", "c"], client)
@@ -290,7 +332,7 @@ def test_the_log_row_never_carries_prompt_text(tmp_path):
     _picks, info = _ask(tmp_path, ["a", "b"], Judge({"Commit a script": 0.8}))
     blob = repr(info)
     assert "how do I deploy" not in blob
-    assert set(info) == {"status", "asked", "injected", "ms", "scores"}
+    assert set(info) == {"status", "asked", "injected", "ms", "scores", "redacted"}
 
 
 def test_the_key_is_the_one_the_list_stage_stores(monkeypatch, tmp_path):
@@ -298,3 +340,94 @@ def test_the_key_is_the_one_the_list_stage_stores(monkeypatch, tmp_path):
     monkeypatch.setenv(judge.DEFAULT_KEY_ENV, "from-the-env")
     key, source = judge.resolve_key(judge.settings(ON))
     assert (key, source) == ("from-the-env", "env")
+
+
+# --- the wall covers the whole stage (#593) ------------------------------------
+#
+# The wall used to wrap the HTTP call only: key lookup and every page read ran
+# before it, so a slow disk made a row's ``ms`` exceed ``timeoutSeconds`` (7
+# ``ok`` rows over 2,500 ms in the maintainer's log, max 3,517). Every stub
+# below blocks on an Event — conftest makes ``time.sleep`` a no-op — and is
+# released at the end so no abandoned worker outlives its test.
+
+WALL = 0.2
+#: Generous: a loaded CI box schedules threads late, and the bug being caught
+#: is a stage that runs for as long as its slowest read, not 50 ms of jitter.
+EPSILON_MS = 400
+
+
+def test_a_page_read_that_outlives_the_wall_is_a_timeout(tmp_path):
+    stuck = threading.Event()
+    client = Judge({"Commit a script": 0.8})
+
+    def slow_read(slug):
+        stuck.wait(3)
+        return _read(slug)
+
+    started = time.time()
+    try:
+        picks, info = judge.ask(tmp_path, prompt="how do I deploy", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                client=client, read_text=slow_read)
+        took_ms = (time.time() - started) * 1000
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+    assert took_ms <= WALL * 1000 + EPSILON_MS
+
+
+def test_reads_and_the_call_share_one_budget(tmp_path):
+    """Each part under the wall, the two together over it: the budget is the
+    stage's, not one per part."""
+    stuck = threading.Event()
+
+    def read_most_of_it(slug):
+        stuck.wait(WALL * 0.75)
+        return _read(slug)
+
+    def call_the_rest(state, questions):
+        stuck.wait(WALL * 0.75)
+        return Judge({"Commit a script": 0.8})(state, questions)
+
+    try:
+        picks, info = judge.ask(tmp_path, prompt="how do I deploy", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                client=call_the_rest, read_text=read_most_of_it)
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+
+
+def test_a_key_lookup_that_outlives_the_wall_is_a_timeout(tmp_path, monkeypatch):
+    stuck = threading.Event()
+
+    def slow_key(chosen):
+        stuck.wait(3)
+        return "k", "env"
+
+    monkeypatch.setattr(judge, "resolve_key", slow_key)
+    try:
+        picks, info = judge.ask(tmp_path, prompt="q", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                read_text=_read)
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+
+
+def test_fast_reads_inside_the_wall_keep_todays_answer(tmp_path):
+    picks, info = _ask(tmp_path, ["a", "b"], Judge({"Commit a script": 0.8}),
+                       timeoutSeconds=WALL * 10)
+    assert picks == ["a"]
+    assert info["status"] == "ok" and info["asked"] == 2 and info["injected"] == 1
+    assert info["scores"][0] == ["a", 0.8]
+
+
+def test_no_key_inside_the_wall_is_still_no_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(judge, "resolve_key", lambda chosen: (None, "none"))
+    picks, info = judge.ask(tmp_path, prompt="q", slugs=["a"],
+                            chosen_settings=judge.settings(ON), read_text=_read)
+    assert picks is None and info["status"] == "no_key"

@@ -547,6 +547,11 @@ def test_doctor_activation_fidelity_info_line_for_complex_globs(
         "malformed": [],
     }), encoding="utf-8")
     _preflight_noop(monkeypatch, vault)
+    # A bare temp home has no cleanupPeriodDays, which doctor rightly warns
+    # about (#596); this test is about the glob line alone.
+    settings = Path.home() / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"cleanupPeriodDays": 3650}), encoding="utf-8")
 
     cli.main(["doctor"])
     out = capsys.readouterr().out
