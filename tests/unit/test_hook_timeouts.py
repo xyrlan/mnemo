@@ -162,9 +162,9 @@ def test_the_timeout_repair_is_said_once(vault: Path, tmp_path: Path):
 
 def test_a_matcher_only_signature_is_unchanged():
     """Markers written before #611 must still recognise a repaired matcher."""
-    drift = hook_drift.Drift(path=Path("/s.json"), missing={"PreToolUse": ["Read"]},
-                             project=False)
-    assert drift.signature == "/s.json|PreToolUse:Read"
+    path = Path("/s.json")
+    drift = hook_drift.Drift(path=path, missing={"PreToolUse": ["Read"]}, project=False)
+    assert drift.signature == f"{path}|PreToolUse:Read"
 
 
 def test_doctor_and_status_name_the_timeout(tmp_path: Path):
