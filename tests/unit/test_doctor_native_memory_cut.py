@@ -54,7 +54,8 @@ def test_an_index_over_the_line_limit_is_reported(tmp_home, run):
     ok, out = run()
     assert ok is False
     assert "1 project(s)" in out and "200 lines or 25,000 characters" in out
-    assert "~/.claude/projects/-proj-long/memory/MEMORY.md: 246 lines" in out
+    index = str(Path("~", ".claude", "projects", "-proj-long", "memory", "MEMORY.md"))
+    assert f"{index}: 246 lines" in out
     assert "over the 200-line limit; loads 200 lines, 46 of 245 index entries past the cut" in out
     assert "-proj-ok" not in out
     assert str(tmp_home) not in out
