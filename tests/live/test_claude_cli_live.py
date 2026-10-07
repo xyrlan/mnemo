@@ -26,7 +26,7 @@ import pytest
 from mnemo.core import child_profile, claude_cli, dispatch
 from mnemo.core.sessions import jobs, liveness, residents
 
-pytestmark = [pytest.mark.live_claude, pytest.mark.real_spawn]
+pytestmark = [pytest.mark.live_claude, pytest.mark.real_spawn, pytest.mark.real_ps]
 
 PROMPT = "Reply with exactly the word OK and nothing else. Do not use any tools."
 

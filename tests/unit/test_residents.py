@@ -137,6 +137,7 @@ def test_format_age(seconds: int, text: str) -> None:
     assert residents.format_age(seconds) == text
 
 
+@pytest.mark.real_ps
 def test_read_ps_is_silent_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(residents.sys, "platform", "win32")
     assert residents.read_ps() is None

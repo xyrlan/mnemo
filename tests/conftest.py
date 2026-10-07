@@ -348,6 +348,24 @@ def _no_real_auth_status(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_process_table(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """No test reads the host's real process table (#570).
+
+    ``mnemo doctor`` counts ``claude --print`` helpers and daemon residents
+    from ``residents.read_ps``, so 34 doctor tests that never asked for a
+    process listing depended on what the developer's machine was running:
+    five ``claude --print`` helpers from a sibling session's measurement made
+    the helper row warn and ``test_doctor_activation_fidelity_info_line_for_
+    complex_globs`` go red on any commit. Here the table is an empty listing —
+    a quiet POSIX machine. Tests that want processes pass ``ps_stdout=``;
+    tests of ``read_ps`` itself carry ``@pytest.mark.real_ps``.
+    """
+    if request.node.get_closest_marker("real_ps"):
+        return
+    monkeypatch.setattr("mnemo.core.sessions.residents.read_ps", lambda: "")
+
+
+@pytest.fixture(autouse=True)
 def _fast_sleep(monkeypatch: pytest.MonkeyPatch):
     """Make time.sleep a no-op during tests so retry backoffs don't slow the suite."""
     import time as _time
