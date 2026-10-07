@@ -37,6 +37,43 @@ def test_plugin_hooks_cover_every_event_mnemo_installs():
         assert f"hook {defn['module']}" in entry["hooks"][0]["command"]
 
 
+def _timeouts(path: Path) -> dict:
+    """``{event: [timeout of each hook entry]}`` — ``None`` where one is missing."""
+    hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
+    return {event: [hook.get("timeout") for entry in entries for hook in entry["hooks"]]
+            for event, entries in hooks.items()}
+
+
+def test_every_plugin_hook_declares_a_timeout():
+    """A hook that hangs holds the session for Claude Code's default bound
+    unless it declares its own (#593); the values are measured, see
+    ``tools/measure_hook_durations.py``."""
+    for event, timeouts in _timeouts(REPO / "hooks" / "hooks.json").items():
+        for timeout in timeouts:
+            assert isinstance(timeout, (int, float)) and not isinstance(timeout, bool), event
+            assert timeout > 0, event
+
+
+def test_the_root_and_subfolder_plugins_declare_the_same_timeouts():
+    """``plugin/`` is what the marketplace installs and is built from the root
+    copy; a timeout changed in one and not the other would ship two plugins."""
+    root = _timeouts(REPO / "hooks" / "hooks.json")
+    sub = _timeouts(REPO / "plugin" / "hooks" / "hooks.json")
+    assert root == sub
+
+
+def test_the_prompt_hooks_timeout_leaves_room_for_the_judges_wall():
+    """``UserPromptSubmit`` carries the reflex judge, whose whole stage is
+    bounded by ``timeoutSeconds`` (#593); the hook's own timeout must not be
+    the thing that cuts it."""
+    import sys
+    sys.path.insert(0, str(REPO / "src"))
+    from mnemo.core.reflex.judge import DEFAULT_TIMEOUT_S
+
+    (timeout,) = _timeouts(REPO / "hooks" / "hooks.json")["UserPromptSubmit"]
+    assert timeout > DEFAULT_TIMEOUT_S * 2
+
+
 def test_plugin_commands_never_hardcode_an_interpreter():
     for path in (REPO / "commands").glob("*.md"):
         body = path.read_text(encoding="utf-8")

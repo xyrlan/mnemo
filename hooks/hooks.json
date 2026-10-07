@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd\" hook session_start",
-            "async": false
+            "async": false,
+            "timeout": 600
           }
         ]
       }
@@ -17,7 +18,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd\" hook user_prompt_submit",
-            "async": false
+            "async": false,
+            "timeout": 30
           }
         ]
       }
@@ -29,7 +31,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd\" hook pre_tool_use",
-            "async": false
+            "async": false,
+            "timeout": 30
           }
         ]
       }
@@ -40,7 +43,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd\" hook session_end",
-            "async": false
+            "async": false,
+            "timeout": 30
           }
         ]
       }
