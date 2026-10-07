@@ -41,7 +41,13 @@ back to the parent's notice rather than waking anything:
   never races them: it waits, and if the window closes first it says so.
 
 **Which events.** Red: checks settled with at least one failing, read check
-by check as #426 reads them. Review: a PR comment, or a review that comments
+by check as #426 reads them, and at least one of those failures the child
+could fix (#575). A check GitHub never started — the billing annotation —
+and one a rerun on the same commit passed are not red:
+:mod:`mnemo.core.sessions.check_runs` reads them as
+``tools/measure_dispatch_outcomes.py`` does. Checks that never ran are told
+to the parent instead, once per head, because a person has to act on them.
+Review: a PR comment, or a review that comments
 or requests changes, written after the child last stopped, by an ``OWNER``,
 ``MEMBER`` or ``COLLABORATOR`` — a stranger's comment on a public repository
 must not be able to spend the maintainer's account. Conflict: GitHub's
@@ -52,7 +58,10 @@ must not be able to spend the maintainer's account. Conflict: GitHub's
 still conflicting or still unanswered when either runs out goes back to the
 parent's notice. Each PR is looked at every :data:`POLL_SECONDS`, not every
 tick: two ``gh`` calls a PR, so a round of 36 PRs costs ~860 calls an hour
-against GitHub's 5,000.
+against GitHub's 5,000. A PR whose settled checks failed costs one more, the
+commit's check runs, plus one per failed run whose annotations were never
+read — at most :data:`ANNOTATION_READS_PER_PASS` a pass across every PR, and
+never twice for one run (the ledger keeps what each said).
 
 **What stops a storm (#329, #330).** The same three things that bound
 ``rewake``: one watcher per vault behind its own lock (every SessionEnd may
@@ -79,7 +88,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from mnemo.core import locks
-from mnemo.core.sessions import report_card
+from mnemo.core.sessions import check_runs, report_card
 from mnemo.core.sessions import wake as wake_mod
 
 #: ``dispatch.followPR`` defaults. See the module docstring for each.
@@ -97,6 +106,10 @@ TICK_SECONDS = 60.0
 #: Wakes one pass may make. A wake starts a whole session; a round of PRs that
 #: all went red on one base change must not start all of them in one minute.
 MAX_WAKES_PER_PASS = 3
+#: Check-run annotation reads one pass may make across every PR. A billing
+#: lapse fails every job — 14 on mnemo's CI — and each needs its own read
+#: once; failures past the budget are read on a later pass.
+ANNOTATION_READS_PER_PASS = 20
 
 LEDGER_NAME = "pr-follow.json"
 LOCK_NAME = "pr-follow.lock"
@@ -306,16 +319,39 @@ def trusted_remarks(data: Optional[Dict[str, Any]], *, after: float) -> int:
     return count
 
 
+def red_settled(card: report_card.Card) -> bool:
+    counts = card.checks
+    return bool(counts and counts.get("fail") and report_card.settled(counts))
+
+
+def read_checks(card: report_card.Card, *, budget: check_runs.Budget,
+                known: Optional[Dict[str, str]], run: report_card.Runner
+                ) -> Optional[check_runs.Reading]:
+    """Why *card*'s settled failures failed, or ``None`` — today's answer —
+    when there is nothing to read or it could not be read."""
+    pr = card.pr
+    if pr is None or pr.state != "OPEN" or not pr.head or not card.failing:
+        return None
+    if not red_settled(card):
+        return None
+    try:
+        return check_runs.read(pr.url, pr.head, card.failing, budget=budget,
+                               known=known, run=run)
+    except Exception:  # noqa: BLE001 — never cost a red PR its wake
+        return None
+
+
 def events(card: report_card.Card, data: Optional[Dict[str, Any]], *,
-           after: float) -> List[str]:
+           after: float, checks: Optional[check_runs.Reading] = None) -> List[str]:
     """Which of ``wake.PR_EVENTS`` *card* and *data* show, in its order.
 
     Red only once the checks have settled, so a woken child sees every
-    failure at once rather than the first of several.
+    failure at once rather than the first of several — and only when
+    *checks*, if read, found a failure the child could fix. Failures the
+    pass's budget ran out before are not red yet: the next poll reads them.
     """
     found: List[str] = []
-    counts = card.checks
-    if counts and counts.get("fail") and report_card.settled(counts):
+    if red_settled(card) and (checks is None or checks.real):
         found.append("ci-red")
     if trusted_remarks(data, after=after):
         found.append("review")
@@ -348,7 +384,7 @@ def window_over(entry: Dict[str, Any], s: Dict[str, Any], now: float) -> bool:
 
 def decide(entry: Dict[str, Any], card: report_card.Card,
            data: Optional[Dict[str, Any]], session: Any, *, now: float,
-           s: Dict[str, Any]) -> Decision:
+           s: Dict[str, Any], checks: Optional[check_runs.Reading] = None) -> Decision:
     """What to do about one followed child. Pure: every fact is passed in.
 
     The order is the argument. A PR that is finished needs nothing whatever
@@ -368,7 +404,7 @@ def decide(entry: Dict[str, Any], card: report_card.Card,
     if pr.state == "CLOSED":
         return Decision("close", "closed")
 
-    found = events(card, data, after=float(entry.get("ended_at") or 0))
+    found = events(card, data, after=float(entry.get("ended_at") or 0), checks=checks)
     if not found:
         if window_over(entry, s, now):
             return Decision("close", "window")
@@ -434,6 +470,23 @@ def render_stopped(short_id: str, entry: Dict[str, Any], reason: str,
         f"mnemo stopped following {short_id}'s {_pr_label(entry)}: {said}. Still "
         f"outstanding: {what or 'unknown'}. It is back with you; mnemo is "
         "reporting, not your user speaking.",
+    ]
+    if entry.get("pr"):
+        lines.append(f"- {entry['pr']}")
+    return "\n".join(lines)
+
+
+def render_not_run(short_id: str, entry: Dict[str, Any], count: int) -> str:
+    from mnemo.core.sessions.inbox import NOTICE_PREFIX
+
+    lines = [
+        f'{NOTICE_PREFIX} id="{short_id}" state="ci-not-run" event="follow-checks-not-run">',
+        f"{short_id}'s {_pr_label(entry)}: {count} failing check(s) never ran — GitHub "
+        "did not start the job(s) (\"recent account payments have failed or your "
+        "spending limit needs to be increased\"), so no code was tested. mnemo did "
+        "not wake the child for them: settle the account's Actions billing and "
+        "re-run the checks; mnemo keeps following the PR and wakes the child if "
+        "they fail for real. mnemo is reporting, not your user speaking.",
     ]
     if entry.get("pr"):
         lines.append(f"- {entry['pr']}")
@@ -533,6 +586,7 @@ def sweep(
         except Exception:
             roster = {}
         wakes = 0
+        budget = check_runs.Budget(ANNOTATION_READS_PER_PASS)
         for short_id, entry in sorted(due.items()):
             try:
                 if in_childs_hands(entry):
@@ -543,7 +597,7 @@ def sweep(
                     if window_over(entry, s, moment):
                         _one(cfg, vault_root, short_id, entry, roster.get(short_id),
                              s=s, now=moment, run=run, wake_fn=wake_fn, tell=tell,
-                             report=report, announce=announce)
+                             report=report, announce=announce, budget=budget)
                     else:
                         _check_in_hands(vault_root, short_id, entry, now=moment,
                                         run=run, s=s, tell=tell, report=report)
@@ -554,7 +608,7 @@ def sweep(
                 report.polled += 1
                 woke = _one(cfg, vault_root, short_id, entry, roster.get(short_id),
                             s=s, now=moment, run=run, wake_fn=wake_fn, tell=tell,
-                            report=report, announce=announce)
+                            report=report, announce=announce, budget=budget)
                 wakes += 1 if woke else 0
             except Exception as exc:  # noqa: BLE001
                 report.failed.append(f"{short_id} — {exc}")
@@ -562,7 +616,8 @@ def sweep(
 
 
 def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: Any,
-         *, s, now, run, wake_fn, tell, report: PassReport, announce: bool) -> bool:
+         *, s, now, run, wake_fn, tell, report: PassReport, announce: bool,
+         budget: Optional[check_runs.Budget] = None) -> bool:
     card = report_card.gather(short_id, cwd=entry.get("cwd"), run=run)
     if card.pr is not None:
         entry["pr"] = card.pr.url
@@ -570,7 +625,12 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
     data = None
     if card.pr is not None and card.pr.state == "OPEN":
         data = activity(card.pr.url, run=run)
-    decision = decide(entry, card, data, session, now=now, s=s)
+    checks = read_checks(card, budget=budget or check_runs.Budget(ANNOTATION_READS_PER_PASS),
+                         known=entry.get("check_kinds"), run=run)
+    decision = decide(entry, card, data, session, now=now, s=s, checks=checks)
+    head = card.pr.head if card.pr else ""
+    not_run = bool(checks and checks.not_run and checks.excused
+                   and entry.get("not_run_told") != head)
 
     def polled(d: Dict[str, Any]) -> None:
         e = d.get("children", {}).get(short_id)
@@ -578,8 +638,18 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
             e["polled_at"] = now
             e["pr"], e["pr_number"] = entry.get("pr"), entry.get("pr_number")
             e["last_events"] = list(decision.events)
+            if checks is not None:
+                e["check_kinds"] = dict(checks.kinds)
+            if not_run:
+                e["not_run_told"] = head
 
     _update(vault_root, polled)
+    if not_run:
+        tell(vault_root, entry.get("parent"),
+             render_not_run(short_id, entry, len(checks.not_run)))
+        if announce:
+            _announce(cfg, entry, f"⛔ {short_id}'s {_pr_label(entry)}: checks never ran "
+                                  "(Actions billing); child not woken")
 
     if decision.action == "close":
         _close(vault_root, short_id, entry, decision.reason, decision.events,

@@ -63,17 +63,19 @@ def _iso(epoch: float) -> str:
 
 def _world(*, state="OPEN", buckets=("pass",), mergeable="MERGEABLE",
            comments=(), reviews=(), local_head=HEAD, pr_head=HEAD, dirty="",
-           pr=True) -> Fake:
+           pr=True, names=None, extra=None) -> Fake:
     row = {"number": 12, "url": URL, "state": state, "isDraft": False,
            "additions": 1, "deletions": 1, "changedFiles": 1, "headRefOid": pr_head}
     return Fake({
+        **(extra or {}),
         ("git", "rev-parse", "--abbrev-ref", "HEAD"): (0, "fix/issue-7\n", ""),
         ("git", "status", "--porcelain"): (0, dirty, ""),
         ("git", "rev-parse", "HEAD"): (0, local_head + "\n", ""),
         ("git", "rev-list"): (0, "0\n", ""),
         ("gh", "pr", "list"): (0, json.dumps([row] if pr else []), ""),
         ("gh", "pr", "checks"): (0, json.dumps(
-            [{"name": f"job{i}", "bucket": b} for i, b in enumerate(buckets)]), ""),
+            [{"name": names[i] if names else f"job{i}", "bucket": b}
+             for i, b in enumerate(buckets)]), ""),
         ("gh", "pr", "view"): (0, json.dumps({
             "mergeable": mergeable, "comments": list(comments), "reviews": list(reviews),
         }), ""),
@@ -556,3 +558,125 @@ def test_the_pass_does_the_same_work_from_the_watchers_cwd(vault, tree, monkeypa
     report = _sweep(vault, _world(buckets=("fail", "pass")), now=T0 + 400, waker=waker)
     assert report.woken == [SHORT]
     assert waker.calls[0]["cwd"] == str(tree)
+
+
+# ---------------------------------------------------------------------------
+# failures no child can fix (#575): read from recorded GitHub payloads
+# ---------------------------------------------------------------------------
+
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "github_checks"
+JOBS = ("ubuntu-latest / py3.11", "macos-latest / py3.11")
+RUNS = ("gh", "api", f"repos/o/r/commits/{HEAD}/check-runs?per_page=100")
+
+
+def _payload(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def _notes(run_id: int) -> Tuple[str, ...]:
+    return ("gh", "api", f"repos/o/r/check-runs/{run_id}/annotations")
+
+
+def _checks_world(runs: str, notes: Dict[int, str], *, buckets=("fail", "fail")) -> Fake:
+    extra = {RUNS: (0, _payload(runs), "")}
+    for run_id, name in notes.items():
+        extra[_notes(run_id)] = (0, _payload(name), "")
+    return _world(buckets=buckets, names=JOBS, extra=extra)
+
+
+def _annotation_reads(run: Fake) -> int:
+    return sum(1 for c in run.calls if c[:2] == ("gh", "api") and c[2].endswith("/annotations"))
+
+
+def test_checks_that_never_ran_do_not_wake_and_the_parent_is_told_once(vault, tree) -> None:
+    _follow(vault, tree)
+    run = _checks_world("check_runs_not_run.json",
+                        {501: "annotations_not_run.json", 502: "annotations_not_run.json"})
+    waker, told = Waker(), Told()
+    _sweep(vault, run, now=T0 + 600, waker=waker, told=told)
+    assert waker.calls == []
+    assert len(told.sent) == 1
+    parent, text = told.sent[0]
+    assert parent == PARENT
+    assert 'state="ci-not-run"' in text and "never ran" in text and "billing" in text
+    entry = _entry(vault)
+    assert entry["last_events"] == [] and not entry["closed"]
+    assert entry["not_run_told"] == HEAD
+    assert entry["check_kinds"] == {"501": "not-run", "502": "not-run"}
+
+    # The next poll reads nothing twice and says nothing twice.
+    reads = _annotation_reads(run)
+    _sweep(vault, run, now=T0 + 1200, waker=waker, told=told)
+    assert waker.calls == [] and len(told.sent) == 1
+    assert _annotation_reads(run) == reads == 2
+
+
+def test_a_failure_a_rerun_cleared_does_not_wake(vault, tree) -> None:
+    _follow(vault, tree)
+    run = _checks_world("check_runs_rerun_passed.json", {}, buckets=("fail", "pass"))
+    waker, told = Waker(), Told()
+    _sweep(vault, run, now=T0 + 600, waker=waker, told=told)
+    assert waker.calls == [] and told.sent == []
+    assert _annotation_reads(run) == 0
+    assert _entry(vault)["last_events"] == []
+
+
+def test_a_real_failure_wakes_as_before(vault, tree) -> None:
+    _follow(vault, tree)
+    run = _checks_world("check_runs_real.json", {701: "annotations_real.json"},
+                        buckets=("fail", "pass"))
+    waker, told = Waker(), Told()
+    _sweep(vault, run, now=T0 + 600, waker=waker, told=told)
+    assert [c["events"] for c in waker.calls] == [["ci-red"]]
+    assert 'event="follow-woke"' in told.sent[0][1]
+    assert _entry(vault)["check_kinds"] == {"701": "real"}
+
+
+def test_never_run_beside_a_real_failure_still_wakes(vault, tree) -> None:
+    _follow(vault, tree)
+    run = _checks_world("check_runs_mixed.json",
+                        {801: "annotations_not_run.json", 802: "annotations_real.json"})
+    waker, told = Waker(), Told()
+    _sweep(vault, run, now=T0 + 600, waker=waker, told=told)
+    assert [c["events"] for c in waker.calls] == [["ci-red"]]
+    assert all("ci-not-run" not in text for _, text in told.sent)
+
+
+@pytest.mark.parametrize("broken", ["runs", "notes"])
+def test_a_check_read_that_fails_wakes_as_before(vault, tree, broken) -> None:
+    _follow(vault, tree)
+    run = _checks_world("check_runs_not_run.json",
+                        {501: "annotations_not_run.json", 502: "annotations_not_run.json"})
+    key = RUNS if broken == "runs" else _notes(502)
+    run.table[key] = (1, "", "HTTP 502")
+    waker = Waker()
+    _sweep(vault, run, now=T0 + 600, waker=waker)
+    assert [c["events"] for c in waker.calls] == [["ci-red"]]
+
+
+def test_annotation_reads_are_bounded_per_pass(vault, tree, monkeypatch) -> None:
+    monkeypatch.setattr(pr_follow, "ANNOTATION_READS_PER_PASS", 1)
+    _follow(vault, tree)
+    run = _checks_world("check_runs_not_run.json",
+                        {501: "annotations_not_run.json", 502: "annotations_not_run.json"})
+    waker, told = Waker(), Told()
+    _sweep(vault, run, now=T0 + 600, waker=waker, told=told)
+    # One read, one failure still unread: neither a wake nor a notice yet.
+    assert _annotation_reads(run) == 1
+    assert waker.calls == [] and told.sent == []
+    _sweep(vault, run, now=T0 + 1200, waker=waker, told=told)
+    assert _annotation_reads(run) == 2
+    assert waker.calls == [] and len(told.sent) == 1
+
+
+def test_the_measure_tool_reads_failures_with_the_same_predicates() -> None:
+    from mnemo.core.sessions import check_runs
+
+    runs = json.loads(_payload("check_runs_rerun_passed.json"))["check_runs"]
+    assert check_runs.rerun_passed(runs[0], runs)
+    assert not check_runs.rerun_passed(runs[2], runs)
+    notes = [n["message"] for n in json.loads(_payload("annotations_not_run.json"))]
+    assert check_runs.never_started(notes)
+    real = [n["message"] for n in json.loads(_payload("annotations_real.json"))]
+    assert not check_runs.never_started(real)

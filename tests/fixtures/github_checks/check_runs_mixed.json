@@ -1,0 +1,65 @@
+{
+  "total_count": 2,
+  "check_runs": [
+    {
+      "id": 801,
+      "name": "ubuntu-latest / py3.11",
+      "node_id": "CR_kwDO801",
+      "head_sha": "abc123",
+      "external_id": "ext-801",
+      "url": "https://api.github.com/repos/o/r/check-runs/801",
+      "html_url": "https://github.com/o/r/actions/runs/9001/job/801",
+      "details_url": "https://github.com/o/r/actions/runs/9001/job/801",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-09-30T14:02:11Z",
+      "completed_at": "2026-09-30T14:02:13Z",
+      "output": {
+        "title": null,
+        "summary": null,
+        "text": null,
+        "annotations_count": 1,
+        "annotations_url": "https://api.github.com/repos/o/r/check-runs/801/annotations"
+      },
+      "check_suite": {
+        "id": 7001
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "pull_requests": []
+    },
+    {
+      "id": 802,
+      "name": "macos-latest / py3.11",
+      "node_id": "CR_kwDO802",
+      "head_sha": "abc123",
+      "external_id": "ext-802",
+      "url": "https://api.github.com/repos/o/r/check-runs/802",
+      "html_url": "https://github.com/o/r/actions/runs/9001/job/802",
+      "details_url": "https://github.com/o/r/actions/runs/9001/job/802",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-09-30T14:02:11Z",
+      "completed_at": "2026-09-30T14:07:01Z",
+      "output": {
+        "title": null,
+        "summary": null,
+        "text": null,
+        "annotations_count": 1,
+        "annotations_url": "https://api.github.com/repos/o/r/check-runs/802/annotations"
+      },
+      "check_suite": {
+        "id": 7001
+      },
+      "app": {
+        "id": 15368,
+        "slug": "github-actions",
+        "name": "GitHub Actions"
+      },
+      "pull_requests": []
+    }
+  ]
+}
