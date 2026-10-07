@@ -102,7 +102,7 @@ from tools import measure_post_done_commits as post_done  # noqa: E402
 
 from mnemo.core import dispatch  # noqa: E402
 from mnemo.core.hook_guard import is_throwaway  # noqa: E402
-from mnemo.core.sessions import child_notices, detector, report_card  # noqa: E402
+from mnemo.core.sessions import check_runs, child_notices, detector, report_card  # noqa: E402
 
 DISPATCH = "dispatch"
 PLAIN = "plain"
@@ -113,8 +113,7 @@ RESUME = "<mnemo-resume"
 
 #: Check-run conclusions that pass, and the ones that fail.
 _PASS = frozenset({"success", "neutral", "skipped"})
-_FAIL = frozenset({"failure", "cancelled", "timed_out", "action_required",
-                   "startup_failure", "stale"})
+_FAIL = check_runs.FAIL
 
 #: Days after a merge in which a revert or a follow-up fix counts against the
 #: PR — #556's secondary outcome, fixed before the pilot's numbers were read.
@@ -389,9 +388,6 @@ def verdict(runs: Iterable[Sequence[Any]]) -> str:
     return "green" if all(str(c or "") in _PASS for _, c in runs) else "red"
 
 
-#: What a check run's annotation says when GitHub never started the job
-#: (a private repo whose Actions billing lapsed): no code was tested.
-_NOT_STARTED = re.compile(r"not started|spending limit|payments have failed", re.I)
 #: A failing test in a pytest log: ``FAILED tests/unit/test_x.py::test_y - …``.
 _FAILED_TEST = re.compile(r"\bFAILED ([\w./-]+\.py)::")
 
@@ -426,21 +422,14 @@ def failure_kind(failed: Dict[str, Any], runs: Sequence[Dict[str, Any]], *, repo
     - ``real``: anything else, including a failure whose log names no test.
     """
     name = str(failed.get("name") or "")
-    for other in runs:
-        if other is not failed and other.get("name") == name and other.get("conclusion") == "success":
-            return "rerun-passed", "a rerun on the same commit passed"
+    if check_runs.rerun_passed(failed, runs):
+        return "rerun-passed", "a rerun on the same commit passed"
     if failed.get("suite"):
         code, out, _ = run(["gh", "api", f"repos/{repo}/check-suites/{failed.get('suite')}",
                             "--jq", ".conclusion"], None)
         if code == 0 and (out or "").strip() == "success":
             return "non-blocking", "its workflow passed with it failing (continue-on-error)"
-    code, out, _ = run(["gh", "api", f"repos/{repo}/check-runs/{failed.get('id')}/annotations",
-                        "--jq", "[.[].message]"], None)
-    try:
-        notes = json.loads(out or "[]") if code == 0 else []
-    except ValueError:
-        notes = []
-    if any(_NOT_STARTED.search(str(n)) for n in notes or []):
+    if check_runs.never_started(check_runs.annotations(repo, failed.get("id"), run=run)):
         return "not-run", "the job was never started"
     prefix = name.split(" / ")[0] if " / " in name else None
     if not prefix:
@@ -465,16 +454,10 @@ def classify_red(repo: str, oid: str, *, changed: Optional[set],
     with each failed run's kind: ``red`` when any failure is ``real``;
     ``not-run`` when one was never started; ``non-blocking`` when every one
     is; ``flaky`` otherwise (each is flaky, rerun-passed or non-blocking)."""
-    code, out, _ = run(["gh", "api", f"repos/{repo}/commits/{oid}/check-runs?per_page=100",
-                        "--jq", "[.check_runs[] | {id, name, status, conclusion, "
-                                "suite: .check_suite.id}]"], None)
-    try:
-        runs = json.loads(out or "[]") if code == 0 else []
-    except ValueError:
-        runs = []
+    runs = check_runs.commit_runs(repo, oid, run=run) or []
     failures = []
-    for r in runs if isinstance(runs, list) else []:
-        if str(r.get("conclusion") or "") in _FAIL:
+    for r in runs:
+        if check_runs.failed(r):
             kind, why = failure_kind(r, runs, repo=repo, changed=changed, run=run)
             failures.append({"check": str(r.get("name") or ""), "kind": kind, "why": why})
     kinds = {f["kind"] for f in failures}

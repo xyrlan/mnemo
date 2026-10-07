@@ -41,7 +41,16 @@ back to the parent's notice rather than waking anything:
   never races them: it waits, and if the window closes first it says so.
 
 **Which events.** Red: checks settled with at least one failing, read check
-by check as #426 reads them. Review: a PR comment, or a review that comments
+by check as #426 reads them — and at least one of those failing for a reason
+the child could act on (#575). A check GitHub never started (its annotation
+says the account's Actions payments failed or its spending limit is spent) or
+one a rerun on the same commit passed is not the child's: on 2026-09-30 two
+children were woken to "fix" checks that had never run, and could only stop
+again. Those are read as :mod:`mnemo.core.sessions.check_runs` reads them —
+the same reading ``tools/measure_dispatch_outcomes.py`` gives — and a PR red
+only by checks that never ran is told to the parent once per head commit, so
+a person can fix the billing; the follow stays open, so a rerun that then
+fails for real still wakes the child. Review: a PR comment, or a review that comments
 or requests changes, written after the child last stopped, by an ``OWNER``,
 ``MEMBER`` or ``COLLABORATOR`` — a stranger's comment on a public repository
 must not be able to spend the maintainer's account. Conflict: GitHub's
@@ -52,7 +61,11 @@ must not be able to spend the maintainer's account. Conflict: GitHub's
 still conflicting or still unanswered when either runs out goes back to the
 parent's notice. Each PR is looked at every :data:`POLL_SECONDS`, not every
 tick: two ``gh`` calls a PR, so a round of 36 PRs costs ~860 calls an hour
-against GitHub's 5,000.
+against GitHub's 5,000. A PR whose checks settled red costs one more call for
+its check runs and at most :data:`MAX_NOTE_READS` annotation reads a poll; a
+run's reading is kept in the ledger, so no run is read twice. When any of
+those calls fails, the failure counts as the child's, which is the behaviour
+before #575.
 
 **What stops a storm (#329, #330).** The same three things that bound
 ``rewake``: one watcher per vault behind its own lock (every SessionEnd may
@@ -79,7 +92,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from mnemo.core import locks
-from mnemo.core.sessions import report_card
+from mnemo.core.sessions import check_runs, report_card
 from mnemo.core.sessions import wake as wake_mod
 
 #: ``dispatch.followPR`` defaults. See the module docstring for each.
@@ -97,6 +110,10 @@ TICK_SECONDS = 60.0
 #: Wakes one pass may make. A wake starts a whole session; a round of PRs that
 #: all went red on one base change must not start all of them in one minute.
 MAX_WAKES_PER_PASS = 3
+
+#: Annotation reads one poll may make for one PR. A lapsed bill fails every
+#: job of a matrix; the rest are read on the next polls (each run once).
+MAX_NOTE_READS = 6
 
 LEDGER_NAME = "pr-follow.json"
 LOCK_NAME = "pr-follow.lock"
@@ -306,16 +323,83 @@ def trusted_remarks(data: Optional[Dict[str, Any]], *, after: float) -> int:
     return count
 
 
+def settled_red(card: report_card.Card) -> bool:
+    counts = card.checks
+    return bool(counts and counts.get("fail") and report_card.settled(counts))
+
+
+#: What :func:`failure_kinds` calls a failing check. Only ``real`` is the
+#: child's; ``unread`` is one the poll's bound left for the next poll.
+REAL, NOT_RUN, RERUN_PASSED, UNREAD = "real", "not-run", "rerun-passed", "unread"
+
+
+def failure_kinds(card: report_card.Card, known: Optional[Dict[str, str]] = None, *,
+                  run: report_card.Runner = report_card._run,
+                  max_reads: int = MAX_NOTE_READS,
+                  ) -> Tuple[Optional[Dict[str, str]], Dict[str, str]]:
+    """``(kind by failing check name, kind by check-run id)`` for *card*'s PR.
+
+    The first is ``None`` when the check runs could not be read — every
+    failure is then the child's, as before #575. *known* is the second answer
+    of an earlier poll: a completed run's annotations do not change, so a run
+    read once is never read again. Reading stops at the first ``real`` one,
+    which settles the question, and after *max_reads* annotation reads, which
+    leaves the rest ``unread``. A failed annotation read is ``real`` and is not
+    kept, so the next poll asks again.
+    """
+    known = dict(known or {})
+    pr = card.pr
+    repo = check_runs.repo_of(pr.url) if pr is not None else None
+    if pr is None or not pr.head or not repo or not card.failing:
+        return None, known
+    runs = check_runs.commit_runs(repo, pr.head, run=run)
+    if runs is None:
+        return None, known
+    kept: Dict[str, str] = {}
+    by_run: Dict[str, str] = {}
+    reads = 0
+    for r in [r for r in runs if check_runs.failed(r)]:
+        rid = str(r.get("id"))
+        if check_runs.rerun_passed(r, runs):
+            kind = RERUN_PASSED
+        elif rid in known:
+            kind = kept[rid] = known[rid]
+        elif REAL in by_run.values() or reads >= max_reads:
+            kind = UNREAD
+        else:
+            reads += 1
+            notes = check_runs.annotations(repo, r.get("id"), run=run)
+            if notes is None:
+                kind = REAL
+            else:
+                kind = kept[rid] = NOT_RUN if check_runs.never_started(notes) else REAL
+        by_run[rid] = kind
+    names: Dict[str, str] = {}
+    for name in card.failing:
+        mine = {by_run[str(r.get("id"))] for r in runs
+                if r.get("name") == name and str(r.get("id")) in by_run}
+        # A failing check with no failed check run — a commit status, say —
+        # has nothing to excuse it.
+        for kind in (REAL, UNREAD, NOT_RUN, RERUN_PASSED):
+            if kind in mine or (kind == REAL and not mine):
+                names[name] = kind
+                break
+    return names, kept
+
+
 def events(card: report_card.Card, data: Optional[Dict[str, Any]], *,
-           after: float) -> List[str]:
+           after: float, kinds: Optional[Dict[str, str]] = None) -> List[str]:
     """Which of ``wake.PR_EVENTS`` *card* and *data* show, in its order.
 
     Red only once the checks have settled, so a woken child sees every
-    failure at once rather than the first of several.
+    failure at once rather than the first of several; and, given *kinds*
+    (:func:`failure_kinds`), only when a failing check is ``real``. Without
+    *kinds* every failure is real.
     """
     found: List[str] = []
-    counts = card.checks
-    if counts and counts.get("fail") and report_card.settled(counts):
+    if settled_red(card) and (
+            kinds is None or not card.failing
+            or any(kinds.get(name, REAL) == REAL for name in card.failing)):
         found.append("ci-red")
     if trusted_remarks(data, after=after):
         found.append("review")
@@ -348,7 +432,7 @@ def window_over(entry: Dict[str, Any], s: Dict[str, Any], now: float) -> bool:
 
 def decide(entry: Dict[str, Any], card: report_card.Card,
            data: Optional[Dict[str, Any]], session: Any, *, now: float,
-           s: Dict[str, Any]) -> Decision:
+           s: Dict[str, Any], kinds: Optional[Dict[str, str]] = None) -> Decision:
     """What to do about one followed child. Pure: every fact is passed in.
 
     The order is the argument. A PR that is finished needs nothing whatever
@@ -368,7 +452,7 @@ def decide(entry: Dict[str, Any], card: report_card.Card,
     if pr.state == "CLOSED":
         return Decision("close", "closed")
 
-    found = events(card, data, after=float(entry.get("ended_at") or 0))
+    found = events(card, data, after=float(entry.get("ended_at") or 0), kinds=kinds)
     if not found:
         if window_over(entry, s, now):
             return Decision("close", "window")
@@ -414,6 +498,37 @@ def render_woke(short_id: str, entry: Dict[str, Any], found: Sequence[str],
         f"mnemo woke {short_id} to work on {_pr_label(entry)}: {what}. Attempt "
         f"{attempt} of {s['attempts']}. mnemo is reporting, not your user speaking; "
         "the child posts its report card when it stops again.",
+    ]
+    if entry.get("pr"):
+        lines.append(f"- {entry['pr']}")
+    return "\n".join(lines)
+
+
+def not_run_only(card: report_card.Card, kinds: Optional[Dict[str, str]]) -> List[str]:
+    """The checks that never ran, when nothing else failing is the child's:
+    what the parent must hear about, because only a person can fix it."""
+    if not kinds or not settled_red(card):
+        return []
+    if any(kinds.get(name, REAL) in (REAL, UNREAD) for name in card.failing):
+        return []
+    return [name for name in card.failing if kinds.get(name) == NOT_RUN]
+
+
+def render_not_run(short_id: str, entry: Dict[str, Any], names: Sequence[str],
+                   *, s: Dict[str, Any]) -> str:
+    from mnemo.core.sessions.inbox import NOTICE_PREFIX
+
+    shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+    lines = [
+        f'{NOTICE_PREFIX} id="{short_id}" state="ci-not-run" event="follow-not-run">',
+        f"mnemo did not wake {short_id} for {_pr_label(entry)}: its failing checks "
+        f"never ran ({shown}). GitHub did not start the jobs — the annotation says "
+        "recent account payments failed or the spending limit needs to be "
+        "increased (Actions billing) — so no code was tested and there is nothing "
+        "for the child to fix. Fix the billing and rerun the checks (`gh run "
+        f"rerun`); mnemo keeps following the PR for up to {s['hours']} h and wakes "
+        "the child if they then fail for real. mnemo is reporting, not your user "
+        "speaking.",
     ]
     if entry.get("pr"):
         lines.append(f"- {entry['pr']}")
@@ -568,9 +683,16 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
         entry["pr"] = card.pr.url
         entry["pr_number"] = card.pr.number
     data = None
+    kinds: Optional[Dict[str, str]] = None
+    known = entry.get("check_kinds") if isinstance(entry.get("check_kinds"), dict) else {}
     if card.pr is not None and card.pr.state == "OPEN":
         data = activity(card.pr.url, run=run)
-    decision = decide(entry, card, data, session, now=now, s=s)
+        if settled_red(card):
+            kinds, known = failure_kinds(card, known, run=run)
+    decision = decide(entry, card, data, session, now=now, s=s, kinds=kinds)
+    never_ran = not_run_only(card, kinds)
+    head = card.pr.head if card.pr is not None else ""
+    tell_not_run = bool(never_ran) and entry.get("not_run_head") != head
 
     def polled(d: Dict[str, Any]) -> None:
         e = d.get("children", {}).get(short_id)
@@ -578,8 +700,17 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
             e["polled_at"] = now
             e["pr"], e["pr_number"] = entry.get("pr"), entry.get("pr_number")
             e["last_events"] = list(decision.events)
+            e["check_kinds"] = known
+            if tell_not_run:
+                e["not_run_head"] = head
 
     _update(vault_root, polled)
+    if tell_not_run:
+        tell(vault_root, entry.get("parent"), render_not_run(short_id, entry, never_ran, s=s))
+        if announce:
+            _announce(cfg, entry,
+                      f"⛔ mnemo did not wake {short_id} for {_pr_label(entry)}: "
+                      f"its failing checks never ran (Actions billing)")
 
     if decision.action == "close":
         _close(vault_root, short_id, entry, decision.reason, decision.events,
