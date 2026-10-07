@@ -49,6 +49,11 @@ import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: Anything that looks like an edit to a file inside the child's own worktree.
 _WT_PATH = re.compile(r"-wt-(?:\d+|c-[a-z0-9-]+|[a-z0-9]+-wt-\d+)/(.*)$")
 _EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -286,9 +291,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     report = measure(args.projects, args.vault, window_minutes=args.window)
+    prov = _provenance.provenance(__file__, argv, vault=args.vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report, listing=args.list), end="")
     return 0
 

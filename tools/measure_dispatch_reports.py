@@ -48,6 +48,11 @@ from typing import Any, Dict, List, Optional
 
 from mnemo.core.sessions.detector import is_human_turn
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: The footer as printed, one line of output. Anchored so the source line
 #: ``print("  queue:  mnemo sessions")`` does not match.
 FOOTER = re.compile(r"^\s*queue:  mnemo sessions\s*$", re.MULTILINE)
@@ -198,9 +203,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     report = measure(args.projects)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report, listing=args.list), end="")
     return 0
 

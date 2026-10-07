@@ -79,6 +79,11 @@ from mnemo.core.mcp import rerank
 from mnemo.core.procedures import _blocks, _records, dispatch_transcripts, fold_repo
 from mnemo.core.reflex.replay import wilson_interval
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: Pre-registered in #508. Not a flag: a cut chosen after reading the scores
 #: would decide the question it is supposed to test.
 CUT = 0.5
@@ -566,9 +571,13 @@ def main(argv: Optional[List[str]] = None, *, client: Optional[Client] = None) -
 
     summary = summarize(rows, args.exclude)
     samples = sample(rows, args.sample)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps({"summary": summary, "sample": samples}, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp({"summary": summary, "sample": samples}, prov),
+                         indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(summary, samples))
     return 0
 

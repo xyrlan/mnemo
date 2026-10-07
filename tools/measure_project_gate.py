@@ -94,6 +94,11 @@ def _sibling(name: str) -> Any:
 dk = _sibling("measure_demoted_keeps")
 mb = _sibling("measure_backfill_routes")
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 CORPORA = {
     "repo-a": mb.DEFAULT_OUT,
     "repo-c": Path.home() / ".cache" / "mnemo" / "day-one-repo-c" / "backfill-live",
@@ -322,9 +327,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cols = [dk.column(m) for m in dk.RATERS]
     out = {n: report(corpora[n][0], corpora[n][1],
                      store["answers"].get(n, {}).get(col, {}), cols) for n in names}
+    prov = _provenance.provenance(__file__, argv)
     if args.json:
-        print(json.dumps({"gate": col, "corpora": out}, indent=1))
+        print(json.dumps(_provenance.stamp({"gate": col, "corpora": out}, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     print("answers %s\n" % answers_path)
     for n in names:
         for line in report_lines(n, col, out[n]):

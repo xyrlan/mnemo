@@ -104,6 +104,11 @@ mja = bp.mja
 mpt = bvl.mpt
 from mnemo.core import briefing_index as bix  # noqa: E402
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 RATERS = bvl.RATERS
 SAMPLES = bvl.SAMPLES
 JUDGE_SYSTEM = bvl.JUDGE_SYSTEM
@@ -527,10 +532,13 @@ def run(argv: Optional[List[str]] = None, provider: Any = None, now: Optional[fl
     if sender is not None:
         print("spent $%.2f notional this run (subscription usage, not money)" % sender.usd, file=sys.stderr)
     data["pending"] = {"answers": len(pend), **{r: len(judge_todo(r)) for r in raters}}
-    mrc._write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
+    mrc._write(out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1, sort_keys=True))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, sort_keys=True))
     else:
+        print(_provenance.line(prov))
         print("\n".join(report_lines(data)))
     return 0
 

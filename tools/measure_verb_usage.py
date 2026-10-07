@@ -52,6 +52,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from mnemo.core.hook_guard import is_throwaway  # noqa: E402
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: The verb token after ``mnemo``, anchored so ``mnemo-desktop`` (a
 #: different word starting with the same six letters) never matches, and a
 #: shell operator or open-paren before ``mnemo`` still counts it as a call.
@@ -258,9 +263,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     since_days = None if args.days == 0 else args.days
     report = measure(args.projects, since_days=since_days)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report, listing=args.list), end="")
     return 0
 

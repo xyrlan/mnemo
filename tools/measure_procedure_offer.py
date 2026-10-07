@@ -39,6 +39,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from mnemo.core import procedures as P
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: The repo's own conversion, kept in one place so two measurements of the same
 #: block cannot report two different token counts.
 BYTES_PER_TOKEN = 4.0
@@ -185,9 +190,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     report = measure(args.vault, projects=args.projects, repeats=args.repeats)
+    prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(args.vault))
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report), end="")
     return 0
 

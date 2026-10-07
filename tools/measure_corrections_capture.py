@@ -55,6 +55,11 @@ from mnemo.core.hook_guard import is_throwaway
 from mnemo.core.log_utils import iter_rotated_rows
 from mnemo.core.transcript import user_turns
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 
 def first_timestamp(events: List[dict]) -> Optional[datetime]:
     stamps = [_parse_timestamp(ev.get("timestamp")) for ev in events if isinstance(ev, dict)]
@@ -258,9 +263,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         rows.append(row)
 
     weeks = weekly(rows)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps({"weeks": weeks, "total": totals(weeks), "sessions": rows}, indent=1))
+        print(json.dumps(_provenance.stamp({"weeks": weeks, "total": totals(weeks), "sessions": rows}, prov),
+                         indent=1))
     else:
+        print(_provenance.line(prov))
         print(render(weeks))
     return 0
 

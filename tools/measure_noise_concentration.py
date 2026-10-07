@@ -111,6 +111,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -692,9 +697,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     data = build(corpora, rated, store.get("labels", {}), signals_for(corpora, facts, vault), facts)
     data["calls"] = {"used": store.get("calls", 0), "budget": MAX_CALLS, "usd": store.get("usd", 0.0)}
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
-        print(json.dumps(data, indent=1, default=sorted))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=sorted))
         return 0
+    print(_provenance.line(prov))
     print("labels %s\n" % labels_path)
     for line in report_lines(data):
         print(line)

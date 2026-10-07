@@ -53,6 +53,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLING = Path(__file__).resolve().with_name("measure_recall_judged.py")
 _spec = importlib.util.spec_from_file_location("measure_recall_judged", _SIBLING)
 mrj = importlib.util.module_from_spec(_spec)
@@ -333,11 +338,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     shipped = mrj._orders(vault, units, None, shipped=True)
     agree = agreement([u["noul"] for u in units], second)
     rows = compare(units, second, shipped)
-    if args.json:
-        print(json.dumps({"first": first["model"], "second": SECOND_MODEL,
-                          "agreement": agree, "rows": rows}, indent=2))
-        return 0
     total = sum(len(u["noul"]) for u in units)
+    prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
+        "%d of %d pairs not scored by both judges" % (total - agree["pairs"], total)
+        if total - agree["pairs"] else None])
+    if args.json:
+        print(json.dumps(_provenance.stamp({"first": first["model"], "second": SECOND_MODEL,
+                                            "agreement": agree, "rows": rows}, prov), indent=2))
+        return 0
+    print(_provenance.line(prov))
     print(f"first judge {first['model']}, second judge {SECOND_MODEL}; "
           f"{agree['pairs']}/{total} pairs scored by both, {len(units)} queries")
     print(f"second judge labels 0/1/2: {agree['second_counts']}; first judge >= {FIRST_SHOULD_READ}: "

@@ -57,6 +57,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -344,6 +349,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     cutoff = _cutoff(args.days) if args.days > 0 else ""
+    vault = None
     if args.transcripts:
         events, skipped = since(_transcript_events(args.projects), cutoff), {}
         source = "session transcripts under %s" % args.projects
@@ -357,9 +363,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         source += ", last %d days" % args.days
     calls, off_list = pair(events)
     data = report(calls, off_list, skipped)
+    blind = [_provenance.transcripts_blind_spot(args.projects)] if args.transcripts else []
+    if skipped and any(skipped.values()):
+        blind.append("judged lists skipped: %d before #416, %d without a session_id"
+                     % (skipped.get("before_416", 0), skipped.get("no_session", 0)))
+    prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=blind)
     if args.json:
-        print(json.dumps(dict(data, source=source), indent=2))
+        print(json.dumps(_provenance.stamp(dict(data, source=source), prov), indent=2))
     else:
+        print(_provenance.line(prov))
         print(format_report(data, source))
     return 0
 

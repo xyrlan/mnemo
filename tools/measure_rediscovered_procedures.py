@@ -38,6 +38,11 @@ from typing import Any, Dict, List, Optional
 
 from mnemo.core import procedures as P
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 
 def measure(projects: str, *, min_children: int = 2, max_shape_repos: int = 2) -> Dict[str, Any]:
     """The population, the candidates, and what each repo's file already says."""
@@ -175,9 +180,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     report = measure(args.projects, min_children=args.min_children,
                      max_shape_repos=args.max_shape_repos)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report, rejected=args.rejected), end="")
     return 0
 

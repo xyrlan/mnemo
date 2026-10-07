@@ -84,6 +84,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -841,7 +846,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     scores = _read_json(vault / ".mnemo" / SCORES_NAME)
     result = report(rules, raters, scores, rater=args.rater,
                     thresholds=thresholds(args.thresholds), variant=args.variant)
-    print(json.dumps(result, indent=2) if args.json else format_report(result))
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    if args.json:
+        print(json.dumps(_provenance.stamp(result, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(format_report(result))
     return 0
 
 

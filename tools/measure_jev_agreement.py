@@ -122,6 +122,11 @@ mrc = mpr.mrc
 mbv = _sibling("measure_broad_value")
 mgr = _sibling("measure_generic_rules")
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 MODEL = "jev-1.13.0"
 #: USD per million input tokens (``mnemo.core.dedup_judge.USD_PER_MTOK``).
 USD_PER_MTOK = 0.042
@@ -1403,10 +1408,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("pending: %d Jev request(s), ~$%.4f notional" % (data["pending_requests"], data["pending_usd"]),
           file=sys.stderr)
     data["cost"]["briefing_raters"] = mrc.spent_by_rater(out / "briefing-calls.jsonl", RATERS)
-    _write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
+    _write(out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     return 0

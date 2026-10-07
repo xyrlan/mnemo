@@ -75,6 +75,11 @@ from mnemo.core.dedup_judge import (  # noqa: F401 — re-exported for callers a
     rule_text,
 )
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 URL = "https://api.typesafe.ai/v1/systemone"
 
 #: Pinned, never ``jev-latest``: an alias that moves would move every score
@@ -202,9 +207,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     rows = judge(bodies, http_client(key), workers=args.workers)
     summary = summarize(rows)
+    from mnemo import cli
+    prov = _provenance.provenance(__file__, argv, vault=cli._resolve_vault())
     if args.json:
-        print(json.dumps({"summary": summary, "rows": rows}, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp({"summary": summary, "rows": rows}, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(summary, rows, bodies, listing=args.listing))
     return 0
 

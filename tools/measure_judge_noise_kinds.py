@@ -79,6 +79,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -563,9 +568,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     data = build(arms, letters, labels, replays, at=float((state.get("settings") or {}).get("injectAt", 0.4)))
     data["calls"] = {"used": mine.get("calls", 0), "budget": MAX_CALLS, "usd": mine.get("usd", 0.0),
                      "rated_here": len(rated)}
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
-        print(json.dumps(data, indent=1, default=sorted))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=sorted))
         return 0
+    print(_provenance.line(prov))
     print("kinds: #480's %s, plus %d rule(s) rated here in %d of %d call(s)\n"
           % (out_dir / nc.LABELS_NAME, len(rated), mine.get("calls", 0), MAX_CALLS))
     print("\n".join(report_lines(data)))

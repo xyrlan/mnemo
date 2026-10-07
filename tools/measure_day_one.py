@@ -229,6 +229,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -1752,7 +1757,8 @@ def judge_lines(data: Dict[str, Any]) -> List[str]:
 
 
 def main_judge(args: argparse.Namespace, work: Path, labels_path: Path,
-               all_labels: Dict[str, Dict[str, Dict[str, int]]], labels: Dict[str, Dict[str, int]]) -> int:
+               all_labels: Dict[str, Dict[str, Dict[str, int]]], labels: Dict[str, Dict[str, int]],
+               argv: Optional[Sequence[str]] = None) -> int:
     from mnemo.core import config
     from mnemo.core.mcp import rerank
     from mnemo.core.reflex import judge
@@ -1779,7 +1785,9 @@ def main_judge(args: argparse.Namespace, work: Path, labels_path: Path,
             return 1
         data = judge_report(state, sources, labels)
         data["rater"] = args.rater
-        print(json.dumps(data, indent=1, default=str) if args.json else "\n".join(judge_lines(data)))
+        prov = _provenance.provenance(__file__, argv)
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str) if args.json
+              else _provenance.line(prov) + "\n" + "\n".join(judge_lines(data)))
         return 0
 
     if args.dry_run:
@@ -1846,6 +1854,7 @@ def main_judge(args: argparse.Namespace, work: Path, labels_path: Path,
     save()
     data = judge_report(state, sources, labels)
     data["rater"] = args.rater
+    print(_provenance.line(_provenance.provenance(__file__, argv)))
     print("\n".join(judge_lines(data)))
     return 0
 
@@ -2005,16 +2014,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     labels = all_labels.setdefault(mrr.column(args.rater), {})
 
     if args.judge:
-        return main_judge(args, work, labels_path, all_labels, labels)
+        return main_judge(args, work, labels_path, all_labels, labels, argv=argv)
 
     if not args.dry_run and not args.send:
         if not progress:
             print("no results in %s; --dry-run, then --send" % work, file=sys.stderr)
             return 1
         data = report(progress, labels, work)
+        prov = _provenance.provenance(__file__, argv)
         if args.json:
-            print(json.dumps(data, indent=1, default=str))
+            print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str))
         else:
+            print(_provenance.line(prov))
             print("\n".join(report_lines(data)))
         return 0
 
@@ -2184,6 +2195,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "suspects": suspects(diff, [args.corpus.name, agent + "/", "day-one", "mnemo-day-one"])}
     save()
     data = report(progress, labels, work)
+    print(_provenance.line(_provenance.provenance(__file__, argv)))
     print("\n".join(report_lines(data)))
     return 0
 

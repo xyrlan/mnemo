@@ -64,6 +64,11 @@ from pathlib import Path
 from statistics import NormalDist
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: #439's alpha (two-sided) and power.
 ALPHA = 0.05
 POWER = 0.80
@@ -415,9 +420,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     vault = Path(args.vault).expanduser() if args.vault else twins.default_vault()
     pair_rows = rows(list(twins.read_pairs(vault).values()))
     report = measure(pair_rows, agreement=args.agreement, exclude=args.exclude)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
-        print(json.dumps({"report": report, "pairs": pair_rows}, indent=2))
+        print(json.dumps(_provenance.stamp({"report": report, "pairs": pair_rows}, prov), indent=2))
     else:
+        print(_provenance.line(prov))
         sys.stdout.write(format_report(report, pair_rows=pair_rows, listing=args.list))
     return 0
 

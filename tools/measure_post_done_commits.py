@@ -62,6 +62,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from mnemo.core.sessions import report_card
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: The opening of the turn that wakes a child for its PR (``wake.PR_NUDGE_PREFIX``).
 FOLLOW = "<mnemo-pr-follow"
 
@@ -282,9 +287,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     since = _epoch(f"{args.since}T00:00:00Z") if args.since else None
     report = measure(args.projects, since=since)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        sys.stdout.write(_provenance.line(prov) + "\n")
         sys.stdout.write(format_report(report, listing=args.list))
     return 0
 

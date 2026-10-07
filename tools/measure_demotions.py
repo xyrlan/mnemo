@@ -48,6 +48,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 OUT_DIR = "demotion-judge"
@@ -309,11 +314,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except VaultBusy as exc:
             print("nothing stamped: %s" % exc)
             return 1
+        print(_provenance.line(_provenance.provenance(__file__, argv, vault=vault)))
         print("judge %s, sample %s\n" % (col, sample_path))
         for line in stamp_lines(todo, skipped, applied=applied):
             print(line)
         return 0
 
+    print(_provenance.line(_provenance.provenance(__file__, argv, vault=vault)))
     print("judge %s, sample %s\n" % (col, sample_path))
     for line in report_lines(sample, scores.get(col, {}), gate.KEEP,
                              days=inbox.held_expiry_days(cfg), now=time.time()):

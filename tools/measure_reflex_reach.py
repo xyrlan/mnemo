@@ -116,6 +116,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -756,11 +761,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     jev = mrg._normalise_scores(saved.get(mrg.SCORES_KEY))
     fable = (_read(mrg._labels_path(vault, FABLE_RATER), {}) or {}).get("labels")
     data = report(units, labels, jev, pools["population"], fable=fable)
+    prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
+        "%d of %d sampled prompts not found in transcripts"
+        % (len(pools["missing"]), len(units) + len(pools["missing"])) if pools.get("missing") else None])
     if args.json:
         data["levers"] = lever_values(data)
         data["recommendation"] = recommendation(data)
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     print("rater %s, %s\n" % (col, labels_path))
     for line in report_lines(data, args.rater):
         print(line)

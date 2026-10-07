@@ -135,6 +135,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -792,7 +797,7 @@ def history_lines(data: Dict[str, Any]) -> List[str]:
 
 
 def history_main(args: argparse.Namespace, cfg: Dict[str, Any], vault: Path, out: Path,
-                 raters: Sequence[str], provider: Any = None) -> int:
+                 raters: Sequence[str], provider: Any = None, argv: Optional[Sequence[str]] = None) -> int:
     """Re-judge #535's cached ``full`` vs ``without`` replies on the grounded
     question, into ``<out>/history-535``. #535's and #527's caches are read,
     never written."""
@@ -837,10 +842,12 @@ def history_main(args: argparse.Namespace, cfg: Dict[str, Any], vault: Path, out
             "results": {"consistent": history_columns(consistent, grounded, frozen, raters),
                         "all": history_columns(uids, grounded, frozen, raters)},
             "kappa": agreement(grounded, consistent, raters, GROUNDED)}
-    mrc._write(h_out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    mrc._write(h_out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
     else:
+        print(_provenance.line(prov))
         print("\n".join(history_lines(data)))
     return 0
 
@@ -892,7 +899,7 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     out = Path(args.out).expanduser() if args.out else vault / ".mnemo" / OUT_DIR
     out.mkdir(parents=True, exist_ok=True)
     if args.history:
-        return history_main(args, cfg, vault, out, raters)
+        return history_main(args, cfg, vault, out, raters, argv=argv)
     pr_out, bv_out = out / "prevented-repeats", out / "broad-value"
     pr_loaded = out / PR_LOADED_DIR
 
@@ -1027,10 +1034,13 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
         if loaded_source is not None:
             data["results_loaded"] = both_readings(loaded_units, rated, arms, grounded, preference, raters)
 
-    mrc._write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
+    mrc._write(out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     return 0

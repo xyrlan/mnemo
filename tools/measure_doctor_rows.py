@@ -31,6 +31,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 
 def time_rows(
     vault: Path,
@@ -90,9 +95,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         from mnemo import cli
         vault = cli._resolve_vault()
     rows = time_rows(vault, DOCTOR_CHECKS, rounds=args.rounds, only=args.rows)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
+        # The report is a bare list; a key cannot be added without changing its shape.
+        print(_provenance.line(prov), file=sys.stderr)
         print(json.dumps(rows, indent=1))
     else:
+        print(_provenance.line(prov))
         print(render(rows))
     return 0
 

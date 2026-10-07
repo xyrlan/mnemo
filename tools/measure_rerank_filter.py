@@ -78,6 +78,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -869,7 +874,12 @@ def main(argv: Optional[List[str]] = None) -> int:
               if sample_path.is_file() else [])
     report = _report(vault, units, labels, scores, sample,
                      part=args.part, bars=thresholds(args.thresholds))
-    print(json.dumps(report, indent=2) if args.json else format_report(report))
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    if args.json:
+        print(json.dumps(_provenance.stamp(report, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(format_report(report))
     return 0
 
 

@@ -148,6 +148,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -1394,15 +1399,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if sender is not None:
         print("spent $%.2f notional this run" % sender.usd, file=sys.stderr)
     data["pending"] = pending
-    mrc._write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(projects)])
+    mrc._write(out / "report.json", _provenance.stamp(data, prov))
     # every unit and its outcome, for #527's value arms
     mrc._write(out / UNITS_NAME, {
         "since": args.since, "rated": sorted(rated),
         "sessions": {s: {k: sessions[s][k] for k in ("path", "project", "cwd", "start")} for s in sorted(rated)},
         "columns": unit_rows})
     if args.json:
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     print("")

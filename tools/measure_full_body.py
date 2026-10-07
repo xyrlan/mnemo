@@ -119,6 +119,11 @@ mpr = bv.mpr
 mrc = bv.mrc
 rl = bv.rl
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 RATERS = bv.RATERS
 SAMPLES = bv.SAMPLES
 SEED = 535
@@ -612,10 +617,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if sender is not None:
         print("spent $%.2f notional this run (subscription usage, not money)" % sender.usd, file=sys.stderr)
     data["pending"] = {"answers": len(pend), **{r: {"judge": len(judge_todo(r))} for r in raters}}
-    mrc._write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    mrc._write(out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     print("")

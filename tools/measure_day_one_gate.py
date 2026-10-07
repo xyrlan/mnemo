@@ -94,6 +94,11 @@ def _sibling(name: str) -> Any:
 day = _sibling("measure_day_one")
 mrr = day.mrr
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 GATE_NAME = "gate.json"
 HELD_DIR = "gate-held"
 #: Claude calls (gate + labels) and new Jev requests (#486).
@@ -354,12 +359,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     pages = project_pages(src["vault"])
     chosen = day.shipped_judge()
 
+    def emit(data: Dict[str, Any]) -> None:
+        prov = _provenance.provenance(__file__, argv, vault=src["vault"])
+        print(json.dumps(_provenance.stamp(data, prov), indent=1) if args.json
+              else _provenance.line(prov) + "\n" + "\n".join(report_lines(data)))
+
     if not args.dry_run and not args.send:
         if not state.get("verdicts"):
             print("no gate results in %s; --dry-run, then --send" % work, file=sys.stderr)
             return 1
-        data = report(state, src, labels)
-        print(json.dumps(data, indent=1) if args.json else "\n".join(report_lines(data)))
+        emit(report(state, src, labels))
         return 0
 
     verdicts: Dict[str, str] = state.setdefault("verdicts", {})
@@ -451,8 +460,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             state["label_calls"] = int(state.get("label_calls", 0)) + day.label(
                 state["off_units"] + state["units"], labels, args.rater, save, limit=left)
         save()
-    data = report(state, src, labels)
-    print(json.dumps(data, indent=1) if args.json else "\n".join(report_lines(data)))
+    emit(report(state, src, labels))
     return 0
 
 

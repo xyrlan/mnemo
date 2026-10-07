@@ -41,6 +41,11 @@ import tempfile
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 REPORTED_HOOK = "reported by SessionEnd"
 REPORTED_BACKSTOP = "reported by backstop"
 SILENT_NEVER_RAN = "silent, SessionEnd never ran"
@@ -327,9 +332,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             roster, rows, links=parents, reports=child_notices.report_rows(Path(vault)),
             find=child_notices.transcript_for, turn_of=child_notices.last_turn,
         )
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(projects)])
     if args.json:
-        print(json.dumps({"since": args.since, **summary, "children": rows}, indent=2))
+        print(json.dumps(_provenance.stamp({"since": args.since, **summary, "children": rows}, prov), indent=2))
         return 0
+    print(_provenance.line(prov))
     print(render(summary, args.since))
     for kind, got in (summary.get("simulated") or {}).items():
         if got["due"] or got["told"]:

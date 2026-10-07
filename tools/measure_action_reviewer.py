@@ -128,6 +128,7 @@ def _sibling(name: str) -> Any:
 
 
 mrc = _sibling("measure_repeated_corrections")
+_provenance = _sibling("_provenance")
 
 RATERS = mrc.RATERS
 #: The model the product would run per turn, then the one #599 adds if it fails.
@@ -966,9 +967,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     data = evaluate(rows, rated_cols)
     weekly = primary_per_week(run.items, run.labels, run.primary)
     data["primary_per_week"] = weekly
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(Path(args.projects))])
     if args.json:
-        print(json.dumps(data, indent=1, default=str))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data, weekly):
         print(line)
     if not args.send:

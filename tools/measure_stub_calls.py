@@ -59,6 +59,11 @@ import typing
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 try:  # the report runs without pytest; the plugin hooks need it
     import pytest
 
@@ -614,7 +619,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     rows = [json.loads(line) for line in Path(args.calls).read_text(encoding="utf-8").splitlines() if line]
     rep = report(rows)
-    print(json.dumps(rep, indent=2) if args.json else render(rep))
+    prov = _provenance.provenance(__file__, argv)
+    if args.json:
+        print(json.dumps(_provenance.stamp(rep, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(render(rep))
     return 1 if any(s["verdict"] == MISMATCH for s in rep["sites"]) else 0
 
 

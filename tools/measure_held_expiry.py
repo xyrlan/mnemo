@@ -45,6 +45,11 @@ from typing import Dict, List, Optional
 
 from mnemo.core import inbox as I
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: A page offered within this many seconds before its mtime is the same write.
 SLACK_S = 60
 #: Ledger events that end a key's life in the queue; an ``offered`` row before
@@ -148,7 +153,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
     cfg = {} if args.days is None else {"inbox": {"heldExpiryDays": args.days}}
     report = measure(args.vault.expanduser(), cfg)
-    print(json.dumps(report, indent=2) if args.json else render(report))
+    prov = _provenance.provenance(__file__, argv, vault=args.vault.expanduser())
+    if args.json:
+        print(json.dumps(_provenance.stamp(report, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(render(report))
     return 0
 
 
