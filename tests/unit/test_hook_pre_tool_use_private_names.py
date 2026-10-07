@@ -145,8 +145,10 @@ def test_git_dash_c_and_cd_resolve_the_repo(tmp_vault, repo, tmp_path, monkeypat
     _write_tsv(tmp_vault)
     _commit(repo, NAME)
 
-    out1 = _run(monkeypatch, tmp_vault, f"git -C {repo} push", tmp_path)
-    out2 = _run(monkeypatch, tmp_vault, f"cd {repo} && git status && git push", tmp_path)
+    # Forward slashes: a shell eats the backslashes of an unquoted Windows path.
+    where = repo.as_posix()
+    out1 = _run(monkeypatch, tmp_vault, f"git -C {where} push", tmp_path)
+    out2 = _run(monkeypatch, tmp_vault, f"cd {where} && git status && git push", tmp_path)
 
     _assert_names_alias_only(_deny_reason(out1))
     _assert_names_alias_only(_deny_reason(out2))
