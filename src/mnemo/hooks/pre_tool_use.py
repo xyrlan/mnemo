@@ -45,6 +45,11 @@ def main() -> int:
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
+        # Before every other gate (#597): publishing a private repo's name is
+        # a leak from any session, a throwaway one included, and the check
+        # stands on <vault>/.mnemo/private-names.tsv alone, not on config.
+        if payload.get("tool_name") == _ENFORCE_TOOL and _private_name_deny(payload, vault):
+            return 0
         # A session in a temp, pytest or job-scratch dir writes nothing into
         # a vault that outlives it (#420). See hook_guard.throwaway_session.
         if throwaway_session(payload.get("cwd") or os.getcwd(), vault):
@@ -129,6 +134,40 @@ def main() -> int:
         except Exception:
             pass
     return 0
+
+
+def _private_name_deny(payload: dict, vault) -> bool:
+    """Deny a Bash command that would publish a private repo's name (#597).
+
+    True when the deny envelope went out. Fail-open: a broken list or a git
+    that errors is logged to ``.errors.log`` and the command runs.
+    """
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str) or not command:
+        return False
+    try:
+        from mnemo.core import private_names
+
+        reason = private_names.check(command, str(payload.get("cwd") or ""), vault)
+    except Exception as exc:  # noqa: BLE001 — fail open
+        try:
+            from mnemo.core import errors
+            errors.log_error(vault, "pre_tool_use.private_names", exc)
+        except Exception:
+            pass
+        return False
+    if reason is None:
+        return False
+    _emit_deny(_Reason(reason))
+    return True
+
+
+class _Reason:
+    """The shape :func:`_emit_deny` reads: a reason and no rule path."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
 
 
 def _repo_relative(file_path: str) -> str:
