@@ -278,12 +278,36 @@ def test_the_marker_is_a_marker_not_the_cache(vault, tmp_path):
 # --- the instrument --------------------------------------------------------
 
 
-def test_stats_answers_whether_the_offer_is_what_gets_things_decided(vault, tmp_path):
+class _Clock(datetime):
+    """Every ``datetime.now()`` in the procedures module reads :attr:`at`,
+    which only the test moves."""
+
+    at = datetime(2026, 9, 20, 12, 0, 0)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.at
+
+
+@pytest.fixture
+def clock(monkeypatch) -> type[_Clock]:
+    # The ledger stamps each row to the second off the wall clock, so an offer
+    # and a decision written back to back straddle a second boundary now and
+    # then and a latency of zero reads one second (1.157e-05 days): #569, on CI.
+    monkeypatch.setattr(_Clock, "at", datetime.now().replace(microsecond=0))
+    monkeypatch.setattr(P, "datetime", _Clock)
+    return _Clock
+
+
+def test_stats_answers_whether_the_offer_is_what_gets_things_decided(
+    vault, tmp_path, clock
+):
     """#390's ``inbox --stats`` is the precedent; this mirrors it in this
     queue's own ledger, because the two queues' keys mean different things."""
     candidates = [_candidate("app", repo_root=tmp_path / "app"),
                   _candidate("other", repo_root=tmp_path / "other")]
     P.record(vault, event=P.OFFERED, repo="app", key="cargo-test")
+    clock.at += timedelta(days=1, hours=12)
     P.record(vault, event=P.ACCEPTED, repo="app", key="cargo-test")
     P.record(vault, event=P.DROPPED, repo="other", key="cargo-test")
 
@@ -292,8 +316,9 @@ def test_stats_answers_whether_the_offer_is_what_gets_things_decided(vault, tmp_
     assert out["candidates"] == 2 and out["repos"] == 2
     assert (out["offered"], out["accepted"], out["dropped"]) == (1, 1, 1)
     assert out["resolved"] == 2
-    # Only the one that was offered first has a latency to report.
-    assert out["median_decision_days"] == 0
+    # Only the one that was offered first has a latency to report, and it is
+    # the gap between its two rows.
+    assert out["median_decision_days"] == 1.5
 
 
 def test_a_decision_nobody_was_offered_has_no_latency(vault, tmp_path):

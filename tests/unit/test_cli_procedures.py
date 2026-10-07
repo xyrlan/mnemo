@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import io
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from mnemo.cli.parser import ADVANCED_COMMANDS, COMMANDS, INTERNAL_COMMANDS, _build_parser
@@ -198,16 +199,29 @@ def test_stats_measures_the_offer_from_being_shown_to_being_decided(
     """The number the offer exists to be judged on (#390's precedent, mirrored)."""
     from mnemo.core import procedures as P
 
+    class _Clock(datetime):
+        """The ledger stamps each row to the second off the wall clock, so two
+        rows written back to back straddle a second boundary now and then:
+        #569. Here only the test moves it."""
+
+        at = datetime.now().replace(microsecond=0)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.at
+
+    monkeypatch.setattr(P, "datetime", _Clock)
     projects, _repo = _population(tmp_path)
     vault = tmp_path / "vault"
     P.record(vault, event=P.OFFERED, repo="app", key="cargo-test")
+    _Clock.at += timedelta(days=1, hours=12)
     P.record(vault, event=P.DROPPED, repo="app", key="cargo-test")
 
     rc, out = _run(vault, projects, monkeypatch, stats=True)
 
     assert rc == 0
     assert "1 offered at session start, 0 accepted, 1 dropped (1 resolved)" in out
-    assert "median offer → decision: 0d" in out
+    assert "median offer → decision: 1.5d" in out
 
 
 def test_refresh_and_an_action_at_once_are_refused(tmp_path: Path, monkeypatch) -> None:
