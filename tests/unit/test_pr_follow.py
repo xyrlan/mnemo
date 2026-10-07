@@ -470,6 +470,211 @@ def test_settings_are_bounded(raw, attempts, hours) -> None:
 
 
 # ---------------------------------------------------------------------------
+# checks the child cannot fix (#575): never run, or cleared by a rerun
+# ---------------------------------------------------------------------------
+
+#: Annotations as ``gh api repos/o/r/check-runs/<id>/annotations`` returned them
+#: on 2026-09-30 (repository and commit anonymised). A lapsed Actions bill: the
+#: job "fails" in two seconds with no step, and this is the only trace of why.
+#: Both kinds of run also carry the runner-label notice every job got that week.
+_LABEL_NOTICE = {
+    "path": ".github", "blob_href": f"https://github.com/o/r/blob/{HEAD}/.github",
+    "start_line": 1, "start_column": None, "end_line": 1, "end_column": None,
+    "annotation_level": "notice", "title": "",
+    "message": '"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, '
+               '2026. For more information, see '
+               'https://github.com/actions/runner-images/issues/14748"',
+    "raw_details": "",
+}
+NOT_STARTED_NOTES = [{
+    "path": ".github", "blob_href": f"https://github.com/o/r/blob/{HEAD}/.github",
+    "start_line": 1, "start_column": None, "end_line": 1, "end_column": None,
+    "annotation_level": "failure", "title": "",
+    "message": "The job was not started because recent account payments have failed or "
+               "your spending limit needs to be increased. Please check the 'Billing & "
+               "plans' section in your settings",
+    "raw_details": "",
+}, _LABEL_NOTICE]
+#: A job that ran and failed — mnemo's own ubuntu / py3.8 job, the same week.
+RAN_AND_FAILED_NOTES = [{
+    "path": ".github", "blob_href": f"https://github.com/o/r/blob/{HEAD}/.github",
+    "start_line": 5912, "start_column": None, "end_line": 5912, "end_column": None,
+    "annotation_level": "failure", "title": "",
+    "message": "Process completed with exit code 1.", "raw_details": "",
+}, _LABEL_NOTICE]
+
+
+def _check_run(rid: int, name: str, conclusion: str, *, suite: int = 99436769760,
+               seconds: int = 2) -> dict:
+    """One element of ``check_runs`` in ``GET /repos/o/r/commits/<sha>/check-runs``."""
+    return {
+        "id": rid, "name": name, "head_sha": HEAD, "status": "completed",
+        "conclusion": conclusion, "started_at": _iso(T0),
+        "completed_at": _iso(T0 + seconds),
+        "output": {"title": None, "summary": None, "text": None, "annotations_count": 2},
+        "check_suite": {"id": suite}, "app": {"slug": "github-actions"},
+    }
+
+
+class GitHub:
+    """``gh api`` over recorded payloads — the raw REST answers, with each
+    call's ``--jq`` applied here as ``gh`` would — and everything else
+    through a :class:`Fake` world whose ``gh pr checks`` rows are the runs'."""
+
+    def __init__(self, runs: List[dict], notes: Dict[int, list], *,
+                 listing_fails: bool = False, broken_notes: Sequence[int] = ()) -> None:
+        rows = [{"name": r["name"], "bucket": "pass" if r["conclusion"] == "success" else "fail"}
+                for r in runs]
+        self.world = _world()
+        self.world.table[("gh", "pr", "checks")] = (0, json.dumps(rows), "")
+        self.runs, self.notes = runs, notes
+        self.listing_fails, self.broken_notes = listing_fails, set(broken_notes)
+        self.calls: List[Tuple[str, ...]] = []
+
+    def note_reads(self) -> List[str]:
+        return [c[2] for c in self.calls if c[:2] == ("gh", "api") and "/annotations" in c[2]]
+
+    def __call__(self, argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
+        self.calls.append(tuple(argv))
+        if tuple(argv[:2]) != ("gh", "api"):
+            return self.world(argv, cwd)
+        path = argv[2]
+        if path == f"repos/o/r/commits/{HEAD}/check-runs?per_page=100":
+            if self.listing_fails:
+                return 1, "", "HTTP 502"
+            body = {"total_count": len(self.runs), "check_runs": self.runs}
+            return 0, json.dumps([{"id": r["id"], "name": r["name"], "status": r["status"],
+                                   "conclusion": r["conclusion"],
+                                   "suite": r["check_suite"]["id"]}
+                                  for r in body["check_runs"]]), ""
+        if path.startswith("repos/o/r/check-runs/") and path.endswith("/annotations"):
+            rid = int(path.split("/")[4])
+            if rid in self.broken_notes:
+                return 1, "", "HTTP 502"
+            return 0, json.dumps([n["message"] for n in self.notes.get(rid, [])]), ""
+        return 1, "", "unexpected call"
+
+
+def _billing_lapsed(*names: str) -> GitHub:
+    runs = [_check_run(109890890679 + i, n, "failure") for i, n in enumerate(names)]
+    return GitHub(runs, {r["id"]: NOT_STARTED_NOTES for r in runs})
+
+
+def test_the_billing_annotation_reads_as_never_started_and_a_real_one_does_not() -> None:
+    from mnemo.core.sessions import check_runs
+
+    assert check_runs.never_started([n["message"] for n in NOT_STARTED_NOTES])
+    assert not check_runs.never_started([n["message"] for n in RAN_AND_FAILED_NOTES])
+    # A test's own output in an annotation is not GitHub declining to start it.
+    assert not check_runs.never_started(["AssertionError: server not started after 5s"])
+
+
+def test_checks_that_never_ran_do_not_wake_the_child_and_the_parent_is_told(
+        vault, tree) -> None:
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    gh = _billing_lapsed("Lint & Typecheck", "Unit tests")
+    report = _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+
+    assert waker.calls == [] and report.woken == [] and report.closed == []
+    (parent, text), = told.sent
+    assert parent == PARENT
+    assert text.startswith(
+        '<mnemo-child-finished id="594436f2" state="ci-not-run" event="follow-not-run">')
+    assert "never ran (Lint & Typecheck, Unit tests)" in text and "billing" in text
+    assert _entry(vault)["last_events"] == []
+
+    # The next poll says nothing new and reads no annotation again.
+    reads = len(gh.note_reads())
+    _sweep(vault, gh, now=T0 + 800, waker=waker, told=told)
+    assert waker.calls == [] and len(told.sent) == 1
+    assert len(gh.note_reads()) == reads
+
+
+def test_a_failure_a_rerun_on_the_same_commit_cleared_does_not_wake(vault, tree) -> None:
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    gh = GitHub([_check_run(1, "ubuntu-latest / py3.8", "failure", seconds=300),
+                 _check_run(2, "ubuntu-latest / py3.8", "success", suite=99436769761,
+                            seconds=300),
+                 _check_run(3, "lint", "success")],
+                {1: RAN_AND_FAILED_NOTES})
+    report = _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+
+    assert waker.calls == [] and report.woken == [] and told.sent == []
+    assert gh.note_reads() == [], "GitHub's own verdict needs no annotation"
+
+
+def test_a_real_failure_wakes_the_child_as_before(vault, tree) -> None:
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    gh = GitHub([_check_run(1, "ubuntu-latest / py3.8", "failure", seconds=300),
+                 _check_run(2, "lint", "success")], {1: RAN_AND_FAILED_NOTES})
+    report = _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+
+    assert report.woken == [SHORT]
+    assert waker.calls[0]["events"] == ["ci-red"]
+    assert [t for _, t in told.sent if "follow-not-run" in t] == []
+
+
+def test_never_run_beside_a_real_failure_still_wakes(vault, tree) -> None:
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    gh = GitHub([_check_run(1, "deploy-preview", "failure"),
+                 _check_run(2, "ubuntu-latest / py3.8", "failure", seconds=300)],
+                {1: NOT_STARTED_NOTES, 2: RAN_AND_FAILED_NOTES})
+    report = _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+
+    assert report.woken == [SHORT] and waker.calls[0]["events"] == ["ci-red"]
+    assert all("follow-not-run" not in t for _, t in told.sent)
+
+
+@pytest.mark.parametrize("how", ["listing", "annotation"])
+def test_a_github_call_that_fails_reads_as_today_a_wake(vault, tree, how) -> None:
+    _follow(vault, tree)
+    waker = Waker()
+    runs = [_check_run(7, "Lint & Typecheck", "failure")]
+    gh = GitHub(runs, {7: NOT_STARTED_NOTES}, listing_fails=how == "listing",
+                broken_notes=(7,) if how == "annotation" else ())
+    _sweep(vault, gh, now=T0 + 400, waker=waker)
+    assert waker.calls and waker.calls[0]["events"] == ["ci-red"]
+
+
+def test_annotation_reads_are_bounded_per_poll_and_never_repeated(vault, tree) -> None:
+    """A lapsed bill fails every job of a big matrix: a poll reads a bounded
+    share, waits rather than guessing at the rest, and the next one goes on."""
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    names = [f"{os_} / py3.{v}" for os_ in ("ubuntu", "macos") for v in range(8, 14)]
+    gh = _billing_lapsed(*names)
+    assert len(names) > pr_follow.MAX_NOTE_READS
+
+    _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+    assert len(gh.note_reads()) == pr_follow.MAX_NOTE_READS
+    assert waker.calls == [] and told.sent == [], "half read is not yet an answer"
+
+    _sweep(vault, gh, now=T0 + 800, waker=waker, told=told)
+    reads = gh.note_reads()
+    assert len(reads) == len(names) == len(set(reads)), "each run read once"
+    assert waker.calls == [] and len(told.sent) == 1 and "follow-not-run" in told.sent[0][1]
+
+
+def test_checks_rerun_after_the_bill_is_paid_wake_the_child_if_they_fail(
+        vault, tree) -> None:
+    _follow(vault, tree)
+    waker, told = Waker(), Told()
+    gh = _billing_lapsed("Lint & Typecheck")
+    _sweep(vault, gh, now=T0 + 400, waker=waker, told=told)
+    assert waker.calls == [] and not _entry(vault)["closed"]
+
+    # `gh run rerun`: the same commit, a new run of the check, and this one ran.
+    gh.runs = [_check_run(9, "Lint & Typecheck", "failure", seconds=90)]
+    gh.notes = {9: RAN_AND_FAILED_NOTES}
+    _sweep(vault, gh, now=T0 + 800, waker=waker, told=told)
+    assert waker.calls and waker.calls[0]["events"] == ["ci-red"]
+
+
+# ---------------------------------------------------------------------------
 # the triggers
 # ---------------------------------------------------------------------------
 
