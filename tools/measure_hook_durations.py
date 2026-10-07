@@ -64,6 +64,11 @@ from mnemo.core.log_utils import iter_rotated_rows  # noqa: E402
 from mnemo.core.reflex.judge import DEFAULT_TIMEOUT_S  # noqa: E402
 from mnemo.core.reflex.judge_stats import percentile  # noqa: E402
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 DEFAULT_WALL_MS = int(DEFAULT_TIMEOUT_S * 1000)
 
 #: The four hooks mnemo installs, by the event Claude Code fires them on.
@@ -354,9 +359,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         env = prepare_scratch(os.path.expanduser(args.vault), os.path.expanduser(args.scratch))
         timed = timed_runs(args.timed, env=env, cwd=os.path.expanduser(args.cwd),
                            transcript=args.transcript)
+        prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(args.vault))
         if args.json:
-            print(json.dumps(timed, indent=2))
+            print(json.dumps(_provenance.stamp(timed, prov), indent=2))
         else:
+            print(_provenance.line(prov))
             for hook, spread in timed.items():
                 print("%-20s n %d  p50 %s  p95 %s  p99 %s  max %s (ms)" % (
                     HOOKS[hook], spread["n"], _ms(spread["p50"]), _ms(spread["p95"]),
@@ -364,7 +371,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     report = measure(os.path.expanduser(args.vault), os.path.expanduser(args.projects),
                      days=args.days, wall_ms=args.wall_ms)
-    print(json.dumps(report, indent=2) if args.json else render(report))
+    projects = os.path.expanduser(args.projects)
+    prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(args.vault),
+                                  blind_spots=[_provenance.transcripts_blind_spot(projects)])
+    if args.json:
+        print(json.dumps(_provenance.stamp(report, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(render(report))
     return 0
 
 

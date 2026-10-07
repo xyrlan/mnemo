@@ -91,6 +91,7 @@ def _sibling(name: str) -> Any:
 
 mpr = _sibling("measure_prevented_repeats")
 mrc = mpr.mrc
+_provenance = _sibling("_provenance")
 
 THRESHOLD = mpr.THRESHOLD
 BOOTSTRAP = mpr.BOOTSTRAP
@@ -454,9 +455,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if unlabelled:
         print("%d evidence quote(s) unlabelled by #520's raters count as unverified" % len(unlabelled),
               file=sys.stderr)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
-        print(json.dumps(data, indent=1, default=str))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     return 0
