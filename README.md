@@ -34,6 +34,11 @@ That's the whole thing. No terminal, no Python, no Node — mnemo ships as a
 self-contained binary that the plugin fetches for your platform on first use.
 Restart Claude Code, and it's running.
 
+Claude Code deletes transcripts after 30 days unless `cleanupPeriodDays` says
+otherwise, and they are what mnemo learns from: add `"cleanupPeriodDays": 365`
+to `~/.claude/settings.json` (`mnemo init` merges it in for you, and `mnemo
+doctor` warns while it is missing).
+
 <details>
 <summary>Other ways to install</summary>
 

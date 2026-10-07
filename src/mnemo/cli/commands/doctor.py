@@ -31,6 +31,7 @@ from mnemo.cli.commands.doctor_checks import (
     share,
     skills,
     stale,
+    transcript_retention,
 )
 from mnemo.cli.parser import command
 
@@ -75,6 +76,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("helper_processes",      helper_processes._doctor_check_helper_processes),
     ("child_reports",         child_reports._doctor_check_child_reports),
     ("native_memory_cut",     native_memory._doctor_check_native_memory_cut),
+    ("transcript_retention",  transcript_retention._doctor_check_transcript_retention),
 ]
 
 
