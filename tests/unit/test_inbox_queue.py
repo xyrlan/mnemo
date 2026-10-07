@@ -205,27 +205,37 @@ def test_drop_archives_before_it_deletes(tmp_vault: Path):
 # --- the numbers -----------------------------------------------------------
 
 
-class _OneInstant(datetime):
-    """Every ``datetime.now()`` in the inbox module reads the same second."""
+def _clock_at(instant: datetime) -> type:
+    """A ``datetime`` whose ``now()`` reads ``instant``.
 
-    @classmethod
-    def now(cls, tz=None):
-        return cls(2026, 9, 20, 12, 0, 0)
+    The ledger stamps to the second, so an offer and a decision written back
+    to back straddle a second boundary now and then and a median meant to be
+    zero reads one second (1.157e-05 days): #408 and #569, seen on CI. One
+    frozen instant for every write fixed that flake but made the latency zero
+    whatever its arithmetic did, so each write is stamped at its own instant.
+    """
+
+    class _At(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant
+
+    return _At
 
 
 def test_stats_reports_depth_age_and_what_drained(tmp_vault: Path, monkeypatch):
-    # The ledger stamps to the second, so an offer and a decision made in the
-    # same instant straddle a second boundary now and then and the median
-    # reads one second (1.157e-05 days) instead of zero: #408, seen on CI.
-    monkeypatch.setattr(I, "datetime", _OneInstant)
+    offered_at = datetime(2026, 9, 20, 12, 0, 0)
     monkeypatch.setattr(I, "_rebuild_indexes", lambda _v: None)
     _page(tmp_vault, "shared/_inbox/reference/a.md", sources=["bots/demo/x.md"], age_days=10)
     _page(tmp_vault, "shared/_inbox/reference/b.md", sources=["bots/demo/x.md"], age_days=2)
     _page(tmp_vault, "shared/_inbox/reference/c.md", sources=["bots/demo/x.md"], age_days=4)
 
     pages = I.staged_pages(tmp_vault)
+    monkeypatch.setattr(I, "datetime", _clock_at(offered_at))
     I.record(tmp_vault, event=I.OFFERED, key=pages[0].key, project="demo")
+    monkeypatch.setattr(I, "datetime", _clock_at(offered_at + timedelta(hours=36)))
     I.promote(tmp_vault, pages[0], project="demo")
+    monkeypatch.setattr(I, "datetime", _clock_at(offered_at + timedelta(days=3)))
     I.drop(tmp_vault, pages[1], project="demo")
 
     stats = I.stats(tmp_vault)
@@ -234,7 +244,7 @@ def test_stats_reports_depth_age_and_what_drained(tmp_vault: Path, monkeypatch):
     assert stats["offered"] == 1
     assert stats["promoted"] == 1 and stats["dropped"] == 1
     assert stats["resolved"] == 2
-    assert stats["median_decision_days"] == 0.0
+    assert stats["median_decision_days"] == 1.5
 
 
 def test_a_page_decided_before_it_was_ever_offered_has_no_latency(tmp_vault: Path):
