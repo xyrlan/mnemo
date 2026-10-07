@@ -198,6 +198,83 @@ def hook_durations(rows: Iterable[Dict[str, Any]], *,
     return out
 
 
+def _when(stamp: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_prompt(row: Dict[str, Any]) -> bool:
+    if row.get("type") != "user" or row.get("isMeta"):
+        return False
+    content = (row.get("message") or {}).get("content")
+    return isinstance(content, str) or (isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") == "text" for part in content))
+
+
+def first_prompt_gap(rows: Iterable[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """Seconds from mnemo's ``SessionStart:startup`` finishing to the first
+    prompt of the session, and how long the hook ran (#610).
+
+    Claude Code writes the hook's attachment when the hook returns, so a
+    prompt it held until then lands at a gap of about zero however long the
+    hook ran, and a prompt it let through early lands at a negative gap. None
+    when the transcript has no such hook run or no prompt.
+    """
+    end: Optional[datetime] = None
+    ms: Optional[float] = None
+    for row in rows:
+        attachment = row.get("attachment")
+        if (end is None and isinstance(attachment, dict)
+                and attachment.get("type") == "hook_success"
+                and str(attachment.get("hookName") or "") == "SessionStart:startup"
+                and mnemo_hook(attachment.get("command")) == "session_start"):
+            end = _when(row.get("timestamp"))
+            ms = _number(attachment.get("durationMs"))
+        elif _is_prompt(row):
+            first = _when(row.get("timestamp"))
+            if end is None or ms is None or first is None:
+                return None
+            return {"gap_s": (first - end).total_seconds(), "hook_ms": ms}
+    return None
+
+
+def _head_rows(path: str) -> Iterable[Dict[str, Any]]:
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                yield row
+
+
+def prompt_holds(gaps: Iterable[Dict[str, float]], *, slow_ms: float = 10000,
+                 within_s: float = 1.0) -> Dict[str, Any]:
+    """Does the first prompt wait for SessionStart? Over the runs that took
+    at least *slow_ms* — long enough that a user or a dispatched child's
+    launch prompt would show up mid-hook if Claude Code let it — how many
+    first prompts landed within *within_s* after the hook returned, and how
+    many before it did."""
+    gaps = list(gaps)
+    slow = [g for g in gaps if g["hook_ms"] >= slow_ms]
+    return {
+        "sessions": len(gaps),
+        "prompt_before_hook_end": sum(1 for g in gaps if g["gap_s"] < 0),
+        "slow_ms": slow_ms,
+        "slow": len(slow),
+        "slow_prompt_before_hook_end": sum(1 for g in slow if g["gap_s"] < 0),
+        "slow_prompt_within_s": within_s,
+        "slow_prompt_within": sum(1 for g in slow if 0 <= g["gap_s"] < within_s),
+    }
+
+
 def measure(vault_root: str, projects_root: str, *, days: Optional[int] = None,
             wall_ms: float = DEFAULT_WALL_MS) -> Dict[str, Any]:
     since = _cutoff(days)
@@ -211,11 +288,18 @@ def measure(vault_root: str, projects_root: str, *, days: Optional[int] = None,
 
     from pathlib import Path
 
+    def _gaps() -> Iterable[Dict[str, float]]:
+        for path in sorted(transcripts):
+            gap = first_prompt_gap(_head_rows(path))
+            if gap is not None:
+                yield gap
+
     return {
         "days": days,
         "transcripts": len(transcripts),
         "judge": judge_rows(iter_rotated_rows(Path(log)), wall_ms=wall_ms, since=since),
         "hooks": hook_durations(_all(), since=since),
+        "first_prompt": prompt_holds(_gaps()),
     }
 
 
@@ -402,6 +486,14 @@ def render(report: Dict[str, Any]) -> str:
         lines.append("  %-20s %6d %8s %8s %8s %8s  %s" % (
             entry["event"], done["n"], _ms(done["p50"]), _ms(done["p95"]),
             _ms(done["p99"]), _ms(done["max"]), cancelled))
+    held = report.get("first_prompt")
+    if held:
+        lines += ["", "first prompt vs SessionStart:startup (%d sessions): %d prompts timestamped "
+                  "before the hook returned; of the %d runs >= %s ms, %d prompts landed within "
+                  "%.0f s after it returned and %d before" % (
+                      held["sessions"], held["prompt_before_hook_end"], held["slow"],
+                      _ms(held["slow_ms"]), held["slow_prompt_within"],
+                      held["slow_prompt_within_s"], held["slow_prompt_before_hook_end"])]
     return "\n".join(lines)
 
 
