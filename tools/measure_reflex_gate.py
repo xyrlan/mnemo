@@ -75,6 +75,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -790,8 +795,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     data["label_counts"] = label_counts(labels)
     data["rater"] = labels_file.get("rater", args.rater)
     data["blind"] = bool(labels_file.get("blind"))
-    print(json.dumps(data, indent=2) if args.json
-          else format_report(data, rater=data["rater"], blind=data["blind"]))
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    if args.json:
+        print(json.dumps(_provenance.stamp(data, prov), indent=2))
+    else:
+        print(_provenance.line(prov))
+        print(format_report(data, rater=data["rater"], blind=data["blind"]))
     return 0
 
 

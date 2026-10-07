@@ -39,6 +39,11 @@ from mnemo.core import briefing_select
 from mnemo.core.briefing import BriefingRecord
 from mnemo.core.extract.scanner import parse_frontmatter
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _PATH_RE = re.compile(
     r"(?:[\w.-]+/)+[\w.-]+\.\w{1,5}"
     r"|\b[\w-]+\.(?:py|ts|tsx|rs|json|jsonl|toml|yml|yaml|sh)\b"
@@ -131,9 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     result = measure(load(Path(args.vault).expanduser(), args.agent))
+    prov = _provenance.provenance(__file__, argv, vault=Path(args.vault).expanduser())
     if args.json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(_provenance.stamp(result, prov), indent=2))
         return 0
+    print(_provenance.line(prov))
     c = result["counts"]
     for r in result["rows"]:
         print(f"  {r['branch']:<45} {r['reason']:<20} best={r['best']} "

@@ -49,6 +49,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 PERSISTED = "<persisted-output>"
 _REPORTED = re.compile(r"Output too large \(([\d.]+)\s*KB\)")
 _SAVED = re.compile(r"Full output saved to: (\S+)")
@@ -221,10 +226,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     d = run(Path(args.projects), args.since)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        json.dump(d, sys.stdout, indent=2)
+        json.dump(_provenance.stamp(d, prov), sys.stdout, indent=2)
         print()
     else:
+        print(_provenance.line(prov))
         print("\n".join(report_lines(d)))
     return 0
 

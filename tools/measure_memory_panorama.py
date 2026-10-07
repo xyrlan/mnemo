@@ -120,6 +120,11 @@ bv = _sibling("measure_broad_value")
 mpr = bv.mpr
 mrc = bv.mrc
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 OUT_DIR = "memory-panorama"
 DAYS = 30
 SEED = 530
@@ -1554,10 +1559,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     aliases = load_aliases(state / "private-names.tsv")
     home = os.path.expanduser("~")
     serial = json.loads(redact(json.dumps(data, ensure_ascii=False, default=str), aliases, home))
-    mrc._write(out / "report.json", serial)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(projects)])
+    mrc._write(out / "report.json", _provenance.stamp(serial, prov))
     if args.json:
-        print(json.dumps(serial, indent=1, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(serial, prov), indent=1, ensure_ascii=False))
         return 0
+    print(redact(_provenance.line(prov), aliases, home))
     for line in report_lines(data):
         print(redact(line, aliases, home))
     print("")

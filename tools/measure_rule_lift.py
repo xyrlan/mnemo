@@ -106,6 +106,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 OUT_DIR = "rule-lift"
@@ -629,12 +634,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     print("judge calls: API-price equivalent $%.2f" % judge_usd)
 
     verdicts = all_verdicts.get(col, {})
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
         rows = pair_rows(todo, answers, verdicts)
         stats = lift(rows)
-        print(json.dumps({"judge": col, "stats": stats, "decision": decision(stats),
-                          "per_rule": per_rule(rows)}, indent=1))
+        print(json.dumps(_provenance.stamp({"judge": col, "stats": stats, "decision": decision(stats),
+                                            "per_rule": per_rule(rows)}, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     print("arms and judge %s, %s\n" % (col, pairs_path))
     for line in report_lines(todo, answers, verdicts):
         print(line)

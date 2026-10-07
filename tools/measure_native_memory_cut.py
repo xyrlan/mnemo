@@ -100,6 +100,11 @@ from mnemo.core.log_utils import iter_rotated_rows  # noqa: E402
 # Claude Code's load limits for ``MEMORY.md`` (see the module docstring).
 from mnemo.core.native_memory import CHAR_LIMIT, INDEX, LINE_LIMIT, loaded_lines  # noqa: E402,F401
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: When the full-body reflex went live on the maintainer's machine (#543,
 #: ``measure_full_body_fresh.LIVE``).
 LIVE = "2026-09-28T23:09:00Z"
@@ -666,6 +671,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         from mnemo.core import config, paths
         vault = paths.vault_root(config.load_config())
     report = gather(vault, Path(args.projects), since=args.since)
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
         report["summary"] = summarize(report["injections"])
         if args.anonymize:
@@ -676,8 +683,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 {k: (len(v) if isinstance(v, list) else v) for k, v in p.items() if k != "agent"}
                 for p in (dict(p, dir=names.get(p["dir"], "temp")) for p in report["native"])]
             del report["injections"]
-        print(json.dumps(report, indent=1, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=1, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(render(report, anonymize=args.anonymize))
     return 0
 

@@ -49,6 +49,11 @@ import re
 import sys
 from typing import Any, Dict, Iterable, List, Optional
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 NOTICE = "<mnemo-child-finished"
 HEADER = re.compile(r'<mnemo-child-finished\s+id="(\w+)"([^>]*)>')
 CARD_ATTR = re.compile(r'\bstate="([\w-]+)"')
@@ -333,10 +338,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
     report = measure(args.projects)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        json.dump(report, sys.stdout, indent=1)
+        json.dump(_provenance.stamp(report, prov), sys.stdout, indent=1)
         print()
     else:
+        print(_provenance.line(prov))
         _print(report, args.list)
     return 0
 

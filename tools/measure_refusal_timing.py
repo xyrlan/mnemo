@@ -62,6 +62,11 @@ from mnemo.core.activity import exploration_for
 from mnemo.core.dispatch import issue_for_cwd
 from mnemo.core.sessions.detector import is_human_turn, turn_text
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: The tool-use counts #383 asks about: "within its first N tool uses".
 BANDS = (3, 5, 10)
 
@@ -365,9 +370,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     report = measure(args.projects)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
         return 0
+    print(_provenance.line(prov))
     print(render(report))
     if args.list:
         print()

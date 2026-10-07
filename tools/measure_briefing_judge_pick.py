@@ -98,6 +98,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -652,10 +657,12 @@ def main(argv: Optional[List[str]] = None, provider: Any = None) -> int:
                 _write(test_path, test)
 
     data = report(inputs, truth, answers, lock, test)
-    _write(out / "report.json", data)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    _write(out / "report.json", _provenance.stamp(data, prov))
     if args.json:
-        print(json.dumps(data, indent=1, sort_keys=True))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, sort_keys=True))
     else:
+        print(_provenance.line(prov))
         print("\n".join(report_lines(data)))
     return 0
 

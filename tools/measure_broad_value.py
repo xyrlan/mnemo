@@ -102,6 +102,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -1047,10 +1052,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     data["pending"] = {"answers": len(pend_answers),
                        **{r: {"locate": len(locate_todo(r)), "judge": len(judge_todo(r))} for r in raters}}
     serial = dict(data, models={"%s (%s)" % k: v for k, v in models.items()})
-    mrc._write(out / "report.json", serial)
+    prov = _provenance.provenance(__file__, argv, vault=vault)
+    mrc._write(out / "report.json", _provenance.stamp(serial, prov))
     if args.json:
-        print(json.dumps(serial, indent=1))
+        print(json.dumps(_provenance.stamp(serial, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(data):
         print(line)
     print("")

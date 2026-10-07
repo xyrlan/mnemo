@@ -30,6 +30,11 @@ from mnemo.core import rule_activation
 from mnemo.core.log_utils import iter_rotated_rows
 from mnemo.core.mcp.popularity import load_recent_read_counts
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 
 def _query_of(entry: dict) -> str | None:
     """Return the call's query text, or None when it carried none."""
@@ -260,12 +265,14 @@ def main(argv: list[str] | None = None) -> int:
     fmt = measure_hit_slug_format(log_path)
     sort = measure_sort_key_discrimination(vault)
 
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
         print(json.dumps(
-            {"query_usage": queries, "hit_slug_format": fmt, "sort_keys": sort},
+            _provenance.stamp({"query_usage": queries, "hit_slug_format": fmt, "sort_keys": sort}, prov),
             indent=2,
         ))
     else:
+        print(_provenance.line(prov))
         _print_report(queries, fmt, sort)
     return 0
 

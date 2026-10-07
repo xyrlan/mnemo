@@ -76,6 +76,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from mnemo.core.sessions.stalls import Kind, from_record  # noqa: E402
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: A day-log line mnemo's own hooks wrote. The file name carries the date and
 #: the line carries local wall-clock, which is how ``log_writer`` writes them.
 _LOG_LINE = re.compile(r"^- \*\*(\d{2}):(\d{2})\*\* — (?:🟢 session started|🔴 session ended)")
@@ -329,9 +334,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         vault = str(paths_mod.vault_root(config_mod.load_config()))
 
     report = measure(os.path.expanduser(args.projects), os.path.expanduser(vault))
+    prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(vault),
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
         return 0
+    print(_provenance.line(prov))
     print(render(report))
     return 0
 

@@ -62,6 +62,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 URL = "https://api.typesafe.ai/v1/systemone"
 
 #: Pinned, never an alias: judgments made by one model are only comparable
@@ -350,10 +355,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("no rerank", evaluate(units, _orders(vault, units, None)))]
     for raw in filter(None, (g.strip() for g in args.gates.split(","))):
         rows.append(("gate " + raw, evaluate(units, _orders(vault, units, float(raw)))))
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
-        print(json.dumps({"model": qrels["model"], "judged_at": qrels["judged_at"],
-                          "rows": dict(rows)}, indent=2))
+        print(json.dumps(_provenance.stamp({"model": qrels["model"], "judged_at": qrels["judged_at"],
+                                            "rows": dict(rows)}, prov), indent=2))
     else:
+        print(_provenance.line(prov))
         print(f"judgments: {qrels['model']}, {qrels['judged_at']}, {len(units)} queries")
         for label, result in rows:
             print(format_row(label, result))

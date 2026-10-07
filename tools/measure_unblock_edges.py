@@ -60,6 +60,11 @@ from pathlib import Path
 # measures cannot drift apart. Needs ``PYTHONPATH=src`` (see Usage).
 from mnemo.core.sessions.detector import is_human_turn
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: When PR #191 gave ``session_end`` a sweep. Before this, ``detector.sweep``
 #: had exactly one caller (``mnemo sessions``, typed by hand), so edges from
 #: the earlier era were never catchable by the hook and a 0% rate over them is
@@ -351,14 +356,18 @@ def main() -> int:
         "own_end_check": own_end,
     }
 
+    prov = _provenance.provenance(__file__, None, vault=vault_root,
+                                  blind_spots=[_provenance.transcripts_blind_spot(projects_root)])
     if args.json:
-        print(json.dumps({
+        print(json.dumps(_provenance.stamp({
             "summary": summary,
             "per_session": per_session,
             "structural": structural,
             "recorded_markers": recorded,
-        }, indent=2))
+        }, prov), indent=2))
         return 0
+
+    print(_provenance.line(prov))
 
     print("Unblock edge coverage (#176)")
     print("=" * 64)

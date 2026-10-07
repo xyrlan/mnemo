@@ -62,6 +62,11 @@ from typing import Any, Dict, Iterable, List, Optional, Pattern, Tuple
 from mnemo.core.activity.exploration import _split_heredocs
 from mnemo.core.dispatch import issue_for_cwd
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 #: ``(repo, name, trigger, needs, why)``. ``trigger`` says "the child is doing
 #: this kind of work"; ``needs`` says "here, that has to look like this".
 PROBES: Tuple[Tuple[str, str, Pattern, Pattern, str], ...] = (
@@ -344,9 +349,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     report = measure(args.projects)
+    prov = _provenance.provenance(__file__, argv,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(json.dumps(_provenance.stamp(report, prov), indent=2, ensure_ascii=False))
     else:
+        print(_provenance.line(prov))
         print(format_report(report, listing=args.list), end="")
     return 0
 

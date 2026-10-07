@@ -55,6 +55,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -402,7 +407,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     timeout = int((cfg.get("extraction") or {}).get("subprocessTimeout") or 180)
 
     if args.gate:
-        return _gate(args, cfg, vault, out, items, labels, raters, timeout)
+        return _gate(args, cfg, vault, out, items, labels, raters, timeout, argv=argv)
 
     scores = _read(out / SCORES_NAME, {})
     if args.score:
@@ -442,6 +447,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         signals["check " + col + tag] = scores[col]
     calls = _read_rows(out / CALLS_NAME)
     stats = {col: call_stats([r for r in calls if r.get("column") == col]) for col in sorted(scores)}
+    prov = _provenance.provenance(__file__, argv, vault=vault)
     if args.json:
         data = {}
         for part in (DEV, TEST):
@@ -450,8 +456,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           for n, k in signals.items()}
         data["calls"] = stats
         data["test_scored_by"] = _read(out / TEST_NAME, [])
-        print(json.dumps(data, indent=1))
+        print(json.dumps(_provenance.stamp(data, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     for line in report_lines(items, gold, signals, stats):
         print(line)
     scored = _read(out / TEST_NAME, [])
@@ -461,7 +468,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 def _gate(args: Any, cfg: dict, vault: Path, out: Path, items: List[Dict[str, Any]],
-          labels: Dict[str, Dict[str, bool]], raters: Sequence[str], timeout: int) -> int:
+          labels: Dict[str, Dict[str, bool]], raters: Sequence[str], timeout: int,
+          argv: Optional[Sequence[str]] = None) -> int:
     from mnemo.core import llm
 
     rows = gate_items(gate_pages(vault), Path(args.projects), items)
@@ -485,10 +493,15 @@ def _gate(args: Any, cfg: dict, vault: Path, out: Path, items: List[Dict[str, An
             mrc.run_calls(provider, r, timeout, calls, None, out / "calls.jsonl", args.pause)
     answers = {r: dict(labels.get(cols[r]) or {}, **(gate_labels.get(cols[r]) or {})) for r in raters}
     counts = gate_counts(rows, answers)
+    prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
+        _provenance.transcripts_blind_spot(args.projects),
+        "%d gate-verified page(s) whose transcript is gone" % counts["transcript gone"],
+        "%d page(s) whose quote was not located in its transcript" % counts["not located"]])
     if args.json:
-        print(json.dumps({"counts": counts, "rows": [
-            {k: v for k, v in r.items() if k not in ("answered", "turn")} for r in rows]}, indent=1))
+        print(json.dumps(_provenance.stamp({"counts": counts, "rows": [
+            {k: v for k, v in r.items() if k not in ("answered", "turn")} for r in rows]}, prov), indent=1))
         return 0
+    print(_provenance.line(prov))
     print("gate-verified feedback pages today: %d" % counts["pages"])
     for key in ("both not", "split", "both correction", "unlabelled", "transcript gone", "not located"):
         print("  %-16s %d" % (key, counts[key]))

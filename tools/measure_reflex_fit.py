@@ -52,6 +52,11 @@ from typing import Any, Dict, Iterable, List, Optional
 from mnemo.core.hook_envelope import ENVELOPE_MAX_BYTES
 from mnemo.core.reflex import render
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 
 def emissions(rows: Iterable[Dict[str, Any]], since: str, until: str) -> List[Dict[str, Any]]:
     """Rows that emitted at least one rule, with ``since <= ts <= until``
@@ -225,12 +230,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--projects", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    d = run(paths.vault_root(cfg_mod.load_config()), args.days, args.until or None,
-            Path(args.projects))
+    vault = paths.vault_root(cfg_mod.load_config())
+    d = run(vault, args.days, args.until or None, Path(args.projects))
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
     if args.json:
-        json.dump(d, sys.stdout, indent=2)
+        json.dump(_provenance.stamp(d, prov), sys.stdout, indent=2)
         print()
     else:
+        print(_provenance.line(prov))
         print("\n".join(report_lines(d)))
     return 0
 

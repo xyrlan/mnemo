@@ -144,6 +144,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 
@@ -871,8 +876,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                      baseline_precision=base_prec,
                                      verdict=verdict_lift(row["coverage_lacked"], base.get("coverage_lacked") or {},
                                                           row["precision"].get("precision"), base_prec, p90))
-    mrc._write(out / REPORT_NAME, data)
-    print(json.dumps(data, indent=1, default=str) if args.json else "\n".join(report_lines(data)))
+    prov = _provenance.provenance(__file__, argv, vault=vault,
+                                  blind_spots=[_provenance.transcripts_blind_spot(args.projects)])
+    mrc._write(out / REPORT_NAME, _provenance.stamp(data, prov))
+    if args.json:
+        print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str))
+    else:
+        print(_provenance.line(prov))
+        print("\n".join(report_lines(data)))
     return 0
 
 

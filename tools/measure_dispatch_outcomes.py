@@ -104,6 +104,11 @@ from mnemo.core import dispatch  # noqa: E402
 from mnemo.core.hook_guard import is_throwaway  # noqa: E402
 from mnemo.core.sessions import check_runs, child_notices, detector, report_card  # noqa: E402
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 DISPATCH = "dispatch"
 PLAIN = "plain"
 
@@ -1202,16 +1207,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     rows = gather(args.projects, jobs=args.jobs, vault=vault, since=since, until=until, run=run,
                   only=only, followup_days=args.followups)
     aliases = load_aliases(vault / ".mnemo" / "private-names.tsv")
+    prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
+        _provenance.transcripts_blind_spot(args.projects),
+        "--no-gh: nothing read from GitHub (merges, checks, follow-ups unknown)" if args.no_gh else None])
     if pairs is not None:
         result = pilot(pairs, rows)
-        text = (json.dumps(result, indent=2, default=str) if args.json else format_pilot(result, planned=args.planned))
+        text = (json.dumps(_provenance.stamp(result, prov), indent=2, default=str) if args.json
+                else _provenance.line(prov) + "\n" + format_pilot(result, planned=args.planned))
         sys.stdout.write(redact(text, aliases) + ("\n" if args.json else ""))
         return 0
     report = measure(rows)
     if args.json:
-        text = json.dumps({"report": report, "jobs": rows}, indent=2, default=str)
+        text = json.dumps(_provenance.stamp({"report": report, "jobs": rows}, prov), indent=2, default=str)
     else:
-        text = format_report(report, rows, listing=args.list)
+        text = _provenance.line(prov) + "\n" + format_report(report, rows, listing=args.list)
     sys.stdout.write(redact(text, aliases) + ("\n" if args.json else ""))
     return 0
 

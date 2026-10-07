@@ -47,6 +47,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from tools import _provenance
+except ImportError:  # run as a script: tools/ is sys.path[0]
+    import _provenance  # type: ignore[no-redef]
+
 _SIBLINGS = Path(__file__).resolve().parent
 
 AUDIT_DIR = "audit-2026-09-22"
@@ -259,6 +264,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     parts = {i: part_of(i) for i in truth}
     n_junk = sum(1 for t in truth.values() if t == JUNK)
+    split = len(sample) - len(truth)
+    print(_provenance.line(_provenance.provenance(
+        __file__, argv, vault=vault,
+        blind_spots=["%d sampled row(s) the raters split on are left out" % split if split else None])))
     print("labelled: %d rows, %d junk (both raters G/N), %d good (both T/S), "
           "%d split and left out" % (len(truth), n_junk, len(truth) - n_junk,
                                      len(sample) - len(truth)))
