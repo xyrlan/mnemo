@@ -6,8 +6,10 @@ The row exists because the command would otherwise be a pull mechanism, and
 is run when something feels wrong, which is the same day a child gets a repo's
 setup wrong.
 
-Stateless like every other row: it re-reads the transcripts each run, and the
-vault's decision ledger is what keeps a dropped candidate quiet (#380's rule).
+Its only state is derived: what each transcript yielded, cached under the
+vault's ``.mnemo/`` and keyed on the file's size and mtime, so a run re-reads
+only the transcripts that changed (#571). The vault's decision ledger is what
+keeps a dropped candidate quiet (#380's rule).
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ def _doctor_check_rediscovered_procedures(vault: Path) -> bool:
                 max_shape_repos=int(cfg.get("maxShapeRepos", 2)),
                 repo=repo,
                 ledger_rows=P.ledger_rows(vault),
+                transcript_cache=P.transcript_cache_path(vault),
             )
             if not c.stated
         ]

@@ -21,7 +21,9 @@ lesson collapse into a single candidate rather than three pairs.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
+from typing import Iterator
 
 from mnemo.core.extract.inbox.dedup import _stem_word
 
@@ -87,6 +89,36 @@ def _similarity(a: _Fields, b: _Fields) -> float:
     )
 
 
+def _pairs(items: list[_Fields], threshold: float) -> Iterator[tuple[int, int]]:
+    """Every ``(i, j)``, ``i < j``, whose score could reach *threshold*, in order.
+
+    A pair whose names share no token scores at most ``_W_TAGS + _W_BODY``
+    (0.5), under the default threshold of 0.55, so above that bound only pairs
+    sharing a name token are worth scoring — 110,528 of 5.59M on the
+    maintainer's 3345-rule vault on 2026-10-07 (#571). The order is the
+    all-pairs order, because the clustering depends on it: a merge keeps the
+    surviving root's best score and drops the absorbed one's, so the reported
+    similarity is order-dependent and pruning must not reorder what it keeps.
+    """
+    n = len(items)
+    if threshold <= _W_TAGS + _W_BODY:
+        for i in range(n):
+            for j in range(i + 1, n):
+                yield i, j
+        return
+    postings: dict[str, list[int]] = {}
+    for index, item in enumerate(items):
+        for token in item.name:
+            postings.setdefault(token, []).append(index)
+    for i in range(n):
+        later: set[int] = set()
+        for token in items[i].name:
+            posting = postings[token]
+            later.update(posting[bisect_right(posting, i):])
+        for j in sorted(later):
+            yield i, j
+
+
 def find_universal_candidates(
     index: dict,
     *,
@@ -123,23 +155,22 @@ def find_universal_candidates(
 
     # Best pairwise score per cluster, reported as the candidate's similarity.
     best: dict[int, float] = {}
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            a, b = items[i], items[j]
-            if a.type != b.type:
-                continue
-            if set(a.projects) == set(b.projects):
-                # Same project(s) on both sides — merging them is dedup work,
-                # not promotion. dedup_rules owns that case.
-                continue
-            score = _similarity(a, b)
-            if score < threshold:
-                continue
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[max(ri, rj)] = min(ri, rj)
-            root = find(i)
-            best[root] = max(best.get(root, 0.0), score)
+    for i, j in _pairs(items, threshold):
+        a, b = items[i], items[j]
+        if a.type != b.type:
+            continue
+        if set(a.projects) == set(b.projects):
+            # Same project(s) on both sides — merging them is dedup work,
+            # not promotion. dedup_rules owns that case.
+            continue
+        score = _similarity(a, b)
+        if score < threshold:
+            continue
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+        root = find(i)
+        best[root] = max(best.get(root, 0.0), score)
 
     clusters: dict[int, list[int]] = {}
     for i in range(len(items)):

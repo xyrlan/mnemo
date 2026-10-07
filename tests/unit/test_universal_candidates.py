@@ -155,3 +155,118 @@ def test_results_are_deterministic_and_ranked_by_project_count():
 def test_empty_or_missing_index_returns_empty():
     assert find_universal_candidates({}) == []
     assert find_universal_candidates({"rules": {}}) == []
+
+
+# --- #571: pruning pairs must not change a single result --------------------
+
+
+def _all_pairs_reference(index, *, threshold=0.55, min_projects=2):
+    """The scan as it was before #571: every pair scored, in order."""
+    from mnemo.core import universal_candidates as U
+
+    rules = (index or {}).get("rules") or {}
+    items = [U._Fields(slug, rule) for slug, rule in sorted(rules.items())
+             if not rule.get("universal") and (rule.get("projects") or [])]
+    if len(items) < 2:
+        return []
+    parent = list(range(len(items)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    best = {}
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            a, b = items[i], items[j]
+            if a.type != b.type or set(a.projects) == set(b.projects):
+                continue
+            score = U._similarity(a, b)
+            if score < threshold:
+                continue
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[max(ri, rj)] = min(ri, rj)
+            root = find(i)
+            best[root] = max(best.get(root, 0.0), score)
+    clusters = {}
+    for i in range(len(items)):
+        clusters.setdefault(find(i), []).append(i)
+    out = []
+    for root, members in clusters.items():
+        projects = sorted({p for m in members for p in items[m].projects})
+        if len(members) < 2 or len(projects) < min_projects:
+            continue
+        out.append(U.UniversalCandidate(
+            slugs=sorted(items[m].slug for m in members), projects=projects,
+            similarity=round(best.get(root, 0.0), 4), type=items[members[0]].type))
+    out.sort(key=lambda c: (-len(c.projects), -c.similarity, tuple(c.slugs)))
+    return out
+
+
+def _random_index(seed: int, n: int = 160) -> dict:
+    """A vault small enough to score every pair, crowded enough to cluster."""
+    import random
+
+    rng = random.Random(seed)
+    words = [f"w{k}" for k in range(24)] + ["the", "never", "run", "running", "tests"]
+    rules = {}
+    for k in range(n):
+        name = " ".join(rng.sample(words, rng.randint(1, 4)))
+        rules[f"rule-{seed}-{k}"] = _rule(
+            name if rng.random() > 0.05 else "",
+            rng.sample(["repo-a", "repo-b", "repo-c", "repo-d"], rng.randint(1, 2)),
+            body=" ".join(rng.choice(words) for _ in range(rng.randint(0, 10))),
+            tags=rng.sample(["git", "testing", "ci", "deploy"], rng.randint(0, 2)),
+            universal=rng.random() < 0.05,
+            type_=rng.choice(["feedback", "feedback", "reference"]),
+        )
+    return _index(rules)
+
+
+def test_pruned_pairs_find_exactly_what_every_pair_finds():
+    """Clusters, their order and their reported similarity all match.
+
+    The reported similarity depends on the order pairs are merged in, so this
+    checks the whole candidate, across thresholds above and below the 0.5
+    bound where pruning switches off.
+    """
+    seen_big_cluster = False
+    for seed in range(12):
+        idx = _random_index(seed)
+        for threshold in (0.35, 0.5, 0.55, 0.6, 0.7):
+            got = find_universal_candidates(idx, threshold=threshold)
+            assert got == _all_pairs_reference(idx, threshold=threshold), (seed, threshold)
+            seen_big_cluster |= any(len(c.slugs) > 2 for c in got)
+    assert seen_big_cluster, "the fixture never exercised a multi-merge cluster"
+
+
+def test_pairs_without_a_shared_name_token_are_never_scored(monkeypatch):
+    from mnemo.core import universal_candidates as U
+
+    scored = []
+    real = U._similarity
+    monkeypatch.setattr(U, "_similarity", lambda a, b: scored.append((a, b)) or real(a, b))
+    idx = _index({
+        "a": _rule("deploy migrations first", ["repo-a"], body="same body words"),
+        "b": _rule("deploy after migrating", ["repo-b"], body="same body words"),
+        "c": _rule("lint before commit", ["repo-c"], body="same body words"),
+    })
+    find_universal_candidates(idx)
+    assert {(a.slug, b.slug) for a, b in scored} == {("a", "b")}
+
+
+def test_pruned_pairs_keep_the_all_pairs_order():
+    """The clustering keeps a merged root's best score and drops the absorbed
+    one's, so the order pairs arrive in is part of the result."""
+    from mnemo.core import universal_candidates as U
+
+    for seed in range(4):
+        rules = _random_index(seed)["rules"]
+        items = [U._Fields(slug, rule) for slug, rule in sorted(rules.items())]
+        every = [(i, j) for i in range(len(items)) for j in range(i + 1, len(items))]
+        assert list(U._pairs(items, 0.5)) == every
+        assert list(U._pairs(items, 0.55)) == [
+            (i, j) for i, j in every if items[i].name & items[j].name]

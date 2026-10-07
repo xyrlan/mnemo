@@ -285,3 +285,104 @@ def test_an_accepted_candidate_is_recorded_as_well(tmp_path: Path) -> None:
     rows = P.ledger_rows(vault)
     assert [(r["event"], r["repo"], r["key"]) for r in rows] == [
         (P.ACCEPTED, "app", "cargo-test")]
+
+
+# --- the transcript cache (#571) --------------------------------------------
+
+
+def _crowd(tmp_path: Path) -> Path:
+    """Two repos, a shape per repo, enough children for candidates of each kind."""
+    projects = tmp_path / "projects"
+    app, lib = _repo(tmp_path, "app"), _repo(tmp_path, "lib")
+    for n in (1, 2, 3):
+        _child(projects, app, f"app-wt-{n}",
+               ["cargo test", "SDKROOT=/sdk cargo test --nocapture", "git status"])
+        _child(projects, lib, f"lib-wt-{n}",
+               ["pytest", "PYTHONPATH=src pytest -q --maxfail=1", "git log"],
+               day=f"2026-09-2{n}")
+    # A transcript that is not a dispatch child: read for its cwd, nothing more.
+    plain = projects / "-Users-x-notes"
+    plain.mkdir(parents=True)
+    (plain / "s.jsonl").write_text(json.dumps({"cwd": "/Users/x/notes"}) + "\n", encoding="utf-8")
+    return projects
+
+
+def _no_reads(monkeypatch) -> None:
+    def refuse(path):
+        raise AssertionError(f"re-read {path}")
+    monkeypatch.setattr(P, "_records", refuse)
+
+
+def test_a_cached_scan_finds_what_an_uncached_scan_finds(tmp_path: Path) -> None:
+    projects = str(_crowd(tmp_path))
+    cache = tmp_path / "vault" / P.TRANSCRIPT_CACHE_REL
+    for kind in (P.ENV, P.FLAG):
+        fresh = P.scan(projects, kind=kind)
+        assert fresh, kind
+        assert P.scan(projects, kind=kind, transcript_cache=cache) == fresh  # cold
+        assert P.scan(projects, kind=kind, transcript_cache=cache) == fresh  # warm
+
+
+def test_a_warm_cache_reads_no_transcript(tmp_path: Path, monkeypatch) -> None:
+    projects = str(_crowd(tmp_path))
+    cache = tmp_path / "vault" / P.TRANSCRIPT_CACHE_REL
+    fresh = P.scan(projects, transcript_cache=cache)
+    _no_reads(monkeypatch)
+    assert P.scan(projects, transcript_cache=cache) == fresh
+
+
+def test_a_transcript_that_grew_is_read_again(tmp_path: Path, monkeypatch) -> None:
+    projects = _crowd(tmp_path)
+    cache = tmp_path / "vault" / P.TRANSCRIPT_CACHE_REL
+    before, = P.scan(str(projects), repo="app", transcript_cache=cache)
+    assert before.carriers[0].values == (("/sdk", 3),)
+
+    grown = next((projects / "app-wt-1").glob("*.jsonl"))
+    record = json.loads(grown.read_text(encoding="utf-8").splitlines()[-1])
+    record["message"]["content"][0]["input"]["command"] = "SDKROOT=/other cargo test"
+    with open(grown, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+    read = []
+    real = P._records
+    monkeypatch.setattr(P, "_records", lambda path: read.append(path) or real(path))
+    after, = P.scan(str(projects), repo="app", transcript_cache=cache)
+    assert set(read) == {str(grown)}
+    assert after == P.scan(str(projects), repo="app")[0]
+    assert dict(after.carriers[0].values) == {"/sdk": 3, "/other": 1}
+
+
+def test_a_deleted_transcript_leaves_the_cache(tmp_path: Path) -> None:
+    projects = _crowd(tmp_path)
+    cache = tmp_path / "vault" / P.TRANSCRIPT_CACHE_REL
+    P.scan(str(projects), transcript_cache=cache)
+    gone = next((projects / "lib-wt-3").glob("*.jsonl"))
+    gone.unlink()
+    assert P.scan(str(projects), transcript_cache=cache) == P.scan(str(projects))
+    assert str(gone) not in json.loads(cache.read_text(encoding="utf-8"))["files"]
+
+
+def test_a_broken_or_foreign_cache_is_a_cold_one(tmp_path: Path, monkeypatch) -> None:
+    projects = str(_crowd(tmp_path))
+    cache = tmp_path / "vault" / P.TRANSCRIPT_CACHE_REL
+    fresh = P.scan(projects)
+    cache.parent.mkdir(parents=True)
+    cache.write_text("{not json", encoding="utf-8")
+    assert P.scan(projects, transcript_cache=cache) == fresh
+    # Written by other code: a parser edit must not be answered from old output.
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    for entry in payload["files"].values():
+        for key in [k for k in entry if k.startswith("runs_")]:
+            entry[key] = {"bogus shape": [{}, {"X": "1"}]}
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    assert P.scan(projects, transcript_cache=cache) != fresh  # served when it matches
+    payload["code"] = "an older parser"
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    assert P.scan(projects, transcript_cache=cache) == fresh
+
+
+def test_a_cache_that_cannot_be_written_costs_nothing(tmp_path: Path) -> None:
+    projects = str(_crowd(tmp_path))
+    blocker = tmp_path / "vault"
+    blocker.write_text("a file where the .mnemo directory would go", encoding="utf-8")
+    assert P.scan(projects, transcript_cache=blocker / P.TRANSCRIPT_CACHE_REL) == P.scan(projects)
