@@ -22,6 +22,7 @@ lesson collapse into a single candidate rather than three pairs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from mnemo.core.extract.inbox.dedup import _stem_word
 
@@ -40,14 +41,23 @@ _STOPWORDS = frozenset({
 })
 
 
+@lru_cache(maxsize=65536)
+def _token(raw: str) -> str:
+    """One lowercased word as a token, or ``""`` when it is dropped.
+
+    Cached because a vault's rules share their vocabulary: 3,345 rules spent
+    half of the doctor row tokenizing the same words over again (#571).
+    """
+    word = "".join(ch for ch in raw if ch.isalnum() or ch == "-").strip("-")
+    if not word or word in _STOPWORDS:
+        return ""
+    return _stem_word(word)
+
+
 def _tokens(text: str) -> set[str]:
     """Lowercase word tokens, stopwords dropped, inflections collapsed."""
-    out: set[str] = set()
-    for raw in str(text or "").lower().split():
-        word = "".join(ch for ch in raw if ch.isalnum() or ch == "-").strip("-")
-        if not word or word in _STOPWORDS:
-            continue
-        out.add(_stem_word(word))
+    out = {_token(raw) for raw in str(text or "").lower().split()}
+    out.discard("")
     return out
 
 
@@ -87,6 +97,35 @@ def _similarity(a: _Fields, b: _Fields) -> float:
     )
 
 
+def _candidate_pairs(items: list[_Fields], threshold: float) -> list[tuple[int, int]]:
+    """Every same-type pair ``(i, j)``, ``i < j``, that could reach *threshold*.
+
+    Disjoint token sets score 0, so a pair sharing no name token tops out at
+    ``_W_TAGS + _W_BODY`` = 0.5. Above that — the default 0.55 is — only pairs
+    sharing a name token are returned: 70k of the 2.27M same-type pairs the
+    all-pairs loop scored on a 3,345-rule index (#571). The pairs left out are
+    exactly ones that loop scored and threw away, so the clusters are the same.
+    At a lower threshold every same-type pair is returned, as before.
+    """
+    # The margin covers the bound and the score summing in different orders.
+    if threshold <= _W_TAGS + _W_BODY + 1e-9:
+        return [
+            (i, j)
+            for i in range(len(items))
+            for j in range(i + 1, len(items))
+            if items[i].type == items[j].type
+        ]
+    postings: dict[tuple[str, str], list[int]] = {}
+    for i, item in enumerate(items):
+        for token in item.name:
+            postings.setdefault((item.type, token), []).append(i)
+    pairs: set[tuple[int, int]] = set()
+    for i, item in enumerate(items):
+        for token in item.name:
+            pairs.update((i, j) for j in postings[(item.type, token)] if j > i)
+    return sorted(pairs)
+
+
 def find_universal_candidates(
     index: dict,
     *,
@@ -122,24 +161,23 @@ def find_universal_candidates(
         return i
 
     # Best pairwise score per cluster, reported as the candidate's similarity.
+    # Pairs are visited in (i, j) order, as the all-pairs loop did: a merge
+    # keeps the lower root's best score, so the order is part of the output.
     best: dict[int, float] = {}
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            a, b = items[i], items[j]
-            if a.type != b.type:
-                continue
-            if set(a.projects) == set(b.projects):
-                # Same project(s) on both sides — merging them is dedup work,
-                # not promotion. dedup_rules owns that case.
-                continue
-            score = _similarity(a, b)
-            if score < threshold:
-                continue
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[max(ri, rj)] = min(ri, rj)
-            root = find(i)
-            best[root] = max(best.get(root, 0.0), score)
+    for i, j in _candidate_pairs(items, threshold):
+        a, b = items[i], items[j]
+        if set(a.projects) == set(b.projects):
+            # Same project(s) on both sides — merging them is dedup work,
+            # not promotion. dedup_rules owns that case.
+            continue
+        score = _similarity(a, b)
+        if score < threshold:
+            continue
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+        root = find(i)
+        best[root] = max(best.get(root, 0.0), score)
 
     clusters: dict[int, list[int]] = {}
     for i in range(len(items)):

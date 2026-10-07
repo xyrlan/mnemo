@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from mnemo.core import procedures as P
 
 
@@ -285,3 +287,78 @@ def test_an_accepted_candidate_is_recorded_as_well(tmp_path: Path) -> None:
     rows = P.ledger_rows(vault)
     assert [(r["event"], r["repo"], r["key"]) for r in rows] == [
         (P.ACCEPTED, "app", "cargo-test")]
+
+
+# --- the transcript cache (#571) ---------------------------------------------
+
+
+def _two_children(tmp_path: Path) -> Path:
+    projects, repo = tmp_path / "projects", _repo(tmp_path, "app")
+    for n in (1, 2):
+        _child(projects, repo, f"app-wt-{n}", ["cargo test", "SDKROOT=/sdk cargo test"])
+    return projects
+
+
+def test_a_warm_cache_answers_without_reading_a_transcript(tmp_path: Path, monkeypatch) -> None:
+    projects, cache = _two_children(tmp_path), tmp_path / "vault" / ".mnemo" / "t.json"
+    for kind in (P.ENV, P.FLAG):
+        expected = P.scan(str(projects), kind=kind)
+        assert P.scan(str(projects), kind=kind, cache=cache) == expected
+
+        def unread(_path):
+            raise AssertionError("a cached transcript was read again")
+
+        with monkeypatch.context() as m:
+            m.setattr(P, "_records", unread)
+            assert P.scan(str(projects), kind=kind, cache=cache) == expected
+
+
+def test_a_transcript_that_grew_is_read_again(tmp_path: Path) -> None:
+    projects, cache = _two_children(tmp_path), tmp_path / "t.json"
+    assert len(P.scan(str(projects), cache=cache)) == 1
+    for path in sorted(projects.glob("*/*.jsonl")):
+        record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        record["message"]["content"][0]["input"]["command"] = "go test"
+        second = dict(record, message={"role": "assistant", "content": [
+            dict(record["message"]["content"][0], input={"command": "GOFLAGS=-v go test"})]})
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n" + json.dumps(second) + "\n")
+    shapes = [c.shape for c in P.scan(str(projects), cache=cache)]
+    assert shapes == [c.shape for c in P.scan(str(projects))]
+    assert "go test" in shapes
+
+
+@pytest.mark.parametrize("content", ["", "not json", "[]", '{"reader": "x", "transcripts": {}}'])
+def test_a_bad_or_foreign_cache_is_an_empty_one(tmp_path: Path, content: str) -> None:
+    projects, cache = _two_children(tmp_path), tmp_path / "t.json"
+    cache.write_text(content, encoding="utf-8")
+    assert P.scan(str(projects), cache=cache) == P.scan(str(projects))
+    assert json.loads(cache.read_text(encoding="utf-8"))["reader"] == P._reader_fingerprint()
+
+
+def test_a_poisoned_entry_from_another_parser_is_not_believed(tmp_path: Path) -> None:
+    """Entries are only as right as the code that wrote them."""
+    projects, cache = _two_children(tmp_path), tmp_path / "t.json"
+    P.scan(str(projects), cache=cache)
+    raw = json.loads(cache.read_text(encoding="utf-8"))
+    for entry in raw["transcripts"].values():
+        entry["runs:env"] = {}
+    raw["reader"] = "an-older-mnemo"
+    cache.write_text(json.dumps(raw), encoding="utf-8")
+    assert len(P.scan(str(projects), cache=cache)) == 1
+
+
+def test_a_deleted_transcript_leaves_the_cache(tmp_path: Path) -> None:
+    projects, cache = _two_children(tmp_path), tmp_path / "t.json"
+    P.scan(str(projects), cache=cache)
+    gone = sorted(projects.glob("*/*.jsonl"))[0]
+    gone.unlink()
+    P.scan(str(projects), cache=cache)
+    assert str(gone) not in json.loads(cache.read_text(encoding="utf-8"))["transcripts"]
+
+
+def test_an_unwritable_cache_costs_the_scan_nothing(tmp_path: Path) -> None:
+    projects = _two_children(tmp_path)
+    blocker = tmp_path / "file"
+    blocker.write_text("", encoding="utf-8")
+    assert P.scan(str(projects), cache=blocker / "t.json") == P.scan(str(projects))
