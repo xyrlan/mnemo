@@ -117,6 +117,18 @@ def test_an_undelivered_card_leaves_a_row_with_the_reason_and_an_error(
     assert err["where"] == rc.UNDELIVERED_WHERE and "c0da0f55" in err["message"]
 
 
+def test_an_undelivered_card_is_held_for_the_parents_next_prompt(tmp_path, monkeypatch) -> None:
+    """#586: the card that did not reach its parent is kept, not only logged."""
+    from mnemo.core.sessions import held_notices
+
+    vault = _setup(tmp_path, monkeypatch)
+
+    _, sent, _ = _run(monkeypatch, _card({"pass": 3}), delivered=False)
+
+    [held] = held_notices.claim(vault, "P1")
+    assert (held["short_id"], held["text"]) == ("c0da0f55", sent[0][1])
+
+
 def test_a_watch_that_ends_without_a_post_is_recorded_as_undelivered(
     tmp_path, monkeypatch,
 ) -> None:

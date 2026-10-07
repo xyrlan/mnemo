@@ -58,6 +58,29 @@ def test_hook_emits_on_confident_match(tmp_vault, monkeypatch, synthetic_index):
     assert "[[use-prisma-mock]]" in text
 
 
+def test_a_held_child_notice_rides_with_the_reflex_block(tmp_vault, monkeypatch, synthetic_index):
+    """#586: one prompt, one JSON object — the held notice first, reflex after."""
+    from mnemo.core.sessions import held_notices, inbox
+
+    for name in (inbox.SESSION_ENV, inbox.SOCKET_ENV):
+        monkeypatch.delenv(name, raising=False)
+    _enable_reflex(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    held_notices.hold(tmp_vault, "sid-1", '<mnemo-child-finished id="c0da0f55">\ndone',
+                      short_id="c0da0f55")
+
+    rc, stdout = _run_hook({
+        "cwd": str(tmp_vault), "session_id": "sid-1",
+        "prompt": "How do I mock prisma in a jest test with typescript",
+    })
+
+    assert rc == 0
+    text = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+    assert text.startswith("[mnemo] 1 notice(s)")
+    assert text.index('id="c0da0f55"') < text.index("mnemo reflex context:")
+    assert "[[use-prisma-mock]]" in text
+
+
 def test_dedupe_is_per_session_not_vault_wide(tmp_vault, monkeypatch, synthetic_index):
     """#361: a rule one session was told is still news to another session;
     only the session that already has it is spared the repeat."""

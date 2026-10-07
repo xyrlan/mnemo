@@ -620,7 +620,8 @@ class Undelivered(Exception):
     """A report card that did not reach the session that dispatched it."""
 
 
-def undelivered(vault_root: Path, row: Dict[str, object], reason: str) -> None:
+def undelivered(vault_root: Path, row: Dict[str, object], reason: str,
+                text: Optional[str] = None) -> None:
     """Record a report that could not be built or delivered, loudly (#454).
 
     Before #454 an undelivered report was a *missing* row: on 2026-09-22 three
@@ -628,8 +629,20 @@ def undelivered(vault_root: Path, row: Dict[str, object], reason: str) -> None:
     gone, and nothing anywhere said so. Now the row is written with
     ``delivered: false`` and the *reason*, and ``errors.log`` gets an entry
     naming the child. Never raises.
+
+    With *text*, the notice itself is held for the parent's next prompt
+    (#586, :mod:`.held_notices`): a row saying it was lost did not bring it
+    back, and on 2026-10-07 five such rows left a parent deaf for an hour.
     """
     record(vault_root, {**row, "delivered": False, "reason": reason})
+    if text:
+        try:
+            from mnemo.core.sessions import held_notices
+
+            held_notices.hold(vault_root, str(row.get("parent") or ""), text,
+                              short_id=str(row.get("short_id") or ""))
+        except Exception:  # noqa: BLE001
+            pass
     try:
         from mnemo.core import errors
 
