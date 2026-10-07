@@ -2,7 +2,7 @@
 
 **Off by default, and the only part of recall that can leave the machine.**
 With ``recall.rerank.provider`` set, every ``list_rules_by_topic`` call that
-carries a ``query`` posts that query and the first 800 characters of each
+carries a ``query`` posts that query (secrets redacted, #591) and the first 800 characters of each
 rule in the bucket to the provider — a third party. Nothing else is sent by
 this stage, and nothing at all by ``mnemo recall`` or by any hook on its
 account: :func:`apply` has one caller, the MCP server. (The prompt path has a
@@ -46,6 +46,8 @@ import ssl
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from mnemo.core.redact import redact_secrets
 
 TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 
@@ -227,7 +229,9 @@ def scores(query: str, texts: Mapping[str, str], slugs: Sequence[str], client: C
     asked = [s for s in slugs if texts.get(s)]
     if not asked:
         return {}
-    out = client({"developer_task": query},
+    # Redacted on the way out only (#591): the query is model-written, but a
+    # model copies what it was shown, and BM25F reads the original locally.
+    out = client({"developer_task": redact_secrets(query)[0]},
                  {"r%d" % i: question(texts[s]) for i, s in enumerate(asked)})
     answers = out.get("answers") or {}
     found: Dict[str, float] = {}
