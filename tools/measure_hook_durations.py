@@ -26,8 +26,8 @@ and every ``SessionEnd`` leave no attachment — the session is gone by the
 time the latter finishes — so for those two this reports what it found and
 says how much of the population that is; it does not invent the rest.
 
-**Timed runs, for the two hooks the transcripts cannot see.** ``--timed``
-runs ``user_prompt_submit`` and ``session_end`` ``RUNS`` times each as Claude
+**Timed runs.** ``--timed`` runs ``session_start`` (#610),
+``user_prompt_submit`` and ``session_end`` ``RUNS`` times each as Claude
 Code would — a fresh interpreter, the payload on stdin — and times the whole
 process. It never touches the real vault: ``--vault`` is cloned into
 ``--scratch`` (``cp -c``, copy-on-write on APFS), a config naming the clone is
@@ -35,7 +35,11 @@ written beside it, ``TMPDIR`` points into the scratch dir, the reflex judge is
 turned off in the clone (so nothing leaves the machine; the judge adds at most
 its own wall, ``timeoutSeconds``, on top), and every detached spawn — the
 extraction, the briefing, the ``pr-follow`` watcher — is replaced by a no-op,
-so what is timed is the synchronous work a hook timeout would cut.
+so what is timed is the synchronous work a hook timeout would cut. The
+clone's ``install.autoRepairHooks`` is off, so ``session_start`` never writes
+the real ``settings.json``, and ``MNEMO_HOOK_PHASES`` is set, so each
+``session_start`` run logs its phase times into the clone; the report prints
+the phases of the run at the p50 and at the p95, and each phase's own spread.
 ``--cwd`` is the project the session pretends to be in; a project path rather
 than a temp dir, because a hook in a temp dir returns before any work (#420).
 
@@ -63,6 +67,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from mnemo.core.log_utils import iter_rotated_rows  # noqa: E402
 from mnemo.core.reflex.judge import DEFAULT_TIMEOUT_S  # noqa: E402
 from mnemo.core.reflex.judge_stats import percentile  # noqa: E402
+from mnemo.hooks.session_start import PHASES_ENV, PHASES_LOG  # noqa: E402
 
 try:
     from tools import _provenance
@@ -222,6 +227,8 @@ import mnemo._detach
 mnemo._detach.spawn = lambda *a, **k: 0
 import mnemo.hooks.session_start as _start
 _start._spawn_detached = lambda *a, **k: None
+import mnemo.autopilot.core.scheduler as _autopilot
+_autopilot.run_detached = lambda **k: None
 sys.exit(importlib.import_module("mnemo.hooks." + sys.argv[1]).main())
 """
 
@@ -269,29 +276,89 @@ def prepare_scratch(vault_root: str, scratch: str) -> Dict[str, str]:
         cfg = {}
     cfg["vaultRoot"] = clone
     cfg.setdefault("reflex", {}).setdefault("judge", {})["provider"] = "none"
+    # session_start repairs drifted hook matchers in the real settings.json;
+    # a timed run must not write there.
+    cfg.setdefault("install", {})["autoRepairHooks"] = False
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(cfg, handle, indent=2)
     tmp = os.path.join(scratch, "tmp")
     os.makedirs(tmp, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k != "MNEMO_HOOKS_OFF"}
-    env.update({"MNEMO_CONFIG_PATH": config_path, "TMPDIR": tmp})
+    env.update({"MNEMO_CONFIG_PATH": config_path, "TMPDIR": tmp, PHASES_ENV: "1",
+                "PYTHONPATH": mnemo_src()})
     return env
+
+
+def mnemo_src() -> str:
+    """The directory holding the ``mnemo`` this tool imported (#610).
+
+    A timed hook runs with ``--cwd`` as its working directory, so a relative
+    ``PYTHONPATH=src`` resolved there, not here: run from a worktree against
+    ``--cwd ~/github/mnemo``, every hook imported the main checkout's mnemo
+    and timed code the branch never touched. Pinned absolute, a timed run
+    times the code the report's provenance names."""
+    import mnemo
+
+    return os.path.dirname(os.path.dirname(os.path.abspath(mnemo.__file__)))
+
+
+def phase_rows(vault: str, session_ids: Iterable[str]) -> List[Dict[str, Any]]:
+    """The per-phase rows the timed ``session_start`` runs wrote (#610)."""
+    wanted = set(session_ids)
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(os.path.join(vault, PHASES_LOG), encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("session_id") in wanted:
+                    out.append(row)
+    except OSError:
+        pass
+    return out
+
+
+def phase_breakdown(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The phase rows of the run at the p50 and at the p95 of ``total_ms``,
+    and per phase its p50/p95/max over every run."""
+    if not rows:
+        return {}
+    ranked = sorted(rows, key=lambda r: float(r.get("total_ms") or 0))
+    def at(q: float) -> Dict[str, Any]:
+        # nearest rank, as percentile() takes it
+        import math
+        return ranked[max(0, min(len(ranked) - 1, int(math.ceil(q * len(ranked))) - 1))]
+    names: List[str] = []
+    for row in rows:
+        for name in row.get("phases") or {}:
+            if name not in names:
+                names.append(name)
+    per_phase = {name: _spread([float((r.get("phases") or {}).get(name) or 0) for r in rows])
+                 for name in names}
+    return {"p50_run": at(0.5), "p95_run": at(0.95), "per_phase": per_phase}
 
 
 def timed_runs(runs: int, *, env: Dict[str, str], cwd: str,
                transcript: Optional[str] = None,
                python: str = sys.executable) -> Dict[str, Any]:
-    """Time ``user_prompt_submit`` and ``session_end`` *runs* times each."""
+    """Time ``session_start``, ``user_prompt_submit`` and ``session_end``
+    *runs* times each; ``session_start`` also reports its phase breakdown."""
     import uuid
 
     out: Dict[str, Any] = {}
-    for hook in ("user_prompt_submit", "session_end"):
+    start_sids: List[str] = []
+    for hook in ("session_start", "user_prompt_submit", "session_end"):
         values: List[float] = []
         for i in range(runs):
             sid = str(uuid.uuid4())
             payload: Dict[str, Any] = {"session_id": sid, "cwd": cwd,
                                        "hook_event_name": HOOKS[hook]}
-            if hook == "user_prompt_submit":
+            if hook == "session_start":
+                payload["source"] = "startup"
+                start_sids.append(sid)
+            elif hook == "user_prompt_submit":
                 payload["prompt"] = PROMPTS[i % len(PROMPTS)]
             else:
                 payload["reason"] = "exit"
@@ -300,6 +367,8 @@ def timed_runs(runs: int, *, env: Dict[str, str], cwd: str,
             values.append(time_command([python, "-c", _DRIVER, hook], stdin=json.dumps(payload),
                                        env=env, cwd=cwd))
         out[hook] = _spread(values)
+    vault = os.path.dirname(env.get("MNEMO_CONFIG_PATH") or "")
+    out["session_start_phases"] = phase_breakdown(phase_rows(vault, start_sids))
     return out
 
 
@@ -336,6 +405,23 @@ def render(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_phases(breakdown: Dict[str, Any]) -> str:
+    if not breakdown:
+        return "SessionStart phases: no rows (was %s set?)" % PHASES_ENV
+    p50, p95 = breakdown["p50_run"], breakdown["p95_run"]
+    lines = ["", "SessionStart phases (ms; in-process, after interpreter start-up):",
+             "  %-24s %9s %9s %9s %9s %9s" % ("phase", "p50 run", "p95 run",
+                                             "p50", "p95", "max")]
+    for name, spread in breakdown["per_phase"].items():
+        lines.append("  %-24s %9s %9s %9s %9s %9s" % (
+            name, _ms((p50.get("phases") or {}).get(name)),
+            _ms((p95.get("phases") or {}).get(name)),
+            _ms(spread["p50"]), _ms(spread["p95"]), _ms(spread["max"])))
+    lines.append("  %-24s %9s %9s" % ("total in-process", _ms(p50.get("total_ms")),
+                                       _ms(p95.get("total_ms"))))
+    return "\n".join(lines)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--vault", default=os.path.expanduser("~/mnemo"))
@@ -345,7 +431,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--wall-ms", type=float, default=DEFAULT_WALL_MS)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--timed", type=int, default=0, metavar="RUNS",
-                        help="time user_prompt_submit and session_end RUNS times each")
+                        help="time session_start, user_prompt_submit and session_end RUNS times each")
     parser.add_argument("--scratch", default=None,
                         help="where --timed clones the vault (required with --timed)")
     parser.add_argument("--cwd", default=os.getcwd(),
@@ -365,9 +451,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             print(_provenance.line(prov))
             for hook, spread in timed.items():
-                print("%-20s n %d  p50 %s  p95 %s  p99 %s  max %s (ms)" % (
-                    HOOKS[hook], spread["n"], _ms(spread["p50"]), _ms(spread["p95"]),
-                    _ms(spread["p99"]), _ms(spread["max"])))
+                if hook in HOOKS:
+                    print("%-20s n %d  p50 %s  p95 %s  p99 %s  max %s (ms)" % (
+                        HOOKS[hook], spread["n"], _ms(spread["p50"]), _ms(spread["p95"]),
+                        _ms(spread["p99"]), _ms(spread["max"])))
+            print(render_phases(timed.get("session_start_phases") or {}))
         return 0
     report = measure(os.path.expanduser(args.vault), os.path.expanduser(args.projects),
                      days=args.days, wall_ms=args.wall_ms)

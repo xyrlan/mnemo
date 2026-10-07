@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -148,3 +149,40 @@ def test_the_scratch_clone_points_the_config_at_itself_and_turns_the_judge_off(t
     original = json.loads((vault / "mnemo.config.json").read_text(encoding="utf-8"))
     assert original["vaultRoot"] == str(vault)
     assert original["reflex"]["judge"]["provider"] == "typesafe"
+
+
+def test_a_timed_hook_imports_the_mnemo_this_tool_imported(tmp_path):
+    """#610: a relative PYTHONPATH=src resolved in --cwd, so a run from a
+    worktree against the main checkout timed the main checkout's code."""
+    import mnemo
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    env = mhd.prepare_scratch(str(vault), str(tmp_path / "scratch"))
+    assert os.path.isabs(env["PYTHONPATH"])
+    root = os.path.realpath(env["PYTHONPATH"])
+    here = os.path.realpath(mnemo.__file__)
+    assert os.path.commonpath([root, here]) == root
+    # and the clone never writes the real settings.json
+    cfg = json.loads(Path(env["MNEMO_CONFIG_PATH"]).read_text(encoding="utf-8"))
+    assert cfg["install"]["autoRepairHooks"] is False
+    assert env[mhd.PHASES_ENV]
+
+
+def test_the_phase_breakdown_names_the_p50_and_p95_runs(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    rows = [{"session_id": "s%d" % i, "total_ms": float(t),
+             "phases": {"config": 1.0, "reflex_index": float(t) - 1}}
+            for i, t in enumerate([100, 300, 200, 900, 400])]
+    rows.append({"session_id": "other", "total_ms": 5.0, "phases": {}})
+    (vault / mhd.PHASES_LOG).write_text(
+        "".join(json.dumps(r) + "\n" for r in rows) + "not json\n", encoding="utf-8")
+    picked = mhd.phase_rows(str(vault), ["s0", "s1", "s2", "s3", "s4"])
+    assert len(picked) == 5
+    out = mhd.phase_breakdown(picked)
+    assert out["p50_run"]["total_ms"] == 300.0
+    assert out["p95_run"]["total_ms"] == 900.0
+    assert out["per_phase"]["reflex_index"]["max"] == 899.0
+    assert "reflex_index" in mhd.render_phases(out)
+    assert mhd.phase_breakdown([]) == {}
