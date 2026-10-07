@@ -234,3 +234,23 @@ def test_each_doc_points_at_its_page_so_the_hook_can_read_its_body(tmp_vault):
     idx = build_index(tmp_vault)
     assert idx["docs"]["yarn-rule"]["path"] == "shared/feedback/use-yarn.md"
     assert (tmp_vault / idx["docs"]["yarn-rule"]["path"]) == page
+
+
+def test_build_index_is_linear_in_the_number_of_pages_sharing_a_term(tmp_vault):
+    """#610: the postings merge scanned a term's whole list for the current
+    slug, once per term per page, so a vault of N pages that share common
+    words cost O(N^2): 24 s of SessionStart's 35 s on a 3,400-rule vault.
+    3,000 pages that share 60 words take seconds before and milliseconds of
+    merge after; the bound leaves an order of magnitude for a loaded box."""
+    import time
+
+    words = " ".join("common%02d" % i for i in range(60))
+    for i in range(3000):
+        _write_rule(tmp_vault, "feedback", "r%04d.md" % i, name="rule %d" % i,
+                    body=words + " unique%04d" % i)
+    started = time.perf_counter()
+    index = build_index(tmp_vault)
+    elapsed = time.perf_counter() - started
+    assert index["doc_count"] == 3000
+    assert len(index["postings"]["common00"]) == 3000
+    assert elapsed < 4.0, "build_index took %.1f s for 3,000 pages" % elapsed
