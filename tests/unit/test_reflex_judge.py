@@ -156,6 +156,48 @@ def test_the_prompt_is_collapsed_then_cut():
     assert "\n" not in sent
 
 
+# A GitHub token: one pattern ``redact_secrets`` knows, 40 characters long.
+SECRET = "ghp_" + "Zq7Wv3Kp9Rt2Ym5Xn8Lc4Hd6Fj1Bs0Ga3Ue7Q"
+
+
+def _fragments(secret, at_least=6):
+    """Every piece of ``secret`` long enough to be worth leaking."""
+    return {secret[i:j] for i in range(len(secret))
+            for j in range(i + at_least, len(secret) + 1)}
+
+
+def test_a_secret_straddling_the_cut_leaves_no_fragment_in_what_is_sent():
+    """Redact, then cut (#591). Cut first and the 20 characters left before
+    the edge no longer look like a token, so no pattern would catch them."""
+    head = "w " * ((judge.PROMPT_CHARS - 20) // 2)
+    prompt = head + SECRET + " and then deploy"
+    collapsed = " ".join(prompt.split())
+    assert collapsed.index(SECRET) < judge.PROMPT_CHARS < collapsed.index(SECRET) + len(SECRET)
+    client = Judge()
+    judge.scores(prompt, TEXTS, ["a"], client)
+    sent = client.calls[0][0]["developer_message"]
+    assert len(sent) <= judge.PROMPT_CHARS
+    assert "ghp_" not in sent
+    assert not [f for f in _fragments(SECRET) if f in sent]
+    assert "[redacted]" in sent
+
+
+def test_ask_counts_what_it_redacted_and_never_logs_it(tmp_path):
+    client = Judge({"Commit a script": 0.8})
+    _picks, info = judge.ask(tmp_path, prompt="deploy with " + SECRET + " now",
+                             slugs=["a"], chosen_settings=judge.settings(ON),
+                             client=client, read_text=_read)
+    assert info["redacted"] == 1
+    assert SECRET not in json.dumps(client.calls[0][0])
+    assert SECRET not in repr(info)
+
+
+def test_a_prompt_with_no_secret_is_sent_as_before(tmp_path):
+    _picks, info = _ask(tmp_path, ["a"], Judge())
+    assert info["redacted"] == 0
+    assert judge.state("how do I deploy") == {"developer_message": "how do I deploy"}
+
+
 def test_one_request_carries_every_rule():
     client = Judge()
     judge.scores("how do I deploy", TEXTS, ["a", "b", "c"], client)
@@ -290,7 +332,7 @@ def test_the_log_row_never_carries_prompt_text(tmp_path):
     _picks, info = _ask(tmp_path, ["a", "b"], Judge({"Commit a script": 0.8}))
     blob = repr(info)
     assert "how do I deploy" not in blob
-    assert set(info) == {"status", "asked", "injected", "ms", "scores"}
+    assert set(info) == {"status", "asked", "injected", "ms", "scores", "redacted"}
 
 
 def test_the_key_is_the_one_the_list_stage_stores(monkeypatch, tmp_path):

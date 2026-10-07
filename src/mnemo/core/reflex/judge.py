@@ -3,7 +3,7 @@
 **Off by default, and the only thing on the prompt path that can leave the
 machine.** With ``reflex.judge.provider`` set, every prompt the lexical stage
 finds candidates for posts the first 1,200 characters of that prompt —
-*what the user typed* — and the first 800 characters of up to
+*what the user typed*, secrets redacted before the cut (#591) — and the first 800 characters of up to
 ``candidates`` rules to the provider, from inside the ``UserPromptSubmit``
 hook. That is a different cost from ``recall.rerank``'s (#405), which only
 ever sees a query an agent chose to type into a tool call, and it is why this
@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from mnemo.core.mcp import rerank
+from mnemo.core.redact import redact_secrets
 
 PROVIDERS = rerank.PROVIDERS
 
@@ -122,13 +123,26 @@ def question(text: str) -> Dict[str, Any]:
     }
 
 
+def message(prompt: str) -> Tuple[str, int]:
+    """The prompt as it may leave the machine, and how many secrets it lost.
+
+    Whitespace-collapsed, then redacted, then cut — in that order (#591).
+    Collapsing first means a pasted diff spends its 1,200 characters on words
+    rather than on indentation; redacting before the cut means a token that
+    straddles character 1,200 is replaced whole, where cutting first would
+    leave a head too short for any pattern to recognise and send it.
+    """
+    text, redacted = redact_secrets(" ".join((prompt or "").split()))
+    return text[:PROMPT_CHARS], redacted
+
+
 def state(prompt: str) -> Dict[str, str]:
     """What the judge is told the developer asked, and the only user text sent.
 
-    Whitespace-collapsed first, then cut: a prompt that is mostly a pasted
-    diff spends its 1,200 characters on words rather than on indentation.
+    :func:`message`'s text: redacting what it was already handed is a no-op,
+    so a caller that redacted first sends the same bytes.
     """
-    return {"developer_message": " ".join((prompt or "").split())[:PROMPT_CHARS]}
+    return {"developer_message": message(prompt)[0]}
 
 
 def _number(value: Any, fallback: float) -> float:
@@ -316,11 +330,14 @@ def ask(vault_root: Path, *, prompt: str, slugs: Sequence[str],
 
     ``info`` is the ``judge`` object of the ``reflex-log`` row and holds no
     prompt text: status, how many rules were asked about and injected, the
-    wall time in milliseconds, and the probability per slug.
+    wall time in milliseconds, the probability per slug, and ``redacted`` —
+    how many secrets were cut out of the prompt before it was sent, a count
+    and never the text (#591).
     """
     started = time.time()
+    sent, redacted = message(prompt)
     info: Dict[str, Any] = {"status": "ok", "asked": 0, "injected": 0, "ms": 0,
-                            "scores": []}
+                            "scores": [], "redacted": redacted}
     if not slugs:
         info["ms"] = _elapsed_ms(started)
         return [], info
@@ -347,7 +364,7 @@ def ask(vault_root: Path, *, prompt: str, slugs: Sequence[str],
         seen["asked"] = len(asked)
         if not asked:
             return {}
-        return scores(prompt, texts, asked, asking)
+        return scores(sent, texts, asked, asking)
 
     try:
         judged = within(_stage, timeout)
