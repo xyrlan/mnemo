@@ -298,3 +298,94 @@ def test_the_key_is_the_one_the_list_stage_stores(monkeypatch, tmp_path):
     monkeypatch.setenv(judge.DEFAULT_KEY_ENV, "from-the-env")
     key, source = judge.resolve_key(judge.settings(ON))
     assert (key, source) == ("from-the-env", "env")
+
+
+# --- the wall covers the whole stage (#593) ------------------------------------
+#
+# The wall used to wrap the HTTP call only: key lookup and every page read ran
+# before it, so a slow disk made a row's ``ms`` exceed ``timeoutSeconds`` (7
+# ``ok`` rows over 2,500 ms in the maintainer's log, max 3,517). Every stub
+# below blocks on an Event — conftest makes ``time.sleep`` a no-op — and is
+# released at the end so no abandoned worker outlives its test.
+
+WALL = 0.2
+#: Generous: a loaded CI box schedules threads late, and the bug being caught
+#: is a stage that runs for as long as its slowest read, not 50 ms of jitter.
+EPSILON_MS = 400
+
+
+def test_a_page_read_that_outlives_the_wall_is_a_timeout(tmp_path):
+    stuck = threading.Event()
+    client = Judge({"Commit a script": 0.8})
+
+    def slow_read(slug):
+        stuck.wait(3)
+        return _read(slug)
+
+    started = time.time()
+    try:
+        picks, info = judge.ask(tmp_path, prompt="how do I deploy", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                client=client, read_text=slow_read)
+        took_ms = (time.time() - started) * 1000
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+    assert took_ms <= WALL * 1000 + EPSILON_MS
+
+
+def test_reads_and_the_call_share_one_budget(tmp_path):
+    """Each part under the wall, the two together over it: the budget is the
+    stage's, not one per part."""
+    stuck = threading.Event()
+
+    def read_most_of_it(slug):
+        stuck.wait(WALL * 0.75)
+        return _read(slug)
+
+    def call_the_rest(state, questions):
+        stuck.wait(WALL * 0.75)
+        return Judge({"Commit a script": 0.8})(state, questions)
+
+    try:
+        picks, info = judge.ask(tmp_path, prompt="how do I deploy", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                client=call_the_rest, read_text=read_most_of_it)
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+
+
+def test_a_key_lookup_that_outlives_the_wall_is_a_timeout(tmp_path, monkeypatch):
+    stuck = threading.Event()
+
+    def slow_key(chosen):
+        stuck.wait(3)
+        return "k", "env"
+
+    monkeypatch.setattr(judge, "resolve_key", slow_key)
+    try:
+        picks, info = judge.ask(tmp_path, prompt="q", slugs=["a"],
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                read_text=_read)
+    finally:
+        stuck.set()
+    assert picks is None and info["status"] == "timeout"
+    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+
+
+def test_fast_reads_inside_the_wall_keep_todays_answer(tmp_path):
+    picks, info = _ask(tmp_path, ["a", "b"], Judge({"Commit a script": 0.8}),
+                       timeoutSeconds=WALL * 10)
+    assert picks == ["a"]
+    assert info["status"] == "ok" and info["asked"] == 2 and info["injected"] == 1
+    assert info["scores"][0] == ["a", 0.8]
+
+
+def test_no_key_inside_the_wall_is_still_no_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(judge, "resolve_key", lambda chosen: (None, "none"))
+    picks, info = judge.ask(tmp_path, prompt="q", slugs=["a"],
+                            chosen_settings=judge.settings(ON), read_text=_read)
+    assert picks is None and info["status"] == "no_key"

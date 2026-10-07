@@ -40,8 +40,9 @@ token pre-gate and a missing index are unchanged and cost no request.
 Every failure — no key, a timeout, an HTTP error, a malformed answer — is
 :func:`ask` returning ``None`` and the hook falling back to the decision the
 shipped gates made, silently to the session. A hook must never raise and
-never hang, so the request runs on a thread this module abandons at
-``timeoutSeconds``: the wall is hard even if the socket's is not.
+never hang, so the whole stage — key lookup, page reads and the request —
+runs on a thread this module abandons at ``timeoutSeconds``: the wall is hard
+even if the socket's is not, and a row's ``ms`` cannot run past it (#593).
 
 The client, the key and the TLS context are :mod:`mnemo.core.mcp.rerank`'s,
 imported rather than copied — one TypeSafe key per machine serves both stages
@@ -259,7 +260,7 @@ def within(call: Callable[[], Any], timeout: float) -> Any:
     server that dribbles a byte every two seconds holds it open forever. This
     hook runs before every prompt the user types, so the wall has to be real.
     The worker is a daemon thread and is simply abandoned — it holds a socket
-    and nothing the caller can see, and the process it would outlive is a
+    or a file read and nothing the caller can see, and the process it would outlive is a
     hook that exits in milliseconds.
     """
     box: Dict[str, Any] = {}
@@ -324,28 +325,45 @@ def ask(vault_root: Path, *, prompt: str, slugs: Sequence[str],
         info["ms"] = _elapsed_ms(started)
         return [], info
     timeout = float(chosen_settings.get("timeoutSeconds") or DEFAULT_TIMEOUT_S)
-    if client is None:
-        key, _source = resolve_key(chosen_settings)
-        if not key:
-            info["status"] = "no_key"
-            info["ms"] = _elapsed_ms(started)
-            return None, info
-        client = rerank.typesafe_client(
-            key, model=str(chosen_settings.get("model") or DEFAULT_MODEL), timeout=timeout)
-    if read_text is None:
-        read_text = page_text(vault_root, project=project)
-    try:
-        texts = {slug: read_text(slug) for slug in slugs}
+    # The wall is the stage's, not the request's (#593): the key lookup and
+    # the page reads ran outside it, so a cold disk made ``ok`` rows of 3.5 s
+    # under a 2.5 s budget. ``seen`` is the worker's own scratch, read once
+    # when the wall falls — an abandoned worker must never write into the row
+    # this function has already returned.
+    seen: Dict[str, Any] = {}
+
+    def _stage() -> Optional[Dict[str, float]]:
+        asking = client
+        if asking is None:
+            key, _source = resolve_key(chosen_settings)
+            if not key:
+                seen["no_key"] = True
+                return None
+            asking = rerank.typesafe_client(
+                key, model=str(chosen_settings.get("model") or DEFAULT_MODEL), timeout=timeout)
+        reader = read_text if read_text is not None else page_text(vault_root, project=project)
+        texts = {slug: reader(slug) for slug in slugs}
         asked = [slug for slug in slugs if texts.get(slug)]
-        info["asked"] = len(asked)
+        seen["asked"] = len(asked)
         if not asked:
-            info["ms"] = _elapsed_ms(started)
-            return [], info
-        judged = within(lambda: scores(prompt, texts, asked, client), timeout)
+            return {}
+        return scores(prompt, texts, asked, asking)
+
+    try:
+        judged = within(_stage, timeout)
     except BaseException as exc:  # noqa: BLE001 — every gap is a fallback
+        info["asked"] = int(seen.get("asked") or 0)
         info["status"] = _failure(exc)
         info["ms"] = _elapsed_ms(started)
         return None, info
+    info["asked"] = int(seen.get("asked") or 0)
+    if seen.get("no_key"):
+        info["status"] = "no_key"
+        info["ms"] = _elapsed_ms(started)
+        return None, info
+    if not info["asked"]:
+        info["ms"] = _elapsed_ms(started)
+        return [], info
     if not judged:
         # Asked, and got back nothing usable: a malformed answer is a failure,
         # not a verdict of "none of these".
