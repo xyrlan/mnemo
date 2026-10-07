@@ -89,6 +89,29 @@ def _no_real_detached_jobs(request: pytest.FixtureRequest, monkeypatch: pytest.M
     monkeypatch.setattr("mnemo.hooks.session_start._spawn_detached", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_process_table(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads the host's real process table (#570).
+
+    ``mnemo doctor`` counts ``claude --print`` helpers and the daemon's
+    resident processes from ``residents.read_ps``. Unstubbed, every test that
+    runs the whole doctor depended on what the machine was running: with more
+    than four real helpers alive — the normal state while another session runs
+    a measurement — doctor printed a warning, and
+    ``test_doctor_activation_fidelity_info_line_for_complex_globs`` went red on
+    any diff, the base commit included.
+
+    The stub is an empty listing: ``ps`` ran and found nothing, the shape of an
+    idle machine, so the process rows still run. A test that wants processes
+    passes its own table (``ps_stdout=``) or re-patches ``read_ps``; one that
+    exercises ``read_ps`` itself binds it at import time. ``live_claude`` tests
+    keep the real one — reading the real table is what they are for.
+    """
+    if request.node.get_closest_marker("live_claude"):
+        return
+    monkeypatch.setattr("mnemo.core.sessions.residents.read_ps", lambda: "")
+
+
 @pytest.fixture
 def tmp_vault(tmp_path: Path) -> Path:
     """Create a minimal vault directory tree and return its root.

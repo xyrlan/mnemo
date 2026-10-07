@@ -20,6 +20,10 @@ from mnemo.cli.commands.doctor_checks import background_processes
 from mnemo.core import claude_cli
 from mnemo.core.sessions import residents
 
+# Bound at import: the autouse ``_no_real_process_table`` stub replaces the
+# module attribute for every test, and this file tests the function itself.
+_real_read_ps = residents.read_ps
+
 SPARE = "/tmp/cc-daemon-501/3c0b3d77/spare"
 VERSIONS = "/Users/you/.local/share/claude/versions/2.1.270"
 
@@ -139,7 +143,7 @@ def test_format_age(seconds: int, text: str) -> None:
 
 def test_read_ps_is_silent_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(residents.sys, "platform", "win32")
-    assert residents.read_ps() is None
+    assert _real_read_ps() is None
 
 
 # --- the doctor row --------------------------------------------------------
