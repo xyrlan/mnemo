@@ -605,6 +605,30 @@ def test_session_end_sweeps_the_background_session_queue(tmp_path, monkeypatch):
     assert calls == [(["s1", "s2"], tmp_path)]
 
 
+def test_session_end_sweep_hands_the_real_sessions_to_the_real_detector(tmp_path, monkeypatch):
+    """The test above feeds ``sweep`` strings, and the hook swallows whatever
+    it raises: a reader and a detector that disagreed on the shape of a
+    session would fail in silence (#572). Here both are real, over a jobs
+    directory shaped like Claude Code's."""
+    from mnemo.core.sessions import jobs
+    from mnemo.hooks import session_end
+
+    job = tmp_path / "jobs" / "a3f1"
+    job.mkdir(parents=True)
+    (job / "state.json").write_text(
+        json.dumps({"state": "working", "tempo": "blocked", "needs": "q?", "cwd": "/repo"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(jobs, "jobs_dir", lambda: tmp_path / "jobs")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    session_end._maybe_sweep_sessions(vault)
+
+    queue = json.loads((vault / ".mnemo" / "session-queue.json").read_text(encoding="utf-8"))
+    assert queue["seen"]["a3f1"]["last_tempo"] == "blocked"
+
+
 def test_session_end_sweep_is_unscoped(tmp_path, monkeypatch):
     """Every background session, not just this cwd's.
 
