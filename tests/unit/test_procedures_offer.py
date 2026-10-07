@@ -278,13 +278,35 @@ def test_the_marker_is_a_marker_not_the_cache(vault, tmp_path):
 # --- the instrument --------------------------------------------------------
 
 
-def test_stats_answers_whether_the_offer_is_what_gets_things_decided(vault, tmp_path):
+def _clock_at(instant: datetime) -> type:
+    """A ``datetime`` whose ``now()`` reads ``instant``.
+
+    The ledger stamps each row with the wall clock, to the second, so two rows
+    a test writes back to back straddle a second boundary now and then and a
+    latency meant to be zero reads one second (1.157e-05 days): #569, on CI.
+    """
+
+    class _At(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant
+
+    return _At
+
+
+def test_stats_answers_whether_the_offer_is_what_gets_things_decided(
+    vault, tmp_path, monkeypatch
+):
     """#390's ``inbox --stats`` is the precedent; this mirrors it in this
     queue's own ledger, because the two queues' keys mean different things."""
+    offered_at = datetime(2026, 9, 20, 12, 0, 0)
     candidates = [_candidate("app", repo_root=tmp_path / "app"),
                   _candidate("other", repo_root=tmp_path / "other")]
+    monkeypatch.setattr(P, "datetime", _clock_at(offered_at))
     P.record(vault, event=P.OFFERED, repo="app", key="cargo-test")
+    monkeypatch.setattr(P, "datetime", _clock_at(offered_at + timedelta(hours=36)))
     P.record(vault, event=P.ACCEPTED, repo="app", key="cargo-test")
+    monkeypatch.setattr(P, "datetime", _clock_at(offered_at + timedelta(days=3)))
     P.record(vault, event=P.DROPPED, repo="other", key="cargo-test")
 
     out = P.stats(vault, candidates)
@@ -292,8 +314,9 @@ def test_stats_answers_whether_the_offer_is_what_gets_things_decided(vault, tmp_
     assert out["candidates"] == 2 and out["repos"] == 2
     assert (out["offered"], out["accepted"], out["dropped"]) == (1, 1, 1)
     assert out["resolved"] == 2
-    # Only the one that was offered first has a latency to report.
-    assert out["median_decision_days"] == 0
+    # Only the one that was offered first has a latency to report: counting
+    # the other repo's drop under the same key would read 2.25 days.
+    assert out["median_decision_days"] == 1.5
 
 
 def test_a_decision_nobody_was_offered_has_no_latency(vault, tmp_path):

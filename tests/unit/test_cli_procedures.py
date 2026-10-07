@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import io
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from mnemo.cli.parser import ADVANCED_COMMANDS, COMMANDS, INTERNAL_COMMANDS, _build_parser
@@ -26,6 +27,17 @@ def _child(projects: Path, repo_root: Path, worktree: str, commands: list) -> No
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{len(list(directory.iterdir()))}.jsonl").write_text(
         "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+
+def _clock_at(instant: datetime) -> type:
+    """A ``datetime`` whose ``now()`` reads ``instant`` (#569)."""
+
+    class _At(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant
+
+    return _At
 
 
 def _population(tmp_path: Path) -> tuple[Path, Path]:
@@ -200,14 +212,22 @@ def test_stats_measures_the_offer_from_being_shown_to_being_decided(
 
     projects, _repo = _population(tmp_path)
     vault = tmp_path / "vault"
-    P.record(vault, event=P.OFFERED, repo="app", key="cargo-test")
-    P.record(vault, event=P.DROPPED, repo="app", key="cargo-test")
+    # The ledger stamps rows with the wall clock, to the second: written back
+    # to back, the two rows straddle a second boundary now and then (#569).
+    # Each is stamped at a chosen instant instead, inside the 7-day window,
+    # and the command runs on the real clock.
+    offered_at = datetime.now().replace(microsecond=0) - timedelta(days=2)
+    for event, at in ((P.OFFERED, offered_at),
+                      (P.DROPPED, offered_at + timedelta(hours=36))):
+        with monkeypatch.context() as m:
+            m.setattr(P, "datetime", _clock_at(at))
+            P.record(vault, event=event, repo="app", key="cargo-test")
 
     rc, out = _run(vault, projects, monkeypatch, stats=True)
 
     assert rc == 0
     assert "1 offered at session start, 0 accepted, 1 dropped (1 resolved)" in out
-    assert "median offer → decision: 0d" in out
+    assert "median offer → decision: 1.5d" in out
 
 
 def test_refresh_and_an_action_at_once_are_refused(tmp_path: Path, monkeypatch) -> None:
