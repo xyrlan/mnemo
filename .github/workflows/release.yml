@@ -19,6 +19,32 @@ on:
 # failed on a missing `shasum`, and the release shipped with no binaries at
 # all -- which is precisely what the plugin install needs.
 jobs:
+  # Before anything: the tagged commit's CI must be green (#594). The tag
+  # checks below never looked at it, and `gh pr merge` does not gate on
+  # checks, so a red or never-run commit shipped. CI still running is waited
+  # for (bounded); see tools/release_gate.py for the verdicts. A manual run
+  # builds from a branch whose push CI never ran, so it skips the check --
+  # it cannot publish anyway.
+  release-gate:
+    name: CI is green on the tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Refuse to release a commit whose CI is not green
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: src
+        run: python3 tools/release_gate.py --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --timeout-minutes 30
+
   publish-pypi:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
@@ -66,6 +92,7 @@ jobs:
 
   build-binaries:
     name: Binary — ${{ matrix.target }}
+    needs: release-gate
     strategy:
       fail-fast: false
       matrix:
