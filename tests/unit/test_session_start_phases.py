@@ -56,7 +56,7 @@ def test_a_profiled_session_start_logs_one_row_of_phase_times(monkeypatch, vault
     assert row["session_id"] == "s" * 36 and row["source"] == "startup"
     phases = row["phases"]
     # The phases #610 asked about, by name, each a non-negative time.
-    for name in ("config", "mirror", "rule_activation_index", "reflex_index",
+    for name in ("config", "rule_activation_index", "reflex_index", "deferred_spawn",
                  "injection", "autopilot"):
         assert name in phases, name
         assert phases[name] >= 0

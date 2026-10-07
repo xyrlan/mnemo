@@ -3,7 +3,9 @@
 
 Two responsibilities:
 
-1. Cache session metadata + mirror Claude memories + log the start (v0.2+).
+1. Cache session metadata + log the start (v0.2+), and spawn the work no
+   injected block reads — the memory mirror, the reflex index — detached
+   (#610): Claude Code holds the session's first prompt until this returns.
 2. v0.5: when ``injection.enabled`` is true, emit a JSON payload on stdout
    that Claude Code interprets as ``additionalContext``, listing the topic
    tags Claude can reach via the mnemo MCP server. Disabled by default.
@@ -513,6 +515,52 @@ def watcher_cwd() -> str:
     except Exception:  # noqa: BLE001 — a cwd must always come back
         pass
     return os.path.expanduser("~")
+
+
+_DEFERRED_LOCK = ".mnemo/session-start-deferred.lock"
+
+
+def _spawn_deferred(cwd: str | None = None) -> None:
+    """Fire-and-forget ``mnemo session-start-deferred``: :func:`run_deferred`."""
+    _spawn_detached(["session-start-deferred"], cwd=cwd)
+
+
+def run_deferred(cfg: dict, vault) -> str:
+    """The session-start work no injected block reads (#610).
+
+    ``SessionStart`` holds the session's first prompt until it returns: of
+    318 runs over 10 s on the maintainer's machine, 285 first prompts landed
+    within a second of the hook returning (``measure_hook_durations``). Two
+    phases fed nothing the hook injects and were most of its time:
+
+    - the reflex BM25F index, read by ``UserPromptSubmit`` only. Every writer
+      of ``shared/`` (extract, inbox apply, reclassify, retire) rebuilds it
+      itself; this rebuild is the net for hand edits and upgrades.
+    - the mirror of Claude Code's memory into ``bots/*/memory``, which no
+      block here reads and which ``SessionEnd`` runs again itself.
+
+    One run at a time: a resume storm starts many sessions in a second, and
+    each rebuild is seconds of CPU, so a second run while one is in flight
+    returns ``locked``. Errors keep their ``session_start.*`` names, which
+    ``doctor`` already reports.
+    """
+    from mnemo.core import errors, locks, mirror
+
+    vault = Path(vault)
+    with locks.try_lock(vault / _DEFERRED_LOCK, stale_after=600.0) as held:
+        if not held:
+            return "locked"
+        try:
+            mirror.mirror_all(cfg)
+        except Exception as e:
+            errors.log_error(vault, "session_start.mirror", e)
+        if bool((cfg.get("reflex") or {}).get("enabled", False)):
+            try:
+                from mnemo.core.reflex import index as reflex_index
+                reflex_index.write_index(vault, reflex_index.build_index(vault))
+            except Exception as exc:
+                errors.log_error(vault, "session_start.reflex_index", exc)
+    return "done"
 
 
 def _spawn_detached_backfill(cwd: str | None = None) -> None:
@@ -1167,7 +1215,7 @@ def main() -> int:
     except Exception:
         return 0
     try:
-        from mnemo.core import agent, config, errors, log_writer, mirror, paths, session
+        from mnemo.core import agent, config, errors, log_writer, paths, session
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
@@ -1242,11 +1290,6 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.hook_repair", e)
         phases.lap("hook_repair")
-        try:
-            mirror.mirror_all(cfg)
-        except Exception as e:
-            errors.log_error(vault, "session_start.mirror", e)
-        phases.lap("mirror")
 
         # #114: legacy pages carry name: but no slug:, which keyed every index
         # by display name. Stamp once (marker short-circuits the scan on every
@@ -1279,13 +1322,24 @@ def main() -> int:
                 errors.log_error(vault, "session_start.rule_activation_index", exc)
         phases.lap("rule_activation_index")
 
+        # The reflex index and the memory mirror feed no block this hook
+        # injects, so they are rebuilt detached (#610): the first prompt waits
+        # for this hook, and the reflex rebuild alone was most of its time.
+        # Only a vault with no reflex index yet builds one here, so a fresh
+        # install's first prompt is not left without one.
         if reflex_enabled:
             try:
                 from mnemo.core.reflex import index as reflex_index
-                reflex_index.write_index(vault, reflex_index.build_index(vault))
+                if not (Path(vault) / ".mnemo" / reflex_index.INDEX_FILENAME).exists():
+                    reflex_index.write_index(vault, reflex_index.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.reflex_index", exc)
         phases.lap("reflex_index")
+        try:
+            _spawn_deferred(cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_start.deferred", e)
+        phases.lap("deferred_spawn")
 
         # A brand-new vault injects on 0% of prompts until something puts rules
         # in it. Runs at most once per vault, capped, detached — one LLM call

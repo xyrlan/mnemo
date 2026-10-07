@@ -186,3 +186,38 @@ def test_the_phase_breakdown_names_the_p50_and_p95_runs(tmp_path):
     assert out["per_phase"]["reflex_index"]["max"] == 899.0
     assert "reflex_index" in mhd.render_phases(out)
     assert mhd.phase_breakdown([]) == {}
+
+
+def _prompt(ts, text="fix the bug"):
+    return {"type": "user", "timestamp": ts, "message": {"content": text}}
+
+
+def _start_done(ts, ms):
+    return {"type": "attachment", "timestamp": ts, "attachment": {
+        "type": "hook_success", "hookName": "SessionStart:startup", "durationMs": ms,
+        "command": "/usr/bin/python3 -m mnemo.hooks.session_start"}}
+
+
+def test_the_first_prompt_gap_is_measured_from_the_hook_returning():
+    held = [_start_done("2026-10-07T10:00:30.000Z", 30000),
+            _prompt("2026-10-07T10:00:30.200Z")]
+    gap = mhd.first_prompt_gap(held)
+    assert gap == {"gap_s": 0.2, "hook_ms": 30000.0}
+    early = [_start_done("2026-10-07T10:00:30.000Z", 30000),
+             _prompt("2026-10-07T10:00:10.000Z")]
+    # The prompt row may come after the attachment in the file yet carry an
+    # earlier stamp: that is a prompt Claude Code let through mid-hook.
+    assert mhd.first_prompt_gap(early)["gap_s"] == -20.0
+    # A meta row is not a prompt; no hook run, no gap.
+    assert mhd.first_prompt_gap([{"type": "user", "isMeta": True, "timestamp": "x"}]) is None
+    assert mhd.first_prompt_gap([_prompt("2026-10-07T10:00:00Z")]) is None
+
+
+def test_prompt_holds_counts_slow_runs_only():
+    gaps = [{"gap_s": 0.1, "hook_ms": 20000}, {"gap_s": 0.3, "hook_ms": 15000},
+            {"gap_s": -5.0, "hook_ms": 12000}, {"gap_s": 40.0, "hook_ms": 11000},
+            {"gap_s": -1.0, "hook_ms": 500}]
+    out = mhd.prompt_holds(gaps)
+    assert out["sessions"] == 5 and out["prompt_before_hook_end"] == 2
+    assert out["slow"] == 4 and out["slow_prompt_within"] == 2
+    assert out["slow_prompt_before_hook_end"] == 1
