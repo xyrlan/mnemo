@@ -6,7 +6,9 @@ turn. Follow the defensive patterns from pre_tool_use.py / session_start.py.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import sys
 import time
@@ -30,6 +32,72 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
+    # Held child notices go out on this prompt whatever reflex decides, so
+    # reflex's own output is caught and merged into the one JSON object a
+    # hook may print (#586).
+    held = _dispatch_upkeep(payload)
+    if not held:
+        return _reflex(payload, throwaway_session)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _reflex(payload, throwaway_session)
+    context = held
+    try:
+        prior = json.loads(buf.getvalue() or "{}")
+        extra = ((prior.get("hookSpecificOutput") or {}).get("additionalContext") or "")
+        if extra:
+            context = held + "\n\n" + extra
+    except (ValueError, AttributeError):
+        pass
+    sys.stdout.write(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context,
+        },
+    }))
+    sys.stdout.flush()
+    return 0
+
+
+def _dispatch_upkeep(payload: dict) -> str:
+    """Keep a dispatching parent reachable; return its held notices (#586).
+
+    Two jobs, both cheap when there is nothing to do — one read each of two
+    small files:
+
+    - re-record this session's inbox address when the log has none for it,
+      so one lost row no longer silences a parent for the rest of its session;
+    - claim the notices its children could not deliver
+      (:mod:`mnemo.core.sessions.held_notices`) and return them as context.
+
+    Never raises; ``""`` when there is nothing to show.
+    """
+    try:
+        from mnemo.core import config as cfg_mod
+        from mnemo.core import errors, paths
+        from mnemo.core.hook_guard import throwaway_session
+
+        cfg = cfg_mod.load_config()
+        if not bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
+            return ""
+        vault = paths.vault_root(cfg)
+        if throwaway_session(payload.get("cwd") or str(Path.cwd()), vault):
+            return ""
+        if not errors.should_run(vault):
+            return ""
+        from mnemo.core.sessions import held_notices, inbox
+
+        try:
+            inbox.ensure_recorded(vault)
+        except Exception as exc:  # noqa: BLE001
+            errors.log_error(vault, "user_prompt_submit.inbox_address", exc)
+        sid = str(payload.get("session_id") or "")
+        return held_notices.render(held_notices.claim(vault, sid))
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return ""
+
+
+def _reflex(payload: dict, throwaway_session) -> int:
     try:
         from mnemo.core import config as cfg_mod
         from mnemo.core import errors, paths

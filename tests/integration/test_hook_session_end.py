@@ -299,6 +299,47 @@ def test_session_end_says_so_when_the_parent_is_gone(
     assert errors.recent_strikes(hook_env) == 0
 
 
+def test_a_notice_with_no_parent_address_reaches_the_parents_next_prompt_once(
+    hook_env: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """#586, the 2026-10-07 path: the parent had no row in session-inbox.jsonl,
+    so the child's ``SessionEnd`` could not deliver. The notice is held, and the
+    parent's next prompt shows it — once."""
+    from mnemo.core.sessions import inbox
+    from mnemo.hooks import user_prompt_submit
+
+    for name in (inbox.SESSION_ENV, inbox.SOCKET_ENV):
+        monkeypatch.delenv(name, raising=False)
+    parent = "f5a7a396-a634-4201-808e-4f3ff00d3ff9"
+    child = _dispatched_child(hook_env, parent=parent)
+    inbox.log_path(hook_env).unlink()  # the lost row
+    monkeypatch.setattr(
+        session_end, "_spawn_detached_child_report",
+        lambda *a, **k: pytest.fail("no address, no reporter"),
+    )
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"session_id": child, "reason": "exit"})),
+    )
+    assert session_end.main() == 0
+    [row] = _report_rows(hook_env)
+    assert row["reason"].startswith("no address recorded for the parent")
+
+    def prompt(sid):
+        out = io.StringIO()
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"session_id": sid, "cwd": str(hook_env), "prompt": "ok"})))
+        monkeypatch.setattr(sys, "stdout", out)
+        assert user_prompt_submit.main() == 0
+        return out.getvalue()
+
+    assert prompt("someone-else") == ""
+    first = prompt(parent)
+    context = json.loads(first)["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith("[mnemo] 1 notice(s)")
+    assert f'{inbox.NOTICE_PREFIX} id="{child[:8]}">' in context
+    assert prompt(parent) == ""
+
+
 def test_session_end_logs_the_one_line_fallback(
     hook_env: Path, monkeypatch: pytest.MonkeyPatch,
 ):

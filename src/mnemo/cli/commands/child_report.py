@@ -95,13 +95,14 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
     card = report_card.gather(args.short_id, cwd=args.cwd, transcript=transcript)
     minutes = report_card.watch_minutes(cfg)
     name = report_card.state(card)
-    why = inbox.deliver(
-        vault_root, args.parent, report_card.render(card, watch_minutes=minutes),
-    )
+    text = report_card.render(card, watch_minutes=minutes)
+    why = inbox.deliver(vault_root, args.parent, text)
     pr = card.pr.number if card.pr else None
     row = {**base, "event": "finished", "state": name, "pr": pr}
     if why:
-        report_card.undelivered(vault_root, row, why)
+        # Held for the parent's next prompt (#586). Without a live parent
+        # there is no watch, so the card as rendered now is the whole notice.
+        report_card.undelivered(vault_root, row, why, text=text)
         return 0
     report_card.record(vault_root, {**row, "delivered": True})
     if name != "ci-running" or minutes <= 0:
@@ -111,10 +112,13 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         return inbox.resolve(vault_root, args.parent)[0] is not None
 
     sent = []
+    failed = []
 
     def post(text: str) -> bool:
         ok = inbox.notify(vault_root, args.parent, text)
         sent.append(ok)
+        if not ok:
+            failed.append(text)
         return ok
 
     ended = report_card.watch_checks(card, minutes=minutes, alive=alive, post=post)
@@ -125,5 +129,6 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         report_card.undelivered(
             vault_root, row,
             "parent not live when checks were due" if not sent else "socket write failed",
+            text=failed[-1] if failed else None,
         )
     return 0

@@ -492,7 +492,8 @@ def _maybe_notify_parent(
     # children of one live parent ended here on 2026-09-22.
     address, why = inbox.resolve(vault, parent)
     if address is None:
-        report_card.undelivered(vault, row, why)
+        # Held, not dropped (#586): the parent sees it at its next prompt.
+        report_card.undelivered(vault, row, why, text=_notice_text(short_id))
         return
 
     try:
@@ -508,9 +509,10 @@ def _maybe_notify_parent(
 
         errors.log_error(vault, "session_end.child_report_spawn", exc)
         reason = f"reporter did not start ({type(exc).__name__}: {exc}); sent the one-line notice"
-    why = inbox.deliver(vault, parent, _notice_text(short_id))
+    text = _notice_text(short_id)
+    why = inbox.deliver(vault, parent, text)
     if why:
-        report_card.undelivered(vault, row, f"{reason}; that failed too: {why}")
+        report_card.undelivered(vault, row, f"{reason}; that failed too: {why}", text=text)
     else:
         report_card.record(vault, {**row, "state": "thin", "delivered": True, "reason": reason})
 

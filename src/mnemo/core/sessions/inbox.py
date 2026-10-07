@@ -91,15 +91,16 @@ SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 #: itself rather than leaving a stale row in front.
 LOG_NAME = "session-inbox.jsonl"
 
-#: Serialises :func:`record`'s rewrite against other session starts, so a row
-#: appended by one is never dropped by another's compaction.
+#: Serialises :func:`record`'s compaction against another session's, so two
+#: rewrites never race; appends need no lock (#586).
 LOCK_NAME = "session-inbox.lock"
 
 #: Fields a row may carry. Anything else — the ``token`` rows written before
 #: #553 above all — is dropped when the file is rewritten.
 ROW_FIELDS = ("session_id", "socket", "pid", "pid_start")
 
-#: How long :func:`record` waits for the lock before appending unlocked.
+#: How long :func:`record` waits for the lock before leaving the compaction
+#: to the next writer. Its row is already on disk by then.
 LOCK_WAIT_SECONDS = 2.0
 
 #: Read/written under a 5s timeout: a hung peer must not hold a hook open.
@@ -223,45 +224,130 @@ def _dump(rows) -> bytes:
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8")
 
 
-def record(vault_root: Path | str, address: dict | None) -> None:
-    """Add one address row, rewriting the log clean. Never raises.
+def _read(path: Path) -> bytes:
+    try:
+        with path.open("rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return b""
 
-    The whole file is rewritten, ``0600``, through :func:`compact` — no
-    legacy token, no row whose pid is gone — with the new row last. Under
-    :data:`LOCK_NAME`, because two sessions start at once whenever a dispatch
-    does, and an unlocked rewrite would drop the other one's row. A lock that
-    stays busy past :data:`LOCK_WAIT_SECONDS` is a stuck holder, not a
-    concurrent one; the row is then appended as before rather than lost.
+
+def _lines(data: bytes) -> list:
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
+def _append(path: Path, row: dict) -> None:
+    """One ``O_APPEND`` write of one line: never interleaves with another's."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "ab") as fh:
+        fh.write(_dump([row]))
+
+
+#: How often :func:`_rewrite` re-reads a log that keeps growing under it
+#: before it leaves the compaction to the next writer.
+REWRITE_TRIES = 5
+
+
+def _rewrite(path: Path, row: dict) -> None:
+    """Compact the log in place, under the lock, without losing an append.
+
+    Writers append outside the lock (:func:`record`), so the file only grows
+    while this runs. Two rules keep every appended row (#586):
+
+    - Only rows already on disk *before* ``ps`` ran are pruned by its answer.
+      A row appended after that read belongs to a process that may have
+      started after the snapshot: absent from it, but alive.
+    - The rewrite is installed only if the file is still byte-for-byte what
+      was compacted. Otherwise it is read again; after :data:`REWRITE_TRIES`
+      it is left uncompacted, which costs disk, not a row.
+    """
+    head = _read(path)
+    alive = live_pids()
+    for _ in range(REWRITE_TRIES):
+        data = _read(path)
+        if not data.startswith(head):
+            return  # rewritten by someone else: their copy stands
+        rows = compact(_lines(head), alive) + compact(_lines(data[len(head):]), None)
+        if row not in rows:
+            rows.append(row)
+        rows = [r for i, r in enumerate(rows) if r not in rows[i + 1:]]
+        if _read(path) != data:
+            continue
+        from mnemo.core import atomic
+
+        atomic.atomic_write_bytes(path, _dump(rows))
+        return
+
+
+def record(vault_root: Path | str, address: dict | None) -> None:
+    """Add one address row, then compact the log. Never raises.
+
+    The row is appended first, in one ``O_APPEND`` write, so it is on disk
+    before anything else can go wrong. The compaction — no legacy token, no
+    row whose pid is gone, no exact duplicate, ``0600`` — runs after, under
+    :data:`LOCK_NAME`, and keeps every row appended while it ran
+    (:func:`_rewrite`). A lock that stays busy past :data:`LOCK_WAIT_SECONDS`
+    skips the compaction, not the row.
+
+    Before #586 the row was written *by* the locked rewrite, with an unlocked
+    append as the fallback when the lock stayed busy; a locked writer that had
+    read the file before that append then installed its copy over it. On
+    2026-10-07 every session resumed at once after a restart, one parent's
+    ``SessionStart`` ran for 38 s, and that parent had no row: its four
+    children's notices all went undelivered.
     """
     if not address:
         return
     try:
-        from mnemo.core import atomic, locks
+        from mnemo.core import locks
 
         row = _clean(address)
         path = log_path(vault_root)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _append(path, row)
         deadline = time.monotonic() + LOCK_WAIT_SECONDS
         while True:
             with locks.try_lock(path.parent / LOCK_NAME, stale_after=30.0) as held:
                 if held:
-                    try:
-                        with path.open("r", encoding="utf-8", errors="replace") as fh:
-                            old = fh.read().splitlines()
-                    except FileNotFoundError:
-                        old = []
-                    rows = compact(old, live_pids())
-                    rows.append(row)
-                    atomic.atomic_write_bytes(path, _dump(rows))
+                    _rewrite(path, row)
                     return
             if time.monotonic() >= deadline:
-                break
+                return
             time.sleep(0.05)
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "ab") as fh:
-            fh.write(_dump([row]))
     except (OSError, TypeError, ValueError):
         return
+
+
+def ensure_recorded(vault_root: Path | str, env: Mapping[str, str] | None = None) -> bool:
+    """Record this session's address if the log has no row for it (#586).
+
+    ``SessionStart`` is not the only chance any more: one lost row used to
+    silence a parent for the rest of its session. Run before each prompt, so
+    the common case is one read of a small file and no ``ps``. True when a
+    row was written. Never raises.
+    """
+    try:
+        src = os.environ if env is None else env
+        sid = (src.get(SESSION_ENV) or "").strip()
+        sock = (src.get(SOCKET_ENV) or "").strip()
+        if not sid or not sock:
+            return False
+        for line in _lines(_read(log_path(vault_root))):
+            if sid in line and sock in line:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(row, dict) and row.get("session_id") == sid \
+                        and row.get("socket") == sock:
+                    return False
+        address = address_from_env(src)
+        if not address:
+            return False
+        record(vault_root, address)
+        return True
+    except Exception:  # noqa: BLE001 — runs in a prompt hook
+        return False
 
 
 def lookup(vault_root: Path | str, session_id: str) -> dict | None:
