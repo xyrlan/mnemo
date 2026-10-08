@@ -612,6 +612,15 @@ announcement exists at all: extraction writes into the vault on its own, so
 the veto has to be one line away rather than three commands deep in a
 directory you have never opened.
 
+`mnemo disable-rule <slug>` adds `disabled: true` to the rule's frontmatter
+and rebuilds both indexes, so from the next tool call the rule no longer
+blocks through its `enforce` block, the reflex no longer injects it, and
+`list_rules_by_topic` and the topic menu no longer offer it. The page stays
+where it is. `mnemo enable-rule <slug>` takes it back — or delete the
+`disabled: true` line yourself; the next session start picks that up.
+(`runtime: false`, which every promoted project page carries, is not a veto
+and never hides anything.)
+
 Two files under the vault's `.mnemo/` back the fourth block:
 
 - `.mnemo/learned.jsonl` — the append-only ledger, one line per promoted rule.

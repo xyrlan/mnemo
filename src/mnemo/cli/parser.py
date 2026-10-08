@@ -827,8 +827,13 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="page types to include (default: feedback; user pages carry names and emails)")
     publish.add_argument("--dry-run", action="store_true", help="print what would change, write nothing")
     publish.add_argument("--remove", action="store_true", help="delete this vault's published files and the manifest")
-    disable = sub.add_parser("disable-rule", help="set runtime: false on a rule's frontmatter by slug")
+    disable = sub.add_parser(
+        "disable-rule",
+        help="veto a rule by slug (disabled: true): it stops blocking, being injected and being offered",
+    )
     disable.add_argument("slug", help="rule slug (from the block message or `mnemo list-enforced`)")
+    enable = sub.add_parser("enable-rule", help="undo `mnemo disable-rule`: remove the rule's disabled: true")
+    enable.add_argument("slug", help="rule slug")
     sub.add_parser("list-enforced", help="audit rules with enforce blocks (can block tool calls)")
     sub.add_parser(
         "regen-graph-edges",
