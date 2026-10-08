@@ -3,7 +3,9 @@
 
 Two responsibilities:
 
-1. Cache session metadata + mirror Claude memories + log the start (v0.2+).
+1. Cache session metadata + log the start (v0.2+), and spawn the work no
+   injected block reads — the memory mirror, the reflex index — detached
+   (#610): Claude Code holds the session's first prompt until this returns.
 2. v0.5: when ``injection.enabled`` is true, emit a JSON payload on stdout
    that Claude Code interprets as ``additionalContext``, listing the topic
    tags Claude can reach via the mnemo MCP server. Disabled by default.
@@ -23,6 +25,45 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+
+
+#: Set to anything non-empty to have each SessionStart append its per-phase
+#: wall times to :data:`PHASES_LOG` (#610). Off by default: a row per session
+#: is a write no one reads unless they are profiling the hook.
+PHASES_ENV = "MNEMO_HOOK_PHASES"
+PHASES_LOG = ".mnemo/session-start-phases.jsonl"
+
+
+class _Phases:
+    """Lap timer over :func:`main`: ``lap(name)`` books the time since the
+    previous lap to *name*. Records nothing unless :data:`PHASES_ENV` is set."""
+
+    def __init__(self) -> None:
+        self.on = bool(os.environ.get(PHASES_ENV))
+        self.started = self.last = time.perf_counter()
+        self.ms: dict = {}
+
+    def lap(self, name: str) -> None:
+        if not self.on:
+            return
+        now = time.perf_counter()
+        self.ms[name] = round(self.ms.get(name, 0.0) + (now - self.last) * 1000, 1)
+        self.last = now
+
+    def write(self, vault, session_id: str, source: str) -> None:
+        if not self.on:
+            return
+        row = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "session_id": session_id,
+            "source": source,
+            "total_ms": round((time.perf_counter() - self.started) * 1000, 1),
+            "phases": self.ms,
+        }
+        path = Path(vault) / PHASES_LOG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
 
 
 _PRUNE_MARKER = ".mnemo/briefings-prune.last"
@@ -474,6 +515,52 @@ def watcher_cwd() -> str:
     except Exception:  # noqa: BLE001 — a cwd must always come back
         pass
     return os.path.expanduser("~")
+
+
+_DEFERRED_LOCK = ".mnemo/session-start-deferred.lock"
+
+
+def _spawn_deferred(cwd: str | None = None) -> None:
+    """Fire-and-forget ``mnemo session-start-deferred``: :func:`run_deferred`."""
+    _spawn_detached(["session-start-deferred"], cwd=cwd)
+
+
+def run_deferred(cfg: dict, vault) -> str:
+    """The session-start work no injected block reads (#610).
+
+    ``SessionStart`` holds the session's first prompt until it returns: of
+    318 runs over 10 s on the maintainer's machine, 285 first prompts landed
+    within a second of the hook returning (``measure_hook_durations``). Two
+    phases fed nothing the hook injects and were most of its time:
+
+    - the reflex BM25F index, read by ``UserPromptSubmit`` only. Every writer
+      of ``shared/`` (extract, inbox apply, reclassify, retire) rebuilds it
+      itself; this rebuild is the net for hand edits and upgrades.
+    - the mirror of Claude Code's memory into ``bots/*/memory``, which no
+      block here reads and which ``SessionEnd`` runs again itself.
+
+    One run at a time: a resume storm starts many sessions in a second, and
+    each rebuild is seconds of CPU, so a second run while one is in flight
+    returns ``locked``. Errors keep their ``session_start.*`` names, which
+    ``doctor`` already reports.
+    """
+    from mnemo.core import errors, locks, mirror
+
+    vault = Path(vault)
+    with locks.try_lock(vault / _DEFERRED_LOCK, stale_after=600.0) as held:
+        if not held:
+            return "locked"
+        try:
+            mirror.mirror_all(cfg)
+        except Exception as e:
+            errors.log_error(vault, "session_start.mirror", e)
+        if bool((cfg.get("reflex") or {}).get("enabled", False)):
+            try:
+                from mnemo.core.reflex import index as reflex_index
+                reflex_index.write_index(vault, reflex_index.build_index(vault))
+            except Exception as exc:
+                errors.log_error(vault, "session_start.reflex_index", exc)
+    return "done"
 
 
 def _spawn_detached_backfill(cwd: str | None = None) -> None:
@@ -1121,15 +1208,18 @@ def main() -> int:
     if hooks_off():
         return 0
 
+    phases = _Phases()
+
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     try:
-        from mnemo.core import agent, config, errors, log_writer, mirror, paths, session
+        from mnemo.core import agent, config, errors, log_writer, paths, session
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
+        phases.lap("config")
         # A session in a temp, pytest or job-scratch dir writes nothing into
         # a vault that outlives it (#420). See hook_guard.throwaway_session.
         if throwaway_session(payload.get("cwd") or os.getcwd(), vault):
@@ -1155,6 +1245,7 @@ def main() -> int:
                 scaffold.scaffold_vault(vault)
         except Exception as e:
             errors.log_error(vault, "session_start.scaffold", e)
+        phases.lap("scaffold")
 
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()
@@ -1175,6 +1266,7 @@ def main() -> int:
             session.cleanup_stale(max_age_seconds=48 * 3600)
         except Exception as e:
             errors.log_error(vault, "session_start.cache", e)
+        phases.lap("session_cache")
         try:
             # #357: the only moment this session's inbox address is knowable.
             # Claude Code exports the socket into the session's own
@@ -1187,18 +1279,17 @@ def main() -> int:
                 inbox.record(vault, inbox.address_from_env())
         except Exception as e:
             errors.log_error(vault, "session_start.inbox_address", e)
+        phases.lap("inbox_record")
         try:
             _maybe_prune_briefings(vault, cfg)
         except Exception as e:
             errors.log_error(vault, "session_start.briefings_prune", e)
+        phases.lap("briefings_prune")
         try:
             _maybe_repair_hook_matchers(vault, cfg, cwd)
         except Exception as e:
             errors.log_error(vault, "session_start.hook_repair", e)
-        try:
-            mirror.mirror_all(cfg)
-        except Exception as e:
-            errors.log_error(vault, "session_start.mirror", e)
+        phases.lap("hook_repair")
 
         # #114: legacy pages carry name: but no slug:, which keyed every index
         # by display name. Stamp once (marker short-circuits the scan on every
@@ -1212,6 +1303,7 @@ def main() -> int:
                     _slugs.write_marker(vault)
         except Exception as exc:
             errors.log_error(vault, "session_start.slug_migration", exc)
+        phases.lap("slug_migration")
 
         # Rebuild rule-activation index when any of the three consumers needs it:
         # enforcement (PreToolUse deny), enrichment (PreToolUse context), or
@@ -1228,13 +1320,26 @@ def main() -> int:
                 rule_activation.write_index(vault, rule_activation.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.rule_activation_index", exc)
+        phases.lap("rule_activation_index")
 
+        # The reflex index and the memory mirror feed no block this hook
+        # injects, so they are rebuilt detached (#610): the first prompt waits
+        # for this hook, and the reflex rebuild alone was most of its time.
+        # Only a vault with no reflex index yet builds one here, so a fresh
+        # install's first prompt is not left without one.
         if reflex_enabled:
             try:
                 from mnemo.core.reflex import index as reflex_index
-                reflex_index.write_index(vault, reflex_index.build_index(vault))
+                if not (Path(vault) / ".mnemo" / reflex_index.INDEX_FILENAME).exists():
+                    reflex_index.write_index(vault, reflex_index.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.reflex_index", exc)
+        phases.lap("reflex_index")
+        try:
+            _spawn_deferred(cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_start.deferred", e)
+        phases.lap("deferred_spawn")
 
         # A brand-new vault injects on 0% of prompts until something puts rules
         # in it. Runs at most once per vault, capped, detached — one LLM call
@@ -1243,12 +1348,14 @@ def main() -> int:
         # switch for every hook; it does not depend on scaffolding, since the
         # lock and ledger writes create `.mnemo/` themselves.
         _maybe_schedule_install_backfill(cfg, vault, cwd)
+        phases.lap("backfill")
 
         # The scan behind the procedure offer: detached, at most once per
         # refresh interval, and for the *next* session's block — never this
         # one's (#397). Below `errors.should_run` like the backfill spawn, and
         # silent to a session either way.
         _maybe_refresh_procedures(cfg, vault, cwd)
+        phases.lap("procedures_refresh")
 
         source = str(payload.get("source") or "startup")
         if cfg.get("capture", {}).get("sessionStartEnd", True):
@@ -1256,6 +1363,7 @@ def main() -> int:
                 log_writer.append_line(ainfo.name, f"🟢 session started ({source})", cfg)
             except Exception as e:
                 errors.log_error(vault, "session_start.log", e)
+        phases.lap("day_log")
 
         # Plugin installs cannot rewrite settings.json, so a leftover
         # `mnemo init` from before the plugin keeps firing alongside it and
@@ -1265,6 +1373,7 @@ def main() -> int:
             _warn_about_duplicate_install(vault)
         except Exception as e:
             errors.log_error(vault, "session_start.migration_notice", e)
+        phases.lap("duplicate_install")
 
         # v0.5 injection — opt-in, fail-silent. Must run last so the JSON
         # envelope is the only thing on stdout.
@@ -1325,6 +1434,7 @@ def main() -> int:
                         errors.log_error(vault, "session_start.inject_telemetry", exc)
             except Exception as e:
                 errors.log_error(vault, "session_start.injection", e)
+        phases.lap("injection")
 
         # #396: make sure something is alive to wake a rate-limited child when
         # its reset comes round. Not a wake: this costs one roster read and at
@@ -1336,6 +1446,7 @@ def main() -> int:
             rewake.on_session_start(cfg, vault_root=vault)
         except Exception as e:
             errors.log_error(vault, "session_start.rewake", e)
+        phases.lap("rewake")
 
         # #436: a watcher following finished children's PRs that died (a
         # reboot, a kill) while follows were still open is started again. A
@@ -1345,6 +1456,7 @@ def main() -> int:
             pr_follow.on_session_start(cfg, vault_root=vault)
         except Exception as e:
             errors.log_error(vault, "session_start.pr_follow", e)
+        phases.lap("pr_follow")
 
         # #502: something outside the child's own SessionEnd has to notice a
         # dispatched child stop, because on 2026-09-24 22 of 95 stopped with
@@ -1354,6 +1466,7 @@ def main() -> int:
             child_notices.on_session_start(cfg, vault_root=vault)
         except Exception as e:
             errors.log_error(vault, "session_start.child_notices", e)
+        phases.lap("child_notices")
 
         # #503: remove the worktrees of dispatched children whose PR merged.
         # Here, not on the child's SessionEnd, which #502 measured missing for
@@ -1364,6 +1477,7 @@ def main() -> int:
             tree_sweep.on_session_start(cfg, vault_root=vault, cwd=cwd)
         except Exception as e:
             errors.log_error(vault, "session_start.tree_sweep", e)
+        phases.lap("tree_sweep")
 
         # autopilot — fire any due hook-driven operations. Always best-effort:
         # any failure here is logged + swallowed, must never block the session.
@@ -1372,6 +1486,11 @@ def main() -> int:
             run_due_jobs(vault_root=vault)
         except Exception as e:
             errors.log_error(vault, "session_start.autopilot", e)
+        phases.lap("autopilot")
+        try:
+            phases.write(vault, sid, source)
+        except Exception as e:
+            errors.log_error(vault, "session_start.phases", e)
     except Exception as e:
         try:
             from mnemo.core import config as _c, errors as _e, paths as _p

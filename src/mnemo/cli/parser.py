@@ -54,6 +54,7 @@ INTERNAL_COMMANDS: frozenset[str] = frozenset({
     "hook",
     "mcp-server",
     "pr-follow",
+    "session-start-deferred",
     "statusline",
     "statusline-compose",
     "tree-sweep",
@@ -479,6 +480,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # #503: spawned detached by SessionStart at most every half hour per repo.
     # Typed by hand it prints what it did to each dispatch tree of this repo.
     sub.add_parser("tree-sweep")
+    # #610: spawned detached by SessionStart on every start; never typed. The
+    # memory mirror and the reflex index rebuild, which no injected block reads.
+    sub.add_parser("session-start-deferred")
 
     # #502: spawned detached by SessionStart and `mnemo dispatch`; never typed.
     # Tells a parent about a child that stopped without its SessionEnd notice.

@@ -121,22 +121,21 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
             field_toks = _field_tokens(fm, indexed_text, slug)
             field_length = {f: len(field_toks[f]) for f in _FIELD_NAMES}
 
-            # Merge all field tokens into postings with per-field tf.
+            # Merge all field tokens into postings with per-field tf. This
+            # page's bucket per term is kept here rather than found by
+            # scanning postings[tok], which made the build quadratic in the
+            # pages sharing a term (#610: 24 s of a 3,400-rule SessionStart).
+            buckets: dict[str, dict] = {}
             for field, toks in field_toks.items():
                 seen: dict[str, int] = {}
                 for tok in toks:
                     seen[tok] = seen.get(tok, 0) + 1
                 for tok, tf in seen.items():
-                    postings.setdefault(tok, [])
-                    # Find or create entry for this slug.
-                    bucket = None
-                    for entry in postings[tok]:
-                        if entry["slug"] == slug:
-                            bucket = entry
-                            break
+                    bucket = buckets.get(tok)
                     if bucket is None:
                         bucket = {"slug": slug, "tf": {f: 0 for f in _FIELD_NAMES}}
-                        postings[tok].append(bucket)
+                        buckets[tok] = bucket
+                        postings.setdefault(tok, []).append(bucket)
                     bucket["tf"][field] = tf
 
             for f in _FIELD_NAMES:

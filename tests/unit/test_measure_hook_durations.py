@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -148,3 +149,75 @@ def test_the_scratch_clone_points_the_config_at_itself_and_turns_the_judge_off(t
     original = json.loads((vault / "mnemo.config.json").read_text(encoding="utf-8"))
     assert original["vaultRoot"] == str(vault)
     assert original["reflex"]["judge"]["provider"] == "typesafe"
+
+
+def test_a_timed_hook_imports_the_mnemo_this_tool_imported(tmp_path):
+    """#610: a relative PYTHONPATH=src resolved in --cwd, so a run from a
+    worktree against the main checkout timed the main checkout's code."""
+    import mnemo
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    env = mhd.prepare_scratch(str(vault), str(tmp_path / "scratch"))
+    assert os.path.isabs(env["PYTHONPATH"])
+    root = os.path.realpath(env["PYTHONPATH"])
+    here = os.path.realpath(mnemo.__file__)
+    assert os.path.commonpath([root, here]) == root
+    # and the clone never writes the real settings.json
+    cfg = json.loads(Path(env["MNEMO_CONFIG_PATH"]).read_text(encoding="utf-8"))
+    assert cfg["install"]["autoRepairHooks"] is False
+    assert env[mhd.PHASES_ENV]
+
+
+def test_the_phase_breakdown_names_the_p50_and_p95_runs(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    rows = [{"session_id": "s%d" % i, "total_ms": float(t),
+             "phases": {"config": 1.0, "reflex_index": float(t) - 1}}
+            for i, t in enumerate([100, 300, 200, 900, 400])]
+    rows.append({"session_id": "other", "total_ms": 5.0, "phases": {}})
+    (vault / mhd.PHASES_LOG).write_text(
+        "".join(json.dumps(r) + "\n" for r in rows) + "not json\n", encoding="utf-8")
+    picked = mhd.phase_rows(str(vault), ["s0", "s1", "s2", "s3", "s4"])
+    assert len(picked) == 5
+    out = mhd.phase_breakdown(picked)
+    assert out["p50_run"]["total_ms"] == 300.0
+    assert out["p95_run"]["total_ms"] == 900.0
+    assert out["per_phase"]["reflex_index"]["max"] == 899.0
+    assert "reflex_index" in mhd.render_phases(out)
+    assert mhd.phase_breakdown([]) == {}
+
+
+def _prompt(ts, text="fix the bug"):
+    return {"type": "user", "timestamp": ts, "message": {"content": text}}
+
+
+def _start_done(ts, ms):
+    return {"type": "attachment", "timestamp": ts, "attachment": {
+        "type": "hook_success", "hookName": "SessionStart:startup", "durationMs": ms,
+        "command": "/usr/bin/python3 -m mnemo.hooks.session_start"}}
+
+
+def test_the_first_prompt_gap_is_measured_from_the_hook_returning():
+    held = [_start_done("2026-10-07T10:00:30.000Z", 30000),
+            _prompt("2026-10-07T10:00:30.200Z")]
+    gap = mhd.first_prompt_gap(held)
+    assert gap == {"gap_s": 0.2, "hook_ms": 30000.0}
+    early = [_start_done("2026-10-07T10:00:30.000Z", 30000),
+             _prompt("2026-10-07T10:00:10.000Z")]
+    # The prompt row may come after the attachment in the file yet carry an
+    # earlier stamp: that is a prompt Claude Code let through mid-hook.
+    assert mhd.first_prompt_gap(early)["gap_s"] == -20.0
+    # A meta row is not a prompt; no hook run, no gap.
+    assert mhd.first_prompt_gap([{"type": "user", "isMeta": True, "timestamp": "x"}]) is None
+    assert mhd.first_prompt_gap([_prompt("2026-10-07T10:00:00Z")]) is None
+
+
+def test_prompt_holds_counts_slow_runs_only():
+    gaps = [{"gap_s": 0.1, "hook_ms": 20000}, {"gap_s": 0.3, "hook_ms": 15000},
+            {"gap_s": -5.0, "hook_ms": 12000}, {"gap_s": 40.0, "hook_ms": 11000},
+            {"gap_s": -1.0, "hook_ms": 500}]
+    out = mhd.prompt_holds(gaps)
+    assert out["sessions"] == 5 and out["prompt_before_hook_end"] == 2
+    assert out["slow"] == 4 and out["slow_prompt_within"] == 2
+    assert out["slow_prompt_before_hook_end"] == 1
