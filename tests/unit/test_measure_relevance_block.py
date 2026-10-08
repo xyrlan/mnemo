@@ -278,6 +278,226 @@ def test_block_numbers_count_blocks_over_the_envelope():
     assert tool.block_numbers(units, ["t0"], per, {"beside": [1.0]}, bodies)["bytes"]["over_envelope"] is None
 
 
+# --- #618: a block that fits ------------------------------------------------------------------
+
+def _rule(slug, body, quote=None, universal=False, name=None):
+    from mnemo.core.export.select import ExportRule
+
+    return ExportRule(slug=slug, name=name or slug, body=body, quote=quote, universal=universal,
+                      source_count=0, page_type="feedback")
+
+
+RULES = {"a": _rule("a", "Do X first. Then Y.\n\n**Why:** long reason.\n", quote="do x", name="Do X"),
+         "b": _rule("b", "Never Z.\n\n**How to apply:** always.\n", universal=True)}
+
+
+def test_export_rules_read_lead_quote_and_universal_from_the_vault(tmp_path):
+    page = tmp_path / "shared" / "feedback" / "a.md"
+    page.parent.mkdir(parents=True)
+    page.write_text('---\nslug: a\nname: Do X\nevidence:\n  quote: "do x"\n---\nDo X first.\n\n**Why:** r.\n',
+                    encoding="utf-8")
+    inbox = tmp_path / "shared" / "_inbox" / "feedback" / "b.md"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_text("---\nname: B\n---\nDraft.\n", encoding="utf-8")
+    got = tool.export_rules(tmp_path, {"a": {"universal": True}})
+    assert set(got) == {"a"}
+    r = got["a"]
+    assert (r.name, r.quote, r.universal) == ("Do X", "do x", True)
+    assert r.body.startswith("Do X first.")
+
+
+def test_first_sentence_is_the_lead_paragraphs_first_on_one_line():
+    assert tool.first_sentence("Do X first. Then Y.\n\nMore.") == "Do X first."
+    assert tool.first_sentence("One line\nwrapped here, e.g. like this. Next.") == "One line wrapped here, e.g. like this."
+    assert tool.first_sentence("No stop at all") == "No stop at all"
+
+
+def test_entry_text_in_each_form():
+    from mnemo.core.export.render import render_entry
+
+    assert tool.entry_text("a", "compact", RULES, {}) == render_entry(RULES["a"], full=False).rstrip("\n")
+    assert tool.entry_text("a", "compact", RULES, {}) == '### Do X  `a`\nDo X first. Then Y.\n> you said: "do x"'
+    assert tool.entry_text("b", "line", RULES, {}) == "• [[b]]: Never Z."
+    assert tool.entry_text("a", "full", RULES, {"a": "whole body"}) == "• [[a]]:\nwhole body"
+    assert tool.entry_text("gone", "compact", RULES, {}) == "• [[gone]]"
+
+
+def test_form_block_and_bytes():
+    assert tool.form_block([], "compact", RULES, {}) == ""
+    assert tool.form_bytes([], "line", RULES, {}) == 0
+    line = tool.form_block(["a", "b"], "line", RULES, {})
+    assert line == "mnemo settled rules:\n• [[a]]: Do X first.\n• [[b]]: Never Z."
+    assert tool.form_bytes(["a", "b"], "line", RULES, {}) == len(line.encode("utf-8"))
+    compact = tool.form_block(["a", "b"], "compact", RULES, {})
+    assert compact.count("\n\n") == 1 and "**Why:**" not in compact
+    # the full form is #616's block, byte for byte
+    assert tool.form_bytes(["a"], "full", RULES, {"a": "x" * 40}) == tool.sb.block_bytes(["a"], {"a": "x" * 40})
+
+
+def test_block_numbers_bytes_by_form():
+    units = _units(("t0", "a"))
+    got = tool.block_numbers(units, ["t0", "t1"], {"t0": ["a", "b"], "t1": ["a"]}, {"beside": [1.0]},
+                             {"a": "x" * 500, "b": "y"}, rules=RULES)
+    by = got["bytes_by_form"]
+    assert set(by) == set(tool.FORMS)
+    assert by["line"]["max"] == tool.form_bytes(["a", "b"], "line", RULES, {})
+    assert by["full"]["max"] == got["bytes"]["max"]
+    assert "bytes_by_form" not in tool.block_numbers(units, ["t0"], {"t0": ["a"]}, {"beside": [1.0]}, {})
+
+
+def _inject(ts, n, tool_name="session_start.inject"):
+    return {"tool": tool_name, "timestamp": ts, "envelope_bytes": n}
+
+
+def test_envelope_room_reads_inject_rows_since_and_leaves_the_rest():
+    since = tool.mrc.epoch("2026-09-29T11:04:00Z")
+    rows = [_inject("2026-09-29T11:00:00Z", 8000),           # before the index went live
+            _inject("2026-10-01T00:00:00Z", 8000, "read"),   # another tool
+            "junk", {"tool": "session_start.inject", "timestamp": "2026-10-01T00:00:00Z"}]
+    rows += [_inject("2026-10-01T00:00:%02dZ" % i, 1000 * (i + 1)) for i in range(5)]
+    got = tool.envelope_room(rows, since, 9000)
+    assert (got["n"], got["median"], got["p95"], got["max"]) == (5, 3000, 5000, 5000)
+    assert (got["room_median"], got["room_p95"]) == (6000, 4000)
+    assert tool.envelope_room([], since, 9000)["room_p95"] is None
+
+
+def test_fits_reads_p95_against_the_budget():
+    assert tool.fits({"p95": 3000}, 3000)
+    assert not tool.fits({"p95": 3001}, 3000)
+    assert not tool.fits({"p95": 0}, 3000)       # an empty block fits nothing
+    assert not tool.fits({"p95": 10}, None)
+    assert not tool.fits({"p95": None}, 3000)
+
+
+def _ctx(parent, texts, event="SessionStart"):
+    return json.dumps({"parentUuid": parent, "attachment": {
+        "type": "hook_additional_context", "hookEvent": event, "content": texts}})
+
+
+def test_original_chars_reads_the_size_a_persisted_preview_names():
+    assert tool.original_chars("x" * 12) == 12
+    assert tool.original_chars("<persisted-output>\nOutput too large (10.4KB). Full ...") == int(10.4 * 1024)
+    assert tool.original_chars("<persisted-output>\nOutput too large (900B). ...") == 900
+
+
+def test_hook_split_counts_summed_firings_and_persisted_ones():
+    big = "<persisted-output>\nOutput too large (11KB). Full output saved\nPreview..."
+    lines = [_ctx("p1", ["x" * 6000]), _ctx("p1", ["y" * 6000]),         # summed 12k, each under: inline
+             _ctx("p2", ["x" * 5600, big]),                               # one was over alone: not evidence
+             _ctx("p3", ["x" * 100, "y" * 100]),                          # under together
+             _ctx("p4", ["x" * 6000]),                                    # one context only
+             _ctx("p5", ["x" * 6000, "<persisted-output>\nOutput too large (6KB). x"]),  # summed AND persisted
+             _ctx("p6", ["x" * 9000, "y" * 9000], event="UserPromptSubmit"),
+             "not json hook_additional_context"]
+    assert tool.hook_split(lines) == {"firings": 4, "summed_over_each_under": 2, "persisted": 1}
+
+
+DOCS2 = {"t": {"projects": ["app"]}, "m1": {"projects": ["app"]}, "m2": {"universal": True},
+         "m3": {"projects": ["app"]}, "other": {"projects": ["zzz"]}, "late": {"projects": ["app"]},
+         "old": {"projects": ["app"], "retired": True}}
+DATES2 = {s: {"stamped": 10.0, "has_row": True, "sources": []} for s in DOCS2}
+DATES2["late"] = {"stamped": 500.0, "has_row": True, "sources": []}
+
+
+def test_mates_rank_bs_log_among_rules_that_existed_never_the_target_or_its_session():
+    ev = {"t": [("x1", 1.0), ("x2", 2.0), ("x3", 3.0)],
+          "m1": [("x1", 1.0), ("x2", 2.0)], "m2": [("x1", 1.0), ("x2", 2.0)],
+          "m3": [("own", 1.0), ("x1", 1.0), ("x9", 1.0)], "other": [("x1", 1.0)] * 5,
+          "late": [("x1", 1.0), ("x2", 2.0), ("x3", 3.0)], "old": [("x1", 1.0)]}
+    assert tool.mates("t", "app", 100.0, ev, DOCS2, DATES2, 10, "own") == ["m1", "m2", "m3"]
+    assert tool.mates("t", "app", 100.0, ev, DOCS2, DATES2, 2, "own") == ["m1", "m2"]
+    # "own" no longer the session: it counts, and m3's 3 sessions put it first
+    assert tool.mates("t", "app", 100.0, ev, DOCS2, DATES2, 10, "") == ["m3", "m1", "m2"]
+    assert tool.mates("t", "app", 600.0, ev, DOCS2, DATES2, 1, "own") == ["late"]
+    assert tool.mates("m1", "app", 100.0, ev, DOCS2, DATES2, 10, "own")[0] == "t"
+
+
+def test_diluted_pair_puts_the_target_among_k_minus_1_and_leaves_arm_a_alone():
+    base = tool.distance_pair(PAIR, ([("user", "q")], "the prompt"))
+    rules = {"m%d" % i: _rule("m%d" % i, "Mate %d says." % i) for i in range(6)}
+    rules["a"] = _rule("a", "Do X.")
+    got = tool.diluted_pair(base, ["a"] + ["m%d" % i for i in range(6)], 4, rules, {}, "line")
+    assert got["mates"] == ["m0", "m1", "m2"] and got["k"] == 4
+    lines = got["block"].splitlines()
+    assert lines[0] == "mnemo settled rules:" and len(lines) == 5
+    assert lines[1 + got["position"]] == "• [[a]]: Do X."
+    assert tool.arm_prompt(got, "A") == tool.arm_prompt(base, "A")
+    assert tool.arm_prompt(got, "B") != tool.arm_prompt(base, "B")
+    # the position is seeded by the pair: the same every run, and not always the same slot
+    again = tool.diluted_pair(base, ["m%d" % i for i in range(6)], 4, rules, {}, "line")
+    assert again["position"] == got["position"]
+    spots = {tool.diluted_pair(dict(base, id="p%d" % i), ["m%d" % i for i in range(6)], 7, rules, {}, "line")["position"]
+             for i in range(30)}
+    assert len(spots) > 2
+    short = tool.diluted_pair(base, ["m0"], 15, rules, {}, "compact")
+    assert short["k"] == 2 and short["block"].count("### ") == 2
+
+
+def test_seed_arm_a_copies_only_arm_a_and_its_verdicts_without_overwriting():
+    aid = tool.rl.answer_id
+    pairs = [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}]
+    old = {"p1": {"A": [{"text": "a0"}, {"text": "a1"}], "B": [{"text": "b0"}]},
+           "p2": {"A": [{"text": "old"}]}}
+    old_v = {aid("p1", "A", 0): "yes", aid("p1", "A", 1): "no", aid("p1", "B", 0): "yes", aid("p2", "A", 0): "na"}
+    answers = {"p2": {"A": [{"text": "mine"}]}}
+    verdicts = {}
+    assert tool.seed_arm_a(pairs, answers, verdicts, old, old_v) == 2
+    assert [a["text"] for a in answers["p1"]["A"]] == ["a0", "a1"] and "B" not in answers["p1"]
+    assert answers["p2"]["A"] == [{"text": "mine"}]
+    assert verdicts == {aid("p1", "A", 0): "yes", aid("p1", "A", 1): "no"}
+    assert tool.seed_arm_a(pairs, answers, verdicts, old, old_v) == 0
+
+
+def test_diluted_judge_items_mask_every_mate():
+    pairs = [{"id": "p1", "slug": "rule-a", "rule": "r", "mates": ["mate-b", "mate-c"]}]
+    answers = {"p1": {"A": [{"text": "plain"}], "B": [{"text": "per Mate-B and mate-c, rule-a"}]}}
+    items = tool.diluted_judge_items(pairs, answers, {})
+    assert sorted(i["answer"] for i in items) == ["per [...] and [...], [...]", "plain"]
+
+
+def _fit_k(by_form, **lifts):
+    """One K's results: p95 bytes per form, and the broad estimate per lift."""
+    return {"bytes_by_form": {f: {"p95": n} for f, n in by_form.items()},
+            "estimate": {tool.BROAD: lifts}}
+
+
+GOOD, BAD = _stats(0.2, 0.1, 0.1, 0.01), _stats(0.2, 0.1, 0.01, 0.0)
+BUDGETS = {"a": 3000, "b": 9000}
+
+
+def test_fitting_lists_the_ks_whose_p95_fits():
+    by_k = {"5": _fit_k({"compact": 2000, "line": 800}), "15": _fit_k({"compact": 8000, "line": 2900}),
+            "25": _fit_k({"compact": 11000, "line": 4600})}
+    assert tool.fitting(by_k, "compact", 9000) == ["5", "15"]
+    assert tool.fitting(by_k, "line", 3000) == ["5", "15"]
+    assert tool.fitting(by_k, "compact", None) == []
+
+
+def test_decide_fit_builds_on_a_fitting_k_in_that_budgets_form():
+    by_k = {"5": _fit_k({"compact": 2000, "line": 800}, **{"diluted-compact": BAD, "diluted-line": BAD}),
+            "15": _fit_k({"compact": 8000, "line": 2900}, **{"diluted-compact": GOOD, "diluted-line": BAD})}
+    assert tool.decide_fit(by_k, BUDGETS) == ("build", "15", "b")
+    by_k["5"]["estimate"][tool.BROAD]["diluted-line"] = GOOD
+    assert tool.decide_fit(by_k, BUDGETS) == ("build", "5", "a")   # budget (a) is tried first, smallest K first
+    # a lift in one form never decides a block in the other
+    only_line = {"15": _fit_k({"compact": 9500, "line": 2900}, **{"diluted-compact": GOOD, "diluted-line": BAD})}
+    assert tool.decide_fit(only_line, BUDGETS)[0] != "build"
+
+
+def test_decide_fit_names_the_constraint_that_failed():
+    none_fit = {"25": _fit_k({"compact": 11000, "line": 4600}, **{"diluted-compact": GOOD, "diluted-line": GOOD})}
+    assert tool.decide_fit(none_fit, BUDGETS)[0] == "do not build: bytes (no K fits a budget)"
+    unfit = {"5": _fit_k({"compact": 2000, "line": 800}, **{"diluted-compact": BAD, "diluted-line": BAD}),
+             "25": _fit_k({"compact": 11000, "line": 4600}, **{"diluted-compact": GOOD, "diluted-line": BAD})}
+    assert tool.decide_fit(unfit, BUDGETS)[0].startswith("do not build: bytes (only")
+    diluted = {"15": _fit_k({"compact": 8000, "line": 2900},
+                            **{"diluted-compact": BAD, "diluted-line": BAD, "distance": GOOD})}
+    assert tool.decide_fit(diluted, BUDGETS)[0].startswith("do not build: dilution")
+    coverage = {"15": _fit_k({"compact": 8000, "line": 2900},
+                             **{"diluted-compact": BAD, "diluted-line": BAD, "distance": BAD})}
+    assert tool.decide_fit(coverage, BUDGETS)[0].startswith("do not build: coverage")
+
+
 # --- (b) from mnemo's own judge-picks ledger (#619) -------------------------------------
 
 def _ledger_with(vault, picks_list):
@@ -317,3 +537,15 @@ def test_source_b_reads_the_ledger_only_when_it_covers_the_judges_life(tmp_path)
     got, counts = tool._source_b(vault, projects, tool.INJECT_AT)
     assert counts["source"] == "ledger" and counts["log_since"] == live
     assert got.picks_before(None, float("inf")) == {"a": 1, "b": 1}
+
+
+def test_mates_rank_the_ledger_as_they_rank_the_rebuilt_history(tmp_path):
+    raw = [("t", "x1", 1.0), ("m1", "x1", 1.0), ("m1", "x2", 2.0), ("m2", "x1", 1.0), ("m2", "x2", 2.0),
+           ("m3", "own", 1.0), ("m3", "x1", 1.0), ("m3", "x9", 1.0), ("other", "x1", 1.0), ("late", "x1", 1.0)]
+    ledger = _ledger_with(tmp_path, raw)
+    rebuilt = tool.pick_events(raw)
+    for sid in ("own", ""):
+        for n in (1, 2, 10):
+            assert tool.mates("t", "app", 100.0, ledger, DOCS2, DATES2, n, sid) == \
+                tool.mates("t", "app", 100.0, rebuilt, DOCS2, DATES2, n, sid)
+    assert tool.mates("t", "app", 100.0, ledger, DOCS2, DATES2, 10, "own") == ["m1", "m2", "m3"]
