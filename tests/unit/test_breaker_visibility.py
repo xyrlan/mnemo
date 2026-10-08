@@ -20,9 +20,10 @@ from mnemo.hooks import session_start
 def _trip(vault: Path) -> None:
     """Twelve failures, one per minute: twelve strikes (#314)."""
     vault.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()  # once: per-row readings can straddle a minute (#625)
     with open(vault / ".errors.log", "w", encoding="utf-8") as fh:
         for minutes in range(12):
-            ts = (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+            ts = (now - timedelta(minutes=minutes)).isoformat(timespec="seconds")
             fh.write(json.dumps({"timestamp": ts, "where": "session_start.injection",
                                  "kind": "BrokenPipeError", "message": "x"}) + "\n")
 

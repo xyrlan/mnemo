@@ -25,9 +25,10 @@ def test_status_reports_open_breaker(tmp_home: Path, capsys: pytest.CaptureFixtu
     cli.main(["init", "--yes", "--vault-root", str(tmp_home / "v"), "--no-mirror", "--quiet"])
     vault = tmp_home / "v"
     # One failure a minute for fifteen minutes: fifteen strikes (#314).
+    now = datetime.now()  # once: per-row readings can straddle a minute (#625)
     with open(vault / ".errors.log", "a", encoding="utf-8") as fh:
         for i in range(15):
-            ts = (datetime.now() - timedelta(minutes=i)).isoformat(timespec="seconds")
+            ts = (now - timedelta(minutes=i)).isoformat(timespec="seconds")
             fh.write(json.dumps({"timestamp": ts, "where": "test", "kind": "ValueError",
                                  "message": f"e{i}"}) + "\n")
     cli.main(["status"])

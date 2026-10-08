@@ -52,13 +52,16 @@ def _write_log(vault: Path, rows: list[dict]) -> None:
             fh.write(json.dumps(row) + "\n")
 
 
-def _minutes_ago(minutes: int) -> str:
-    return (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+def _minutes_ago(minutes: int, now: datetime) -> str:
+    """``now`` is read once per test: a minute boundary between per-row
+    readings would merge two strikes into one (#625)."""
+    return (now - timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
 
 def test_should_run_false_at_threshold(tmp_vault: Path):
+    now = datetime.now()
     _write_log(tmp_vault, [
-        {"timestamp": _minutes_ago(m), "where": "test", "kind": "ValueError", "message": f"err{m}"}
+        {"timestamp": _minutes_ago(m, now), "where": "test", "kind": "ValueError", "message": f"err{m}"}
         for m in range(11)
     ])
     assert errors.should_run(tmp_vault) is False
@@ -80,8 +83,9 @@ def test_one_sweeps_burst_is_one_strike(tmp_vault: Path):
 
 def test_a_failure_that_persists_across_minutes_still_trips(tmp_vault: Path):
     """The breaker's own job: a hook failing on every call keeps striking."""
+    now = datetime.now()
     _write_log(tmp_vault, [
-        {"timestamp": _minutes_ago(m), "where": "pre_tool_use.x", "kind": "OSError", "message": "m"}
+        {"timestamp": _minutes_ago(m, now), "where": "pre_tool_use.x", "kind": "OSError", "message": "m"}
         for m in range(11) for _ in range(5)
     ])
     assert errors.recent_strikes(tmp_vault) == 11
