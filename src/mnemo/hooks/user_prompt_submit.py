@@ -162,6 +162,9 @@ def _reflex(payload: dict, throwaway_session) -> int:
         # stage and is written on whichever branch ends up answering.
         survivors: list | None = None
         judge_row = None
+        # What the judge itself picked, for the pick ledger (#619); None
+        # whenever the judge did not answer and the gates decided instead.
+        judge_picks: list | None = None
         exported: list = []
         if decision.scores and _judge_configured(reflex_cfg):
             from mnemo.core.reflex import judge as judge_stage
@@ -190,11 +193,13 @@ def _reflex(payload: dict, throwaway_session) -> int:
                     vault, prompt=prompt_raw, slugs=pool, chosen_settings=chosen,
                     project=project)
                 if picks is not None:
+                    judge_picks = list(picks)
                     if not picks:
                         _log_silence(vault, sid, project, prompt_raw,
                                      reason=judge_stage.SILENCE_REASON,
                                      candidates=receipt, thresholds=gate_thresholds,
-                                     exported=exported, judge=judge_row)
+                                     exported=exported, judge=judge_row,
+                                     judge_picks=judge_picks)
                         return 0
                     survivors = picks
 
@@ -243,7 +248,7 @@ def _reflex(payload: dict, throwaway_session) -> int:
                       scores=[score_map.get(s, 0.0) for s in survivors],
                       candidates=receipt, thresholds=gate_thresholds,
                       exported=exported, judge=judge_row,
-                      body_fmt=body_fmt, rendered=rendered)
+                      body_fmt=body_fmt, rendered=rendered, judge_picks=judge_picks)
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
             from mnemo.core import config as _cfg, errors as _err, paths as _paths
@@ -333,7 +338,8 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
                  candidates: list | None = None,
                  thresholds: dict | None = None,
                  exported: list | None = None,
-                 judge: dict | None = None) -> None:
+                 judge: dict | None = None,
+                 judge_picks: list | None = None) -> None:
     try:
         from mnemo.core.reflex.tokenizer import tokenize_query as _tq
         prompt_tokens_len = len(set(_tq(prompt)))
@@ -362,7 +368,7 @@ def _log_silence(vault_root, sid: str, project: str, prompt: str, *, reason: str
     # the stage existed, which `test_hook_user_prompt_submit.py` pins.
     if judge:
         entry["judge"] = judge
-    _record_log(vault_root, entry)
+    _record_log(vault_root, entry, judge_picks)
 
 
 def _log_emission(vault_root, sid: str, project: str, prompt: str,
@@ -372,7 +378,8 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
                   exported: list | None = None,
                   judge: dict | None = None,
                   body_fmt: str | None = None,
-                  rendered=None) -> None:
+                  rendered=None,
+                  judge_picks: list | None = None) -> None:
     entry = {
         "session_id": sid,
         "project": project,
@@ -402,10 +409,13 @@ def _log_emission(vault_root, sid: str, project: str, prompt: str,
     # the stage existed, which `test_hook_user_prompt_submit.py` pins.
     if judge:
         entry["judge"] = judge
-    _record_log(vault_root, entry)
+    _record_log(vault_root, entry, judge_picks)
 
 
-def _record_log(vault_root, entry: dict) -> None:
+def _record_log(vault_root, entry: dict, judge_picks: list | None = None) -> None:
+    """Append the reflex-log row; with ``judge_picks``, the judge-picks
+    ledger's row too (#619), at the same time stamp. The reflex log rotates
+    after a few days; the ledger is the judge's history that outlives it."""
     try:
         from datetime import datetime, timezone
         from mnemo.core.log_utils import rotate_if_needed
@@ -418,6 +428,16 @@ def _record_log(vault_root, entry: dict) -> None:
             fh.flush()
     except Exception:
         pass
+    if judge_picks is not None:
+        try:
+            from datetime import datetime, timezone
+            from mnemo.core.reflex import picks as pick_ledger
+            ts = datetime.strptime(entry["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc).timestamp()
+            pick_ledger.record(vault_root, session_id=entry["session_id"],
+                               project=entry["project"], picks=judge_picks, ts=ts)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":  # pragma: no cover

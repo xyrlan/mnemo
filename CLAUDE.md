@@ -31,6 +31,18 @@ module-level expressions — assignments, defaults, `TypeVar` bounds — use
 `Union[...]`. `from __future__ import annotations` defers *annotations* only,
 never the expressions around them.
 
+## Tests compare paths as paths
+
+CI runs the suite on Windows; a local run on macOS cannot see what breaks
+there. On 2026-10-07 four PRs went red on Windows alone, each from a test that
+spelled a path as a string: `"~/proj-a"` against `~\proj-a` (#605),
+`"/s.json"` against `\s.json` (#614), `C:\Users\…` against the lowercase
+`os.path.normcase` reports (#615), and an unquoted `C:\…` inside a shell
+command, whose backslashes the shell drops (#603). Build expected values from
+`Path` objects and compare `Path`s, or `os.path.normcase` both sides. When a
+path goes into a string, build it with `str(Path(...))`; inside a shell
+command, use `.as_posix()`.
+
 ## Changelog entries go in `changelog.d/`, never in `CHANGELOG.md`
 
 One file per change, `changelog.d/<id>.<section>.md`, assembled at release.

@@ -539,6 +539,8 @@ def run_deferred(cfg: dict, vault) -> str:
     - the mirror of Claude Code's memory into ``bots/*/memory``, which no
       block here reads and which ``SessionEnd`` runs again itself.
 
+    It also bounds the judge-picks ledger (#619), which no block reads yet.
+
     One run at a time: a resume storm starts many sessions in a second, and
     each rebuild is seconds of CPU, so a second run while one is in flight
     returns ``locked``. Errors keep their ``session_start.*`` names, which
@@ -560,6 +562,13 @@ def run_deferred(cfg: dict, vault) -> str:
                 reflex_index.write_index(vault, reflex_index.build_index(vault))
             except Exception as exc:
                 errors.log_error(vault, "session_start.reflex_index", exc)
+        # The judge-picks ledger the reflex hook appends to (#619) is bounded
+        # here: a stat when under its cap, a roll-up of old sessions past it.
+        try:
+            from mnemo.core.reflex import picks
+            picks.compact(vault)
+        except Exception as exc:
+            errors.log_error(vault, "session_start.judge_picks", exc)
     return "done"
 
 

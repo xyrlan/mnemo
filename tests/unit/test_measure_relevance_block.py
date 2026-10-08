@@ -496,3 +496,56 @@ def test_decide_fit_names_the_constraint_that_failed():
     coverage = {"15": _fit_k({"compact": 8000, "line": 2900},
                              **{"diluted-compact": BAD, "diluted-line": BAD, "distance": BAD})}
     assert tool.decide_fit(coverage, BUDGETS)[0].startswith("do not build: coverage")
+
+
+# --- (b) from mnemo's own judge-picks ledger (#619) -------------------------------------
+
+def _ledger_with(vault, picks_list):
+    from mnemo.core.reflex import picks
+    for slug, sid, ts in picks_list:
+        picks.record(vault, session_id=sid, project="app", picks=[slug], ts=ts)
+    return picks.load(vault)
+
+
+def test_the_ledger_ranks_every_block_as_the_rebuilt_history_does(tmp_path):
+    """The same picks, read through ``picks_before`` or rebuilt as events,
+    fill the same block for every session at every K."""
+    raw = [("a", "x", 30.0), ("a", "x", 35.0), ("b", "y", 50.0), ("b", "z", 55.0), ("c", "s3", 58.0),
+           ("a", "s3", 59.0), ("late", "y", 150.0), ("d", "y", 51.0), ("c", "w", 199.0)]
+    ledger = _ledger_with(tmp_path, raw)
+    ev = tool.pick_events(raw)
+    sessions = ["s1", "s2", "s3", "s4"]
+    for k in (1, 2, 15):
+        for redundant in ({}, {"s4": {"a"}}):
+            assert tool.blocks_for(sessions, META, ledger, DOCS, DATES, k, redundant) == \
+                tool.blocks_for(sessions, META, ev, DOCS, DATES, k, redundant)
+    assert tool.blocks_for(["s4"], META, ledger, DOCS, DATES, 15, {})["s4"] == ["a", "b", "c", "late"]
+    assert tool.window(ledger) == tool.window(ev) == (30.0, 199.0)
+    assert tool.with_history(sessions, META, ledger) == tool.with_history(sessions, META, ev) == 3
+
+
+def test_source_b_reads_the_ledger_only_when_it_covers_the_judges_life(tmp_path):
+    from mnemo.core.reflex import picks
+    vault, projects = tmp_path / "vault", tmp_path / "projects"
+    projects.mkdir()
+    live = tool.mrc.epoch(tool.JUDGE_LIVE)
+    _ledger_with(vault, [("a", "x", live + 3600)])
+    got, counts = tool._source_b(vault, projects, tool.INJECT_AT)
+    assert counts["source"] == "rebuilt" and got == {}      # the hook's rows alone start too late
+    picks.backfill(vault, [{"ts": "2026-09-20T18:56:10Z", "session_id": "old", "project": "app",
+                            "picks": ["b"]}], covers_since=live)
+    got, counts = tool._source_b(vault, projects, tool.INJECT_AT)
+    assert counts["source"] == "ledger" and counts["log_since"] == live
+    assert got.picks_before(None, float("inf")) == {"a": 1, "b": 1}
+
+
+def test_mates_rank_the_ledger_as_they_rank_the_rebuilt_history(tmp_path):
+    raw = [("t", "x1", 1.0), ("m1", "x1", 1.0), ("m1", "x2", 2.0), ("m2", "x1", 1.0), ("m2", "x2", 2.0),
+           ("m3", "own", 1.0), ("m3", "x1", 1.0), ("m3", "x9", 1.0), ("other", "x1", 1.0), ("late", "x1", 1.0)]
+    ledger = _ledger_with(tmp_path, raw)
+    rebuilt = tool.pick_events(raw)
+    for sid in ("own", ""):
+        for n in (1, 2, 10):
+            assert tool.mates("t", "app", 100.0, ledger, DOCS2, DATES2, n, sid) == \
+                tool.mates("t", "app", 100.0, rebuilt, DOCS2, DATES2, n, sid)
+    assert tool.mates("t", "app", 100.0, ledger, DOCS2, DATES2, 10, "own") == ["m1", "m2", "m3"]
