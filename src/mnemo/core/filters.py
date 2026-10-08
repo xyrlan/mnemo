@@ -126,11 +126,12 @@ def is_consumer_visible(
 ) -> bool:
     """Return True if the page should appear in consumer surfaces.
 
-    Three conditions, short-circuited in order:
+    Four conditions, short-circuited in order:
     1. Path filter — anything under ``shared/_inbox/`` is draft.
     2. ``*.proposed.md`` siblings — staged rewrites, see
        :data:`PROPOSED_SUFFIXES`.
     3. ``stability: evolving`` — decision still in flux.
+    4. ``disabled: true`` — the user vetoed it, see :func:`is_disabled`.
 
     **Location is the authority on draft-ness, not the ``needs-review`` tag.**
     Until v0.18 this predicate also hid any page carrying ``needs-review``.
@@ -156,7 +157,24 @@ def is_consumer_visible(
         return False
     if (frontmatter.get("stability") or "stable") == "evolving":
         return False
+    if is_disabled(frontmatter):
+        return False
     return True
+
+
+#: The frontmatter key ``mnemo disable-rule`` writes and ``enable-rule`` removes.
+DISABLED = "disabled"
+
+
+def is_disabled(frontmatter: dict[str, Any]) -> bool:
+    """True if the user vetoed this page with ``mnemo disable-rule``.
+
+    Its own key, not ``runtime: false``: ``extract/promote.py`` stamps
+    ``runtime: false`` on every promoted project page, so that key cannot
+    tell a vetoed rule from a live one (#629).
+    """
+    value = frontmatter.get(DISABLED)
+    return isinstance(value, str) and value.strip().lower() == "true"
 
 
 #: Frontmatter keys a retirement writes (``core/friction/retire.py``). The

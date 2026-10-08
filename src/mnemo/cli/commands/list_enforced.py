@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mnemo.cli.parser import command
 from mnemo.core import config, paths
-from mnemo.core.filters import iter_shared_pages, parse_frontmatter
+from mnemo.core.filters import is_disabled, iter_shared_pages, parse_frontmatter
 
 
 def _iter_enforced(vault_root: Path):
@@ -25,9 +25,11 @@ def _iter_enforced(vault_root: Path):
 
 def run_list_enforced(vault_root: Path) -> int:
     any_rule = False
-    for md, _fm, enforce in _iter_enforced(vault_root):
+    for md, fm, enforce in _iter_enforced(vault_root):
         any_rule = True
         rel = md.relative_to(vault_root)
+        if is_disabled(fm):
+            rel = f"{rel}  (disabled: blocks nothing)"
         tool = enforce.get("tool", "?")
         dp = enforce.get("deny_pattern") or enforce.get("deny_patterns")
         dc = enforce.get("deny_command") or enforce.get("deny_commands")
