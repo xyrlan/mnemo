@@ -1,4 +1,4 @@
-"""Fill the SessionStart block by relevance history, and measure a rule's lift at session start (#613)
+"""Fill the SessionStart block by relevance history, and measure a rule's lift at session start (#613, #618)
 
 Usage:
     PYTHONPATH=src python3 tools/measure_relevance_block.py [--units FILE] [--k 5 ...]
@@ -97,6 +97,45 @@ block is over mnemo's 9,000-byte SessionStart envelope, median 44,792 bytes
 15–25. Strict stays inconclusive (0.053 at best), as #598 found. Arms: 256
 calls, $8.67 API-price equivalent, plus 26 judge calls.
 
+**3. A block that fits, and its lift with the other rules beside it (#618).**
+(b)'s blocks are also rendered ``compact`` (``mnemo export``'s
+``render_entry(rule, full=False)``: heading, lead paragraph, quote) and
+``line`` (bullet and first sentence). A K fits a budget when its p95 bytes
+over the covered sessions do. There are two budgets:
+
+- (a): the room today's envelope leaves at its p95, read from mcp-access-log's
+  ``session_start.inject`` rows since :data:`ROOM_SINCE`;
+- (b): a separate SessionStart hook entry, ``ENVELOPE_MAX_BYTES``.
+
+Claude Code holds each hook entry to its 10,000-character threshold on its
+own; it does not sum them. The report counts SessionStart firings whose
+contexts sum past it while each stays under it, and how many were persisted
+(:func:`hook_split`). A throwaway probe on 2.1.293 agreed: three hooks of
+5,600, 9,000 and 11,000 characters left the first two inline and persisted
+only the third.
+
+The dilution arm re-asks (2)'s pairs, arm B holding the target at a seeded
+position among the K − 1 rules (b)'s whole log ranks highest for the pair's
+project (:func:`mates`), among rules that existed at the prompt. #434's
+prompts predate (b)'s log, so no as-of ranking exists for them. Arm A is (2)'s
+prompt unchanged, so its answers and verdicts are copied (:func:`seed_arm_a`),
+and every mate's slug is masked for the judge. Each budget gets the form that
+fits it: line for (a), compact for (b). The bar, declared in #618: build if
+some K that fits a budget, in that budget's form and with that form's
+diluted lift, passes #613's bar over the covered sessions; otherwise name the
+constraint (bytes, dilution, coverage).
+
+First run, 2026-10-08, same cache. Today's envelope is median 4,788 and p95
+5,891 bytes over 549 rows, which leaves budget (a) 3,107 bytes. Compact fits
+only (b), at K ≤ 15 (K=15 p95 7,732). Line fits (a) at K ≤ 15 (p95 2,999).
+Transcripts: 194 firings summed past 10,000 with each context under it, 0
+persisted. **Diluted lift at K=15: compact +14.9 pp [+2.6, +27.2], line +12.3
+pp [+0.0, +24.6]**, over 57 pairs, against +28.3 alone and #434's +31.1: the
+block's other 14 rules halve it. With it, (b) over the 86 covered sessions:
+compact K=15 0.095 [0.020, 0.184], 0.038 without ``run-git-commands-yourself``;
+line K=15 0.079 [0.000, 0.166], 0.031 without it. **Do not build: dilution.**
+Arms: 256 B calls, $10.34 API-price equivalent, plus 26 judge calls.
+
 Only ``--send`` calls a model, through ``core.llm``'s provider, which carries
 mnemo's hook guard. Answers and verdicts are saved after every call under
 ``<vault>/.mnemo/relevance-block/``, so a rerun resumes. The dollar figure is
@@ -108,6 +147,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -148,6 +188,21 @@ VERDICTS_NAME = "lift-verdicts.json"
 #: characters, whole turns at a time.
 HISTORY_CHARS = 24000
 WORKERS = 4
+#: #618's renderings of a rule in the block, and the dilution arm's cache.
+FORMS = ("full", "compact", "line")
+#: The form each budget's dilution arm renders the block in: ``line``, the
+#: stricter form, is the only one that fits inside today's envelope (a);
+#: ``compact`` is what #618 asks for, in a hook entry of its own (b). The bar
+#: tries (a) first: it needs no new hook entry.
+BUDGET_FORMS = (("a", "line"), ("b", "compact"))
+DILUTION_DIR = "dilution-%s-k%d"
+#: Claude Code persists a hook context of this many characters or more (#533),
+#: and marks it so.
+PERSIST_CHARS = 10000
+PERSISTED = "<persisted-output>"
+#: The SessionStart envelope as it is today: the ten-TL;DR briefing index went
+#: live on the main checkout then (#551).
+ROOM_SINCE = "2026-09-29T11:04:00Z"
 
 #: ``slug -> [(session_id, ts)]``: the moments a rule was relevant.
 Events = Dict[str, List[Tuple[str, Optional[float]]]]
@@ -251,10 +306,11 @@ def blocks_for(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], events:
 
 def block_numbers(units: Sequence[Dict[str, Any]], sessions: Sequence[str], per: Dict[str, Sequence[str]],
                   lifts: Dict[str, Sequence[float]], bodies: Dict[str, str],
-                  envelope: Optional[int] = None) -> Dict[str, Any]:
+                  envelope: Optional[int] = None, rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Over ``sessions`` only: size, bytes (and how many blocks overflow
-    ``envelope``), coverage, and per lift the estimate with and without the
-    rule that carried the most units."""
+    ``envelope``), with ``rules`` the bytes in every form of :data:`FORMS`,
+    coverage, and per lift the estimate with and without the rule that
+    carried the most units."""
     per = {s: list(per.get(s) or ()) for s in sessions}
     sizes = [len(per[s]) for s in sessions]
     nbytes = [sb.block_bytes(per[s], bodies) for s in sessions]
@@ -264,6 +320,12 @@ def block_numbers(units: Sequence[Dict[str, Any]], sessions: Sequence[str], per:
                   "max": max(nbytes) if nbytes else None,
                   "over_envelope": None if envelope is None else sum(n > envelope for n in nbytes)},
         "coverage": {}, "coverage_fresh": {}, "estimate": {}}
+    if rules is not None:
+        out["bytes_by_form"] = {}
+        for form in FORMS:
+            nb = [form_bytes(per[s], form, rules, bodies) for s in sessions]
+            out["bytes_by_form"][form] = {"median": sb.quantile(nb, 0.5), "p95": sb.quantile(nb, 0.95),
+                                          "max": max(nb) if nb else None}
     for r in (STRICT, BROAD):
         rows = sb.session_rows(units, sessions, per, r)
         out["coverage"][r] = sb.ratio_ci(rows, "delivered", "units")
@@ -452,6 +514,239 @@ def notional(pairs: Sequence[Dict[str, Any]], pending: int, samples: int) -> Dic
             "usd": usd, "samples": samples}
 
 
+# --- #618: a block that fits, and the lift with K − 1 other rules beside it ---------------
+
+def export_rules(vault: Path, docs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """``slug -> ExportRule`` for every live rule page, as ``mnemo export``
+    reads it (lead paragraph, the evidence quote), universal as the reflex
+    index says."""
+    from mnemo.core.export.select import ExportRule, _is_imported
+    from mnemo.core.filters import derive_rule_slug, is_consumer_visible, iter_shared_pages
+    from mnemo.core.reclassify_types import split_frontmatter
+    from mnemo.core.text_utils import retrieval_body
+
+    out: Dict[str, Any] = {}
+    for md in iter_shared_pages(vault, include_inbox=False):
+        try:
+            fm, body = split_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if not fm or not is_consumer_visible(md, fm, vault):
+            continue
+        slug = derive_rule_slug(fm, md.stem)
+        evidence = fm.get("evidence")
+        quote = evidence.get("quote") if isinstance(evidence, dict) else None
+        out[slug] = ExportRule(slug=slug, name=str(fm.get("name") or slug),
+                               body=retrieval_body(body).strip() + "\n",
+                               quote=str(quote).strip() if quote else None,
+                               universal=bool((docs.get(slug) or {}).get("universal")),
+                               source_count=0, page_type=md.parent.name, imported=_is_imported(fm))
+    return out
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`*\[(\"'])")
+
+
+def first_sentence(body: str) -> str:
+    """The lead paragraph's first sentence, on one line."""
+    from mnemo.core.export.render import first_paragraph
+
+    lead = " ".join(first_paragraph(body).split())
+    return _SENTENCE_END.split(lead, maxsplit=1)[0]
+
+
+def entry_text(slug: str, form: str, rules: Dict[str, Any], bodies: Dict[str, str]) -> str:
+    """One rule in the block: ``full`` as #616 rendered it (the reflex's whole
+    body), ``compact`` as ``mnemo export`` writes it (``render_entry(rule,
+    full=False)``: heading, lead paragraph, quote), ``line`` its bullet and
+    first sentence."""
+    from mnemo.core.export.render import render_entry
+    from mnemo.core.reflex import render
+
+    if form == "full":
+        return render.full_line(render.bullet(slug), bodies.get(slug, ""))
+    rule = rules.get(slug)
+    if rule is None:
+        return render.bullet(slug)
+    if form == "compact":
+        return render_entry(rule, full=False).rstrip("\n")
+    return "%s: %s" % (render.bullet(slug), first_sentence(rule.body))
+
+
+def form_block(slugs: Sequence[str], form: str, rules: Dict[str, Any], bodies: Dict[str, str]) -> str:
+    """The block's text under its header; empty for no rules."""
+    if not slugs:
+        return ""
+    sep = "\n\n" if form == "compact" else "\n"
+    return HEADER + "\n" + sep.join(entry_text(s, form, rules, bodies) for s in slugs)
+
+
+def form_bytes(slugs: Sequence[str], form: str, rules: Dict[str, Any], bodies: Dict[str, str]) -> int:
+    from mnemo.core.hook_envelope import utf8_len
+
+    return utf8_len(form_block(slugs, form, rules, bodies))
+
+
+def envelope_room(rows: Iterable[Any], since: float, cap: int) -> Dict[str, Any]:
+    """Today's SessionStart envelope, from the ``session_start.inject`` rows of
+    mcp-access-log at or after ``since``, and the room it leaves under ``cap``:
+    at its median, and at its p95 (the room a block has in 95% of sessions)."""
+    sizes = []
+    for r in rows:
+        if not isinstance(r, dict) or r.get("tool") != "session_start.inject":
+            continue
+        ts = mrc.epoch(r.get("timestamp"))
+        if ts is None or ts < since or not isinstance(r.get("envelope_bytes"), int):
+            continue
+        sizes.append(r["envelope_bytes"])
+    med, p95 = sb.quantile(sizes, 0.5), sb.quantile(sizes, 0.95)
+    return {"n": len(sizes), "median": med, "p95": p95, "max": max(sizes) if sizes else None,
+            "room_median": None if med is None else cap - med, "room_p95": None if p95 is None else cap - p95}
+
+
+def fits(stats: Dict[str, Any], budget: Optional[int]) -> bool:
+    """A block fits a budget when its p95 bytes do (and it is ever non-empty)."""
+    p95 = stats.get("p95")
+    return budget is not None and p95 is not None and 0 < p95 <= budget
+
+
+def hook_split(lines: Iterable[str], limit: int = PERSIST_CHARS) -> Dict[str, int]:
+    """Over one transcript's SessionStart firings with two or more hook
+    contexts: how many summed to ``limit`` or more with each one under it,
+    and how many of those had any context persisted. If Claude Code summed
+    the contexts against its threshold, those would be persisted; if each
+    hook is held to it alone, none would be."""
+    groups: Dict[Any, List[str]] = {}
+    for raw in lines:
+        if '"hook_additional_context"' not in raw:
+            continue
+        try:
+            ev = json.loads(raw)
+        except ValueError:
+            continue
+        att = ev.get("attachment") if isinstance(ev, dict) else None
+        if (not isinstance(att, dict) or att.get("type") != "hook_additional_context"
+                or att.get("hookEvent") != "SessionStart"):
+            continue
+        content = att.get("content")
+        texts = content if isinstance(content, list) else [content]
+        groups.setdefault(ev.get("parentUuid") or id(ev), []).extend(str(t) for t in texts if t)
+    out = {"firings": 0, "summed_over_each_under": 0, "persisted": 0}
+    for texts in groups.values():
+        if len(texts) < 2:
+            continue
+        out["firings"] += 1
+        sizes = [original_chars(t) for t in texts]
+        if sum(sizes) >= limit and max(sizes) < limit:
+            out["summed_over_each_under"] += 1
+            out["persisted"] += any(PERSISTED in t for t in texts)
+    return out
+
+
+_TOO_LARGE = re.compile(r"Output too large \(([0-9.]+)(KB|MB|B)\)")
+
+
+def original_chars(text: str) -> int:
+    """A context's size before Claude Code persisted it: its own length, or,
+    for a persisted one, the size its preview names (``10.4KB`` = 10,650)."""
+    if PERSISTED not in text:
+        return len(text)
+    m = _TOO_LARGE.search(text)
+    if not m:
+        return len(text)
+    return int(float(m.group(1)) * {"B": 1, "KB": 1024, "MB": 1024 * 1024}[m.group(2)])
+
+
+def mates(slug: str, project: str, as_of: float, events: Events, docs: Dict[str, Dict[str, Any]],
+          dates: Dict[str, Dict[str, Any]], n: int, session_id: str = "") -> List[str]:
+    """The ``n`` rules other than ``slug`` that source (b)'s whole log ranks
+    highest for ``project``, among rules that existed at ``as_of``: the block a
+    rule would sit in. #434's prompts predate (b)'s log, so no as-of ranking
+    exists for them; their own session never counts."""
+    scored = []
+    for s, evs in events.items():
+        if s == slug or not sb.eligible(docs.get(s), project):
+            continue
+        facts = dates.get(s)
+        learned = mrc.first_learned(facts, session_id) if facts is not None else None
+        if learned is None or learned >= as_of:
+            continue
+        k = len({sid for sid, _ in evs if sid and sid != session_id})
+        if k:
+            scored.append((-k, s))
+    return [s for _, s in sorted(scored)[:n]]
+
+
+def diluted_pair(pair: Dict[str, Any], others: Sequence[str], k: int, rules: Dict[str, Any],
+                 bodies: Dict[str, str], form: str = "compact") -> Dict[str, Any]:
+    """#616's pair with its block holding the target among ``others``, at a
+    position seeded by the pair's id; everything arm A sees is unchanged."""
+    import random
+
+    others = [s for s in others if s != pair["slug"]][:k - 1]
+    pos = random.Random("%s:%d" % (pair["id"], k)).randrange(len(others) + 1)
+    slugs = others[:pos] + [pair["slug"]] + others[pos:]
+    local = dict(bodies, **{pair["slug"]: pair["rule"]})
+    return dict(pair, block=form_block(slugs, form, rules, local), mates=list(others), position=pos, k=len(slugs))
+
+
+def seed_arm_a(pairs: Sequence[Dict[str, Any]], answers: Dict[str, Dict[str, List[Any]]],
+               verdicts: Dict[str, str], old_answers: Dict[str, Dict[str, List[Any]]],
+               old_verdicts: Dict[str, str]) -> int:
+    """Copy #616's arm A answers and their verdicts: arm A's prompt does not
+    hold the block, so it is the same prompt. Returns the answers copied."""
+    n = 0
+    for p in pairs:
+        old = (old_answers.get(p["id"]) or {}).get("A") or []
+        mine = answers.setdefault(p["id"], {})
+        if old and not mine.get("A"):
+            mine["A"] = [dict(a) for a in old]
+            n += len(old)
+            for i in range(len(old)):
+                aid = rl.answer_id(p["id"], "A", i)
+                if aid in old_verdicts:
+                    verdicts.setdefault(aid, old_verdicts[aid])
+    return n
+
+
+def diluted_judge_items(pairs: Sequence[Dict[str, Any]], answers: Dict[str, Dict[str, List[Any]]],
+                        done: Dict[str, str]) -> List[Dict[str, str]]:
+    """``judge_items``, with every block mate's slug masked too, so no answer
+    names a rule only arm B saw."""
+    by_id = {p["id"]: p for p in pairs}
+    items = judge_items(pairs, answers, done)
+    for it in items:
+        for s in by_id[it["id"].split("|")[0]].get("mates") or ():
+            it["answer"] = re.sub(re.escape(s), rl.MASK, it["answer"], flags=re.IGNORECASE)
+    return items
+
+
+def fitting(by_k: Dict[str, Dict[str, Any]], form: str, budget: Optional[int]) -> List[str]:
+    """The Ks whose ``form`` block fits ``budget`` at p95."""
+    return [k for k, v in by_k.items() if fits(v["bytes_by_form"][form], budget)]
+
+
+def decide_fit(by_k: Dict[str, Dict[str, Any]], budgets: Dict[str, Optional[int]],
+               forms: Sequence[Tuple[str, str]] = BUDGET_FORMS) -> Tuple[str, Optional[str], Optional[str]]:
+    """#618's bar, declared before measuring: (verdict, K, budget). Build if
+    some K whose block fits a budget, in that budget's form, passes #613's bar
+    with the lift measured in that form (``diluted-<form>``); otherwise name
+    the constraint that failed."""
+    fit = [(name, k, form) for name, form in forms
+           for k in sorted(fitting(by_k, form, budgets.get(name)), key=int)]
+    for name, k, form in fit:
+        if passes(by_k[k]["estimate"][BROAD].get("diluted-" + form)):
+            return "build", k, name
+    if not fit:
+        return "do not build: bytes (no K fits a budget)", None, None
+    if any(passes(v["estimate"][BROAD].get(lift)) for v in by_k.values()
+           for lift in ["diluted-" + f for _, f in forms]):
+        return "do not build: bytes (only a K that does not fit passes)", None, None
+    if any(passes(by_k[k]["estimate"][BROAD].get("distance")) for _, k, _ in fit):
+        return "do not build: dilution (a fitting K passes with #616's lift alone, not with its block)", None, None
+    return "do not build: coverage (no fitting K passes even with #616's lift alone)", None, None
+
+
 # --- report -------------------------------------------------------------------------------
 
 def _day(ts: Optional[float]) -> str:
@@ -502,6 +797,64 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
     out += ["", "DECISION (#613's bar: distance lift, best K per source, over the %d sessions (b) covers): %s" % (
         data["scopes"]["covered"], data["decision"].upper())]
     out += ["   %s" % g for g in data.get("gap") or [] if g]
+    fit = data.get("fit")
+    if fit:
+        out += fit_lines(data, fit)
+    return out
+
+
+def fit_lines(data: Dict[str, Any], fit: Dict[str, Any]) -> List[str]:
+    """#618's part of the report: bytes per form, the budgets, the diluted lift, the bar."""
+    room, budgets, h = fit["room"], fit["budgets"], fit["hooks"]
+    out = ["", "#618: A BLOCK THAT FITS, AND ITS LIFT WITH THE OTHER RULES BESIDE IT",
+           "   today's SessionStart envelope (%d inject rows since %s): median %s, p95 %s, max %s bytes; "
+           "room under %d: %s at the median, %s at p95" % (
+               room["n"], ROOM_SINCE, room["median"], room["p95"], room["max"], data["envelope_max"],
+               room["room_median"], room["room_p95"]),
+           "   budget (a), inside today's envelope: %s bytes (room at p95, less the blank line); "
+           "budget (b), a separate hook entry: %s bytes" % (budgets["a"], budgets["b"]),
+           "   two hook entries in transcripts (%d transcripts): %d SessionStart firings with 2+ contexts, %d summed "
+           "to >= %d chars with each under it, %d of those persisted" % (
+               h["transcripts"], h["firings"], h["summed_over_each_under"], PERSIST_CHARS, h["persisted"]),
+           "   (b)'s blocks over the %d covered sessions, bytes median / p95 per form; a K fits when p95 does:" % (
+               data["scopes"]["covered"])]
+    by_k = data["sources"]["b"]["blocks"]["covered"]
+    for k in data["ks"]:
+        b = by_k[str(k)]["bytes_by_form"]
+        out.append("   K=%-2d %s" % (k, "; ".join("%s %s / %s" % (f, b[f]["median"], b[f]["p95"]) for f in FORMS)))
+    for f in FORMS:
+        out.append("   fits, %-7s (a) K=%s; (b) K=%s" % (
+            f, ",".join(fit["fitting"][f]["a"]) or "none", ",".join(fit["fitting"][f]["b"]) or "none"))
+    far = data["lift"].get("stats") or {}
+    for arm in fit["arms"]:
+        d = arm.get("lift") or {}
+        out.append("2'. LIFT IN THE REAL BLOCK, budget (%s): the target among %d other rules, %s form, K=%d "
+                   "(median %s mates; %d pair(s) with fewer than K-1)" % (
+                       arm["budget"], arm["k"] - 1, arm["form"], arm["k"], arm["mates_median"], arm["short_blocks"]))
+        if d.get("n"):
+            lo, hi = d["ci"]
+            out.append("   %d pairs judged (%d na in both arms); follow A %.1f%%, B %.1f%%; lift %+.1f pp [%+.1f, %+.1f]; "
+                       "gained %d, lost %d" % (d["n"], d["excluded_na"], 100 * d["follow_a"], 100 * d["follow_b"],
+                                              100 * d["lift"], 100 * lo, 100 * hi, d["gained"], d["lost"]))
+        else:
+            out.append("   not measured yet: run with --dry-run, then --send")
+    if far.get("n"):
+        out.append("   against #616's alone, full body: %+.1f pp [%+.1f, %+.1f]; #434's beside the prompt: +31.1 pp (%s)" % (
+            100 * far["lift"], 100 * far["ci"][0], 100 * far["ci"][1], data["lift"]["near_source"]))
+    for budget, form in BUDGET_FORMS:
+        out.append("3. (b) WITH THE %s LIFT, every K that fits budget (%s)" % (form.upper(), budget))
+        for sc in data["scopes"]:
+            blocks = data["sources"]["b"]["blocks"][sc]
+            for k in fit["fitting"][form][budget]:
+                e = blocks[k]["estimate"][BROAD].get("diluted-" + form)
+                if e:
+                    out.append("   %-7s K=%-2s %s" % (sc, k, sb._e(e)))
+                    w = e.get("without_top")
+                    if w:
+                        out.append("                without %s (%d unit(s)): %s" % (w["rule"], w["carried"], sb._e(w)))
+    tail = "" if not fit.get("k") else " (K=%s, budget (%s))" % (fit["k"], fit["budget"])
+    out += ["", "DECISION (#618's bar, over the %d covered sessions): %s%s" % (
+        data["scopes"]["covered"], fit["decision"].upper(), tail)]
     return out
 
 
@@ -555,8 +908,35 @@ def _build_pairs(vault: Path, projects: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def _build_diluted(vault: Path, pairs: Sequence[Dict[str, Any]], events: Events, docs: Dict[str, Dict[str, Any]],
+                   dates: Dict[str, Dict[str, Any]], k: int, rules: Dict[str, Any],
+                   bodies: Dict[str, str], form: str) -> List[Dict[str, Any]]:
+    mrg = _sibling("measure_reflex_gate")
+    units = {u["uid"]: u for u in mrg._load_units(vault)}
+    out = []
+    for p in pairs:
+        u = units.get(p["uid"]) or {}
+        as_of = float(u.get("ts") or 0.0)
+        others = mates(p["slug"], p.get("project") or u.get("project") or "", as_of, events, docs, dates,
+                       k - 1, u.get("session_id") or "")
+        out.append(diluted_pair(p, others, k, rules, bodies, form))
+    return out
+
+
+def _hook_split_all(projects: Path) -> Dict[str, int]:
+    total = {"firings": 0, "summed_over_each_under": 0, "persisted": 0, "transcripts": 0}
+    for path in sorted(projects.glob("*/*.jsonl")):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            got = hook_split(fh)
+        for key, n in got.items():
+            total[key] += n
+        total["transcripts"] += 1
+    return total
+
+
 def _send(pairs: List[Dict[str, Any]], all_answers: Dict[str, Any], answers: Dict[str, Any],
-          all_verdicts: Dict[str, Any], col: str, paths: Tuple[Path, Path], args: Any, cfg: Any) -> None:
+          all_verdicts: Dict[str, Any], col: str, paths: Tuple[Path, Path], args: Any, cfg: Any,
+          items_of: Callable[..., List[Dict[str, str]]] = judge_items) -> None:
     from mnemo.core import llm
 
     provider = llm.resolve(cfg)
@@ -580,7 +960,7 @@ def _send(pairs: List[Dict[str, Any]], all_answers: Dict[str, Any], answers: Dic
             with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
                 list(pool.map(one, enumerate(calls, 1)))
             verdicts = all_verdicts.setdefault(col, {})
-            items = judge_items(pairs, answers, verdicts)
+            items = items_of(pairs, answers, verdicts)
             for start in range(0, len(items), rl.JUDGE_CHUNK):
                 batch = items[start:start + rl.JUDGE_CHUNK]
                 resp = provider(rl.judge_prompt(batch), system=rl.JUDGE_SYSTEM, model=args.judge_model,
@@ -608,6 +988,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--workers", type=int, default=WORKERS)
     ap.add_argument("--model", default=rl.DEFAULT_MODEL)
     ap.add_argument("--judge-model", default=rl.DEFAULT_JUDGE)
+    ap.add_argument("--dilution-k", type=int, default=0,
+                    help="K of the dilution arm's block (default: the largest K whose compact block fits 9,000 bytes)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     ks = sorted(set(args.k or KS))
@@ -629,16 +1011,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         rl._write(pairs_path, _build_pairs(vault, projects))
     pairs = mrc._read(pairs_path, [])
 
-    if args.dry_run or args.send:
-        pending = len(rl.pending_calls(pairs, answers, args.samples))
-        e = notional(pairs, pending, args.samples)
-        print("lift at a distance: %d pairs, %d pending arm call(s) + ~%d judge call(s), ~%d input tokens; "
-              "notional ~$%.2f (subscription usage, not money)" % (
-                  len(pairs), e["arm_calls"], e["judge_calls"], e["input_tokens"], e["usd"]), file=sys.stderr)
-        if args.dry_run:
-            return 0
-        _send(pairs, all_answers, answers, all_verdicts, col, (answers_path, verdicts_path), args, cfg)
-
     units_file = Path(args.units).expanduser() if args.units else vault / ".mnemo" / "prevented-repeats" / mpr.UNITS_NAME
     cache = mrc._read(units_file, None)
     if not cache:
@@ -656,21 +1028,78 @@ def main(argv: Optional[List[str]] = None) -> int:
         if u.get("redundant"):
             redundant.setdefault(u["session_id"], set()).add(u["slug"])
 
-    near, near_source = mpr.lift_diffs(vault)
-    far, far_stats = lift_diffs(pairs, answers, all_verdicts.get(col, {}))
-    lifts: Dict[str, Sequence[float]] = {"beside": near}
-    if far:
-        lifts["distance"] = far
-
     b_events, b_counts = _source_b(vault, projects, args.inject_at)
     b_window = window(b_events)
     events = {"a": rater_events(units, meta), "b": b_events,
               "a_window": rater_events(units, meta, since=b_window[0] if b_window else float("inf"))}
     slugs = {s for evs in events.values() for s in evs}
     bodies = {s: (rules.ctx.pages.get(s) or ("", ""))[1] for s in slugs}
-
+    exported = export_rules(vault, docs)
     scopes = {"covered": [s for s in sessions if b_window and float(meta[s]["start"]) > b_window[0]],
               "all": sessions}
+
+    # #618, 1: the room today's envelope leaves, and the K the dilution arm uses.
+    from mnemo.core.log_utils import iter_rotated_rows
+
+    room = envelope_room(iter_rotated_rows(vault / ".mnemo" / "mcp-access-log.jsonl"), mrc.epoch(ROOM_SINCE),
+                         ENVELOPE_MAX_BYTES)
+    # The block joins the envelope after a blank line.
+    budgets = {"a": None if room["room_p95"] is None else room["room_p95"] - 2, "b": ENVELOPE_MAX_BYTES}
+    covered_blocks = {k: blocks_for(scopes["covered"], meta, b_events, docs, dates, k, redundant) for k in ks}
+    arms: List[Dict[str, Any]] = []
+    for budget, form in BUDGET_FORMS:
+        sizes = {k: {"p95": sb.quantile([form_bytes(covered_blocks[k][s], form, exported, bodies)
+                                         for s in scopes["covered"]], 0.95)} for k in ks}
+        k_arm = args.dilution_k or max([k for k in ks if fits(sizes[k], budgets[budget])] or [min(ks)])
+        d_dir = out_dir / (DILUTION_DIR % (form, k_arm))
+        d_paths = (d_dir / PAIRS_NAME, d_dir / ANSWERS_NAME, d_dir / VERDICTS_NAME)
+        d_all_answers = mrc._read(d_paths[1], {})
+        d_all_verdicts = mrc._read(d_paths[2], {})
+        if not d_paths[0].exists():
+            if any(d_all_answers.values()):
+                raise SystemExit("error: %s holds answers but %s is gone; refusing to rebuild" % (d_paths[1], d_paths[0]))
+            d_dir.mkdir(parents=True, exist_ok=True)
+            rl._write(d_paths[0], _build_diluted(vault, pairs, b_events, docs, dates, k_arm, exported, bodies, form))
+        d_pairs = mrc._read(d_paths[0], [])
+        d_answers = d_all_answers.setdefault(arm_col, {})
+        d_verdicts = d_all_verdicts.setdefault(col, {})
+        if seed_arm_a(d_pairs, d_answers, d_verdicts, answers, all_verdicts.get(col, {})):
+            rl._write(d_paths[1], d_all_answers)
+            rl._write(d_paths[2], d_all_verdicts)
+        arms.append({"budget": budget, "form": form, "k": k_arm, "pairs": d_pairs, "answers": d_answers,
+                     "all_answers": d_all_answers, "all_verdicts": d_all_verdicts, "paths": d_paths[1:]})
+
+    if args.dry_run or args.send:
+        for name, ps, ans in [("lift at a distance", pairs, answers)] + [
+                ("lift in a K=%d %s block" % (a["k"], a["form"]), a["pairs"], a["answers"]) for a in arms]:
+            pending = len(rl.pending_calls(ps, ans, args.samples))
+            e = notional(ps, pending, args.samples)
+            print("%s: %d pairs, %d pending arm call(s) + ~%d judge call(s), ~%d input tokens; "
+                  "notional ~$%.2f (subscription usage, not money)" % (
+                      name, len(ps), e["arm_calls"], e["judge_calls"], e["input_tokens"], e["usd"]), file=sys.stderr)
+        if args.dry_run:
+            for a in arms:
+                sample = next((p for p in a["pairs"] if p.get("mates")), None)
+                if sample:
+                    print("\nfirst %s arm B prompt (%s, target at position %d of %d), its first 3,000 chars:\n%s" % (
+                        a["form"], sample["id"], sample["position"], sample["k"], arm_prompt(sample, "B")[:3000]),
+                        file=sys.stderr)
+            return 0
+        _send(pairs, all_answers, answers, all_verdicts, col, (answers_path, verdicts_path), args, cfg)
+        for a in arms:
+            _send(a["pairs"], a["all_answers"], a["answers"], a["all_verdicts"], col, a["paths"], args, cfg,
+                  items_of=diluted_judge_items)
+
+    near, near_source = mpr.lift_diffs(vault)
+    far, far_stats = lift_diffs(pairs, answers, all_verdicts.get(col, {}))
+    lifts: Dict[str, Sequence[float]] = {"beside": near}
+    if far:
+        lifts["distance"] = far
+    for a in arms:
+        diffs, a["lift"] = lift_diffs(a["pairs"], a["answers"], a["all_verdicts"].get(col, {}))
+        if diffs:
+            lifts["diluted-" + a["form"]] = diffs
+
     results: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {sc: {} for sc in scopes}
     sources: Dict[str, Any] = {}
     for src, evs in events.items():
@@ -682,10 +1111,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             per = blocks_for(sessions, meta, evs, docs, dates, k, redundant)
             for sc, subset in scopes.items():
                 results[sc].setdefault(src, {})[str(k)] = block_numbers(units, subset, per, lifts, bodies,
-                                                                       ENVELOPE_MAX_BYTES)
+                                                                       ENVELOPE_MAX_BYTES, exported)
         for sc in scopes:
             sources[src]["blocks"][sc] = results[sc][src]
     sources["b"].update(b_counts)
+
+    fit = {"room": room, "budgets": budgets, "hooks": _hook_split_all(projects),
+           "fitting": {f: {b: fitting(results["covered"]["b"], f, budgets[b]) for b in budgets} for f in FORMS},
+           "arms": [{"budget": a["budget"], "form": a["form"], "k": a["k"], "lift": a["lift"],
+                     "mates_median": sb.quantile([len(p.get("mates") or ()) for p in a["pairs"]], 0.5),
+                     "short_blocks": sum(len(p.get("mates") or ()) < a["k"] - 1 for p in a["pairs"])}
+                    for a in arms]}
+    if all("diluted-" + f in lifts for _, f in BUDGET_FORMS):
+        verdict, k_pass, budget = decide_fit(results["covered"]["b"], budgets)
+        fit.update(decision=verdict, k=k_pass, budget=budget)
+    else:
+        fit["decision"] = "pending: no diluted lift yet (run --dry-run, then --send)"
 
     turns = [p["turns_before"] for p in pairs]
     chars = [p["chars_before"] for p in pairs]
@@ -696,7 +1137,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "lift": {"column": col, "stats": far_stats, "near_source": near_source,
                  "turns_median": sb.quantile(turns, 0.5), "chars_median": sb.quantile(chars, 0.5),
                  "no_context": sum(not p["context"] for p in pairs)},
-        "sources": sources, "decision": decision,
+        "sources": sources, "decision": decision, "fit": fit,
         "gap": [gap_line(results[sc], "distance" if far else "beside", sc) for sc in scopes],
     }
     prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
