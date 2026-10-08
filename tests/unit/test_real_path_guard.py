@@ -110,7 +110,8 @@ def test_an_in_process_write_under_a_watched_root_is_caught(roots, tmp_path, wri
     guard.begin(own_paths=[tmp_path / "test-own"])
     write(vault / "shared")
     violations = guard.end()
-    assert violations and str(vault / "shared") in violations[0]
+    # Windows reports the path case-folded (``os.path.normcase``).
+    assert violations and os.path.normcase(str(vault / "shared")) in violations[0]
 
 
 def test_an_in_process_write_deep_inside_an_existing_project_dir_is_caught(roots, tmp_path):
