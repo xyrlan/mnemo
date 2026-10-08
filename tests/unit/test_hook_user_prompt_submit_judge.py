@@ -317,3 +317,77 @@ def test_an_exported_rule_is_dropped_before_asking(
     entry = _log(tmp_vault)[-1]
     assert entry["silence_reason"] == "all_exported"
     assert "judge" not in entry
+
+
+# --- the pick ledger (#619) ----------------------------------------------------
+
+def _ledger(vault) -> list:
+    from mnemo.core.reflex import picks
+    path = vault / ".mnemo" / picks.LEDGER_NAME
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in
+            path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_a_judged_prompt_appends_its_picks_to_the_ledger(
+        tmp_vault, monkeypatch, synthetic_index, stub):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock"])
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    rows = _ledger(tmp_vault)
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "s" and rows[0]["picks"] == ["use-prisma-mock"]
+    assert rows[0]["project"] == _log(tmp_vault)[-1]["project"]
+    assert rows[0]["ts"] == _log(tmp_vault)[-1]["ts"]
+    assert set(rows[0]) == {"ts", "session_id", "project", "picks"}
+
+
+def test_a_judged_prompt_with_no_pick_is_still_a_row(
+        tmp_vault, monkeypatch, synthetic_index, stub):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub([])
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    assert [r["picks"] for r in _ledger(tmp_vault)] == [[]]
+
+
+@pytest.mark.parametrize("status", ["no_key", "error", "timeout"])
+def test_a_judge_that_did_not_answer_writes_no_ledger_row(
+        tmp_vault, monkeypatch, synthetic_index, stub, status):
+    """The gates' fallback decision is not the judge's pick."""
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(None, {"status": status, "asked": 1, "injected": 0, "ms": 2, "scores": []})
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    assert _ledger(tmp_vault) == []
+
+
+def test_with_the_stage_off_there_is_no_ledger(tmp_vault, monkeypatch, synthetic_index):
+    _configure(tmp_vault, monkeypatch, judge_on=False)
+    synthetic_index(tmp_vault)
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    assert _ledger(tmp_vault) == []
+
+
+def test_a_ledger_that_cannot_be_written_never_breaks_the_hook(
+        tmp_vault, monkeypatch, synthetic_index, stub):
+    from mnemo.core.reflex import picks
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock"])
+    (tmp_vault / ".mnemo" / picks.LEDGER_NAME).mkdir(parents=True)
+
+    rc, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    assert rc == 0 and "[[use-prisma-mock]]" in stdout
+    assert _log(tmp_vault)[-1]["emitted"] == ["use-prisma-mock"]
