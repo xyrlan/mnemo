@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import time
 from pathlib import Path
 
 from mnemo.cli.parser import command
@@ -121,8 +122,23 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
             failed.append(text)
         return ok
 
-    ended = report_card.watch_checks(card, minutes=minutes, alive=alive, post=post)
+    from mnemo.core.sessions import pr_follow
+
+    started = time.time()
+
+    def stand_down() -> bool:
+        return pr_follow.woken_since(vault_root, args.short_id, pr=pr, since=started)
+
+    ended = report_card.watch_checks(card, minutes=minutes, alive=alive, post=post,
+                                     stand_down=stand_down)
     row = {**base, "event": ended, "pr": pr}
+    if ended == "stood-down":
+        # pr-follow woke the child for this PR (#623): its next card reports.
+        report_card.record(vault_root, {
+            **row, "delivered": False,
+            "reason": "pr-follow woke the child; its next card reports",
+        })
+        return 0
     if sent and sent[-1]:
         report_card.record(vault_root, {**row, "delivered": True})
     else:

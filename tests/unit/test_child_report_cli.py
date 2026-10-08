@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -185,3 +186,46 @@ def test_every_reporter_row_names_the_reporter(tmp_path, monkeypatch) -> None:
     _run(monkeypatch, _card({"pending": 2}))
 
     assert [r["reporter"] for r in _rows(vault)] == [os.getpid(), os.getpid()]
+
+
+def test_a_watch_that_stood_down_for_pr_follow_is_not_undelivered(tmp_path, monkeypatch) -> None:
+    """#623: pr-follow woke the child for this PR, so the child's next card
+    reports — the earlier watch has nothing to say, and nothing was lost."""
+    from mnemo.core.sessions import pr_follow
+
+    vault = _setup(tmp_path, monkeypatch, watch=5)
+    monkeypatch.setattr(rc, "gather", lambda *a, **k: _card({"pending": 1}))
+    monkeypatch.setattr(inbox, "deliver", lambda *a: "")
+    seen = []
+
+    def watch(card, **kw):
+        seen.append(kw["stand_down"]())
+        pr_follow.register(vault, short_id="c0da0f55", session_id="s", cwd="/x", parent="P1")
+        pr_follow._update(vault, lambda d: d["children"]["c0da0f55"].update(
+            woken_at=time.time() + 1, pr_number=12))
+        seen.append(kw["stand_down"]())
+        return "stood-down"
+
+    monkeypatch.setattr(rc, "watch_checks", watch)
+
+    cli_main(["child-report", "c0da0f55", "--parent", "P1"])
+
+    assert seen == [False, True]
+    assert [(r["event"], r["delivered"]) for r in _rows(vault)] == [
+        ("finished", True), ("stood-down", False),
+    ]
+    assert not (vault / ".errors.log").exists()
+
+
+def test_a_wake_for_another_pr_or_before_the_watch_does_not_stand_it_down(tmp_path) -> None:
+    from mnemo.core.sessions import pr_follow
+
+    vault = tmp_path
+    pr_follow.register(vault, short_id="c0da0f55", session_id="s", cwd="/x", parent="P1")
+    pr_follow._update(vault, lambda d: d["children"]["c0da0f55"].update(
+        woken_at=100.0, pr_number=12))
+
+    assert pr_follow.woken_since(vault, "c0da0f55", pr=12, since=50.0)
+    assert not pr_follow.woken_since(vault, "c0da0f55", pr=12, since=150.0)
+    assert not pr_follow.woken_since(vault, "c0da0f55", pr=13, since=50.0)
+    assert not pr_follow.woken_since(vault, "other", pr=12, since=50.0)

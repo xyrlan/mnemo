@@ -32,7 +32,7 @@ import json
 import re
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -51,11 +51,11 @@ BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
 #: The states a card can be in, in the order :func:`state` checks them.
 STATES = (
     "unknown", "no-change", "unpublished", "merged", "closed", "draft",
-    "ci-red", "ci-running", "ready",
+    "conflict", "ci-red", "ci-running", "ready",
 )
 
 _PR_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
-_PR_FIELDS = "number,url,state,isDraft,additions,deletions,changedFiles,headRefOid"
+_PR_FIELDS = "number,url,state,isDraft,additions,deletions,changedFiles,headRefOid,mergeable"
 
 
 def _run(argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
@@ -78,6 +78,9 @@ class PR:
     deletions: Optional[int] = None
     files: Optional[int] = None
     head: str = ""
+    #: gh's own: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub computes it;
+    #: ``""`` when it was not read.
+    mergeable: str = ""
 
 
 @dataclass
@@ -200,6 +203,7 @@ def _pr_from(row: object) -> Optional[PR]:
         deletions=_int("deletions"),
         files=_int("changedFiles"),
         head=str(row.get("headRefOid") or ""),
+        mergeable=str(row.get("mergeable") or ""),
     )
 
 
@@ -352,6 +356,14 @@ def state(card: Card) -> str:
     Local work outranks the PR: a tree with uncommitted changes, or a branch
     whose head the PR does not have, means the PR is not the whole of what the
     child did, whatever its checks say.
+
+    ``ready`` means open, not a draft, mergeable, and every reported check
+    green (#623). A PR that conflicts with its base is ``conflict`` whatever
+    its checks say: GitHub runs no ``pull_request`` workflow on it, so its
+    checks are either absent or about a merge that can no longer happen. The
+    first card reads ``mergeable`` with the PR and demotes only a known
+    conflict; the checks watch (:func:`watch_checks`), which can wait, holds
+    ``ready`` to a ``MERGEABLE`` answer and polls through ``UNKNOWN``.
     """
     if card.tree_seen and (not card.clean or card.unpushed):
         return "unpublished"
@@ -366,6 +378,8 @@ def state(card: Card) -> str:
         return "closed"
     if pr.draft:
         return "draft"
+    if pr.mergeable == "CONFLICTING":
+        return "conflict"
     if card.checks is None:
         return "unknown"
     if card.checks.get("fail"):
@@ -401,6 +415,8 @@ def _size(pr: PR) -> str:
 def _pr_line(pr: PR) -> str:
     if pr.state == "OPEN":
         status = "open, draft" if pr.draft else "open, ready for review"
+        if pr.mergeable == "CONFLICTING":
+            status += ", conflicts with its base"
     else:
         status = pr.state.lower() or "state unknown"
     return f"- PR #{pr.number} {status}{_size(pr)} — {pr.url}"
@@ -479,12 +495,31 @@ def render_checks(
     card: Card, counts: Optional[Dict[str, int]], failing: Sequence[str],
     *, timed_out_after: int = 0,
 ) -> str:
-    """The follow-up once the checks settle, or once the watch gives up."""
+    """The follow-up once the checks settle, or once the watch gives up.
+
+    The state follows :func:`state`'s rule: ``ready`` only for a PR that is
+    not a draft, not conflicting, and has no failing check. *card*'s PR is
+    the watch's latest read of it, ``mergeable`` included.
+    """
     from mnemo.core.sessions.inbox import NOTICE_PREFIX
 
     pr = card.pr
     number = f"PR #{pr.number}" if pr else "its PR"
-    if timed_out_after:
+    if timed_out_after and settled(counts):
+        name = "unknown"
+        head = (
+            f"{card.short_id}'s {number}: checks settled — {_counts(counts)} — but "
+            f"GitHub had not decided whether it merges cleanly after "
+            f"{timed_out_after} min; mnemo stopped watching."
+        )
+    elif timed_out_after and counts == {} and pr and pr.mergeable == "UNKNOWN":
+        name = "unknown"
+        head = (
+            f"{card.short_id}'s {number}: no checks reported, and GitHub had not "
+            f"decided whether it merges cleanly after {timed_out_after} min; "
+            f"mnemo stopped watching."
+        )
+    elif timed_out_after:
         name = "ci-running"
         head = (
             f"{card.short_id}'s {number}: checks still running after "
@@ -493,6 +528,14 @@ def render_checks(
     elif counts is None:
         name = "unknown"
         head = f"{card.short_id}'s {number}: checks could not be read; mnemo stopped watching."
+    elif pr and pr.state == "OPEN" and pr.mergeable == "CONFLICTING":
+        name = "conflict"
+        head = (
+            f"{card.short_id}'s {number}: conflicts with its base — CI cannot run "
+            f"until the conflict is resolved."
+        )
+        if counts:
+            head += f" Checks reported: {_counts(counts)}."
     elif not counts:
         name = "ready" if pr and not pr.draft else state(card)
         head = f"{card.short_id}'s {number}: no checks reported."
@@ -555,19 +598,33 @@ def watch_checks(
     clock: Callable[[], float] = time.monotonic,
     interval: float = POLL_SECONDS,
     grace: float = NO_CHECKS_GRACE_SECONDS,
+    stand_down: Callable[[], bool] = lambda: False,
 ) -> str:
     """Poll *card*'s PR checks until they settle, then post once.
 
-    Returns what ended the watch: ``settled``, ``no-checks``, ``timeout``,
-    ``unreadable`` or ``parent-gone``. Exactly one notice is posted on every
-    ending except ``parent-gone``, where nobody is left to read it — so a
-    parent is never promised a follow-up that silently fails to come.
+    Returns what ended the watch: ``settled``, ``no-checks``, ``conflict``,
+    ``timeout``, ``unreadable``, ``parent-gone`` or ``stood-down``. Exactly
+    one notice is posted on every ending except ``parent-gone``, where nobody
+    is left to read it, and ``stood-down`` — so a parent is never promised a
+    follow-up that silently fails to come.
+
+    Before any verdict that could say ``ready`` — checks all green, or none
+    at all after the grace — the PR is read again for ``mergeable`` (#623):
+    a PR that conflicts with its base gets no ``pull_request`` run, so an
+    empty list there is the conflict, and the notice says ``conflict``.
+    ``UNKNOWN`` is GitHub still computing: no verdict yet, poll again.
+
+    *stand_down* is asked after every sleep: true once ``pr-follow`` has woken
+    the child for this PR, which is now changing it. Its next stop posts a
+    card of its own; a verdict from here would be about a PR that no longer
+    exists in that shape.
     """
     if card.pr is None or minutes <= 0:
         return "not-watched"
     start = clock()
     deadline = start + minutes * 60
     failures = 0
+    unread_merges = 0  # its own count: a checks read in between must not reset it
     counts: Optional[Dict[str, int]] = card.checks
     failing: List[str] = list(card.failing)
     while True:
@@ -577,6 +634,8 @@ def watch_checks(
         sleep(interval)
         if not alive():
             return "parent-gone"
+        if stand_down():
+            return "stood-down"
         counts, failing = checks(card.pr.url, run=run)
         if counts is None:
             failures += 1
@@ -585,12 +644,27 @@ def watch_checks(
                 return "unreadable"
             continue
         failures = 0
-        if settled(counts):
-            post(render_checks(card, counts, failing))
-            return "settled"
-        if not counts and clock() - start >= grace:
-            post(render_checks(card, {}, []))
-            return "no-checks"
+        due = settled(counts) or (not counts and clock() - start >= grace)
+        if not due:
+            continue
+        if not counts.get("fail"):
+            # Green or empty could read as ``ready``: ask whether it merges.
+            fresh = pr_by_url(card.pr.url, run=run)
+            if fresh is None:
+                unread_merges += 1
+                if unread_merges >= MAX_READ_FAILURES:
+                    post(render_checks(card, None, []))
+                    return "unreadable"
+                continue
+            unread_merges = 0
+            card = replace(card, pr=fresh)
+            if fresh.state == "OPEN" and fresh.mergeable not in ("MERGEABLE", "CONFLICTING"):
+                continue  # UNKNOWN: GitHub is still computing it
+            if fresh.state == "OPEN" and fresh.mergeable == "CONFLICTING":
+                post(render_checks(card, counts, failing))
+                return "conflict"
+        post(render_checks(card, counts, failing))
+        return "settled" if counts else "no-checks"
 
 
 def record(vault_root: Path, row: Dict[str, object]) -> None:

@@ -319,7 +319,7 @@ def test_the_watch_posts_once_when_the_checks_settle(tmp_path: Path) -> None:
 
 def test_the_watch_waits_out_the_grace_before_calling_a_pr_checkless(tmp_path: Path) -> None:
     clock, posted = Clock(), []
-    run = _answers((1, "", "no checks reported on the 'b' branch"))
+    run = _routed([(1, "", "no checks reported on the 'b' branch")], [_view("MERGEABLE")])
 
     ended = rc.watch_checks(_watched_card(tmp_path), minutes=30, alive=lambda: True,
                             post=lambda t: posted.append(t) or True, run=run,
@@ -366,6 +366,109 @@ def test_the_watch_stops_after_repeated_unreadable_answers(tmp_path: Path) -> No
     assert ended == "unreadable"
     assert clock.now == rc.MAX_READ_FAILURES * rc.POLL_SECONDS
     assert len(posted) == 1 and "could not be read" in posted[0]
+
+
+# --- mergeability (#623) -----------------------------------------------------------
+# GitHub runs no `pull_request` workflow while a PR conflicts with its base, so
+# "no checks" on a conflicting PR is the conflict, not a green light.
+
+def _view(mergeable: str, **over) -> Tuple[int, str, str]:
+    return 0, json.dumps({**json.loads(_pr_json(**over)), "mergeable": mergeable}), ""
+
+
+def _routed(checks: Sequence[Tuple[int, str, str]], views: Sequence[Tuple[int, str, str]]):
+    """``gh pr checks`` and ``gh pr view`` each answer from their own queue; the
+    last answer of each repeats."""
+    queues = {"checks": list(checks), "view": list(views)}
+    calls: List[str] = []
+
+    def run(argv, cwd):
+        kind = argv[2]
+        calls.append(kind)
+        queue = queues[kind]
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    run.calls = calls
+    return run
+
+
+NONE_YET = (1, "", "no checks reported on the 'fix/issue-7' branch")
+
+
+def _watch(tmp_path: Path, run, *, minutes: int = 30, stand_down=None):
+    clock, posted = Clock(), []
+    kw = {} if stand_down is None else {"stand_down": stand_down}
+    ended = rc.watch_checks(_watched_card(tmp_path), minutes=minutes, alive=lambda: True,
+                            post=lambda t: posted.append(t) or True, run=run,
+                            sleep=clock.sleep, clock=clock, **kw)
+    return ended, posted, clock
+
+
+def test_no_checks_on_a_conflicting_pr_is_a_conflict_not_ready(tmp_path: Path) -> None:
+    ended, posted, _ = _watch(tmp_path, _routed([NONE_YET], [_view("CONFLICTING")]))
+
+    assert ended == "conflict"
+    [text] = posted
+    assert text.splitlines()[0] == '<mnemo-child-finished id="x" state="conflict" event="checks">'
+    assert "CI cannot run until the conflict is resolved" in text
+    assert 'state="ready"' not in text
+
+
+def test_no_checks_on_a_mergeable_ready_pr_is_still_ready(tmp_path: Path) -> None:
+    ended, posted, _ = _watch(tmp_path, _routed([NONE_YET], [_view("MERGEABLE")]))
+
+    assert ended == "no-checks"
+    [text] = posted
+    assert 'state="ready"' in text and "no checks reported" in text
+
+
+def test_green_checks_on_a_pr_that_now_conflicts_are_not_ready(tmp_path: Path) -> None:
+    ended, posted, _ = _watch(tmp_path, _routed(
+        [(0, _checks_json("pass", "pass"), "")], [_view("CONFLICTING")]))
+
+    assert ended == "conflict"
+    assert 'state="conflict"' in posted[0] and "2 pass" in posted[0]
+
+
+def test_unknown_mergeability_keeps_the_watch_polling(tmp_path: Path) -> None:
+    run = _routed([NONE_YET], [_view("UNKNOWN"), _view("UNKNOWN"), _view("MERGEABLE")])
+    ended, posted, clock = _watch(tmp_path, run)
+
+    assert ended == "no-checks"
+    assert run.calls.count("view") == 3
+    assert len(posted) == 1 and 'state="ready"' in posted[0]
+
+
+def test_an_unreadable_mergeability_ends_the_watch_as_unreadable(tmp_path: Path) -> None:
+    ended, posted, _ = _watch(tmp_path, _routed([NONE_YET], [(1, "", "HTTP 401")]))
+
+    assert ended == "unreadable"
+    assert len(posted) == 1 and "could not be read" in posted[0]
+
+
+def test_mergeability_that_stays_unknown_never_reads_as_ready(tmp_path: Path) -> None:
+    ended, posted, _ = _watch(tmp_path, _routed([NONE_YET], [_view("UNKNOWN")]), minutes=10)
+
+    assert ended == "timeout"
+    assert len(posted) == 1 and 'state="ready"' not in posted[0]
+
+
+def test_the_watch_stands_down_once_pr_follow_woke_the_child(tmp_path: Path) -> None:
+    woke = []
+    run = _routed([(8, _checks_json("pending"), ""), NONE_YET], [_view("CONFLICTING")])
+
+    ended, posted, _ = _watch(tmp_path, run, stand_down=lambda: bool(woke) or woke.append(1))
+
+    assert ended == "stood-down"
+    assert posted == []
+
+
+def test_the_first_card_calls_a_conflicting_green_pr_a_conflict(tmp_path: Path) -> None:
+    run = _open_pr_runner("pass", mergeable="CONFLICTING")
+    card = rc.gather("c0da0f55", cwd=str(_tree(tmp_path)), run=run)
+
+    assert rc.state(card) == "conflict"
+    assert "conflicts with its base" in rc.render(card)
 
 
 @pytest.mark.parametrize("configured, expected", [

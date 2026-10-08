@@ -426,6 +426,27 @@ def in_childs_hands(entry: Dict[str, Any]) -> bool:
     return woken is not None and woken >= (entry.get("ended_at") or 0)
 
 
+def woken_since(vault_root: Path, short_id: str, *, pr: Optional[int],
+                since: float) -> bool:
+    """True when the follow woke *short_id* for *pr* after *since*. Never raises.
+
+    A checks watch started at the child's stop asks this (#623): once the
+    child is woken to change its PR, the watch's verdict is about a PR that is
+    being rewritten, and the child's next stop reports instead.
+    """
+    try:
+        entry = (load_ledger(vault_root).get("children") or {}).get(short_id)
+        if not isinstance(entry, dict):
+            return False
+        woken = entry.get("woken_at")
+        if not isinstance(woken, (int, float)) or woken <= since:
+            return False
+        number = entry.get("pr_number")
+        return pr is None or number is None or number == pr
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def window_over(entry: Dict[str, Any], s: Dict[str, Any], now: float) -> bool:
     return now - float(entry.get("since") or now) >= s["hours"] * 3600
 
