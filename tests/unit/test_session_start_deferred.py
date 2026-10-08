@@ -132,3 +132,25 @@ def test_the_injected_context_is_the_same_with_the_deferred_work_run_first(monke
         outs.append(out.getvalue().replace(str(copy), "<vault>"))
     assert outs[0], "the fixture must inject something to compare"
     assert outs[0] == outs[1]
+
+
+def test_the_deferred_run_compacts_the_judge_pick_ledger(monkeypatch, vault):
+    """#619: the ledger the reflex hook appends to is bounded here, off the
+    hot path, and nowhere a prompt waits."""
+    from mnemo.core.reflex import picks
+    monkeypatch.setattr("mnemo.core.mirror.mirror_all", lambda cfg: None)
+    seen: list = []
+    monkeypatch.setattr(picks, "compact", lambda v, **k: seen.append(Path(v)) or "under_cap")
+    assert session_start.run_deferred(_cfg(vault), vault) == "done"
+    assert seen == [vault]
+
+
+def test_a_failing_compaction_is_logged_and_the_run_goes_on(monkeypatch, vault):
+    from mnemo.core.reflex import picks
+
+    def boom(v, **k):
+        raise OSError("disk")
+    monkeypatch.setattr("mnemo.core.mirror.mirror_all", lambda cfg: None)
+    monkeypatch.setattr(picks, "compact", boom)
+    assert session_start.run_deferred(_cfg(vault), vault) == "done"
+    assert "session_start.judge_picks" in (vault / ".errors.log").read_text(encoding="utf-8")

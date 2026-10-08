@@ -34,7 +34,11 @@ before the session's start counts, and never the session itself. Two sources:
   every #520 session, from the reflex blocks Claude Code recorded in every
   transcript on disk since the judge went live (:data:`JUDGE_LIVE`): the
   rules a reflex block carried are the judge's picks at the ``injectAt`` in
-  force.
+  force. Once mnemo's own judge-picks ledger (#619,
+  ``mnemo.core.reflex.picks``) holds every pick since the judge went live —
+  after ``tools/backfill_judge_picks.py`` — (b) reads it through
+  ``picks_before`` instead, the count a SessionStart block would read, and
+  rebuilds nothing.
 
 So (b) has history only for the sessions that started after the judge went
 live, over a window of days, while (a) has the whole of #520's window. The
@@ -226,13 +230,40 @@ def pick_events(picks: Iterable[Tuple[str, str, float]]) -> Events:
     return out
 
 
-def window(events: Events) -> Optional[Tuple[float, float]]:
+def ledger_covers(ledger: Any) -> bool:
+    """Whether mnemo's judge-picks ledger (#619) holds every pick since the
+    judge went live, so (b) reads it instead of rebuilding the history."""
+    since = ledger.since()
+    return since is not None and since <= mrc.epoch(JUDGE_LIVE)
+
+
+def ledger_block_at(session_id: str, project: str, start: float, ledger: Any,
+                    docs: Dict[str, Dict[str, Any]], dates: Dict[str, Dict[str, Any]], k: int,
+                    exclude: Iterable[str] = ()) -> List[str]:
+    """#598's ``block_at``, ranked by ``picks_before`` as of ``start``: the
+    count a SessionStart block would read from the ledger."""
+    skip = set(exclude)
+    scored = []
+    for slug, n in ledger.picks_before(None, start, session_id).items():
+        if slug in skip or not sb.eligible(docs.get(slug), project):
+            continue
+        facts = dates.get(slug)
+        learned = mrc.first_learned(facts, session_id) if facts is not None else None
+        if learned is None or learned >= start:
+            continue
+        scored.append((-n, slug))
+    return [slug for _, slug in sorted(scored)[:k]]
+
+
+def window(events: Any) -> Optional[Tuple[float, float]]:
     """The first and last moment a source saw anything."""
+    if not isinstance(events, dict):
+        return events.window()
     ts = [t for evs in events.values() for _, t in evs if t is not None]
     return (min(ts), max(ts)) if ts else None
 
 
-def with_history(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], events: Events) -> int:
+def with_history(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], events: Any) -> int:
     """Sessions that started after the source's first event: the ones it could fill a block for."""
     w = window(events)
     return 0 if w is None else sum(float(meta[s]["start"]) > w[0] for s in sessions)
@@ -240,12 +271,14 @@ def with_history(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], event
 
 # --- 1. the block per source, and its numbers --------------------------------------------
 
-def blocks_for(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], events: Events,
+def blocks_for(sessions: Sequence[str], meta: Dict[str, Dict[str, Any]], events: Any,
                docs: Dict[str, Dict[str, Any]], dates: Dict[str, Dict[str, Any]], k: int,
                redundant: Dict[str, Set[str]]) -> Dict[str, List[str]]:
-    """Each session's block as of its start (#598's ``block_at``, fed relevance history)."""
-    return {sid: sb.block_at(sid, meta[sid]["project"], float(meta[sid]["start"]), events, docs, dates, k,
-                             redundant.get(sid, ()))
+    """Each session's block as of its start (#598's ``block_at``, fed relevance
+    history), or :func:`ledger_block_at` when ``events`` is the ledger."""
+    at = sb.block_at if isinstance(events, dict) else ledger_block_at
+    return {sid: at(sid, meta[sid]["project"], float(meta[sid]["start"]), events, docs, dates, k,
+                    redundant.get(sid, ()))
             for sid in sessions}
 
 
@@ -519,8 +552,15 @@ def gap_line(results: Dict[str, Dict[str, Dict[str, Any]]], lift: str, scope: st
 
 # --- main ---------------------------------------------------------------------------------
 
-def _source_b(vault: Path, projects: Path, inject_at: float) -> Tuple[Events, Dict[str, Any]]:
+def _source_b(vault: Path, projects: Path, inject_at: float) -> Tuple[Any, Dict[str, Any]]:
+    """The judge's picks: mnemo's ledger (#619) when it covers the judge's
+    whole life, else rebuilt from the reflex logs and transcripts."""
     from mnemo.core.log_utils import iter_rotated_rows
+    from mnemo.core.reflex import picks as pick_ledger
+
+    ledger = pick_ledger.load(vault)
+    if ledger_covers(ledger):
+        return ledger, {"source": "ledger", "log_since": ledger.since()}
 
     m = vault / ".mnemo"
     picks = log_picks(iter_rotated_rows(m / "reflex-log.jsonl"), inject_at)
@@ -533,8 +573,8 @@ def _source_b(vault: Path, projects: Path, inject_at: float) -> Tuple[Events, Di
     for path in sorted(projects.glob("*/*.jsonl")):
         with open(path, encoding="utf-8", errors="replace") as fh:
             picks += transcript_picks(fh, path.stem, since)
-    return pick_events(picks), {"log_picks": n_log, "transcript_picks": len(picks) - n_log,
-                                "log_since": log_since}
+    return pick_events(picks), {"source": "rebuilt", "log_picks": n_log,
+                                "transcript_picks": len(picks) - n_log, "log_since": log_since}
 
 
 def _build_pairs(vault: Path, projects: Path) -> List[Dict[str, Any]]:
@@ -666,7 +706,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     b_window = window(b_events)
     events = {"a": rater_events(units, meta), "b": b_events,
               "a_window": rater_events(units, meta, since=b_window[0] if b_window else float("inf"))}
-    slugs = {s for evs in events.values() for s in evs}
+    totals = {src: ({s: len(v) for s, v in evs.items()} if isinstance(evs, dict)
+                    else evs.picks_before(None, float("inf"))) for src, evs in events.items()}
+    slugs = {s for t in totals.values() for s in t}
     bodies = {s: (rules.ctx.pages.get(s) or ("", ""))[1] for s in slugs}
 
     scopes = {"covered": [s for s in sessions if b_window and float(meta[s]["start"]) > b_window[0]],
@@ -675,7 +717,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sources: Dict[str, Any] = {}
     for src, evs in events.items():
         w = window(evs)
-        sources[src] = {"rules": len(evs), "events": sum(len(v) for v in evs.values()),
+        sources[src] = {"rules": len(totals[src]), "events": sum(totals[src].values()),
                         "window": list(w) if w else [None, None],
                         "with_history": with_history(sessions, meta, evs), "blocks": {}}
         for k in ks:
@@ -701,6 +743,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     prov = _provenance.provenance(__file__, argv, vault=vault, blind_spots=[
         _provenance.transcripts_blind_spot(projects),
+        "(b) read mnemo's judge-picks ledger, complete since %s" % _day(b_counts["log_since"])
+        if b_counts["source"] == "ledger" else
         "reflex-log and archived rows begin %s; (b) before that reads transcripts" % _day(b_counts["log_since"])])
     if args.json:
         print(json.dumps(_provenance.stamp(data, prov), indent=1, default=str))
