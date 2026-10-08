@@ -49,26 +49,35 @@ def _hook_command(module: str) -> str:
     return hook_command(module)
 
 
+# ``timeout`` is the bound in seconds Claude Code gives each hook. Without one
+# it ends a ``SessionEnd`` hook at 1.5 s, and #593 timed ours at p50 3.7 s /
+# p99 5.3 s under load (``tools/measure_hook_durations.py``). The values are
+# #593's; this table is their one source, and a manifest test holds both
+# plugin ``hooks.json`` files to it (#611).
 HOOK_DEFINITIONS: dict[str, dict[str, Any]] = {
     "SessionStart": {
         "module": "session_start",
         "matcher": None,
         "async": False,
+        "timeout": 600,
     },
     "UserPromptSubmit": {
         "module": "user_prompt_submit",
         "matcher": None,
         "async": False,
+        "timeout": 30,
     },
     "PreToolUse": {
         "module": "pre_tool_use",
         "matcher": "Bash|Read|Edit|Write|MultiEdit",
         "async": False,
+        "timeout": 30,
     },
     "SessionEnd": {
         "module": "session_end",
         "matcher": None,
         "async": False,
+        "timeout": 30,
     },
 }
 
@@ -113,6 +122,8 @@ def _build_entry(event: str, defn: dict[str, Any]) -> dict[str, Any]:
     hook: dict[str, Any] = {"type": "command", "command": _hook_command(defn["module"])}
     if defn.get("async"):
         hook["async"] = True
+    if defn.get("timeout"):
+        hook["timeout"] = defn["timeout"]
     entry: dict[str, Any] = {"hooks": [hook]}
     if defn.get("matcher"):
         entry["matcher"] = defn["matcher"]

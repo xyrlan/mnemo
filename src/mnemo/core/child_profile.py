@@ -146,8 +146,14 @@ def mnemo_hooks(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     Entries are copied whole — matcher included — because ``PreToolUse`` is
     installed with one and a hook re-registered without its matcher would fire
     on every tool instead of on four.
+
+    A hook that declares no ``timeout`` gets the one this version ships
+    (#611). An install from before #611 has none until session start repairs
+    it — never, with ``install.autoRepairHooks`` off — and without one Claude
+    Code ends the child's ``SessionEnd`` at 1.5 s, cutting the report and the
+    notice to the parent. A timeout the user set is theirs and is kept.
     """
-    from mnemo.install.settings import is_mnemo_hook_command
+    from mnemo.install.settings import HOOK_DEFINITIONS, is_mnemo_hook_command
 
     data = _load(user_settings_path()) if settings is None else settings
     raw = data.get("hooks")
@@ -158,6 +164,7 @@ def mnemo_hooks(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     for event, matchers in raw.items():
         if not isinstance(matchers, list):
             continue
+        shipped = HOOK_DEFINITIONS.get(event, {}).get("timeout")
         kept = []
         for matcher in matchers:
             if not isinstance(matcher, dict):
@@ -167,6 +174,9 @@ def mnemo_hooks(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 if isinstance(hook, dict)
                 and is_mnemo_hook_command(hook.get("command", ""))
             ]
+            if shipped is not None:
+                ours = [hook if "timeout" in hook else {**hook, "timeout": shipped}
+                        for hook in ours]
             if not ours:
                 continue
             entry: Dict[str, Any] = {"hooks": ours}

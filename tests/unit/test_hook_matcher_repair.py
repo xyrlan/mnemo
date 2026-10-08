@@ -29,7 +29,9 @@ PRE_271 = "Bash|Edit|Write|MultiEdit"
 
 def _settings(dir_: Path, matcher: object = PRE_271, command: str = MNEMO) -> Path:
     dir_.mkdir(parents=True, exist_ok=True)
-    entry: dict = {"hooks": [{"type": "command", "command": command}]}
+    # The shipped timeout, so these tests see matcher drift alone (#611 has its own).
+    entry: dict = {"hooks": [{"type": "command", "command": command,
+                              "timeout": HOOK_DEFINITIONS["PreToolUse"]["timeout"]}]}
     if matcher is not ...:
         entry["matcher"] = matcher
     path = dir_ / "settings.json"

@@ -14,6 +14,12 @@ install whose owner never does. The detection lives here, out of the doctor
 package, because three callers now need it — the doctor row, the ``mnemo
 status`` line, and the session-start repair that closes the loop unasked.
 
+#611 added the second thing ``init`` writes once and a release can change: the
+``timeout`` on each hook. An install from before it has none, and Claude Code
+then ends ``SessionEnd`` at 1.5 s — under the 3.7 s median #593 measured. A
+missing or different timeout on a mnemo hook is drift the same way a narrow
+matcher is, found and repaired by the same calls.
+
 Stateless on purpose: it compares what is on disk now with what the running
 code ships, so it notices drift introduced by any later upgrade — unlike a
 notice printed at install time.
@@ -23,7 +29,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -102,6 +108,44 @@ def missing_tools(settings: dict) -> dict[str, list[str]]:
     return drift
 
 
+def wrong_timeouts(settings: dict) -> dict[str, tuple[object, object]]:
+    """Map each hook event to ``(installed, shipped)`` where a mnemo hook's
+    ``timeout`` is not the one this version ships.
+
+    ``installed`` is ``None`` when the hook declares none. Only mnemo's own
+    hooks are judged: another tool's hook on the same event keeps whatever
+    bound it chose. With several mnemo hooks on one event the first that is
+    off is reported — the repair rewrites them all anyway.
+    """
+    from mnemo.install.settings import HOOK_DEFINITIONS, is_mnemo_hook_command
+
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return {}
+    drift: dict[str, tuple[object, object]] = {}
+    for event, defn in HOOK_DEFINITIONS.items():
+        shipped = defn.get("timeout")
+        entries = hooks.get(event)
+        if shipped is None or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                continue
+            for hook in entry["hooks"]:
+                if not isinstance(hook, dict):
+                    continue
+                if not is_mnemo_hook_command(hook.get("command", "")):
+                    continue
+                installed = hook.get("timeout")
+                if installed != shipped:
+                    drift.setdefault(event, (installed, shipped))
+    return drift
+
+
+def _bound(installed: object) -> str:
+    return "no timeout" if installed is None else f"{installed} s"
+
+
 def _reach(lacking: list[str]) -> str:
     verb = "never reaches" if len(lacking) == 1 else "never reach"
     return f"{', '.join(lacking)} {verb} it"
@@ -109,11 +153,16 @@ def _reach(lacking: list[str]) -> str:
 
 @dataclass(frozen=True)
 class Drift:
-    """One settings.json scope whose mnemo matchers are narrower than shipped."""
+    """One settings.json scope whose mnemo hooks are behind what ships.
+
+    ``missing`` is matcher drift (tools the installed matcher lacks);
+    ``timeouts`` is timeout drift, ``{event: (installed, shipped)}`` (#611).
+    """
 
     path: Path
     missing: dict[str, list[str]]
     project: bool
+    timeouts: dict[str, tuple[object, object]] = field(default_factory=dict)
 
     @property
     def scope(self) -> str:
@@ -133,8 +182,13 @@ class Drift:
         back by hand after a repair is left alone instead of being fought
         every session.
         """
-        body = ";".join(f"{ev}:{','.join(tools)}" for ev, tools in sorted(self.missing.items()))
-        return f"{self.path}|{body}"
+        parts = [f"{ev}:{','.join(tools)}" for ev, tools in sorted(self.missing.items())]
+        # Keyed on the shipped bound, not the installed one: a user who sets
+        # their own after a repair keeps it, and a release that changes the
+        # shipped value is repaired again. Absent for matcher-only drift, so
+        # markers written before #611 still match.
+        parts += [f"{ev}:timeout={shipped}" for ev, (_, shipped) in sorted(self.timeouts.items())]
+        return f"{self.path}|{';'.join(parts)}"
 
     def doctor_lines(self) -> list[str]:
         """One finding per drifted event, as ``mnemo doctor`` prints them."""
@@ -144,6 +198,10 @@ class Drift:
             f"{event} hook in {self.path} predates this version's matcher: "
             f"{_reach(lacking)} (ships `{HOOK_DEFINITIONS[event]['matcher']}`)"
             for event, lacking in self.missing.items()
+        ] + [
+            f"{event} hook in {self.path} predates this version's timeout: "
+            f"{_bound(installed)} (ships {shipped} s)"
+            for event, (installed, shipped) in self.timeouts.items()
         ]
 
     def status_lines(self) -> list[str]:
@@ -152,17 +210,31 @@ class Drift:
             f"Hooks ({self.scope}): {event} matcher predates this version — "
             f"{_reach(lacking)}. Run `{self.remedy}`"
             for event, lacking in self.missing.items()
+        ] + [
+            f"Hooks ({self.scope}): {event} timeout predates this version — "
+            f"{_bound(installed)}, ships {shipped} s. Run `{self.remedy}`"
+            for event, (installed, shipped) in self.timeouts.items()
         ]
 
     def repair_notice(self) -> str:
         """What the session-start repair says on stderr once it has written."""
-        events = ", ".join(
-            f"{event} ({', '.join(lacking)})" for event, lacking in self.missing.items()
-        )
+        found: list[str] = []
+        if self.missing:
+            events = ", ".join(
+                f"{event} ({', '.join(lacking)})" for event, lacking in self.missing.items()
+            )
+            found.append(f"hook matcher in {self.path} predated this version — {events} "
+                         f"never reached it")
+        if self.timeouts:
+            events = ", ".join(
+                f"{event} ({_bound(installed)} → {shipped} s)"
+                for event, (installed, shipped) in self.timeouts.items()
+            )
+            found.append(f"hook timeout in {self.path} predated this version — {events}")
         return (
-            f"[mnemo] hook matcher in {self.path} predated this version — {events} "
-            f"never reached it. Repaired in place (previous file backed up alongside it); "
-            f"new sessions pick it up. Set install.autoRepairHooks=false to stop this."
+            f"[mnemo] {'; '.join(found)}. Repaired in place (previous file backed up "
+            f"alongside it); new sessions pick it up. Set install.autoRepairHooks=false "
+            f"to stop this."
         )
 
 
@@ -199,8 +271,10 @@ def scan(claude_dir: Path | None = None, cwd: Path | None = None) -> list[Drift]
         if not isinstance(data, dict):
             continue
         missing = missing_tools(data)
-        if missing:
-            drifts.append(Drift(path=path, missing=missing, project=project))
+        timeouts = wrong_timeouts(data)
+        if missing or timeouts:
+            drifts.append(Drift(path=path, missing=missing, project=project,
+                                timeouts=timeouts))
     return drifts
 
 
