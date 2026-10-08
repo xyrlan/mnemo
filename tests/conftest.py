@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._real_path_guard import RealPathGuard
+
 # Captured at import, before any fixture can patch it. This is the one place
 # the suite is allowed to know where the developer's real vault lives -- and
 # only so it can prove nothing touched it (#117).
@@ -165,61 +167,62 @@ def real_home() -> Path:
     return _REAL_HOME
 
 
-def _vault_fingerprint() -> tuple:
-    """``(size, mtime_ns)`` of five real paths (the vault's error log and
-    ``shared/``, ``~/.claude/projects``, and the Cursor and Codex config dirs
-    a host adapter would write) that a leaky test would hit.
-
-    Directory entries are shallow: a directory's mtime moves when an entry is
-    created or removed inside it. Missing paths are ``None``.
-
-    ``~/mnemo/.mnemo/`` is deliberately *not* watched. The developer's own
-    Claude Code session keeps firing real hooks while the suite runs, and
-    those atomically replace files there on every MCP call and every
-    reflex/enrich emission (``core/mcp/session_state.py``) and rename both
-    index files on SessionStart -- each bumping the directory's mtime. The
-    harm #117 names is ``.errors.log`` (the circuit breaker); watching
-    ``.mnemo/`` would only add false positives.
-    """
-    def st(p: Path):
-        try:
-            s = p.stat()
-            return (s.st_size, s.st_mtime_ns)
-        except OSError:
-            return None
-    return (
-        st(_REAL_VAULT / ".errors.log"),
-        st(_REAL_VAULT / "shared"),
-        st(_REAL_HOME / ".claude" / "projects"),
-        st(_REAL_HOME / ".cursor"),
-        st(_REAL_HOME / ".codex"),
-    )
+# #612: the guard used to stat ``~/.claude/projects`` around every test, and
+# every Claude Code session on the machine adds to it -- each dispatched child
+# once per worktree -- so a parallel session failed whichever test was running.
+# Now a test is blamed for writes it makes itself (an audit hook, at any depth
+# under these roots) or through a process it starts (``stat`` of the paths a
+# leak would hit, only when that process got the real HOME or a watched path,
+# and new ``~/.claude/projects`` entries named after the test's own paths). See ``tests/_real_path_guard.py`` for what it cannot see.
+#
+# In-process the whole vault is watched. Out of process ``~/mnemo/.mnemo/``
+# is deliberately not: the developer's own Claude Code session keeps firing
+# real hooks while the suite runs, and those atomically replace files there on
+# every MCP call and every reflex/enrich emission
+# (``core/mcp/session_state.py``) -- noise a ``stat`` cannot tell from a leak.
+_REAL_PATH_GUARD = RealPathGuard(
+    write_roots=[
+        _REAL_VAULT,
+        _REAL_HOME / ".claude" / "projects",
+        _REAL_HOME / ".cursor",
+        _REAL_HOME / ".codex",
+    ],
+    stat_paths=[
+        _REAL_VAULT / ".errors.log",
+        _REAL_VAULT / "shared",
+        _REAL_HOME / ".cursor",
+        _REAL_HOME / ".codex",
+    ],
+    projects_dir=_REAL_HOME / ".claude" / "projects",
+    home=_REAL_HOME,
+)
 
 
 @pytest.fixture(autouse=True)
-def _real_vault_guard(request: pytest.FixtureRequest):
-    """Fail any test that changes the real vault, ``~/.claude/projects``,
-    ``~/.cursor``, or ``~/.codex``.
+def _real_vault_guard(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory):
+    """Fail any test that writes to the real vault, ``~/.claude/projects``,
+    ``~/.cursor``, or ``~/.codex`` -- itself or through a process it starts.
 
-    Five ``stat`` calls before and after. Tests marked ``recall`` run against
-    the real vault on purpose and are exempt. So are tests marked
-    ``live_claude`` (#235): they spawn a real ``claude --bg`` child, and a
-    real child writes its transcript under ``~/.claude/projects`` — that write
-    is the behaviour under test, not a leak. They are opt-in and deselected
-    by default for the same reason.
+    Tests marked ``recall`` run against the real vault on purpose and are
+    exempt. So are tests marked ``live_claude`` (#235): they spawn a real
+    ``claude --bg`` child, and a real child writes its transcript under
+    ``~/.claude/projects`` — that write is the behaviour under test, not a
+    leak. They are opt-in and deselected by default for the same reason.
     """
     if request.node.get_closest_marker("recall") or request.node.get_closest_marker("live_claude"):
         yield
         return
-    before = _vault_fingerprint()
-    yield
-    after = _vault_fingerprint()
-    if before != after:
+    _REAL_PATH_GUARD.begin(own_paths=[tmp_path_factory.getbasetemp(), Path.cwd()])
+    try:
+        yield
+    finally:
+        violations = _REAL_PATH_GUARD.end()
+    if violations:
         pytest.fail(
-            f"test touched the real vault, ~/.claude/projects, ~/.cursor, or "
-            f"~/.codex at {_REAL_VAULT} "
-            f"(before={before}, after={after}); build a tmp vault and set "
-            "MNEMO_CONFIG_PATH instead (see tests/unit/test_hook_session_start_backfill.py::_run_hook)"
+            "test touched the real vault, ~/.claude/projects, ~/.cursor, or "
+            f"~/.codex at {_REAL_VAULT}:\n  " + "\n  ".join(violations) + "\n"
+            "build a tmp vault and set MNEMO_CONFIG_PATH instead "
+            "(see tests/unit/test_hook_session_start_backfill.py::_run_hook)"
         )
 
 
