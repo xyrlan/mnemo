@@ -132,6 +132,40 @@ tokens per session. Reproduce with
 [`tools/measure_prevented_repeats.py`](tools/measure_prevented_repeats.py)
 ([#520](https://github.com/xyrlan/mnemo/issues/520)).
 
+**Would a fixed block of rules at session start do better? No, measured.**
+A block holding every rule with a verified correction, sent once at
+`SessionStart`, would have delivered 44 of the 46 corrected-rule units a
+perfect channel could, for 0.056 prevented repeats per session
+[0.030, 0.087]. Perfect delivery would reach only 0.059, still under the bar
+([#598](https://github.com/xyrlan/mnemo/issues/598)). For any relevant rule,
+not only corrected ones, the lift survives distance: alone at the top of the
+session, a median of 12 turns before the prompt, a rule lifts the follow rate
+by +28.3 pp. The block that would carry it does not fit, though: the 15 rules
+the reflex judge picked in the most earlier sessions have a median of 44.8 KB
+as whole bodies, five times the 9,000-byte budget
+([#613](https://github.com/xyrlan/mnemo/issues/613)). In a compact form they
+fit a hook entry of their own (p95 7.7 KB), and among the 14 other rules the
+lift halves:
+
+```
+where the rule sits                       lift       95% CI
+beside the prompt (the reflex)            +31.1 pp   [+19.7, +42.6]   #434
+alone at session start, ~12 turns back    +28.3 pp   [+15.8, +40.8]   #613
+among 14 others, compact                  +14.9 pp   [+2.6, +27.2]    #618
+among 14 others, one line each            +12.3 pp   [+0.0, +24.6]    #618
+```
+
+With the diluted lift, the compact block of 15 reaches 0.095 per session, but
+only through one rule: without it, 0.038, under the bar
+([#618](https://github.com/xyrlan/mnemo/issues/618)). A judge reading what the
+agent *did* in a turn, instead of the prompt, fared no better: four weeks of
+history held one correction of a rule the vault already had, so deciding would
+take about 2.8 years ([#599](https://github.com/xyrlan/mnemo/issues/599)). None
+of the three was built. Reproduce with
+[`tools/measure_settled_block.py`](tools/measure_settled_block.py),
+[`tools/measure_relevance_block.py`](tools/measure_relevance_block.py) and
+[`tools/measure_action_reviewer.py`](tools/measure_action_reviewer.py).
+
 **Do those changes make the answer better? Not measurably.** The test covered
 all 265 sessions and the 138 times mnemo put a rule in context that Claude
 Code's own memory lacked. Each prompt was answered twice, with the rule and
@@ -162,12 +196,16 @@ Net help rose from −0.02 with the preview to **+0.22 with the whole body; the
 paired difference is +0.24 [+0.09, +0.40]** over the 72 units whose rule is
 unchanged since its session, above the +0.10 bar set before measuring. Both
 record pages and advice pages help. The reflex has injected the whole body
-since #542. That reading is on old units, so a fresh check is registered for
-after 14 days of sessions with the change. Reproduce with
+since #542. That reading is on old units, so a fresh check was registered on
+sessions that ran the change. It was read once, early, and stopped for cost
+before any answer was judged
+([#627](https://github.com/xyrlan/mnemo/issues/627)): 91 fresh sessions hold
+100 units, rules both raters call relevant that the reflex delivered whole and
+Claude Code's own memory lacked, and the effect on them is not measured.
+Reproduce with
 [`tools/measure_full_body.py`](tools/measure_full_body.py)
 ([#535](https://github.com/xyrlan/mnemo/issues/535)); the fresh check is
-[`tools/measure_full_body_fresh.py`](tools/measure_full_body_fresh.py), which
-will not send before it is due
+[`tools/measure_full_body_fresh.py`](tools/measure_full_body_fresh.py)
 ([#545](https://github.com/xyrlan/mnemo/issues/545)).
 
 **A session starts with an index of your recent briefings, not the last one
@@ -186,9 +224,16 @@ scored +0.109 [+0.005, +0.218]. That is inconclusive against its own bar of
 was the right one (+0.21 vs +0.22) or not (+0.05 vs −0.06), and it did not
 raise wrong-state replies (5.9% vs 6.8% with none). Reproduce with
 [`tools/measure_briefing_index.py`](tools/measure_briefing_index.py)
-([#548](https://github.com/xyrlan/mnemo/issues/548)). A fresh check on
-sessions that ran the index is registered for after 14 days and 100 sessions,
-and it will reverse the change if the whole briefing wins:
+([#548](https://github.com/xyrlan/mnemo/issues/548)). The fresh check on
+sessions that ran the index was read once, at 89 of the registered 100, and
+stopped for cost with its second judge partway
+([#627](https://github.com/xyrlan/mnemo/issues/627)). Against the whole newest
+briefing, the index scored +0.208 [+0.079, +0.337] with one judge over all 89
+sessions and +0.100 [−0.180, +0.380] with the other over 25, the same
+direction (κ 0.41), with fewer wrong-state replies on both (5.1% vs 10.1% on
+the first). That is not the registered verdict, since the two-judge interval
+over 25 sessions still includes 0, and against no briefing there is no
+verdict; the index stays. Reproduce with
 [`tools/measure_briefing_index_fresh.py`](tools/measure_briefing_index_fresh.py).
 `briefings.sessionStart` picks `index` (the default), `last` or `none`.
 
@@ -221,8 +266,9 @@ quoted as the number. The block's last line is the replay's own: it cannot
 see an answer change, which is what the lift above measures.
 
 Every number on this page comes from a command or a script in
-[`tools/`](tools/) you can run, and the design notes and measurement
-write-ups behind them are in [`design/`](design/).
+[`tools/`](tools/) you can run, each report stamped with the commit and vault
+state it ran on and what it could not see, and the design notes and
+measurement write-ups behind them are in [`design/`](design/).
 
 ## Day one
 
@@ -297,7 +343,9 @@ treats it as one: the `SessionEnd` hook runs `mnemo sessions
 `mnemo learn` does, so the next child to hit the same fork already has your
 answer. A child ends itself: it reports, opens its own pull request when git
 says there is something to publish, and stops — and only a stopped child fires
-`SessionEnd`, which is where its briefing is written. If that PR then goes
+`SessionEnd`, which is where its briefing is written. A report that cannot
+reach its parent, because the parent restarted or was busy, is held, and the
+parent's next prompt shows it, exactly once. If that PR then goes
 red, gets a review or conflicts with its base, mnemo wakes the child to deal
 with it, a bounded number of times, and hands it back to you after that. Dispatch it with
 `--may none` and it publishes nothing; then it is delivered by name —
@@ -358,12 +406,24 @@ you, and then you have six of them: in whatever directory each was started,
 with no view of which one is waiting for a human, and nothing that pushes a
 finished one or merges them in the order their dependencies require.
 
+**[ai-memory](https://github.com/akitaonrails/ai-memory)** — a memory server
+a whole team's agents point at, across 20+ agent tools and machines, injected
+once at session start with no LLM call on its default path: cheaper and
+broader than mnemo. Its published numbers measure retrieval, not whether a
+recalled memory changes the answer. Neither project has shown, end to end,
+that the agent makes fewer mistakes. Seven of mnemo's fixes came out of
+reading it ([#591](https://github.com/xyrlan/mnemo/issues/591)–[#597](https://github.com/xyrlan/mnemo/issues/597)).
+
 **mnemo** — learns from your corrections and keeps a verifiable quote of what
 you actually said. Rules it can't verify stay staged for your review instead of
 entering the vault. Then it injects at most two rules per prompt — usually
 one — chosen by BM25F against the prompt text. No database, no daemon, and no
 per-prompt LLM call unless you turn on the
 [judge](docs/configuration.md#reflexjudge--an-opt-in-judge-as-the-gate).
+Claude Code holds your first prompt until `SessionStart` returns; on a
+10,000-page vault that takes 0.65 s at the median and 1.3 s at p95, and every
+hook declares a timeout set from measured durations
+([#610](https://github.com/xyrlan/mnemo/issues/610)).
 Dispatch gives every child a worktree and a branch, the queue puts the blocked
 ones first, each child inherits the vault, `deliver` and
 `land` finish the job, and what you answer at a blocked child goes back in.
@@ -436,13 +496,22 @@ That last one is the only thing mnemo can send that you did not type into a
 tool call on purpose, so it has its own consent (asked separately at the end
 of `mnemo rerank --setup`, or later with `mnemo rerank --reflex on`)
 and `mnemo rerank --off` turns it off along with everything else.
+Both replace secrets with `[redacted]` before the prompt or query leaves — API
+keys and tokens, JWTs, private keys, passwords in URLs, `*_TOKEN=`-style
+assignments — the judge before its 1,200-character cut, so no piece of a
+secret straddling it gets out, and the same pass runs on what mnemo writes
+into the vault.
+If `<vault>/.mnemo/private-names.tsv` lists names (`name<TAB>alias`), a
+`git push` or `gh` command that would publish one outside a private repo is
+denied, and the message gives the alias.
 No third-party Python dependencies. Every piece of telemetry
 (`.mnemo/*.jsonl`) stays on disk. LLM calls go through the `claude` CLI you
 already have — one per session for the briefing, one per ten new files at
 extraction time — never on the prompt path. Logs are capped at 1 MB;
 briefings accumulate, one file per session. The one other outbound call is
 the plugin downloading its binary from GitHub Releases on first use
-(checksum-verified). Read the [source](src/mnemo).
+(checksum-verified, and released only from a commit whose CI passed). Read the
+[source](src/mnemo).
 
 ## License
 
