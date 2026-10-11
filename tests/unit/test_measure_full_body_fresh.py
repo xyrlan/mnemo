@@ -376,6 +376,40 @@ def test_main_counts_fresh_units_and_refuses_to_send_before_it_is_due(tmp_path, 
     assert loaded[loaded.index("--out") + 1].endswith(tool.PR_LOADED_DIR)
 
 
+def test_until_ends_the_window_for_the_sessions_counted_and_for_520s_raters(tmp_path, capsys, monkeypatch):
+    base = _setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(llm, "resolve", lambda cfg: pytest.fail("2 units are under 60: no arm may be sent"))
+    rated = []
+    monkeypatch.setattr(tool.mpr, "main", lambda argv: rated.append(argv) or 0)
+    now = LIVE + 15 * DAY
+
+    # the fresh session started at 10:00: a bound before it leaves no session, so no unit
+    assert tool.main(base + ["--until", "2026-09-30T09:00:00Z"], now=now) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert (data["until"], data["sessions"], data["rated"], data["units"]) == ("2026-09-30T09:00:00Z", 0, 0, 0)
+    # a bound after it counts it, and #520's raters get that bound instead of a day ago
+    assert tool.main(base + ["--send", "--until", "2026-09-30T11:00:00Z"], now=now) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert (data["sessions"], data["rated"], data["units"]) == (1, 1, 2)
+    assert [argv[:4] for argv in rated] == [["--since", tool.LIVE, "--until", "2026-09-30T11:00:00Z"]] * 2
+    # a bound inside the settle leaves the raters at the settle: that session may still be running
+    del rated[:]
+    assert tool.main(base + ["--send", "--until", "2026-10-13T11:09:00Z"], now=now) == 0
+    capsys.readouterr()
+    assert [argv[:4] for argv in rated] == [["--since", tool.LIVE, "--until", "2026-10-12T23:09:00Z"]] * 2
+    # the report says which window it read; without --until it says nothing of one
+    text_argv = [a for a in base if a != "--json"]
+    assert tool.main(text_argv + ["--until", "2026-09-30T11:00:00Z"], now=now) == 0
+    assert "1 started since then and before 2026-09-30T11:00:00Z (--until), 1 with" in capsys.readouterr().out
+    assert tool.main(text_argv, now=now) == 0
+    assert "--until" not in capsys.readouterr().out
+
+    with pytest.raises(SystemExit):
+        tool.main(base + ["--until", "soon"], now=now)
+    assert "--until: not a date or an ISO timestamp" in capsys.readouterr().err
+
+
 def test_main_with_force_answers_judges_and_prints_both_bars(tmp_path, capsys, monkeypatch):
     base = _setup(tmp_path)
     monkeypatch.chdir(tmp_path)

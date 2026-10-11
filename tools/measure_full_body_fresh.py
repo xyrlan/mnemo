@@ -3,7 +3,7 @@
 Usage:
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py            # dry: fresh emissions, units so far, when it is due
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py --send     # once due: rate, place, answer, judge, report
-        [--force] [--workers W] [--pause S] [--limit N]
+        [--force] [--until T] [--workers W] [--pause S] [--limit N]
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py --json     # the report as data
     PYTHONPATH=src python3 tools/measure_full_body_fresh.py --history [--send]
                                         # #535's cached pairs re-judged on the grounded question
@@ -113,6 +113,14 @@ session's transcript, from which what the session did next is read.
 A session that started under :data:`SETTLE_HOURS` ago may still be running;
 #520 freezes a session's prompts the first time it reads it, so those
 sessions wait for a later run.
+
+``--until T`` ends the window at ``T`` instead: only sessions started before
+it are counted, rated and read. #627 read this check once, on the units that
+existed at its send on 2026-10-08, and that send stopped after the raters'
+pass, before any unit was judged. ``--until`` with that send's own bound
+(``--until`` in ``prevented-repeats/report.json``'s provenance) finishes the
+read on those sessions, without rating the ones started since. A bound inside
+the settle leaves the raters at the settle.
 
 Only ``--send`` calls a model. Every answer is cached under ``--out``
 (default ``<vault>/.mnemo/full-body-fresh``) as it arrives, so a rerun
@@ -651,9 +659,10 @@ def report_lines(data: Dict[str, Any]) -> List[str]:
         "full-body reflex live since %s (%.1f days)" % (data["live"], d["days_in"]),
         "reflex-log rows in the full format since then: %d on disk, %d kept in this tool's archive; "
         "%d from human sessions" % (data["rows"]["log"], data["rows"]["archive"], data["rows"]["human"]),
-        "fresh human sessions: %d started since then, %d with a full-format reflex block; "
+        "fresh human sessions: %d started since then%s, %d with a full-format reflex block; "
         "%d (session, rule) emissions, %d whole, %d cut"
-        % (data["sessions"], data["sessions_with_full"], data["emissions"]["n"],
+        % (data["sessions"], " and before %s (--until)" % data["until"] if data.get("until") else "",
+           data["sessions_with_full"], data["emissions"]["n"],
            data["emissions"]["whole"], data["emissions"]["cut"]),
     ]
     if data.get("rated") is None:
@@ -884,6 +893,9 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     ap.add_argument("--rater", action="append", default=[])
     ap.add_argument("--send", action="store_true")
     ap.add_argument("--force", action="store_true", help="send before the due condition holds")
+    ap.add_argument("--until", default="",
+                    help="only sessions started before this date or ISO timestamp "
+                         "(default: all of them, rated up to %d h ago)" % SETTLE_HOURS)
     ap.add_argument("--workers", type=int, default=bv.WORKERS)
     ap.add_argument("--pause", type=float, default=bv.PAUSE_SECONDS)
     ap.add_argument("--limit", type=int, default=None, help="with --send: at most N calls per step")
@@ -893,6 +905,8 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     args = ap.parse_args(argv)
     raters = args.rater or list(bv.RATERS)
     now = time.time() if now is None else now
+    if args.until and mrc.epoch(args.until) is None:
+        ap.error("--until: not a date or an ISO timestamp: %r" % args.until)
 
     cfg = config.load_config()
     vault = Path(args.vault).expanduser() if args.vault else paths.vault_root(cfg)
@@ -909,7 +923,7 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     write_rows(out / ROWS_NAME, archive)
 
     # what the full format delivered so far, no model call
-    sessions = mpr.collect_sessions(Path(args.projects), vault, LIVE)
+    sessions = mpr.collect_sessions(Path(args.projects), vault, LIVE, args.until)
     events: Dict[str, List[dict]] = {}
 
     def load(sid: str) -> List[dict]:
@@ -937,7 +951,10 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
               % (state["date"], (state["date_at"] - now) / 86400), file=sys.stderr)
     if send_rate:
         pr_out.mkdir(parents=True, exist_ok=True)
-        rate_argv = ["--since", LIVE, "--until", _iso(now - SETTLE_HOURS * 3600), "--projects", args.projects,
+        # --until ends the raters' window too, unless it falls inside the settle
+        settled = now - SETTLE_HOURS * 3600
+        rate_until = args.until if args.until and (mrc.epoch(args.until) or 0.0) <= settled else _iso(settled)
+        rate_argv = ["--since", LIVE, "--until", rate_until, "--projects", args.projects,
                      "--claude-home", args.claude_home, "--vault", str(vault),
                      "--send", "--workers", str(args.workers), "--pause", str(args.pause)] \
             + (["--limit", str(args.limit)] if args.limit else []) + [x for r in raters for x in ("--rater", r)]
@@ -954,7 +971,8 @@ def main(argv: Optional[List[str]] = None, now: Optional[float] = None) -> int:
     # registered in #543 (notes) and #565's (loaded)
     source = mrc._read(pr_out / mpr.UNITS_NAME, None)
     loaded_source = mrc._read(pr_loaded / mpr.UNITS_NAME, None)
-    data: Dict[str, Any] = {"live": LIVE, "sessions": len(sessions), "sessions_with_full": with_full,
+    data: Dict[str, Any] = {"live": LIVE, "until": args.until or None,
+                            "sessions": len(sessions), "sessions_with_full": with_full,
                             "emissions": emissions, "native_primary": NATIVE_PRIMARY,
                             "rows": {"log": len(live_rows), "archive": len(archive), "human": human_rows}}
     units: List[Dict[str, Any]] = []
