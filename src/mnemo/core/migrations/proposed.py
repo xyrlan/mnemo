@@ -55,6 +55,11 @@ def relocate_proposed(vault_root: Path, *, dry_run: bool = False) -> ProposedRep
     than leaving another misfiled for one more run.
     """
     rep = ProposedReport()
+    # #643: a sync satellite moves no page; the primary's run reaches it.
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(Path(vault_root)):
+        dry_run = True
     shared = Path(vault_root) / "shared"
     if not shared.is_dir():
         return rep

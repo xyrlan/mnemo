@@ -122,9 +122,13 @@ def _render_briefing(
     corrections: int,
     body: str,
     source_sha256: str = "",
+    machine: str = "",
 ) -> str:
+    """``machine`` is the sync machine id that wrote it (#643), stamped only
+    once the vault syncs: with sync off a briefing is what it always was."""
     header = f"# Briefing — {agent} — {session_id}\n"
     sha_line = f"transcript_sha256: {source_sha256}\n" if source_sha256 else ""
+    machine_line = f"machine: {machine}\n" if machine else ""
     return (
         "---\n"
         "type: briefing\n"
@@ -134,6 +138,7 @@ def _render_briefing(
         f"duration_minutes: {duration_minutes}\n"
         f"corrections: {corrections}\n"
         f"{sha_line}"
+        f"{machine_line}"
         "---\n\n"
         f"{header}\n"
         f"{body.strip()}\n"
@@ -266,6 +271,8 @@ def generate_session_briefing(
     else:
         date_str = datetime.now().date().isoformat()
 
+    from mnemo.core.sync import roles as sync_roles
+
     content = _render_briefing(
         agent=agent,
         session_id=session_id,
@@ -274,6 +281,7 @@ def generate_session_briefing(
         corrections=len(kept),
         body=body,
         source_sha256=source_sha,
+        machine=sync_roles.briefing_machine(cfg, vault_root),
     )
     _atomic_write(out_path, content)
     if record_corrections and kept:
@@ -424,6 +432,12 @@ def prune(
     cutoff = now - retention_days * 86400
     rep = PruneReport()
     vault_root = Path(vault_root)
+    # #643: a sync satellite deletes no briefing; the report is still
+    # computed, as for a dry run, and the primary's prune reaches it.
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault_root, cfg):
+        dry_run = True
     bots = vault_root / "bots"
     if not bots.is_dir():
         return rep

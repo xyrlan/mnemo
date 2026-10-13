@@ -30,6 +30,7 @@ from mnemo.core import locks
 from mnemo.core.atomic import atomic_write_bytes
 from mnemo.core.sync import git as gitmod
 from mnemo.core.sync import health
+from mnemo.core.sync import roles
 from mnemo.core.sync import state as st
 from mnemo.core.sync import tracked
 from mnemo.core.sync.git import Git, GitError, GitMissing, GitTimeout
@@ -107,6 +108,9 @@ class _Tips:
     head_tree: Optional[str] = None
     theirs_tree: Optional[str] = None
     format_blob: Optional[str] = None
+    #: The role the hub's own primary record gives this machine, read once
+    #: per command by :func:`_role` (#643). ``None`` until read.
+    role: Optional[str] = None
 
 
 @dataclass
@@ -117,6 +121,14 @@ class _Pulled:
     conflicts: int = 0
     losers: int = 0
     shared_changed: bool = False
+    #: Briefings the hub brought that this machine had not seen (#643): on
+    #: the primary, what schedules an extraction.
+    briefings: int = 0
+    #: Changes the primary refused because a satellite may not make them.
+    refused: int = 0
+    #: Tracked files a satellite had deleted or changed where it may not,
+    #: written back from the hub's last known version.
+    restored: int = 0
 
 
 # --- small pieces ----------------------------------------------------------
@@ -305,6 +317,73 @@ def _trailers(message: str, prefix: str) -> List[str]:
     return [ln[len(prefix):].strip() for ln in message.splitlines() if ln.startswith(prefix)]
 
 
+def _role(git: Git, machine: str, tips: _Tips) -> str:
+    """This machine's role by the *hub's* primary record (#643), falling back
+    to the local one only while the hub holds none (``init``, an empty hub).
+
+    The local record is a file on disk, and a satellite that rewrote it
+    would otherwise be the primary in its own eyes for one push: publishing
+    everything, refusing nothing. The hub's copy is what every machine
+    agreed on, and the primary refuses any change to it from a satellite.
+    """
+    if tips.role is None:
+        recorded = None
+        if tips.theirs_tree is not None:
+            found = _blobs_in(git, tips.theirs_tree, [tracked.PRIMARY_FILE])
+            sha = found.get(tracked.PRIMARY_FILE, (None, None))[0]
+            if sha:
+                try:
+                    data = json.loads(git.blobs([sha]).get(sha, b"").decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    data = None
+                value = data.get("machine") if isinstance(data, dict) else None
+                recorded = value if isinstance(value, str) and value else None
+        if recorded is None:
+            tips.role = st.role_of(git.work_tree, machine)
+        else:
+            tips.role = st.PRIMARY if recorded == machine else st.SATELLITE
+    return tips.role
+
+
+def _blobs_in(git: Git, tree: Optional[str], rels: List[str]) -> Dict[str, Tuple[str, str]]:
+    """``rel -> (blob, mode)`` for every ``rel`` that ``tree`` holds, in one call."""
+    if tree is None or not rels:
+        return {}
+    names = [f"{tree}:{rel}" for rel in rels]
+    raw = git.run("cat-file", "--batch-check", stdin=("\n".join(names) + "\n").encode(
+        "utf-8", errors="surrogateescape")).stdout
+    out: Dict[str, Tuple[str, str]] = {}
+    lines = raw.decode("utf-8", errors="surrogateescape").splitlines()
+    for rel, line in zip(rels, lines):
+        parts = line.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            out[rel] = (parts[0], "100644")
+    return out
+
+
+def _restore_satellite(git: Git, machine: str, tips: _Tips) -> int:
+    """On a satellite, write back every tracked file this machine deleted or
+    changed where a satellite may not write (#643, item 10): the hub's last
+    known version, from the commit the branch sits on, so nothing a satellite
+    does by accident can be taken away from the primary. Additions in those
+    places stay on disk and are simply never published. Returns how many."""
+    if tips.head is None or _role(git, machine, tips) != st.SATELLITE:
+        return 0
+    ours = _changes(git, tips.head_tree, _stage(git))
+    # Only tracked paths: a path the hub carries outside the set is dropped
+    # from the staged tree and so reads as a deletion, but is never written.
+    wanted = [rel for rel, (sha, _mode) in ours.items() if tracked.is_tracked(rel)
+              and (sha is None or roles.primary_refuses(rel, deleted=False))]
+    had = _blobs_in(git, tips.head_tree, wanted)
+    blobs = git.blobs([sha for sha, _mode in had.values()])
+    restored = 0
+    for rel, (sha, _mode) in had.items():
+        if sha in blobs:
+            _write_file(_fs(git.work_tree, rel), blobs[sha])
+            restored += 1
+    return restored
+
+
 def _rebuild_indexes(vault: Path) -> None:
     """A pull wrote ``shared/``: rebuild what is derived from it, as every
     other writer of ``shared/`` does. Best-effort — the pages are already in
@@ -354,7 +433,7 @@ def _integrate(git: Git, machine: str, state: Dict[str, Any], tips: _Tips) -> _P
 
     ours = _changes(git, base_tree, _stage(git))
     hubs = _changes(git, base_tree, tips.theirs_tree)
-    primary = st.role_of(vault, machine) == st.PRIMARY
+    primary = _role(git, machine, tips) == st.PRIMARY
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
     take: Dict[str, Optional[str]] = {}
@@ -364,6 +443,13 @@ def _integrate(git: Git, machine: str, state: Dict[str, Any], tips: _Tips) -> _P
         # The hub cannot widen the set: a path this mnemo would never commit
         # is one it never writes either, whoever pushed it.
         if not tracked.is_tracked(rel) or mode in (_SYMLINK, _GITLINK):
+            continue
+        # Everything in head..theirs on the primary came from some other
+        # machine, and a satellite may not take anything away (#643): a
+        # deletion, or a change outside briefings and live pages, is left
+        # where it is, and the primary's next push puts the hub right.
+        if primary and head is not None and roles.primary_refuses(rel, deleted=sha is None):
+            done.refused += 1
             continue
         mine = ours.get(rel)
         if mine is None:
@@ -428,6 +514,7 @@ def _integrate(git: Git, machine: str, state: Dict[str, Any], tips: _Tips) -> _P
     done.files = len(take)
     done.conflicts = len(kept) + len(lost) + len(overridden)
     done.shared_changed = any(rel.startswith("shared/") for rel in take)
+    done.briefings = sum(1 for rel, sha in take.items() if sha and roles.is_briefing_path(rel))
     state["conflictsResolved"] = int(state.get("conflictsResolved") or 0) + done.conflicts
     state["losersKept"] = int(state.get("losersKept") or 0) + done.losers
     if done.shared_changed:
@@ -476,6 +563,37 @@ def _refusal(found: List[Dict[str, str]]) -> str:
 # --- one push, already holding the lock ------------------------------------
 
 
+def _withhold(git: Git, machine: str, tree: str, tips: _Tips,
+              publishing: Dict[str, Tuple[Optional[str], str]]) -> Tuple[str, int]:
+    """On a satellite, take out of the index what a satellite may not publish
+    (#643, item 10) and return the new tree and how many paths were held
+    back. The files stay on disk; the index gets the hub's version of each,
+    or loses the entry when the hub has none."""
+    if _role(git, machine, tips) != st.SATELLITE:
+        return tree, 0
+    blobs = git.blobs([sha for rel, (sha, _m) in publishing.items()
+                       if sha and roles.is_briefing_path(rel)])
+    held = [rel for rel, (sha, _mode) in publishing.items() if tracked.is_tracked(rel)
+            and not roles.satellite_may_publish(
+                rel, blobs.get(sha) if sha and roles.is_briefing_path(rel) else
+                (b"" if sha else None), machine)]
+    if not held:
+        return tree, 0
+    theirs = _blobs_in(git, tips.theirs_tree, held)
+    if theirs:
+        git.run("update-index", "-z", "--index-info", stdin=b"".join(
+            f"{mode} {sha}\t{rel}".encode("utf-8", errors="surrogateescape") + b"\0"
+            for rel, (sha, mode) in theirs.items()))
+    gone = [rel for rel in held if rel not in theirs]
+    if gone:
+        git.run("update-index", "--force-remove", "-z", "--stdin",
+                stdin=b"".join(rel.encode("utf-8", errors="surrogateescape") + b"\0"
+                               for rel in gone))
+    for rel in held:
+        publishing.pop(rel, None)
+    return git.out("write-tree"), len(held)
+
+
 def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[Path],
           timeout: Optional[float]) -> Tuple[str, str, Dict[str, Any]]:
     """``(outcome, message, detail)``; the detail is the log row's ``files``,
@@ -483,22 +601,33 @@ def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[P
     ``commit`` the hub took."""
     vault = git.work_tree
     said = ""
+    state["_briefings"] = 0  # what this push's own pulls brought; read by push()
     conflicts = 0
     for _attempt in range(PUSH_ATTEMPTS):
         _fetch(git, timeout)
         tips = _tips(git)
         _check_format(git, state, tips)
-        conflicts += _integrate(git, machine, state, tips).conflicts
-        if st.role_of(vault, machine) == st.PRIMARY:
+        restored = _restore_satellite(git, machine, tips)
+        pulled = _integrate(git, machine, state, tips)
+        state["_briefings"] += pulled.briefings
+        conflicts += pulled.conflicts
+        if _role(git, machine, tips) == st.PRIMARY:
             st.write_format(vault)
             st.write_seed(vault, config_path)
         tree = _stage(git)
         head, head_tree = tips.head, tips.head_tree
+        publishing = _changes(git, tips.theirs_tree, tree)
+        tree, withheld = _withhold(git, machine, tree, tips, publishing)
+        state["withheld"] = withheld
+        state["restored"] = int(state.get("restored") or 0) + restored
         if head is not None and tree == head_tree and tips.theirs == head:
             state["refused"] = []
-            return "nothing", "nothing to push", {"files": 0, "conflicts": conflicts}
+            return ("nothing",
+                    ("nothing to push" if not withheld else
+                     f"nothing to push ({withheld} change"
+                     f"{'s' if withheld != 1 else ''} a satellite may not publish)"),
+                    {"files": 0, "conflicts": conflicts})
 
-        publishing = _changes(git, tips.theirs_tree, tree)
         found = _scan(git, publishing)
         if found:
             state["refused"] = found
@@ -544,6 +673,8 @@ def _finish(vault: Path, machine: str, op: str, timer: st.Timer, state: Optional
     """Record one run: the state it leaves, and its row in the log."""
     now = st.now_iso()
     if state is not None:
+        state["machineId"] = machine
+        state.pop("_briefings", None)  # a push's scratch counter, never saved
         if outcome in ("ok", "nothing"):
             if op in ("pull", "join", "init", "push"):
                 state["lastPull"] = now
@@ -612,6 +743,8 @@ def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
             tips = _tips(git)
             _check_format(git, state, tips)
             done = _integrate(git, machine, state, tips)
+            done.restored = _restore_satellite(git, machine, tips)
+            state["restored"] = int(state.get("restored") or 0) + done.restored
             message = (f"pulled {done.files} file{'s' if done.files != 1 else ''}"
                        if done.files else "already up to date")
             if done.conflicts:
@@ -619,7 +752,16 @@ def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
                             f"resolved for the primary, {done.losers} losing "
                             f"version{'s' if done.losers != 1 else ''} kept under "
                             f"{tracked.LOSERS_DIR}/")
-            return "ok", message, {"files": done.files, "conflicts": done.conflicts}
+            if done.refused:
+                message += (f"; {done.refused} change{'s' if done.refused != 1 else ''} "
+                            "a satellite may not make left out")
+            if done.restored:
+                message += (f"; {done.restored} file{'s' if done.restored != 1 else ''} "
+                            "a satellite may not change restored from the hub")
+            detail = {"files": done.files, "conflicts": done.conflicts,
+                      "briefings": done.briefings, "refused": done.refused,
+                      "restored": done.restored, "sharedChanged": done.shared_changed}
+            return "ok", message, detail
 
         return _guarded(vault, machine, "pull", timer, state, body,
                         {"trigger": trigger} if trigger else None)
@@ -646,7 +788,13 @@ def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
 
         def body():
             _refresh_info(git)
-            return _push(git, machine, state, config_path, timeout)
+            try:
+                outcome, message, detail = _push(git, machine, state, config_path, timeout)
+            finally:
+                brought = int(state.pop("_briefings", 0) or 0)
+            # `trigger` reaches the row through `_guarded`'s extra, on every outcome.
+            detail = dict(detail, withheld=int(state.get("withheld") or 0), briefings=brought)
+            return outcome, message, detail
 
         return _guarded(vault, machine, "push", timer, state, body,
                         {"trigger": trigger} if trigger else None)

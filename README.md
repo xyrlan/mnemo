@@ -509,7 +509,8 @@ secret straddling it gets out, and the same pass runs on what mnemo writes
 into the vault.
 `mnemo sync` is not a switch but a command, and nothing runs it for you:
 until you type `mnemo sync init` or `mnemo sync join`, no part of the vault
-goes anywhere. Once you have, `push` sends your rule pages, briefings,
+goes anywhere. Once you have, the hooks pull before a session starts and
+push what a session wrote, and `push` sends your rule pages, briefings,
 mirrored memory, extraction state and `HOME.md` to the one git remote you
 named, through your own `git` — never logs, indexes, telemetry or the config
 — and refuses while any file it would publish holds a secret shape

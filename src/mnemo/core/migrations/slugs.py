@@ -265,6 +265,11 @@ def stamp_slugs(vault_root: Path, *, dry_run: bool = False) -> SlugReport:
     for cluster pages, verbatim for project pages — which is what every page
     was written under in the first place."""
     rep = SlugReport()
+    # #643: a sync satellite rewrites no page; the primary's stamp reaches it.
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(Path(vault_root)):
+        dry_run = True
     shared = Path(vault_root) / "shared"
     touched: dict[str, Path] = {}
     for md in iter_shared_pages(Path(vault_root), include_inbox=True):

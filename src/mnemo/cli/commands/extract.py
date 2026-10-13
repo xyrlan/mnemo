@@ -100,6 +100,11 @@ def _run_extract_background(cfg: dict, args: argparse.Namespace) -> int:
                     force=bool(args.force),
                     background=True,
                 )
+            except extract_mod.SatelliteRefused as exc:
+                # #643: a satellite's SessionEnd never schedules this; a row
+                # here means something else asked.
+                err_mod.log_error(vault_root, "extract.bg.satellite", exc)
+                return 2
             except extract_mod.ExtractionIOError as exc:
                 # Lock contention: do NOT write last-auto-run.json; log only
                 err_mod.log_error(vault_root, "extract.bg.lock", exc)

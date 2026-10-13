@@ -685,6 +685,10 @@ def auto_retire(vault_root: Path, records: Iterable[FrictionRecord], *,
     """
     if not auto_retire_enabled(cfg):
         return RetireRun(skipped="friction.autoRetire is off")
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(Path(vault_root), cfg):
+        return RetireRun(skipped="this machine is a sync satellite; the primary retires")
     try:
         return apply_retirements(Path(vault_root), _plan(Path(vault_root), records))
     except Exception as exc:  # never raises into extraction

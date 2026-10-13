@@ -714,6 +714,8 @@ def expire_held(
 ) -> list[DecisionResult]:
     """Archive every expiring page staged *days* or more ago. Never raises.
 
+    Nothing on a sync satellite (#643): ``shared/_inbox`` is the primary's.
+
     Counted from when the page first entered the inbox (:func:`first_staged`),
     not from its last write (#518). This used to be the file's mtime, on the
     reasoning that a rewrite is new evidence the judge has just looked at. It
@@ -733,6 +735,10 @@ def expire_held(
     which rule archived it.
     """
     if days <= 0:
+        return []
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault_root):
         return []
     try:
         ref = now or datetime.now()

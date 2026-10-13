@@ -208,8 +208,17 @@ def mirror_all(cfg: dict[str, Any], projects_root: Optional[Path] = None) -> Rep
     """Mirror every project's memory under *projects_root* (default
     ``~/.claude/projects``) into the vault. Returns what the run did; an
     empty :class:`Report` when there was nothing to do or another run holds
-    the lock."""
+    the lock.
+
+    Not on a sync satellite (#643): ``bots/*/memory`` is the primary's to
+    write, and two machines mirroring by file name would overwrite each
+    other's ``MEMORY.md`` every session.
+    """
+    from mnemo.core.sync import roles
+
     vault = paths.vault_root(cfg)
+    if roles.is_satellite(vault, cfg):
+        return Report()
     paths.bots_dir(cfg).mkdir(parents=True, exist_ok=True)
     if projects_root is None:
         projects_root = _claude_projects_root()

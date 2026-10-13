@@ -567,8 +567,14 @@ def main() -> int:
             # since this is only the cache-miss path for the same session. The
             # day's log is written under this name.
             agent_name = agent.resolve_canonical_agent(cwd).name
+        # #643: a satellite writes only its own briefings. The mirror,
+        # extraction and the autopilot's proposer stand down there; the
+        # briefing below still runs.
+        from mnemo.core.sync import roles as sync_roles
+        satellite = sync_roles.is_satellite(vault, cfg)
         try:
-            mirror.mirror_all(cfg)
+            if not satellite:
+                mirror.mirror_all(cfg)
         except Exception as e:
             errors.log_error(vault, "session_end.mirror", e)
         if cfg.get("capture", {}).get("sessionStartEnd", True):
@@ -605,7 +611,8 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_end.follow_pr", e)
         try:
-            _maybe_schedule_extraction(cfg, vault, agent_name)
+            if not satellite:
+                _maybe_schedule_extraction(cfg, vault, agent_name)
         except Exception as e:
             errors.log_error(vault, "session_end.schedule_wrap", e)
         try:
@@ -625,9 +632,12 @@ def main() -> int:
             errors.log_error(vault, "session_end.unblocks_wrap", e)
         try:
             cwd = str(payload.get("cwd") or os.getcwd())
-            _maybe_schedule_propose(
-                cfg, vault, agent_name, session_id=sid, cwd=cwd,
-            )
+            if satellite:
+                session.mark_analyzed(sid)
+            else:
+                _maybe_schedule_propose(
+                    cfg, vault, agent_name, session_id=sid, cwd=cwd,
+                )
         except Exception as e:
             errors.log_error(vault, "session_end.propose_wrap", e)
     except Exception as e:

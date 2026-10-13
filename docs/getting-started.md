@@ -488,8 +488,10 @@ command that still exists.
 ## Syncing between your own machines
 
 One vault, used from two machines of yours, through a private git remote you
-already have. It is off until you type it, and no hook calls it: a vault that
-never ran `mnemo sync init` or `mnemo sync join` behaves exactly as it did.
+already have. It is off until you type it: a vault that never ran
+`mnemo sync init` or `mnemo sync join` behaves exactly as it did, and no hook
+calls it. Once it is on, the hooks pull before a session starts and push
+what a session wrote — [what they do](#what-the-hooks-do-once-sync-is-on).
 
 ```bash
 # on the machine that owns the vault
@@ -585,8 +587,70 @@ again. A hub written by a newer mnemo, in a format this one does not know, is
 neither pulled nor pushed until you upgrade. A second `mnemo sync` while one
 is running returns "busy" and touches nothing.
 
-Every pull and push leaves one row — time, outcome, duration, what ran it —
-in `.mnemo/sync-log.jsonl`, which stays on the machine.
+Every pull and push leaves one row — time, outcome, duration, and what ran
+it (`cli`, `session_start`, `session_end`) — in `.mnemo/sync-log.jsonl`,
+which stays on the machine.
+
+### What the hooks do once sync is on
+
+Nothing, while sync is off. Once a vault has run `init` or `join`:
+
+- **SessionStart pulls before it builds what it injects.** It gives the pull
+  at most 3 seconds of wall time and runs one at most once per 5 minutes per
+  vault; past the bound, offline, or inside those 5 minutes, it injects from
+  the vault as it is. A pull that did not finish in time completes on its
+  own, in its own process, and the next session start sees it. A resume
+  storm pulls once, and a dispatched child never pulls: its parent did.
+- **A pull that changed `shared/` rebuilds the reflex index**, in that same
+  process rather than in the hook. The first prompts of a session that
+  arrived during a slow pull may be answered from the previous index; the
+  pages themselves are already in place.
+- **On the primary, a pull that brought briefings it had not seen schedules
+  an extraction**, detached, behind the same debounce and lock SessionEnd
+  uses — so a week of sessions on the satellite becomes rules the next time
+  the primary starts a session.
+- **The workers push when they finish writing**: the detached briefing after
+  it writes the briefing, the extraction after it writes pages and state.
+  SessionStart's deferred work pushes whatever an earlier run left unpushed —
+  a briefing written while the machine was offline goes at the next start.
+- **A sync that fails never fails a hook** and never holds one past the
+  bound. An unreachable hub is an outcome, in `mnemo sync status` and the
+  sync log; only an exception is logged to `.errors.log`, under the hook's
+  own name (`session_start.sync_pull`, `session_start.sync_push`,
+  `briefing.sync_push`, `extract.sync_push`), where `doctor` groups it with
+  the hook's other errors.
+- **`MNEMO_HOOKS_OFF` stops sync from the hooks** as it stops everything
+  else they do.
+
+### A satellite writes only its own briefings
+
+The rule that keeps two machines from ever needing a merge is one writer per
+path. The **primary** does everything it does today. A **satellite** reads the
+whole vault and adds only its own sessions' briefings — one file per session,
+so two machines never write the same one — and the primary extracts from
+them. On a satellite, nothing automatic adds, changes or deletes any other
+tracked file: not extraction (`mnemo extract` there says so and does
+nothing), not the memory mirror, not the weekly briefing prune, not inbox
+apply and expiry, not auto-retire, not a vault migration, not the install
+backfill, not the `HOME.md` dashboard, and not the autopilot's hook-driven
+jobs. A command you type on a satellite to change a rule — `mnemo fix`,
+`mnemo inbox --promote`, `mnemo disable-rule` — still works, and a live page
+it changes under `shared/` travels.
+
+Every briefing written once sync is on says where it was written: its
+frontmatter carries `machine: <id>`, the id `mnemo sync status` shows.
+
+**A satellite cannot take anything away from the primary.** Its push carries
+additions and changes only, and only its own briefings and live pages under
+`shared/`: never a deletion, and never `.mnemo/extraction-state.json`,
+`HOME.md`, `bots/<repo>/memory/`, `shared/_inbox/` or sync's own records. A
+tracked file that went missing on a satellite, or was changed in one of
+those places, comes back from the hub at its next pull (`status` counts it
+as restored). The primary refuses the same things when they arrive in a
+commit it did not make — a deletion, a change outside briefings and live
+pages — so an older or damaged satellite cannot do it either; its next push
+puts the hub right. The role itself is read from the hub's record, not the
+local file, so a satellite cannot promote itself by editing one.
 
 ### How far this machine is from the hub
 

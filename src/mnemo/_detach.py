@@ -73,6 +73,31 @@ def spawn(argv: List[str], *, cwd: Optional[str] = None) -> int:
     return _orphaned(start)
 
 
+def spawn_waitable(argv: List[str], *, cwd: Optional[str] = None):
+    """Start *argv* detached like :func:`spawn`, but keep it as a child so the
+    caller can wait on it for a bounded time (#643).
+
+    Stdio goes to ``DEVNULL`` and the flags are :func:`detach_kwargs`, so the
+    worker holds no pipe of the hook's open and gets no signal from its
+    terminal. It is *not* orphaned: ``Popen.wait(timeout)`` is how the
+    SessionStart hook gives a pull three seconds before injecting from the
+    vault as it is. A worker still running when the hook returns is adopted
+    by init and finishes on its own.
+    """
+    import subprocess
+
+    kwargs: Dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    kwargs.update(detach_kwargs())
+    if cwd is not None:
+        kwargs["cwd"] = cwd
+    return subprocess.Popen(argv, **kwargs)
+
+
 def _orphaned(start: Callable[[], int]) -> int:
     """Run *start* in a forked intermediate that exits as soon as it returns.
 
