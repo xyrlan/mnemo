@@ -223,7 +223,9 @@ def test_one_run_brings_an_unredacted_vault_in_line(tmp_home: Path, tmp_vault: P
     assert _memory_scan(tmp_vault) != []
     mirror.mirror_all({"vaultRoot": str(tmp_vault)})
     assert _memory_scan(tmp_vault) == []
-    assert (target / "clean.md").read_bytes() == _CLEAN.encode("utf-8")
+    # Against the source's own bytes, not the fixture string: the helper wrote
+    # it with `write_text`, which turns "\n" into "\r\n" on Windows.
+    assert (target / "clean.md").read_bytes() == (src_dir / "clean.md").read_bytes()
 
 
 def test_a_second_run_over_unchanged_sources_rewrites_nothing(
