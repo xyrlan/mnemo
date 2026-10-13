@@ -97,9 +97,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
         elif action == "join":
             result = sync.join(vault, args.remote, machine=machine, config_path=config_path)
         elif action == "pull":
-            result = sync.pull(vault, machine=machine)
+            result = sync.pull(vault, machine=machine, trigger="cli")
         else:
-            result = sync.push(vault, machine=machine, config_path=config_path)
+            result = sync.push(vault, machine=machine, config_path=config_path, trigger="cli")
     except sync.GitMissing:
         print("mnemo sync: git is not installed or not on PATH; sync runs this machine's own git")
         return 1

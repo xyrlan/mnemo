@@ -584,8 +584,69 @@ again. A hub written by a newer mnemo, in a format this one does not know, is
 neither pulled nor pushed until you upgrade. A second `mnemo sync` while one
 is running returns "busy" and touches nothing.
 
-Every pull and push leaves one row — time, outcome, duration — in
-`.mnemo/sync-log.jsonl`, which stays on the machine.
+Every pull and push leaves one row — time, outcome, duration, what ran it —
+in `.mnemo/sync-log.jsonl`, which stays on the machine.
+
+### How far this machine is from the hub
+
+Sync is allowed to fall behind — a machine sleeps before its briefing worker
+finishes, a pull runs out of its time, a push is refused over a secret shape
+— but never silently. With sync on, `mnemo doctor` prints one row for each
+thing that can be wrong, and nothing at all with sync off:
+
+- whether the hub answers, asked once with a 3 s bound;
+- this machine's role and id, and which machine is the primary;
+- commits ahead and behind as of the last fetch, and how many tracked files
+  are waiting to be pushed;
+- when the last successful pull and push were, a warning when either is older
+  than a day, and the last error if one is standing;
+- pushes the secret gate refused, with the file and the kind of shape;
+- conflicts resolved in the primary's favour, and the directory the losing
+  versions were kept under;
+- a hub written in a format this mnemo does not know.
+
+The statusline shows one short segment in the same situations and nothing in
+step: `sync 3↑` while three tracked files wait to be pushed, `sync 2 d
+behind` when the last pull is older than a day, both when both. The count of
+waiting files is kept for two minutes between renders and dropped by every
+pull and push, so a vault just pushed reads as in step on the next render.
+
+### The four bars
+
+#641 set four numbers for sync to be judged by, read after 14 days on two
+machines. `tools/measure_sync.py` prints each with a verdict:
+
+```bash
+PYTHONPATH=src python3 tools/measure_sync.py --cwd ~/github/app          # text
+PYTHONPATH=src python3 tools/measure_sync.py --cwd ~/github/app --json   # for a program
+```
+
+1. **Parity identical.** The tool digests what SessionStart would inject for
+   the repository — the topic menu and the briefing block, built by the hook's
+   own code with its telemetry off — after replacing this machine's paths, and
+   prints the digest next to the commit the work tree stands on. Run it on
+   both machines at the same commit (`mnemo sync pull` on each, `pending
+   files 0`), then pass one machine's digest to the other as
+   `--other-digest`: the bar passes when they are the same. A different digest
+   at the same commit means one machine injects something the other does not.
+2. **Push lag p95 ≤ 5 min while the machine stays awake.** For every briefing
+   this machine pushed: from the file's last write to the commit that carried
+   it. The report shows the spread over all of them and over the ones a worker
+   pushed; the ones whose push ran at a later SessionStart are the "waited"
+   count — the machine slept, or the session ended before its worker pushed —
+   and the bar is judged without them. A push row with no trigger recorded is
+   counted as unknown and judged as awake.
+3. **SessionStart with sync on at p50 ≤ 1.5 s and p95 ≤ 5 s.** Read from
+   `tools/measure_hook_durations.py` over the transcripts since the first row
+   of this machine's sync log — the same attachments and the same percentiles
+   that tool reports.
+4. **0 conflicts left unresolved.** Counted on disk, not assumed: unmerged
+   index entries and tracked files holding conflict markers. Resolved
+   conflicts are listed beside it, with the losing versions' directory.
+
+Briefings another machine wrote are not in this machine's push lag: their
+write time is only known where they were written, so run the tool on each
+machine. Every report ends with the provenance #595 requires.
 
 ## Observing and debugging
 

@@ -212,6 +212,8 @@ def _build_injection_payload(
     source: str | None = None,
     blocks: Sequence[str] = (),
     briefing_mode: str = "last",
+    record: bool = True,
+    path_label: str | None = None,
 ) -> str:
     """Return a structured ``mnemo://v1`` envelope, or '' when there's nothing to inject.
 
@@ -234,6 +236,13 @@ def _build_injection_payload(
     offer), already built, in order. They go after the topic menu and before
     the briefing, and the briefing alone is trimmed so the whole envelope
     stays within :data:`ENVELOPE_MAX_BYTES` (#533).
+
+    ``record=False`` builds the same text without the briefing-log rows a
+    real SessionStart leaves: ``tools/measure_sync.py`` digests what would be
+    injected (#644), and a measurement is not a read. ``path_label`` stands in
+    for the vault in the one line that names a file — the trimmed briefing's
+    — so the cut, which leaves room for that line, falls on the same byte on
+    two machines whose vaults sit at paths of different lengths.
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core import rule_activation
@@ -332,14 +341,22 @@ def _build_injection_payload(
                     + "\n[/last-briefing]"
                 )
                 briefing_path = rec.path
+                if path_label is not None:
+                    try:
+                        briefing_path = (
+                            f"{path_label}/{rec.path.relative_to(Path(vault_root)).as_posix()}"
+                        )
+                    except ValueError:
+                        briefing_path = f"{path_label}/{rec.path.name}"
                 # The hook is this builder's only caller and emits whatever it
                 # returns, so building the block is handing it to the session.
                 # Its own try: telemetry must never cost the session its briefing.
                 try:
-                    briefing_mod.record_briefing_read(
-                        vault_root, rec, reader_session_id=session_id, source=source,
-                        mode="last", entries=1,
-                    )
+                    if record:
+                        briefing_mod.record_briefing_read(
+                            vault_root, rec, reader_session_id=session_id, source=source,
+                            mode="last", entries=1,
+                        )
                 except Exception:
                     pass
         except Exception:
@@ -378,6 +395,7 @@ def _build_injection_payload(
     if index_records:
         briefing_block = _index_block(
             vault_root, index_records, room, session_id=session_id, source=source,
+            record=record,
         )
         # An index alone opens the envelope, as #548 measured it.
         return head + briefing_block if head else briefing_block.lstrip("\n")
@@ -393,6 +411,7 @@ def _index_block(
     *,
     session_id: str | None = None,
     source: str | None = None,
+    record: bool = True,
 ) -> str:
     """The ``[recent-briefings]`` block for ``records`` in ``room`` bytes, logged.
 
@@ -408,8 +427,8 @@ def _index_block(
         block, n, _cut = briefing_index.fit(records, room)
     except Exception:
         return ""
-    if not block:
-        return ""
+    if not block or not record:
+        return block
     try:
         from mnemo.core import briefing as briefing_mod
 
