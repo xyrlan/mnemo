@@ -96,7 +96,13 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
     card = report_card.gather(args.short_id, cwd=args.cwd, transcript=transcript)
     minutes = report_card.watch_minutes(cfg)
     name = report_card.state(card)
-    text = report_card.render(card, watch_minutes=minutes)
+    from mnemo.core import config as cfg_mod
+    from mnemo.core.sessions import pr_follow
+
+    auto_merge = card.pr is not None and pr_follow.will_merge(
+        cfg, vault_root=vault_root, short_id=args.short_id, cwd=args.cwd,
+        url=card.pr.url, config_path=cfg_mod.default_config_path())
+    text = report_card.render(card, watch_minutes=minutes, auto_merge=auto_merge)
     why = inbox.deliver(vault_root, args.parent, text)
     pr = card.pr.number if card.pr else None
     row = {**base, "event": "finished", "state": name, "pr": pr}
@@ -121,8 +127,6 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         if not ok:
             failed.append(text)
         return ok
-
-    from mnemo.core.sessions import pr_follow
 
     started = time.time()
 

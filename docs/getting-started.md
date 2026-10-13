@@ -608,6 +608,50 @@ wakes a child at most `dispatch.followPR.attempts` times (2) within
 comes back to you the same way. Every wake is also a notice to the parent and
 a line in the day log, and the ledger is `.mnemo/pr-follow.json`.
 
+The same watcher can merge the PR, in the repositories you name. It is off
+until you list them in mnemo's config:
+
+```json
+{ "dispatch": { "autoMerge": { "repos": ["you/app"] } } }
+```
+
+With that, a followed child's PR is merged on the first poll (every five
+minutes) that finds it open, not a draft, `MERGEABLE` and with every reported
+check passed — at least one, read check by check; a skipped, cancelled or
+pending check is not a pass, and a repository with no CI gets no automatic
+merge. mnemo reads the PR once more right before merging and runs
+`gh pr merge --squash --match-head-commit <the head it read>`, the method
+`mnemo land` defaults to, never with `--admin` or `--auto`. If `gh` refuses —
+branch protection, a race — the dispatching session gets a
+`follow-merge-refused` notice with `gh`'s own words, and that head is not
+tried again. After a merge the PR is read again, and the `follow-merged`
+notice says "merged" only when GitHub says `MERGED`.
+
+It never merges a twin's PR, or any PR while another open PR targets the same
+issue; a contract piece (`mnemo land` owns the order); a PR whose head is not
+the child's `HEAD`, or whose tree is dirty or gone; a PR with a comment or an
+asking review from an owner, member or collaborator that the child has not
+answered, or with changes still requested; or a PR whose child is running or
+blocked. Each of those is a `follow-merge-held` notice, once, and the PR stays
+followed. Red checks and conflicts still wake the child first, inside the same
+bounds.
+
+The switch is yours alone. It is read from mnemo's config file on every pass,
+never from a config inside a dispatched worktree (the branch being merged
+could carry one), and no `mnemo dispatch` flag sets it: `--may merge` is still
+refused, the child's prompt still says "Do not merge", and `--may none` or
+`--read-only` still withholds everything — a child that may not push is not
+followed, so nothing of its is merged. `mnemo sessions` lists the PRs mnemo
+will merge and the ones it merged; the ledger records `merged_by`, so a merge
+mnemo made is told apart from one you made, and
+`tools/measure_merge_wait.py` reports the wait and who merged per repository.
+
+This is not a merge queue. Two PRs that are each green on their own can break
+together, and nothing here tests the combination: the base branch's own CI
+run after the merge is where that shows. Make the checks you rely on
+*required* on the base branch, so GitHub itself refuses a merge they have not
+passed.
+
 Once a child's PR has merged, mnemo removes its worktree and deletes its
 branch (`dispatch.removeMergedTrees`, on by default). A session start spawns
 the sweep in the background, at most every half hour per repo, so it works for
@@ -753,7 +797,8 @@ mnemo dispatch 244 --may none      # publish nothing; `mnemo deliver` does it
 
 `pr` implies `push`. The child is told it may do exactly that once its full
 suite passes, on its own branch, never force-pushing — and not to ask again.
-`merge` is refused: merging stays with `mnemo land` and review.
+`merge` is refused: a child never merges. You do, `mnemo land` does, or — where
+you turned `dispatch.autoMerge` on — mnemo's own watcher does (see above).
 
 `--may` defaults to `pr`. Use `--may none` for work that should not become a
 branch at all — an exploratory spike, or anything you want to read before it

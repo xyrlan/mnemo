@@ -235,6 +235,23 @@ def _woken(scope) -> list:
         return []
 
 
+def _merge_footer(found) -> str:
+    """Which children's PRs mnemo will merge, and which it merged (#638).
+    Never raises; '' while `dispatch.autoMerge` is off and nothing was merged."""
+    try:
+        from mnemo.core import config as config_mod
+        from mnemo.core import paths as paths_mod
+        from mnemo.core.sessions import pr_follow
+
+        cfg = config_mod.load_config()
+        return "\n".join(pr_follow.queue_lines(
+            cfg, vault_root=paths_mod.vault_root(cfg),
+            short_ids=[s.short_id for s in found],
+            config_path=config_mod.default_config_path()))
+    except Exception:
+        return ""
+
+
 @command("sessions")
 def cmd_sessions(args: argparse.Namespace) -> int:
     """Print background sessions, blocked first."""
@@ -404,6 +421,9 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     woken_footer = _woken_footer(_woken(scope))
     if woken_footer:
         print(woken_footer)
+    merge_footer = _merge_footer(found)
+    if merge_footer:
+        print(merge_footer)
     if not found and scope is not None:
         # An empty scoped queue and an empty machine render identically, and
         # the first one is a lie by omission: #281 sat on four waiting

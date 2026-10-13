@@ -683,8 +683,10 @@ def merge_prs(
     Not ``--admin`` by default: a branch protection that refuses the merge is
     a rule the maintainer set, and this command is not the place to override
     it on its own. ``admin=True`` passes ``--admin`` through, for the
-    maintainer who typed ``--admin`` — on this repo master requires a
-    code-owner approval no one else can give, so every merge is one.
+    maintainer who typed ``--admin``. On this repo master used to require a
+    code-owner approval no one else could give, so every merge was one; the
+    maintainer is replacing that rule with required status checks (#638),
+    which a green PR passes without it.
     The refusal's stderr is the step's detail, and a rerun skips whatever did
     land — ``gh`` reports it as ``MERGED`` — so a landing that stopped
     part-way is resumed by running it again.
