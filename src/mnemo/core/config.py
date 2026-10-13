@@ -80,6 +80,18 @@ DEFAULTS: dict[str, Any] = {
             "attempts": 2,
             "hours": 24,
         },
+        # #638: the `pr-follow` watcher merges a followed child's PR itself
+        # once it is open, not a draft, MERGEABLE and every reported check has
+        # passed — in the repositories named here, as `owner/name`. Empty, so
+        # off, by default: only the maintainer turns it on, in this file. It
+        # is never honoured from a config inside a dispatched worktree (a
+        # branch could carry one), and no `mnemo dispatch` flag sets it; the
+        # child is still told "Do not merge". Squash, pinned to the head that
+        # was read, never `--admin`. Never a twin's PR, a contract piece, a PR
+        # with another open PR for the same issue, or one with no checks.
+        "autoMerge": {
+            "repos": [],
+        },
         # #503: once a dispatched child's PR has merged and the child has
         # stopped, remove its worktree and delete its branch with `-d`. A tree
         # that is dirty, has unpushed commits or commits the merged PR lacks

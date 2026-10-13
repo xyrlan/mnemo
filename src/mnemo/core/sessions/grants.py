@@ -17,10 +17,16 @@ message that *is* the maintainer's, on every child, is the opening prompt —
   It implies ``push``: a PR is opened from a pushed branch, so granting one
   without the other would grant nothing, and the child would stop to ask.
 
-``merge`` is refused by name, not merely unknown. Landing belongs to
-``mnemo land`` and the review gate, and a child never merges: a grant that
-could say so would move the one decision that has to stay per-diff into a flag
-typed before any diff existed.
+``merge`` is refused by name, not merely unknown. A child never merges: a
+grant that could say so would move the one decision that has to stay per-diff
+into a flag typed before any diff existed. Landing a contract belongs to
+``mnemo land``. An issue child's PR is merged by the maintainer — or, in a
+repository the maintainer named in ``dispatch.autoMerge.repos``, by mnemo's
+own ``pr-follow`` watcher once the PR is open, mergeable and every check has
+passed (#638, :mod:`mnemo.core.sessions.pr_follow`). That switch lives in
+mnemo's config and is not a grant: nothing ``--may`` accepts turns it on, the
+child's prompt says "Do not merge" either way, and ``--may none`` or a
+read-only dispatch still withholds everything, the follow included.
 
 **The library default is empty.** No grant means the prompt says what it
 always said — "Do not merge or push without asking" — and ``mnemo deliver``
@@ -84,8 +90,8 @@ def parse(value: str | Iterable[str] | None) -> Grant:
             continue
         if word == "merge":
             raise GrantError(
-                "merge cannot be granted: a child never merges — "
-                "`mnemo land` and the review gate do"
+                "merge cannot be granted: a child never merges — the maintainer, "
+                "`mnemo land` or mnemo's own watcher (`dispatch.autoMerge`) does"
             )
         if word not in VALUES:
             raise GrantError(

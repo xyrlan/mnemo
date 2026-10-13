@@ -347,7 +347,12 @@ says there is something to publish, and stops — and only a stopped child fires
 reach its parent, because the parent restarted or was busy, is held, and the
 parent's next prompt shows it, exactly once. If that PR then goes
 red, gets a review or conflicts with its base, mnemo wakes the child to deal
-with it, a bounded number of times, and hands it back to you after that. Dispatch it with
+with it, a bounded number of times, and hands it back to you after that. The
+merge is yours — unless you name the repository in `dispatch.autoMerge.repos`,
+and then the same watcher merges the PR once it is open, mergeable and every
+check has passed: squash, pinned to the head it read, never `--admin`, never
+a twin or a contract piece, and not a merge queue
+([details](docs/getting-started.md)). Dispatch it with
 `--may none` and it publishes nothing; then it is delivered by name —
 `mnemo deliver 7c1e` pushes its branch and opens the pull request,
 `Closes #205` included — and naming it is the approval; no flag approves them
