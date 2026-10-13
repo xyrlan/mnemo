@@ -148,7 +148,10 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
     Assumption(
         key="jobs-state-json",
         claim=(
-            "`~/.claude/jobs/<id>/state.json` exists by the time `--bg` returns "
+            "`<config dir>/jobs/<id>/state.json` — `~/.claude`, or "
+            "`$CLAUDE_CONFIG_DIR` when the spawning process has it set (#640: "
+            "both children of 2026-10-13 were under the account dir) — exists "
+            "by the time `--bg` returns "
             "(measured: 0.00s after exit) and is a JSON object whose `cwd` is "
             "the spawn cwd verbatim; `state`, `tempo`, `sessionId` (the full "
             "uuid, prefixed by the short id) and `intent` (the prompt) are "
@@ -586,16 +589,23 @@ def verify_registered(short_id: str, *, cwd: "Path | str") -> Optional[str]:
     directory through two spellings and a false mismatch here would accuse a
     healthy spawn.
     """
-    from mnemo.core.sessions.jobs import jobs_dir, normalize_cwd
+    from mnemo.core.sessions import accounts
+    from mnemo.core.sessions.jobs import normalize_cwd
 
-    entry = jobs_dir() / short_id
-    state_path = entry / "state.json"
+    # The child is registered under the Claude account that spawned it, which
+    # is `~/.claude` only when `CLAUDE_CONFIG_DIR` is unset (#640). Looking in
+    # the default alone printed this warning for two healthy children on
+    # 2026-10-13. The spawning account's path comes first, so it is the one
+    # named when the file is nowhere.
+    candidates = accounts.state_paths(short_id)
+    state_path = next((p for p in candidates if p.is_file()), candidates[0])
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
     except OSError:
+        elsewhere = "".join(f", nor {p}" for p in candidates if p != state_path)
         return str(ContractBroken(
             "jobs-state-json",
-            f"no readable {state_path} after `claude --bg` returned id {short_id}",
+            f"no readable {state_path}{elsewhere} after `claude --bg` returned id {short_id}",
         ))
     except ValueError:
         return str(ContractBroken(

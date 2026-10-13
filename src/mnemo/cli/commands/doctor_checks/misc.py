@@ -157,38 +157,43 @@ def _doctor_check_background_sessions(
     would print "no sessions" and look healthy. Counting unreadable entries
     makes that visible the way piping the CLI made the Windows crash visible.
     """
-    from mnemo.core.sessions.jobs import jobs_dir, read_sessions
+    from mnemo.core.sessions import accounts
+    from mnemo.core.sessions.jobs import read_sessions
 
     # `vault` is part of every doctor check's signature but unused here on
-    # purpose: background sessions live in Claude Code's own jobs dir, not in
+    # purpose: background sessions live in Claude Code's own jobs dirs, not in
     # the vault. Binding the jobs root to that parameter instead would make
     # doctor scan the vault, find no `state.json` anywhere, and print "no
     # background sessions" forever. Tests pass `jobs_root` by keyword.
-    base = jobs_dir() if jobs_root is None else jobs_root
-    if not base.is_dir():
-        print("  ✓ no background sessions")
-        return True
-
-    try:
-        dirs = [d for d in base.iterdir() if d.is_dir()]
-    except OSError as exc:
-        # Doctor is the thing that must survive breakage: an unreadable jobs
-        # dir is worth saying out loud, never worth aborting the whole run.
-        print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
-        return True
+    #
+    # One jobs dir per Claude account (#640). An id under two of them is one
+    # session, which is how `read_sessions` counts it too.
+    bases = [root.jobs for root in accounts.roots()] if jobs_root is None else [jobs_root]
+    dirs = set()
+    for base in bases:
+        if not base.is_dir():
+            continue
+        try:
+            dirs.update(d.name for d in base.iterdir() if d.is_dir())
+        except OSError as exc:
+            # Doctor is the thing that must survive breakage: an unreadable
+            # jobs dir is worth saying out loud, never worth aborting the run.
+            print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
+            if len(bases) == 1:
+                return True
 
     if not dirs:
         print("  ✓ no background sessions")
         return True
 
     try:
-        sessions = read_sessions(base)
+        sessions = read_sessions(jobs_root)
     except OSError as exc:  # pragma: no cover - read_sessions swallows its own
         # `read_sessions` guards both its walk and every per-entry read, so a
         # permission lost between our two walks comes back as an empty list and
         # is counted as unreadable below. This stays as a backstop: the day its
         # contract changes, doctor still reports instead of aborting the run.
-        print(f"  ℹ background sessions: could not read {base} ({exc.strerror or exc})")
+        print(f"  ℹ background sessions: could not read its jobs ({exc.strerror or exc})")
         return True
 
     unreadable = max(len(dirs) - len(sessions), 0)

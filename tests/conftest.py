@@ -120,10 +120,16 @@ def tmp_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     protecting us the moment ``jobs_dir`` stopped going through ``~``. Pinning
     the function makes the guarantee explicit. Tests that want sessions pass
     their own root to ``read_sessions``/``render(jobs_root=...)``.
+
+    ``CLAUDE_CONFIG_DIR`` names a second jobs dir the roster reads (#640), and
+    a suite run from inside a session on a non-default account inherits it.
+    It is unset here for the same reason; a test that wants an account sets
+    its own.
     """
     empty = tmp_path / "jobs-empty"
     empty.mkdir(exist_ok=True)
     monkeypatch.setattr("mnemo.core.sessions.jobs.jobs_dir", lambda: empty)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return empty
 
 

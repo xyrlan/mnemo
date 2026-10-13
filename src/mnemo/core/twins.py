@@ -456,13 +456,17 @@ def _state(short_id: str) -> Optional[Dict[str, Any]]:
     """The twin's ``state.json``, or ``None`` when there is none to read."""
     if not short_id:
         return None
-    from mnemo.core.sessions.jobs import jobs_dir
+    from mnemo.core.sessions import accounts
 
-    try:
-        data = json.loads((jobs_dir() / short_id / "state.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    # Under whichever Claude account ran the twin (#640).
+    for path in accounts.state_paths(short_id):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def _seconds_between(start: Any, end: Any) -> Optional[float]:
