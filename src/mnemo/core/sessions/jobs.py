@@ -1,4 +1,4 @@
-"""Parse ``~/.claude/jobs/*/state.json`` into :class:`Session` records.
+"""Parse ``<config dir>/jobs/*/state.json`` into :class:`Session` records.
 
 The only module that knows the on-disk schema, so an upstream change touches
 one file.
@@ -43,7 +43,10 @@ from typing import Any
 
 
 def jobs_dir() -> Path:
-    """Where Claude Code keeps background-session state."""
+    """Where Claude Code keeps the **default** account's background sessions.
+
+    One of several: see :mod:`mnemo.core.sessions.accounts` for the rest.
+    """
     return Path(os.path.expanduser("~/.claude/jobs"))
 
 
@@ -353,7 +356,13 @@ def in_scope(session_cwd: str | None, scope: str | None) -> bool:
 
 def read_sessions(root: Path | None = None, *, cwd: str | None = None,
                   claude_home: Path | None = None) -> list[Session]:
-    """Every readable background session under *root* (default: real jobs dir).
+    """Every readable background session, on every Claude account (#640).
+
+    With no *root* and no *claude_home* this reads each config dir
+    :func:`mnemo.core.sessions.accounts.roots` names — the current account,
+    the default one, and every one mnemo has run under — because a session's
+    job record lives under the account that runs it. Passing either reads
+    that one place alone, as before.
 
     Unreadable or malformed entries are skipped, never raised: one corrupt
     file must not take out the whole listing, and a directory we cannot list
@@ -361,48 +370,64 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None,
     sessions belonging to that directory's queue — the directory itself and
     the dispatch worktrees beside it, see :func:`in_scope`.
 
-    Each session is stamped with ``live`` from the daemon roster (#196). The
-    roster is read **once** for the whole listing: the statusline calls this
-    on every render under a 2s timeout, so one extra file read per queue is
-    the budget, not one per session.
+    Each session is stamped with ``live`` from the daemon roster (#196) **of
+    the account that holds it**: every account has its own daemon, and the
+    default one has never heard of another's workers. A roster is read
+    **once** per account: the statusline calls this on every render under a
+    2s timeout, so one extra file read per queue is the budget, not one per
+    session.
+
+    An id found under two accounts is one session (the desktop app can move a
+    pane between accounts, and the old record stays behind). The copy whose
+    process is running wins, then the one updated last, then the account
+    listed first.
     """
-    base = jobs_dir() if root is None else root
-    if not base.is_dir():
-        return []
-
-    try:
-        entries = sorted(base.iterdir())
-    except OSError:
-        # The directory passed is_dir() and is still unlistable: a permission
-        # change, or it vanished between the two calls. Same answer as a
-        # missing directory — no sessions, no traceback out of the command.
-        return []
-
-    scope = normalize_cwd(cwd)
-
-    # One read for the whole queue. `None` means the roster was unreadable, in
-    # which case every session keeps live=None and is treated as waiting.
     from mnemo.core.sessions import liveness as _liveness
 
-    try:
-        roster = _liveness.read_roster(claude_home)
-    except Exception:  # pragma: no cover - read_roster is already total
-        roster = None
+    if root is None and claude_home is None:
+        from mnemo.core.sessions import accounts as _accounts
 
-    out: list[Session] = []
-    for entry in entries:
-        if not entry.is_dir():
-            continue  # pins.json and friends
+        sources = [(found.jobs, found.home) for found in _accounts.roots()]
+    else:
+        sources = [(jobs_dir() if root is None else root, claude_home)]
+
+    scope = normalize_cwd(cwd)
+    best: dict[str, tuple[tuple[bool, str, int], Session]] = {}
+    for index, (base, home) in enumerate(sources):
+        # A missing directory, a file where one should be, a permission
+        # change, or one that vanished between the two calls: all the same
+        # answer — no sessions here, no traceback out of the command.
         try:
-            data = json.loads((entry / "state.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            if not base.is_dir():
+                continue
+            entries = sorted(base.iterdir())
+        except OSError:
             continue
-        if not isinstance(data, dict):
-            continue
-        session = _parse(entry.name, data)
-        if cwd is not None and not in_scope(session.cwd, scope):
-            continue
-        if roster is not None:
-            session = replace(session, live=_liveness.is_live(entry.name, roster=roster))
-        out.append(session)
-    return out
+
+        # One read for this account's queue. `None` means the roster was
+        # unreadable, in which case its sessions keep live=None and are
+        # treated as waiting.
+        try:
+            roster = _liveness.read_roster(home)
+        except Exception:  # pragma: no cover - read_roster is already total
+            roster = None
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue  # pins.json and friends
+            try:
+                data = json.loads((entry / "state.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            session = _parse(entry.name, data)
+            if cwd is not None and not in_scope(session.cwd, scope):
+                continue
+            if roster is not None:
+                session = replace(session, live=_liveness.is_live(entry.name, roster=roster))
+            rank = (session.live is True, session.updated_at or "", -index)
+            held = best.get(session.short_id)
+            if held is None or rank > held[0]:
+                best[session.short_id] = (rank, session)
+    return [best[short_id][1] for short_id in sorted(best)]
