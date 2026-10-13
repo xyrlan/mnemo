@@ -140,11 +140,18 @@ jobs:
     #
     # The timeout replaces GitHub's 6-hour default, which is the real cost of a
     # hang: the job holds a runner slot for hours before anyone sees a failure.
-    # Across the last 60 runs this job took 62–108s (median 77s, p90 93s), so
-    # 10 minutes is ~5.5x the slowest healthy run — wide enough that a cold pip
-    # cache or a slow runner never trips it, short enough that a hang reads as
-    # a fast, legible failure.
-    timeout-minutes: 10
+    #
+    # It was 10 minutes while the job took 62–108s. By 2026-10-13 it took far
+    # longer: over the 37 successful runs since 2026-10-07 the whole job ran
+    # 267–533s (median 463s, p90 513s), and two PRs that add tests running
+    # `git` reached 9m14s and a cancel at the limit with nothing failing
+    # (#653, which also asks where the time goes). 25 minutes is ~3x the
+    # median: wide enough that a slow runner or a few more process-starting
+    # tests never trip it, short enough that a hang still reads as a failure
+    # within the half hour. Measure again before changing it:
+    # `gh run list --workflow CI`, then each run's jobs, this job's
+    # `started_at` to `completed_at`.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
