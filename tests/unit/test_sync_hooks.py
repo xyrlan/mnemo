@@ -420,7 +420,9 @@ def test_writer_mirror_writes_nothing_on_a_satellite_and_writes_on_the_primary(p
     mac, win, _hub = pair
     memory = tmp_home / ".claude" / "projects" / "-Users-you-app" / "memory"
     memory.mkdir(parents=True)
-    (memory / "MEMORY.md").write_text("- mirrored\n", encoding="utf-8")
+    # Bytes, not text: `write_text` would put "\r\n" on disk on Windows, and
+    # the mirror copies what is on disk.
+    (memory / "MEMORY.md").write_bytes(b"- mirrored\n")
     monkeypatch.setattr(mirror, "_agent_from_project_dir", lambda name: "app")
 
     before = _tracked_now(win)
@@ -676,7 +678,9 @@ def test_a_dispatched_child_does_not_pull(pair, tmp_path, monkeypatch):
 
 def test_an_unreachable_hub_leaves_the_vault_as_it_is_and_logs_no_error(pair, monkeypatch):
     mac, win, hub = pair
-    shutil.rmtree(str(hub))
+    # Pointed at a hub that is not there. Removing the real one fails on
+    # Windows: git's object files are read-only there.
+    _git(win.vault, "remote", "set-url", "origin", str(hub.parent / "gone.git"))
     before = _tracked_now(win)
     out = sync_hooks.run_hook_pull(win.cfg(), win.vault)
     assert out.outcome == "unreachable"
