@@ -467,8 +467,8 @@ def _refusal(found: List[Dict[str, str]]) -> str:
     lines.append("  → take them out, then push again. `mnemo redact --apply` rewrites pages "
                  "and briefings.")
     if any(rel.startswith("bots/") and "/memory/" in rel for rel in files):
-        lines.append("  → a file under bots/*/memory/ is a copy of Claude Code's own memory: "
-                     "edit the original, or the next session start copies it back")
+        lines.append("  → a file under bots/*/memory/ is a copy of Claude Code's own memory, "
+                     "redacted on the way in: the next session start rewrites it")
     return "\n".join(lines)
 
 

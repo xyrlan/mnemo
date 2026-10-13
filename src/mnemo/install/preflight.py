@@ -101,12 +101,5 @@ def run_preflight(
             "Less than 10MB free disk space at vault location",
             "Free up disk space or pick a different --vault-root",
         ))
-    if shutil.which("rsync") is None:
-        issues.append(Issue(
-            "rsync_missing", "warning",
-            "rsync not found in PATH — using slower pure-Python fallback",
-            "Install rsync (apt install rsync / brew install rsync) for faster mirror",
-        ))
-
     ok = not any(i.severity == "error" for i in issues)
     return PreflightResult(ok=ok, issues=issues)

@@ -36,11 +36,13 @@ def test_unwritable_vault_parent(tmp_path: Path):
         parent.chmod(0o700)
 
 
-def test_missing_rsync_is_warning_not_error(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+def test_missing_rsync_is_not_an_issue(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):
+    """#649: the mirror no longer shells out to rsync, so its absence is not
+    worth a word."""
     monkeypatch.setattr(shutil, "which", lambda name: None)
     result = preflight.run_preflight(vault_root=tmp_home / "mnemo")
-    assert result.ok is True  # warning only
-    assert any(i.kind == "rsync_missing" and i.severity == "warning" for i in result.issues)
+    assert result.ok is True
+    assert not any(i.kind == "rsync_missing" for i in result.issues)
 
 
 def test_issue_has_remediation(tmp_home: Path, monkeypatch: pytest.MonkeyPatch):

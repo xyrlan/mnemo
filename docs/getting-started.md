@@ -547,8 +547,9 @@ files about to be published are scanned for the shapes `mnemo redact` knows
 (API keys, tokens, JWTs, private keys, passwords in URLs and beside a label).
 A hit refuses the whole push and names the file and the kind, never the value;
 `mnemo sync status` shows it until it clears. `mnemo redact --apply` rewrites
-pages and briefings. A file under `bots/<repo>/memory/` is a copy: fix the
-original in Claude Code's memory, or the next session start copies it back.
+pages and briefings. A file under `bots/<repo>/memory/` is a copy of Claude
+Code's memory, redacted on the way in; one it still flags is from before that
+redaction, and the next session start rewrites it.
 
 ### The config does not travel
 
