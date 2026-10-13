@@ -194,7 +194,10 @@ def test_on_a_vault_that_syncs_the_rows_print_and_off_they_do_not(tmp_path, tmp_
 @needs_git
 def test_a_hub_that_does_not_answer_is_a_warning_within_the_bound(tmp_path, monkeypatch, git_env):
     vault = primary(tmp_path, monkeypatch)
-    shutil.rmtree(tmp_path / "hub.git")
+    # Pointed at a hub that is not there, as the two-vault tests do. Removing
+    # the real one fails on Windows: git's object files are read-only there.
+    subprocess.run(["git", "-C", str(vault), "remote", "set-url", "origin",
+                    str(tmp_path / "gone.git")], check=True)
     started = datetime.now(timezone.utc)
     out = _printed(rows._doctor_check_sync, vault)
     assert datetime.now(timezone.utc) - started < timedelta(seconds=health.REACH_TIMEOUT + 5)
