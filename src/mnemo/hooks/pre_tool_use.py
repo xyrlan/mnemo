@@ -17,9 +17,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+from typing import Optional, Tuple
 
 _ENFORCE_TOOL = "Bash"
 _ENRICH_TOOLS = frozenset({"Read", "Edit", "Write", "MultiEdit"})
+#: The tools that write the file `file_path` names (#637). Read is not one:
+#: Claude Code reads the account spelling of a memory file without asking.
+_MEMORY_WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
 
 
 def main() -> int:
@@ -27,7 +31,7 @@ def main() -> int:
     # `claude --print` helpers that brief and extract run under the user's own
     # settings, mnemo's hooks included, so an unguarded hook here schedules the
     # work whose helper is running it. See :mod:`mnemo.core.hook_guard`.
-    from mnemo.core.hook_guard import hooks_off, throwaway_session
+    from mnemo.core.hook_guard import hooks_off
 
     if hooks_off():
         return 0
@@ -40,8 +44,62 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
+    # A memory write spelled through an account dir's linked `projects` goes
+    # to its real path (#637). Before every gate below: it reads no vault and
+    # no config, and a session in a temp dir or with enforcement and
+    # enrichment both off is stopped by the same prompt.
+    rewrite, redirect = _memory_write(payload)
+    if redirect is not None:
+        _emit_deny(_Reason(redirect))
+        return 0
+    if not _rules(payload, rewrite) and rewrite is not None:
+        _emit_rewrite(rewrite)
+    return 0
+
+
+def _memory_write(payload: dict) -> Tuple[Optional[dict], Optional[str]]:
+    """``(rewrite, redirect)`` for a write to auto-memory markdown that an
+    account dir reaches through a link (#637); ``(None, None)`` for every
+    other call. See :mod:`mnemo.core.memory_path` for which paths those are.
+
+    A Write that creates the file is *rewritten*: the tool input comes back
+    with ``file_path`` as the real path and no other field changed. An Edit,
+    a MultiEdit or a Write over a file that exists cannot be: Claude Code
+    (2.1.296) checks "was this file read" twice, on the path the model asked
+    for before this hook runs and on the path the tool ends up with, so a
+    rewritten edit fails with "File has not been read yet" whichever spelling
+    the Read used. Those are *redirected*: denied with a reason that names
+    the real path, which the model then reads and edits itself.
+
+    Neither approves anything. Fail-open: any error leaves the call alone.
+    """
+    try:
+        tool_name = payload.get("tool_name")
+        if tool_name not in _MEMORY_WRITE_TOOLS:
+            return None, None
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return None, None
+        from mnemo.core import memory_path
+
+        real = memory_path.real_memory_path(
+            tool_input.get("file_path"), os.environ.get(memory_path.CONFIG_DIR_ENV),
+        )
+        if real is None:
+            return None, None
+        if tool_name == "Write" and not os.path.lexists(real):
+            return dict(tool_input, file_path=real), None
+        return None, memory_path.redirect_reason(tool_input["file_path"], real)
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return None, None
+
+
+def _rules(payload: dict, rewrite: Optional[dict]) -> bool:
+    """Enforcement and enrichment. True when an envelope went out: a deny, or
+    an enrichment that carries *rewrite* with it, since a hook prints one."""
     try:
         from mnemo.core import config, errors, paths
+        from mnemo.core.hook_guard import throwaway_session
 
         cfg = config.load_config()
         vault = paths.vault_root(cfg)
@@ -49,21 +107,21 @@ def main() -> int:
         # a leak from any session, a throwaway one included, and the check
         # stands on <vault>/.mnemo/private-names.tsv alone, not on config.
         if payload.get("tool_name") == _ENFORCE_TOOL and _private_name_deny(payload, vault):
-            return 0
+            return True
         # A session in a temp, pytest or job-scratch dir writes nothing into
         # a vault that outlives it (#420). See hook_guard.throwaway_session.
         if throwaway_session(payload.get("cwd") or os.getcwd(), vault):
-            return 0
+            return False
 
         enf_cfg = cfg.get("enforcement", {}) or {}
         enr_cfg = cfg.get("enrichment", {}) or {}
         enf_enabled = bool(enf_cfg.get("enabled", False))
         enr_enabled = bool(enr_cfg.get("enabled", False))
         if not (enf_enabled or enr_enabled):
-            return 0
+            return False
 
         if not errors.should_run(vault):
-            return 0
+            return False
 
         from mnemo.core import rule_activation as ra
         from mnemo.core.agent import resolve_canonical_agent
@@ -74,11 +132,11 @@ def main() -> int:
             tool_input = {}
         cwd = payload.get("cwd") or ""
         if not tool_name:
-            return 0
+            return False
 
         index = ra.load_index(vault)
         if index is None:
-            return 0
+            return False
 
         project = resolve_canonical_agent(cwd).name
 
@@ -89,7 +147,7 @@ def main() -> int:
             if hit is not None:
                 _emit_deny(hit)
                 ra.log_denial(vault, hit, tool_input)
-                return 0
+                return True
 
         # Enrichment for path-based tools
         if enr_enabled and tool_name in _ENRICH_TOOLS:
@@ -109,14 +167,14 @@ def main() -> int:
                         counts = session_state.read_emission_counts(vault, sid)
                         room = max_enrich - counts["enrich_count"]
                         if room <= 0:
-                            return 0  # silent: cap reached
+                            return False  # silent: cap reached
                         seen = session_state.read_enriched_slugs(vault, sid)
                         hits = [h for h in hits if h.slug not in seen][:room]
                     except Exception:
                         pass
 
                     if hits:
-                        _emit_enrich(hits)
+                        _emit_enrich(hits, rewrite)
                         ra.log_enrichment(vault, hits, tool_name, tool_input)
                         try:
                             import time as _time
@@ -126,6 +184,7 @@ def main() -> int:
                             )
                         except Exception:
                             pass
+                        return True
 
     except Exception as exc:  # noqa: BLE001 — hook must never propagate
         try:
@@ -133,7 +192,7 @@ def main() -> int:
             _err.log_error(_paths.vault_root(_cfg.load_config()), "pre_tool_use.outer", exc)
         except Exception:
             pass
-    return 0
+    return False
 
 
 def _private_name_deny(payload: dict, vault) -> bool:
@@ -217,19 +276,32 @@ def _emit_deny(hit) -> None:
         pass
 
 
-def _emit_enrich(hits: list) -> None:
+def _emit_rewrite(updated_input: dict) -> None:
+    """The rewritten input alone: no ``permissionDecision``, so Claude Code's
+    own handling of the new path is still what decides (#637)."""
+    try:
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": updated_input,
+            },
+        }))
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _emit_enrich(hits: list, updated_input: Optional[dict] = None) -> None:
     try:
         max_rules = 3  # safety cap; rule_activation also caps
         parts = []
         for h in hits[:max_rules]:
             parts.append(f"• mnemo rule [[{h.slug}]]:\n{h.rule_body_preview}")
         text = "\n\n".join(parts)
-        sys.stdout.write(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": text,
-            },
-        }))
+        out = {"hookEventName": "PreToolUse", "additionalContext": text}
+        if updated_input is not None:
+            out["updatedInput"] = updated_input
+        sys.stdout.write(json.dumps({"hookSpecificOutput": out}))
         sys.stdout.flush()
     except Exception:
         pass

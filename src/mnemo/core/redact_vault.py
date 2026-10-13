@@ -8,8 +8,8 @@ revisited by any writer, so this module walks them:
 * ``bots/*/briefings/**/*.md`` — session briefings.
 
 Never ``bots/*/memory/``: that is the mirror of the user's own Claude Code
-auto-memory, which mnemo copies and must not rewrite; the next promotion of a
-project page redacts its derived copy.
+auto-memory, and the mirror redacts every copy as it writes it (#649), on the
+next session start at the latest.
 
 :func:`scan` reports *where* and *what kind*, never the value — the report is
 printed to a terminal and may be pasted into an issue. :func:`apply` rewrites

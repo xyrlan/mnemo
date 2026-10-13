@@ -549,8 +549,9 @@ files about to be published are scanned for the shapes `mnemo redact` knows
 (API keys, tokens, JWTs, private keys, passwords in URLs and beside a label).
 A hit refuses the whole push and names the file and the kind, never the value;
 `mnemo sync status` shows it until it clears. `mnemo redact --apply` rewrites
-pages and briefings. A file under `bots/<repo>/memory/` is a copy: fix the
-original in Claude Code's memory, or the next session start copies it back.
+pages and briefings. A file under `bots/<repo>/memory/` is a copy of Claude
+Code's memory, redacted on the way in; one it still flags is from before that
+redaction, and the next session start rewrites it.
 
 ### The config does not travel
 
@@ -650,6 +651,67 @@ commit it did not make — a deletion, a change outside briefings and live
 pages — so an older or damaged satellite cannot do it either; its next push
 puts the hub right. The role itself is read from the hub's record, not the
 local file, so a satellite cannot promote itself by editing one.
+
+### How far this machine is from the hub
+
+Sync is allowed to fall behind — a machine sleeps before its briefing worker
+finishes, a pull runs out of its time, a push is refused over a secret shape
+— but never silently. With sync on, `mnemo doctor` prints one row for each
+thing that can be wrong, and nothing at all with sync off:
+
+- whether the hub answers, asked once with a 3 s bound;
+- this machine's role and id, and which machine is the primary;
+- commits ahead and behind as of the last fetch, and how many tracked files
+  are waiting to be pushed;
+- when the last successful pull and push were, a warning when either is older
+  than a day, and the last error if one is standing;
+- pushes the secret gate refused, with the file and the kind of shape;
+- conflicts resolved in the primary's favour, and the directory the losing
+  versions were kept under;
+- a hub written in a format this mnemo does not know.
+
+The statusline shows one short segment in the same situations and nothing in
+step: `sync 3↑` while three tracked files wait to be pushed, `sync 2 d
+behind` when the last pull is older than a day, both when both. The count of
+waiting files is kept for two minutes between renders and dropped by every
+pull and push, so a vault just pushed reads as in step on the next render.
+
+### The four bars
+
+#641 set four numbers for sync to be judged by, read after 14 days on two
+machines. `tools/measure_sync.py` prints each with a verdict:
+
+```bash
+PYTHONPATH=src python3 tools/measure_sync.py --cwd ~/github/app          # text
+PYTHONPATH=src python3 tools/measure_sync.py --cwd ~/github/app --json   # for a program
+```
+
+1. **Parity identical.** The tool digests what SessionStart would inject for
+   the repository — the topic menu and the briefing block, built by the hook's
+   own code with its telemetry off — after replacing this machine's paths, and
+   prints the digest next to the commit the work tree stands on. Run it on
+   both machines at the same commit (`mnemo sync pull` on each, `pending
+   files 0`), then pass one machine's digest to the other as
+   `--other-digest`: the bar passes when they are the same. A different digest
+   at the same commit means one machine injects something the other does not.
+2. **Push lag p95 ≤ 5 min while the machine stays awake.** For every briefing
+   this machine pushed: from the file's last write to the commit that carried
+   it. The report shows the spread over all of them and over the ones a worker
+   pushed; the ones whose push ran at a later SessionStart are the "waited"
+   count — the machine slept, or the session ended before its worker pushed —
+   and the bar is judged without them. A push row with no trigger recorded is
+   counted as unknown and judged as awake.
+3. **SessionStart with sync on at p50 ≤ 1.5 s and p95 ≤ 5 s.** Read from
+   `tools/measure_hook_durations.py` over the transcripts since the first row
+   of this machine's sync log — the same attachments and the same percentiles
+   that tool reports.
+4. **0 conflicts left unresolved.** Counted on disk, not assumed: unmerged
+   index entries and tracked files holding conflict markers. Resolved
+   conflicts are listed beside it, with the losing versions' directory.
+
+Briefings another machine wrote are not in this machine's push lag: their
+write time is only known where they were written, so run the tool on each
+machine. Every report ends with the provenance #595 requires.
 
 ## Observing and debugging
 
@@ -773,6 +835,50 @@ wakes a child at most `dispatch.followPR.attempts` times (2) within
 `dispatch.followPR.hours` of its first stop (24); a PR still red after that
 comes back to you the same way. Every wake is also a notice to the parent and
 a line in the day log, and the ledger is `.mnemo/pr-follow.json`.
+
+The same watcher can merge the PR, in the repositories you name. It is off
+until you list them in mnemo's config:
+
+```json
+{ "dispatch": { "autoMerge": { "repos": ["you/app"] } } }
+```
+
+With that, a followed child's PR is merged on the first poll (every five
+minutes) that finds it open, not a draft, `MERGEABLE` and with every reported
+check passed — at least one, read check by check; a skipped, cancelled or
+pending check is not a pass, and a repository with no CI gets no automatic
+merge. mnemo reads the PR once more right before merging and runs
+`gh pr merge --squash --match-head-commit <the head it read>`, the method
+`mnemo land` defaults to, never with `--admin` or `--auto`. If `gh` refuses —
+branch protection, a race — the dispatching session gets a
+`follow-merge-refused` notice with `gh`'s own words, and that head is not
+tried again. After a merge the PR is read again, and the `follow-merged`
+notice says "merged" only when GitHub says `MERGED`.
+
+It never merges a twin's PR, or any PR while another open PR targets the same
+issue; a contract piece (`mnemo land` owns the order); a PR whose head is not
+the child's `HEAD`, or whose tree is dirty or gone; a PR with a comment or an
+asking review from an owner, member or collaborator that the child has not
+answered, or with changes still requested; or a PR whose child is running or
+blocked. Each of those is a `follow-merge-held` notice, once, and the PR stays
+followed. Red checks and conflicts still wake the child first, inside the same
+bounds.
+
+The switch is yours alone. It is read from mnemo's config file on every pass,
+never from a config inside a dispatched worktree (the branch being merged
+could carry one), and no `mnemo dispatch` flag sets it: `--may merge` is still
+refused, the child's prompt still says "Do not merge", and `--may none` or
+`--read-only` still withholds everything — a child that may not push is not
+followed, so nothing of its is merged. `mnemo sessions` lists the PRs mnemo
+will merge and the ones it merged; the ledger records `merged_by`, so a merge
+mnemo made is told apart from one you made, and
+`tools/measure_merge_wait.py` reports the wait and who merged per repository.
+
+This is not a merge queue. Two PRs that are each green on their own can break
+together, and nothing here tests the combination: the base branch's own CI
+run after the merge is where that shows. Make the checks you rely on
+*required* on the base branch, so GitHub itself refuses a merge they have not
+passed.
 
 Once a child's PR has merged, mnemo removes its worktree and deletes its
 branch (`dispatch.removeMergedTrees`, on by default). A session start spawns
@@ -919,7 +1025,8 @@ mnemo dispatch 244 --may none      # publish nothing; `mnemo deliver` does it
 
 `pr` implies `push`. The child is told it may do exactly that once its full
 suite passes, on its own branch, never force-pushing — and not to ask again.
-`merge` is refused: merging stays with `mnemo land` and review.
+`merge` is refused: a child never merges. You do, `mnemo land` does, or — where
+you turned `dispatch.autoMerge` on — mnemo's own watcher does (see above).
 
 `--may` defaults to `pr`. Use `--may none` for work that should not become a
 branch at all — an exploratory spike, or anything you want to read before it

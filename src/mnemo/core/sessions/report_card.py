@@ -457,8 +457,24 @@ def _report_lines(card: Card) -> List[str]:
     return lines
 
 
-def render(card: Card, *, watch_minutes: int = 0) -> str:
-    """The notice for a child that just finished."""
+#: The card's last line: who merges. The second is said only where the
+#: maintainer turned ``dispatch.autoMerge`` on and the child's PR is one the
+#: follow would merge (``pr_follow.will_merge``, #638).
+MAINTAINER_MERGES = "Review and merge stay with the maintainer; `mnemo sessions` has the queue."
+MNEMO_MERGES = (
+    "Review stays with the maintainer. mnemo merges this PR itself once it is open, "
+    "mergeable and every check has passed (`dispatch.autoMerge`), and says so here; "
+    "do not merge it yourself. `mnemo sessions` has the queue."
+)
+
+
+def render(card: Card, *, watch_minutes: int = 0, auto_merge: bool = False) -> str:
+    """The notice for a child that just finished.
+
+    *auto_merge* says the ``pr-follow`` watcher will merge this child's PR
+    once it is ready, so the last line does not hand the parent a merge that
+    is not the maintainer's to type any more.
+    """
     from mnemo.core.sessions.inbox import NOTICE_PREFIX
 
     name = state(card)
@@ -487,7 +503,8 @@ def render(card: Card, *, watch_minutes: int = 0) -> str:
         lines.append("- PR: none found for this child")
     lines.append(_tree_line(card))
     lines.extend(_report_lines(card))
-    lines.append("Review and merge stay with the maintainer; `mnemo sessions` has the queue.")
+    lines.append(MNEMO_MERGES if auto_merge and card.pr is not None
+                 and card.pr.state == "OPEN" else MAINTAINER_MERGES)
     return "\n".join(lines)
 
 

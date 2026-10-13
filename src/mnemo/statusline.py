@@ -228,7 +228,29 @@ def render(
     if blocked:
         parts.append(blocked)
 
+    sync_seg = _sync_segment(vault_root)
+    if sync_seg:
+        parts.append(sync_seg)
+
     return SEPARATOR.join(parts)
+
+
+def _sync_segment(vault_root: Path) -> str:
+    """``sync 3↑`` / ``sync 2 d behind`` when this machine has unpushed work
+    or has not pulled for longer than a day (#644); '' in step or with sync
+    off. Reads the state file and a count cached for two minutes
+    (:mod:`mnemo.core.sync.health`); never the hub. Any error is ''."""
+    try:
+        from mnemo.core import config as cfg_mod
+        from mnemo.core.sync import health
+        from mnemo.core.sync import state as sync_state
+
+        if not sync_state.enabled(vault_root):
+            return ""
+        machine = sync_state.machine_id(cfg_mod.load_config())
+        return health.segment(health.summary(vault_root, machine))
+    except Exception:
+        return ""
 
 
 def _run_original(original_cmd: str | None) -> str:

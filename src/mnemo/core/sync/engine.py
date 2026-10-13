@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from mnemo.core import locks
 from mnemo.core.atomic import atomic_write_bytes
 from mnemo.core.sync import git as gitmod
+from mnemo.core.sync import health
 from mnemo.core.sync import roles
 from mnemo.core.sync import state as st
 from mnemo.core.sync import tracked
@@ -554,8 +555,8 @@ def _refusal(found: List[Dict[str, str]]) -> str:
     lines.append("  → take them out, then push again. `mnemo redact --apply` rewrites pages "
                  "and briefings.")
     if any(rel.startswith("bots/") and "/memory/" in rel for rel in files):
-        lines.append("  → a file under bots/*/memory/ is a copy of Claude Code's own memory: "
-                     "edit the original, or the next session start copies it back")
+        lines.append("  → a file under bots/*/memory/ is a copy of Claude Code's own memory, "
+                     "redacted on the way in: the next session start rewrites it")
     return "\n".join(lines)
 
 
@@ -594,16 +595,22 @@ def _withhold(git: Git, machine: str, tree: str, tips: _Tips,
 
 
 def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[Path],
-          timeout: Optional[float]) -> Tuple[str, str]:
+          timeout: Optional[float]) -> Tuple[str, str, Dict[str, Any]]:
+    """``(outcome, message, detail)``; the detail is the log row's ``files``,
+    the ``conflicts`` the pulls on the way resolved and, once sent, the
+    ``commit`` the hub took."""
     vault = git.work_tree
     said = ""
     state["_briefings"] = 0  # what this push's own pulls brought; read by push()
+    conflicts = 0
     for _attempt in range(PUSH_ATTEMPTS):
         _fetch(git, timeout)
         tips = _tips(git)
         _check_format(git, state, tips)
         restored = _restore_satellite(git, machine, tips)
-        state["_briefings"] += _integrate(git, machine, state, tips).briefings
+        pulled = _integrate(git, machine, state, tips)
+        state["_briefings"] += pulled.briefings
+        conflicts += pulled.conflicts
         if _role(git, machine, tips) == st.PRIMARY:
             st.write_format(vault)
             st.write_seed(vault, config_path)
@@ -615,15 +622,17 @@ def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[P
         state["restored"] = int(state.get("restored") or 0) + restored
         if head is not None and tree == head_tree and tips.theirs == head:
             state["refused"] = []
-            return "nothing", ("nothing to push" if not withheld else
-                               f"nothing to push ({withheld} change"
-                               f"{'s' if withheld != 1 else ''} a satellite may not publish)")
+            return ("nothing",
+                    ("nothing to push" if not withheld else
+                     f"nothing to push ({withheld} change"
+                     f"{'s' if withheld != 1 else ''} a satellite may not publish)"),
+                    {"files": 0, "conflicts": conflicts})
 
         found = _scan(git, publishing)
         if found:
             state["refused"] = found
             state["pushesRefused"] = int(state.get("pushesRefused") or 0) + 1
-            return "refused", _refusal(found)
+            return "refused", _refusal(found), {"files": 0, "conflicts": conflicts}
 
         commit = head
         if head is None or tree != head_tree:
@@ -643,7 +652,8 @@ def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[P
             state["refused"] = []
             state["pendingOverrides"] = []
             n = len(publishing)
-            return "ok", f"pushed {n} file{'s' if n != 1 else ''}"
+            return ("ok", f"pushed {n} file{'s' if n != 1 else ''}",
+                    {"files": n, "conflicts": conflicts, "commit": commit})
         # The hub moved first, or would not take it. Step back off the commit
         # (the work tree still holds everything) and look again.
         said = gitmod._tail(sent.stderr)
@@ -651,7 +661,8 @@ def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[P
             git.run("update-ref", LOCAL_REF, head)
         else:
             git.run("update-ref", "-d", LOCAL_REF)
-    return "error", f"the hub did not take the push after {PUSH_ATTEMPTS} tries ({said})"
+    return ("error", f"the hub did not take the push after {PUSH_ATTEMPTS} tries ({said})",
+            {"files": 0, "conflicts": conflicts})
 
 
 # --- the commands ----------------------------------------------------------
@@ -676,6 +687,7 @@ def _finish(vault: Path, machine: str, op: str, timer: st.Timer, state: Optional
             state["lastError"] = {"at": now, "op": op, "outcome": outcome,
                                   "message": message.splitlines()[0]}
         st.save(vault, state)
+        health.drop_cache(vault)
     if outcome != "off":
         st.append_log(vault, {"at": now, "op": op, "outcome": outcome, "machine": machine,
                               "durationMs": timer.ms(), **detail})
@@ -688,27 +700,32 @@ def _off(op: str) -> Outcome:
 
 
 def _guarded(vault: Path, machine: str, op: str, timer: st.Timer, state: Dict[str, Any],
-             body) -> Outcome:
-    """Run ``body`` and turn every way it can end into one recorded outcome."""
+             body, extra: Optional[Dict[str, Any]] = None) -> Outcome:
+    """Run ``body`` and turn every way it can end into one recorded outcome.
+    ``extra`` is carried into the log row whatever the outcome."""
+    extra = dict(extra or {})
     try:
         outcome, message, detail = body()
     except _Stop as stop:
-        return _finish(vault, machine, op, timer, state, stop.outcome, stop.message)
+        return _finish(vault, machine, op, timer, state, stop.outcome, stop.message, **extra)
     except GitMissing:
         raise
     except GitTimeout as exc:
         return _finish(vault, machine, op, timer, state, "unreachable",
-                       f"could not reach the hub ({exc.stderr}); the vault is as it was")
+                       f"could not reach the hub ({exc.stderr}); the vault is as it was", **extra)
     except (GitError, OSError) as exc:
         text = exc.stderr if isinstance(exc, GitError) else str(exc)
-        return _finish(vault, machine, op, timer, state, "error", f"{op} failed: {text}")
-    return _finish(vault, machine, op, timer, state, outcome, message, **detail)
+        return _finish(vault, machine, op, timer, state, "error", f"{op} failed: {text}", **extra)
+    return _finish(vault, machine, op, timer, state, outcome, message, **extra, **detail)
 
 
 def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
          trigger: Optional[str] = None) -> Outcome:
-    """Bring the hub into the vault. Never leaves it conflicted. ``trigger``
-    names what ran it (``cli``, ``session_start``…) in the log row."""
+    """Bring the hub into the vault. Never leaves it conflicted.
+
+    ``trigger`` says what ran it — ``cli``, ``session_start`` — and lands in
+    the log row as ``trigger``, for ``tools/measure_sync.py`` (#644).
+    """
     vault = Path(vault)
     timer = st.Timer()
     if not st.enabled(vault):
@@ -744,17 +761,20 @@ def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
             detail = {"files": done.files, "conflicts": done.conflicts,
                       "briefings": done.briefings, "refused": done.refused,
                       "restored": done.restored, "sharedChanged": done.shared_changed}
-            if trigger:
-                detail["trigger"] = trigger
             return "ok", message, detail
 
-        return _guarded(vault, machine, "pull", timer, state, body)
+        return _guarded(vault, machine, "pull", timer, state, body,
+                        {"trigger": trigger} if trigger else None)
 
 
 def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
          timeout: Optional[float] = None, trigger: Optional[str] = None) -> Outcome:
     """Commit what changed in the tracked set and push it, pulling first.
-    ``trigger`` names what ran it (``cli``, ``session_end``…) in the log row."""
+
+    ``trigger`` says what ran it — ``cli``, ``session_start``, ``session_end``
+    — and lands in the log row as ``trigger``, for ``tools/measure_sync.py``
+    (#644): a briefing whose push ran at a SessionStart is one that waited.
+    """
     vault = Path(vault)
     timer = st.Timer()
     if not st.enabled(vault):
@@ -769,16 +789,15 @@ def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
         def body():
             _refresh_info(git)
             try:
-                outcome, message = _push(git, machine, state, config_path, timeout)
+                outcome, message, detail = _push(git, machine, state, config_path, timeout)
             finally:
                 brought = int(state.pop("_briefings", 0) or 0)
-            detail: Dict[str, Any] = {"withheld": int(state.get("withheld") or 0),
-                                      "briefings": brought}
-            if trigger:
-                detail["trigger"] = trigger
+            # `trigger` reaches the row through `_guarded`'s extra, on every outcome.
+            detail = dict(detail, withheld=int(state.get("withheld") or 0), briefings=brought)
             return outcome, message, detail
 
-        return _guarded(vault, machine, "push", timer, state, body)
+        return _guarded(vault, machine, "push", timer, state, body,
+                        {"trigger": trigger} if trigger else None)
 
 
 def _pin_machine_id(config_path: Optional[Path], machine: str) -> None:
@@ -843,12 +862,12 @@ def init(vault: Path, remote: str, *, machine: str, config_path: Optional[Path] 
             st.write_format(vault)
             st.write_seed(vault, config_path)
             state["enabled"] = True
-            outcome, message = _push(git, machine, state, config_path, timeout)
+            outcome, message, detail = _push(git, machine, state, config_path, timeout)
             if outcome == "nothing":
-                return "ok", f"already initialised as the primary '{machine}'; nothing to push", {}
+                return "ok", f"already initialised as the primary '{machine}'; nothing to push", detail
             if outcome == "ok":
                 message = f"this machine ('{machine}') is the primary of {_shown(remote)}; {message}"
-            return outcome, message, {}
+            return outcome, message, detail
 
         result = _guarded(vault, machine, "init", timer, state, body)
     if created and not state.get("enabled"):

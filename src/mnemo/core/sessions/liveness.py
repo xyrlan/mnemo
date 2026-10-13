@@ -36,7 +36,11 @@ from typing import Any
 
 
 def claude_home() -> Path:
-    """Where Claude Code keeps daemon state."""
+    """Where Claude Code keeps the **default** account's daemon state.
+
+    Each account has its own daemon and roster under its own config dir
+    (#640); :mod:`mnemo.core.sessions.accounts` lists them.
+    """
     return Path(os.path.expanduser("~/.claude"))
 
 
