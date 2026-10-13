@@ -445,6 +445,7 @@ mnemo resume    wake the children the account's limit stopped, once it has reset
 mnemo land      a dispatched contract's pieces in landing order; --merge lands them
 mnemo replay    your transcripts against your vault: what would have come back, and from when
 mnemo stale     live rules citing a file this repo no longer has, and where it moved to
+mnemo sync      one vault on two of your own machines, through a private git remote (off until `sync init`)
 ```
 
 Your rules are yours. `mnemo export` writes the ones for the repo you're in to
@@ -479,7 +480,7 @@ Uninstall with `/plugin uninstall mnemo`. The vault is always preserved.
 - [Troubleshooting](docs/troubleshooting.md) — when something looks wrong
 - [Obsidian](docs/obsidian.md) — optional: browse the vault as a graph
 - [Design notes](design/README.md) — how it was decided and measured, built in the open
-- [Privacy](#privacy) — what stays on your machine, and the three opt-in switches that send anything
+- [Privacy](#privacy) — what stays on your machine, and the three opt-in switches that send anything, and what `mnemo sync` publishes once you run it
 
 ## Privacy
 
@@ -501,6 +502,13 @@ keys and tokens, JWTs, private keys, passwords in URLs, `*_TOKEN=`-style
 assignments — the judge before its 1,200-character cut, so no piece of a
 secret straddling it gets out, and the same pass runs on what mnemo writes
 into the vault.
+`mnemo sync` is not a switch but a command, and nothing runs it for you:
+until you type `mnemo sync init` or `mnemo sync join`, no part of the vault
+goes anywhere. Once you have, `push` sends your rule pages, briefings,
+mirrored memory, extraction state and `HOME.md` to the one git remote you
+named, through your own `git` — never logs, indexes, telemetry or the config
+— and refuses while any file it would publish holds a secret shape
+([exactly what leaves, and where it goes](docs/getting-started.md#what-leaves-the-machine-and-where-it-goes)).
 If `<vault>/.mnemo/private-names.tsv` lists names (`name<TAB>alias`), a
 `git push` or `gh` command that would publish one outside a private repo is
 denied, and the message gives the alias.

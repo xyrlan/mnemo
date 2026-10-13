@@ -839,6 +839,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "regen-graph-edges",
         help="refresh `## Sources` wikilink section on shared rules (idempotent, Obsidian graph)",
     )
+    sync_p = sub.add_parser(
+        "sync",
+        help="one vault on several of your own machines, through a private git remote (off until `sync init`)",
+    )
+    sync_sub = sync_p.add_subparsers(dest="sync_action")
+    sync_init = sync_sub.add_parser(
+        "init", help="on the machine that owns the vault: make it the primary and push it to the remote",
+    )
+    sync_init.add_argument("remote", help="a private git remote you already have (URL or path)")
+    sync_join = sync_sub.add_parser(
+        "join", help="on another machine: put the hub's vault here, moving aside any vault already there",
+    )
+    sync_join.add_argument("remote", help="the remote `mnemo sync init` pushed to")
+    sync_sub.add_parser("pull", help="bring the hub into the vault; the primary's version wins a conflict")
+    sync_sub.add_parser("push", help="commit what changed in the tracked set and push it; refused while it holds a secret shape")
+    sync_status = sync_sub.add_parser("status", help="on or off, the role, what is waiting, the last pull and push")
+    sync_status.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     help_p = sub.add_parser("help", help="list commands")
     help_p.add_argument(
         "--all", action="store_true",

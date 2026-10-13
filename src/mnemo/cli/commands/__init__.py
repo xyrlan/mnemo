@@ -50,6 +50,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     stale,
     statusline,
     status,
+    sync,
     telemetry,
     tree_sweep,
     twins,
