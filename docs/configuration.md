@@ -491,8 +491,12 @@ was working in, and in a `mnemo sessions` footer.
 | `sync.machineId` | `""` | The name this machine goes by in `mnemo sync`. Empty means the sanitised hostname. The vault records one machine id as its primary, and a machine is the primary only while its own id matches. `mnemo sync init` and `mnemo sync join` write the id they resolved here. It is never copied to another machine. |
 
 There is no switch that turns sync on: it is on for a vault once
-`mnemo sync init` or `mnemo sync join` ran there, and nothing calls it but
-the command. [What it sends, and where](getting-started.md#syncing-between-your-own-machines).
+`mnemo sync init` or `mnemo sync join` ran there. Off, no hook calls it; on,
+SessionStart pulls (at most 3 s, at most once per 5 minutes per vault) and
+the briefing and extraction workers push when they finish. `MNEMO_HOOKS_OFF`
+stops that as it stops every hook.
+[What it sends, and where](getting-started.md#syncing-between-your-own-machines);
+[what the hooks do with it on](getting-started.md#what-the-hooks-do-once-sync-is-on).
 
 ### `autopilot` — what may leave the machine
 

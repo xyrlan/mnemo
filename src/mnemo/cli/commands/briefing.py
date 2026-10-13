@@ -60,6 +60,13 @@ def cmd_briefing(args: argparse.Namespace) -> int:
                     from mnemo.core.friction import capture
 
                     capture.corrections_only(jsonl, args.agent, cfg)
+                else:
+                    # #643: the briefing is what a satellite has to send.
+                    from mnemo.core.sync import hooks as sync_hooks
+
+                    sync_hooks.push_after_write(
+                        cfg, vault_root, where="briefing.sync_push", trigger="session_end",
+                    )
             except Exception as exc:
                 err_mod.log_error(vault_root, "briefing.cli", exc)
                 return 1

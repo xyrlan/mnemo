@@ -856,6 +856,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sync_sub.add_parser("push", help="commit what changed in the tracked set and push it; refused while it holds a secret shape")
     sync_status = sync_sub.add_parser("status", help="on or off, the role, what is waiting, the last pull and push")
     sync_status.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    # #643: SessionStart's pull worker; never typed, so not in the help.
+    sync_sub.add_parser("hook-pull", help=argparse.SUPPRESS)
     help_p = sub.add_parser("help", help="list commands")
     help_p.add_argument(
         "--all", action="store_true",

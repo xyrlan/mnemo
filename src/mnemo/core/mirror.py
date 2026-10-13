@@ -99,7 +99,17 @@ def _has_files(src: Path) -> bool:
 
 
 def mirror_all(cfg: dict[str, Any]) -> None:
+    """Copy Claude Code's per-project memory into ``bots/<agent>/memory/``.
+
+    Not on a sync satellite (#643): ``bots/*/memory`` is the primary's to
+    write, and two machines mirroring by file name would overwrite each
+    other's ``MEMORY.md`` every session.
+    """
+    from mnemo.core.sync import roles
+
     vault = paths.vault_root(cfg)
+    if roles.is_satellite(vault, cfg):
+        return
     paths.bots_dir(cfg).mkdir(parents=True, exist_ok=True)
     projects_root = _claude_projects_root()
     if not projects_root.exists():

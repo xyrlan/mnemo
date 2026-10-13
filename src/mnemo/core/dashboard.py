@@ -233,11 +233,16 @@ def update_home_md(cfg: dict[str, Any]) -> Path:
     block and preserves any user-authored content above/below.
     """
     vault_root = paths.vault_root(cfg)
+    home_path = vault_root / "HOME.md"
+    # #643: ``HOME.md`` is the primary's; a satellite reads the one it pulled.
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault_root, cfg):
+        return home_path
     entries = _scan_shared(vault_root)
     body = _render_block_body(entries)
     new_block = _wrap_block(body)
 
-    home_path = vault_root / "HOME.md"
     if home_path.exists():
         existing = home_path.read_text(encoding="utf-8")
     else:

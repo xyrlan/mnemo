@@ -175,6 +175,12 @@ def _redact_quote(ev: dict | None) -> tuple[dict | None, int]:
     return ({**ev, "quote": quote} if n else ev), n
 
 
+class SatelliteRefused(ExtractionIOError):
+    """Extraction asked for on a sync satellite (#643): only the primary
+    extracts. An :class:`ExtractionIOError` so every caller that already
+    reports a held lock reports this the same way."""
+
+
 @dataclass
 class ExtractionSummary:
     projects_promoted: int = 0
@@ -1028,6 +1034,16 @@ def run_extraction(
     """
     start = time.monotonic()
     vault_root = paths.vault_root(cfg)
+    # #643: the primary is the sole extractor. A satellite's briefings reach
+    # it through the hub; extraction there would write pages and state a
+    # satellite can never publish.
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault_root, cfg):
+        raise SatelliteRefused(
+            "this machine is a sync satellite: only the primary extracts; its next "
+            "session start pulls this machine's briefings and extracts from them"
+        )
     state_path = vault_root / ".mnemo" / "extraction-state.json"
     lock_path = vault_root / ".mnemo" / "extract.lock"
     last_auto_run_path = vault_root / ".mnemo" / "last-auto-run.json"
@@ -1137,4 +1153,12 @@ def run_extraction(
             except ExtractionIOError as exc:
                 errors.log_error(vault_root, "extract.bg.summary", exc)
 
+    # #643: push what this run wrote, after the lock is released — a push
+    # pulls first, and that pull rebuilds the same indexes. One missing-file
+    # read with sync off.
+    if not dry_run:
+        from mnemo.core.sync import hooks as sync_hooks
+
+        sync_hooks.push_after_write(cfg, vault_root, where="extract.sync_push",
+                                    trigger="session_end")
     return summary

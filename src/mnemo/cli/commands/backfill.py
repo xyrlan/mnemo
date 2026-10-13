@@ -136,6 +136,12 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     cfg = cfg_mod.load_config()
     vault_root = paths.vault_root(cfg)
     try:
+        # #643: the sweep writes ``bots/<repo>/memory``, the primary's to
+        # write. A satellite's one-shot stays unspent; its lock is released.
+        from mnemo.core.sync import roles as sync_roles
+
+        if sync_roles.is_satellite(vault_root, cfg):
+            return _EXIT_ABORTED
         code = _run_backfill(args)
         if code in (_EXIT_OK, _EXIT_SOME_FAILED) and (cfg.get("backfill") or {}).get(
             "enabled", True

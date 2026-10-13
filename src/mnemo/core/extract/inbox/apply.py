@@ -363,6 +363,12 @@ def apply_pages(
 ) -> ApplyResult:
     run_id = run_id or datetime.now().isoformat(timespec="seconds")
     result = ApplyResult()
+    # #643: on a sync satellite nothing lands in ``shared/``; the primary
+    # extracts from this machine's briefings once they reach the hub.
+    from mnemo.core.sync import roles as sync_roles
+
+    if pages and sync_roles.is_satellite(Path(vault_root)):
+        return result
 
     # Built lazily, one per page type, from the state as it stands at loop
     # start, then kept current: every handled page is fed back in via

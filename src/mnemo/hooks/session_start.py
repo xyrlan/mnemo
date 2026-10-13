@@ -528,6 +528,11 @@ def _spawn_deferred(cwd: str | None = None) -> None:
 def run_deferred(cfg: dict, vault) -> str:
     """The session-start work no injected block reads (#610).
 
+    With sync on (#643) it also pushes whatever an earlier run left unpushed —
+    a briefing written while the machine was offline — after the rebuilds,
+    and on a satellite it skips the memory mirror: a satellite writes only
+    its own briefings.
+
     ``SessionStart`` holds the session's first prompt until it returns: of
     318 runs over 10 s on the maintainer's machine, 285 first prompts landed
     within a second of the hook returning (``measure_hook_durations``). Two
@@ -547,13 +552,15 @@ def run_deferred(cfg: dict, vault) -> str:
     ``doctor`` already reports.
     """
     from mnemo.core import errors, locks, mirror
+    from mnemo.core.sync import roles
 
     vault = Path(vault)
     with locks.try_lock(vault / _DEFERRED_LOCK, stale_after=600.0) as held:
         if not held:
             return "locked"
         try:
-            mirror.mirror_all(cfg)
+            if not roles.is_satellite(vault, cfg):
+                mirror.mirror_all(cfg)
         except Exception as e:
             errors.log_error(vault, "session_start.mirror", e)
         if bool((cfg.get("reflex") or {}).get("enabled", False)):
@@ -569,6 +576,14 @@ def run_deferred(cfg: dict, vault) -> str:
             picks.compact(vault)
         except Exception as exc:
             errors.log_error(vault, "session_start.judge_picks", exc)
+        # #643: what an earlier worker left unpushed goes now. Off, this is
+        # one missing-file read.
+        try:
+            from mnemo.core.sync import hooks as sync_hooks
+            sync_hooks.push_after_write(cfg, vault, where="session_start.sync_push",
+                                        trigger="session_start")
+        except Exception as exc:
+            errors.log_error(vault, "session_start.sync_push", exc)
     return "done"
 
 
@@ -1248,8 +1263,13 @@ def main() -> int:
         # touch, leaving no HOME.md, no config, and no shared/ for extracted
         # rules to land in. scaffold_vault is idempotent and skips files that
         # already exist, so this is a no-op on every subsequent session.
+        # #643: with sync on, the vault is one of several machines'. The
+        # role is read once here; a satellite writes only its own briefings,
+        # so every automatic writer below stands down there.
+        from mnemo.core.sync import roles as sync_roles
+        satellite = sync_roles.is_satellite(vault, cfg)
         try:
-            if not (Path(vault) / "HOME.md").exists():
+            if not satellite and not (Path(vault) / "HOME.md").exists():
                 from mnemo.install import scaffold
                 scaffold.scaffold_vault(vault)
         except Exception as e:
@@ -1258,6 +1278,15 @@ def main() -> int:
 
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()
+        # #643: pull before anything below reads the vault. Bounded, at most
+        # once per interval, never for a dispatched child; a pull that did
+        # not finish completes in its own process.
+        try:
+            from mnemo.core.sync import hooks as sync_hooks
+            sync_hooks.pull_at_session_start(cfg, vault, cwd=cwd)
+        except Exception as e:
+            errors.log_error(vault, "session_start.sync_pull", e)
+        phases.lap("sync_pull")
         # Canonical (#225): this name is cached for session_end (which writes
         # the day's log under it) and used for the session-start log line
         # below. Resolving naively filed both under the worktree's own
@@ -1290,7 +1319,8 @@ def main() -> int:
             errors.log_error(vault, "session_start.inbox_address", e)
         phases.lap("inbox_record")
         try:
-            _maybe_prune_briefings(vault, cfg)
+            if not satellite:
+                _maybe_prune_briefings(vault, cfg)
         except Exception as e:
             errors.log_error(vault, "session_start.briefings_prune", e)
         phases.lap("briefings_prune")
@@ -1306,7 +1336,7 @@ def main() -> int:
         # then the rebuilds below key by slug.
         try:
             from mnemo.core.migrations import slugs as _slugs
-            if not _slugs.marker_present(vault):
+            if not satellite and not _slugs.marker_present(vault):
                 rep = _slugs.stamp_slugs(vault)
                 if not rep.skipped:
                     _slugs.write_marker(vault)
@@ -1356,7 +1386,8 @@ def main() -> int:
         # prompt path. Must stay below `errors.should_run`, which is the kill
         # switch for every hook; it does not depend on scaffolding, since the
         # lock and ledger writes create `.mnemo/` themselves.
-        _maybe_schedule_install_backfill(cfg, vault, cwd)
+        if not satellite:
+            _maybe_schedule_install_backfill(cfg, vault, cwd)
         phases.lap("backfill")
 
         # The scan behind the procedure offer: detached, at most once per
@@ -1490,9 +1521,11 @@ def main() -> int:
 
         # autopilot — fire any due hook-driven operations. Always best-effort:
         # any failure here is logged + swallowed, must never block the session.
+        # Not on a satellite (#643): its jobs stage pages and fix state.
         try:
             from mnemo.autopilot.core.scheduler import run_due_jobs
-            run_due_jobs(vault_root=vault)
+            if not satellite:
+                run_due_jobs(vault_root=vault)
         except Exception as e:
             errors.log_error(vault, "session_start.autopilot", e)
         phases.lap("autopilot")

@@ -82,8 +82,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 2
 
     vault = cli._resolve_vault()
-    machine = sync.machine_id(cfg_mod.load_config())
+    cfg = cfg_mod.load_config()
+    machine = sync.machine_id(cfg)
     config_path = cfg_mod.default_config_path()
+    if action == "hook-pull":
+        # SessionStart's worker (#643): the pull, then what the primary does
+        # with briefings it brought. Prints nothing; the hook waits on it.
+        from mnemo.core.sync import hooks as sync_hooks
+
+        try:
+            sync_hooks.run_hook_pull(cfg, vault)
+        except Exception:  # noqa: BLE001 — logged by the worker, never raised
+            return 1
+        return 0
     try:
         if action == "status":
             report = sync.status(vault, machine=machine)
@@ -97,9 +108,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
         elif action == "join":
             result = sync.join(vault, args.remote, machine=machine, config_path=config_path)
         elif action == "pull":
-            result = sync.pull(vault, machine=machine)
+            result = sync.pull(vault, machine=machine, trigger="cli")
         else:
-            result = sync.push(vault, machine=machine, config_path=config_path)
+            result = sync.push(vault, machine=machine, config_path=config_path, trigger="cli")
     except sync.GitMissing:
         print("mnemo sync: git is not installed or not on PATH; sync runs this machine's own git")
         return 1

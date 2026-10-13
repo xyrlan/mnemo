@@ -424,19 +424,40 @@ def phase_breakdown(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"p50_run": at(0.5), "p95_run": at(0.95), "per_phase": per_phase}
 
 
+def reset_sync_throttle(vault: str) -> None:
+    """Forget when the last SessionStart pull ran, so the next run pulls (#643).
+
+    The hook pulls at most once per five minutes per vault; a timed series
+    of thirty starts would otherwise pay the pull once and time twenty-nine
+    starts that skipped it. ``--pull-every-run`` calls this before each
+    ``session_start`` run, so every run carries the pull."""
+    from mnemo.core.sync.hooks import PULL_STAMP
+
+    try:
+        os.unlink(os.path.join(vault, *PULL_STAMP.split("/")))
+    except OSError:
+        pass
+
+
 def timed_runs(runs: int, *, env: Dict[str, str], cwd: str,
                transcript: Optional[str] = None,
-               python: str = sys.executable) -> Dict[str, Any]:
+               python: str = sys.executable,
+               pull_every_run: bool = False) -> Dict[str, Any]:
     """Time ``session_start``, ``user_prompt_submit`` and ``session_end``
-    *runs* times each; ``session_start`` also reports its phase breakdown."""
+    *runs* times each; ``session_start`` also reports its phase breakdown.
+    ``pull_every_run`` makes every ``session_start`` run pay the sync pull
+    (#643) instead of one in five minutes."""
     import uuid
 
     out: Dict[str, Any] = {}
     start_sids: List[str] = []
+    vault = os.path.dirname(env.get("MNEMO_CONFIG_PATH") or "")
     for hook in ("session_start", "user_prompt_submit", "session_end"):
         values: List[float] = []
         for i in range(runs):
             sid = str(uuid.uuid4())
+            if hook == "session_start" and pull_every_run:
+                reset_sync_throttle(vault)
             payload: Dict[str, Any] = {"session_id": sid, "cwd": cwd,
                                        "hook_event_name": HOOKS[hook]}
             if hook == "session_start":
@@ -451,7 +472,6 @@ def timed_runs(runs: int, *, env: Dict[str, str], cwd: str,
             values.append(time_command([python, "-c", _DRIVER, hook], stdin=json.dumps(payload),
                                        env=env, cwd=cwd))
         out[hook] = _spread(values)
-    vault = os.path.dirname(env.get("MNEMO_CONFIG_PATH") or "")
     out["session_start_phases"] = phase_breakdown(phase_rows(vault, start_sids))
     return out
 
@@ -530,13 +550,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="the project directory a timed session runs in")
     parser.add_argument("--transcript", default=None,
                         help="a transcript a timed session_end is handed")
+    parser.add_argument("--pull-every-run", action="store_true",
+                        help="with sync on in the vault, every timed session_start pulls "
+                             "(the hook itself pulls at most once per five minutes)")
     args = parser.parse_args(argv)
     if args.timed:
         if not args.scratch:
             parser.error("--timed needs --scratch")
         env = prepare_scratch(os.path.expanduser(args.vault), os.path.expanduser(args.scratch))
         timed = timed_runs(args.timed, env=env, cwd=os.path.expanduser(args.cwd),
-                           transcript=args.transcript)
+                           transcript=args.transcript, pull_every_run=args.pull_every_run)
         prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(args.vault))
         if args.json:
             print(json.dumps(_provenance.stamp(timed, prov), indent=2))
