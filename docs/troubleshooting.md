@@ -302,9 +302,8 @@ and Python can reach. Avoid `*`, `?`, and newlines.
 
 ## Windows without WSL
 
-Supported. `rsync` is absent, so a pure-Python fallback takes over — slower per
-file, but functional. The plugin needs `bash` on `PATH` (Git for Windows
-provides it); without it, hooks skip silently rather than erroring.
+Supported. The plugin needs `bash` on `PATH` (Git for Windows provides it);
+without it, hooks skip silently rather than erroring.
 
 ## `mnemo sessions` says there are none, but I have some running
 
