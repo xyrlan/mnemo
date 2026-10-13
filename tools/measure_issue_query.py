@@ -82,7 +82,36 @@ different issue from the one its prompt named, so none of the four has a
 single issue text to rank. 509 children after 13 resumed copies, sample 200
 (first hash ``00fa523a…``, last ``59f7f0f5…``). Pending: 423 Jev requests
 (~0.55M input tokens, ~US$ 0.02 at list price) and at most 1,139 rater pairs.
-The verdict waits on the maintainer's ``--send``.
+
+**First send, 2026-10-13, the maintainer's vault (population frozen by a
+second dry run: 12 human, 200 of 511 children, last hash ``5997f64f…``).**
+423 Jev requests, 0 failed; 31 rater calls (``claude-sonnet-5``), US$ 2.50
+API-price equivalent; 212 of 212 sessions complete.
+
+=========  ==============  ==============  ==============
+reach      pooled (212)    human (12)      children (200)
+=========  ==============  ==============  ==============
+A          48.6%           25.0% (3)       50.0%
+B          52.8%           75.0% (9)       51.5%
+B-head     52.8%           75.0% (9)       51.5%
+=========  ==============  ==============  ==============
+
+B - A pooled +4.2 pp [-2.8, +11.3]; human +50.0 pp [+25.0, +75.0]; children
++1.5 pp [-6.0, +9.0]. Precision pooled A 55.1% (146/265), B 72.0% (172/239),
+B-head 68.2% (163/239). Without the top rule (``contract-dispatch-design-pattern``)
+B - A is +3.3 pp [-3.8, +10.4]. **VERDICT: DO NOT BUILD (B and B-head fail
+conditions 1 and 4).**
+
+What carries the pooled result is the children's arm A: their opening line
+carries the issue's **title**, and the title alone already reaches 50% of
+the sample, which the body leaves unchanged. The body still raises their
+precision from 55.0% to 71.0% at the same reach. A human pointer carries no
+title. On the 12 human sessions, B reaches an on-point rule in 9 where A
+reaches 3, and precision is 86.7% (13/15). That reading was not the
+pre-registered decision, and its n is 12. It is also bounded by frequency:
+16 sessions in the 48 days of transcripts on disk followed a pointer prompt
+with ``gh issue view``, so even at +50 pp that is about 8 more sessions
+reached in 48 days.
 
 **Sending.** ``--send`` sends issue text and rule text to TypeSafe (the judge,
 with the key ``mnemo rerank --setup`` stored) and to the rater. Issue bodies
