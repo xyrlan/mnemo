@@ -485,6 +485,108 @@ table to paste into `~/.codex/config.toml`. `mnemo status` lists the hosts it
 finds registered; `mnemo doctor` checks that each registration points at a
 command that still exists.
 
+## Syncing between your own machines
+
+One vault, used from two machines of yours, through a private git remote you
+already have. It is off until you type it, and no hook calls it: a vault that
+never ran `mnemo sync init` or `mnemo sync join` behaves exactly as it did.
+
+```bash
+# on the machine that owns the vault
+mnemo sync init git@github.com:you/my-vault.git
+
+# on the other machine
+mnemo sync join git@github.com:you/my-vault.git
+
+# on either, whenever you want the two to agree
+mnemo sync pull
+mnemo sync push
+mnemo sync status          # --json for a program
+```
+
+`init` makes the vault a git work tree, records this machine as the
+**primary**, and makes the first push. Running it again is safe. `join`
+fetches the hub into place on another machine, which becomes a **satellite**.
+A vault already there is moved to `<vault>.pre-sync-<timestamp>` — never
+deleted — and the command says where it went.
+
+### What leaves the machine, and where it goes
+
+It goes to the remote you named, and nowhere else. mnemo runs your machine's
+own `git` and stores no credential: whatever already lets you `git push` to
+that remote (an SSH key, a credential helper) is what answers it. Make the
+remote **private** — it will hold your rules and your session briefings.
+
+What is committed and pushed:
+
+- `shared/` — your live rule pages — including `shared/_inbox/`, the pages
+  staged for review;
+- `bots/<repo>/briefings/` — one briefing per session;
+- `bots/<repo>/memory/` — mnemo's copy of Claude Code's per-project memory;
+- `.mnemo/extraction-state.json` — what extraction has already read;
+- `HOME.md`;
+- three small files of sync's own under `.mnemo/sync/`: which machine is the
+  primary, the format version, and the config seed described below.
+
+What never is:
+
+- `shared/_archive/`, the rest of `.mnemo/` (indexes, telemetry, measurement
+  output, every `*.jsonl` log), `bots/<repo>/logs/`, `.obsidian/`;
+- `mnemo.config.json`, backups (`*.bak*`) and `.errors.log`;
+- anything else at the top of the vault;
+- agent directories left by test runs and probes — a name starting `bg-`,
+  `claude-jobs-` or `claude-tmp-`, a numeric uid followed by `--`, or
+  `pytest-of-` or `scratchpad` anywhere in it. They stay on disk; nothing is
+  deleted from the vault.
+
+Claude Code's own memory and your transcripts are not in the vault and do not
+travel. The hub keeps every version it was ever pushed, like any git remote.
+
+**Nothing is pushed while it holds a secret shape.** Before every push the
+files about to be published are scanned for the shapes `mnemo redact` knows
+(API keys, tokens, JWTs, private keys, passwords in URLs and beside a label).
+A hit refuses the whole push and names the file and the kind, never the value;
+`mnemo sync status` shows it until it clears. `mnemo redact --apply` rewrites
+pages and briefings. A file under `bots/<repo>/memory/` is a copy: fix the
+original in Claude Code's memory, or the next session start copies it back.
+
+### The config does not travel
+
+`mnemo.config.json` names this machine's vault and may name its paths and
+keys, so it is never committed. The primary publishes a **seed** instead —
+every key of its config except `vaultRoot`, `sync.machineId`, any value that
+is a machine path, and anything shaped like a secret. `join` writes the new
+machine's config from that seed once. After that the two configs are
+independent: changing one does not change the other.
+
+### Two machines, one writer per file
+
+A machine is the primary only while its own id matches the one the vault
+records; the id is the sanitised hostname unless you set `sync.machineId`,
+and `init` and `join` write the id they used into that machine's config so a
+hostname that changes with the network cannot change the role. Nothing
+changes the primary after `init`.
+
+`pull` never leaves the vault conflicted and never asks you anything. When
+the same file changed on both sides, **the primary's version wins on every
+machine**. The version that lost is kept on the machine it came from, under
+`shared/_archive/sync-losers/<timestamp>/`, and counted in `status`. A pull
+that changed `shared/` rebuilds the indexes recall reads.
+
+`push` commits what changed and pushes it; when the hub moved first it pulls
+and tries again, a bounded number of times. Having nothing to push is not an
+error. A hub that cannot be reached leaves the vault exactly as it was, and
+the command says so.
+
+Line endings are never converted, on any platform: a page's bytes are what
+extraction hashed, and a converted page would look changed and be extracted
+again. A hub written by a newer mnemo, in a format this one does not know, is
+neither pulled nor pushed until you upgrade. A second `mnemo sync` while one
+is running returns "busy" and touches nothing.
+
+Every pull and push leaves one row — time, outcome, duration — in
+`.mnemo/sync-log.jsonl`, which stays on the machine.
+
 ## Observing and debugging
 
 ```bash

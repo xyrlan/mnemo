@@ -202,6 +202,16 @@ DEFAULTS: dict[str, Any] = {
     "scoping": {
         "universalThreshold": 2,
     },
+    "sync": {
+        # #642: the name this machine goes by in `mnemo sync`. The vault's
+        # primary record names one machine id, and a machine is the primary
+        # only while its own id matches. Empty means the sanitised hostname;
+        # `mnemo sync init` and `join` write the id they resolved here, so a
+        # hostname that changes with the network cannot change the role.
+        # There is no switch to turn sync on: it is on for a vault once
+        # `init` or `join` ran there, and nothing calls it but the command.
+        "machineId": "",
+    },
     "inbox": {
         # #380: what waits in shared/_inbox/ reaches the maintainer at session
         # start instead of only when they think to run `mnemo doctor`. The

@@ -484,6 +484,16 @@ was working in, and in a `mnemo sessions` footer.
 | `doctor.skipStatuslineDrift` | `false` | Silence the statusLine drift check — useful if you manage `settings.json` by hand |
 | `install.autoRepairHooks` | `true` | Rewrite mnemo's hook entries at session start when an installed matcher is narrower than the one this version ships (#337). Once per distinct drift, `settings.json` hooks only, previous file backed up. `false` keeps a matcher you narrowed by hand — `mnemo status` and `mnemo doctor` still report it. |
 
+### `sync` — one vault on several of your own machines
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sync.machineId` | `""` | The name this machine goes by in `mnemo sync`. Empty means the sanitised hostname. The vault records one machine id as its primary, and a machine is the primary only while its own id matches. `mnemo sync init` and `mnemo sync join` write the id they resolved here. It is never copied to another machine. |
+
+There is no switch that turns sync on: it is on for a vault once
+`mnemo sync init` or `mnemo sync join` ran there, and nothing calls it but
+the command. [What it sends, and where](getting-started.md#syncing-between-your-own-machines).
+
 ### `autopilot` — what may leave the machine
 
 | Key | Default | Meaning |
