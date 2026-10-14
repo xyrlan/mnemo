@@ -222,6 +222,7 @@ def _git(args: Sequence[str], *, cwd: Path | str):
     try:
         return subprocess.run(
             ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError) as exc:  # pragma: no cover - platform
         return subprocess.CompletedProcess(args, 1, "", str(exc))
@@ -231,7 +232,8 @@ def _run_gh(args, **kwargs):
     """Indirection so the check reader can be faked in tests."""
     import subprocess
 
-    return subprocess.run(args, capture_output=True, text=True, timeout=60, **kwargs)
+    return subprocess.run(args, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=60, **kwargs)
 
 
 def failing_checks(pr: str) -> list[str]:
@@ -646,6 +648,7 @@ def rehearse(
             try:
                 ran = subprocess.run(
                     list(suite), cwd=str(tree), capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
                     env=_suite_env(tree),
                 )
             except (FileNotFoundError, OSError) as exc:
@@ -704,6 +707,7 @@ def merge_prs(
                 ["gh", "pr", "merge", str(state.pr), f"--{method}"]
                 + (["--admin"] if admin else []),
                 cwd=str(repo_root), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
             )
         except (FileNotFoundError, OSError) as exc:
             steps.append(Step(state.piece.slug, ok=False, detail=f"gh unavailable: {exc}"))

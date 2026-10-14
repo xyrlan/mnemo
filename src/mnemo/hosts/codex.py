@@ -70,7 +70,8 @@ def toml_snippet() -> str:
 def _run(argv: List[str]) -> Optional[str]:
     """None on success, else a one-line reason."""
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
         return str(exc)
     if proc.returncode != 0:

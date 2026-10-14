@@ -132,7 +132,8 @@ def pid_start(pid: int) -> str:
     try:
         out = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(int(pid))],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=TIMEOUT_SECONDS,
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         return ""
@@ -175,7 +176,8 @@ def live_pids() -> Optional[Set[int]]:
     try:
         out = subprocess.run(
             ["ps", "-A", "-o", "pid="],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError):
         return None

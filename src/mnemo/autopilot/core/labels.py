@@ -26,7 +26,7 @@ def ensure_label_exists() -> bool:
                 "--force",
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError):
         return False

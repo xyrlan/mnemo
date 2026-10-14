@@ -84,6 +84,7 @@ def base_branch(*, repo_root: Path | str) -> str:
                 ["gh", "repo", "view", "--json", "defaultBranchRef",
                  "--jq", ".defaultBranchRef.name"],
                 cwd=str(repo_root), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
             )
         except (FileNotFoundError, OSError):
             result = None
@@ -184,6 +185,7 @@ def _git(args: Sequence[str], *, cwd: Path | str) -> subprocess.CompletedProcess
     try:
         return subprocess.run(
             ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError) as exc:  # pragma: no cover - platform
         return subprocess.CompletedProcess(args, 1, "", str(exc))
@@ -295,7 +297,7 @@ def pr_info(branch: str, *, repo_root: Path | str) -> PR | None:
         result = subprocess.run(
             ["gh", "pr", "list", "--head", branch, "--state", "all",
              "--json", "number,url,state", "--limit", "1"],
-            cwd=str(repo_root), capture_output=True, text=True,
+            cwd=str(repo_root), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError):
         return None
@@ -583,7 +585,7 @@ def _append_closing_trailer(url: str, *, issue: int, worktree: Path | str) -> No
     try:
         got = subprocess.run(
             ["gh", "pr", "view", url, "--json", "body", "--jq", ".body"],
-            cwd=str(worktree), capture_output=True, text=True,
+            cwd=str(worktree), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if got.returncode != 0:
             return
@@ -592,7 +594,7 @@ def _append_closing_trailer(url: str, *, issue: int, worktree: Path | str) -> No
             return
         subprocess.run(
             ["gh", "pr", "edit", url, "--body", f"{body}\n\nCloses #{issue}"],
-            cwd=str(worktree), capture_output=True, text=True,
+            cwd=str(worktree), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError):
         return
@@ -634,7 +636,7 @@ def open_pr(
     try:
         result = subprocess.run(
             ["gh", "pr", "create", "--head", branch, "--title", title, "--fill"],
-            cwd=str(worktree), capture_output=True, text=True,
+            cwd=str(worktree), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError) as exc:
         raise DeliveryError(f"gh unavailable: {exc}") from exc
@@ -704,7 +706,7 @@ def stop_session(short_id: str) -> str | None:
     try:
         result = subprocess.run(
             ["claude", "stop", short_id],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
         return str(exc)

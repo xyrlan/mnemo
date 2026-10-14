@@ -514,7 +514,8 @@ def claude_version() -> Optional[str]:
     """
     try:
         result = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, timeout=15,
+            ["claude", "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15,
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError):
         return None

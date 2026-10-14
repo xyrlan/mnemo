@@ -260,7 +260,7 @@ def _run_pytest(*, repo_root: Path) -> bool:
         result = subprocess.run(
             argv,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(repo_root),
         )
     except (FileNotFoundError, OSError):

@@ -24,7 +24,8 @@ WORKTREE_PREFIX = "mnemo-selffix-"
 def _run(args: List[str], *, cwd: Path) -> Optional[subprocess.CompletedProcess]:
     """Run *args* in *cwd*, returning ``None`` if the binary is unavailable."""
     try:
-        return subprocess.run(args, capture_output=True, text=True, cwd=str(cwd))
+        return subprocess.run(args, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", cwd=str(cwd))
     except (FileNotFoundError, OSError, NotADirectoryError):
         return None
 
@@ -135,7 +136,7 @@ def push_branch(branch_name: str, *, repo_root: Path) -> bool:
         result = subprocess.run(
             ["git", "push", "-u", "origin", branch_name],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(repo_root),
         )
     except (FileNotFoundError, OSError):
@@ -177,7 +178,7 @@ def open_pr(
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(repo_root),
         )
     except (FileNotFoundError, OSError):
