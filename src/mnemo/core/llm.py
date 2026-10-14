@@ -343,7 +343,7 @@ def _ask_login() -> str | None:
         result = _auth_status_run(
             [_resolve_claude(), "auth", "status", "--json"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=15,
             env=_build_env(),
             cwd=_working_dir(),

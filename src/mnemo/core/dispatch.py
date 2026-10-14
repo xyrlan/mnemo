@@ -806,7 +806,7 @@ def fetch_issue(issue: int, *, repo_root: Path | str) -> Issue:
     try:
         result = subprocess.run(
             ["gh", "issue", "view", str(issue), "--json", "number,title,body"],
-            cwd=str(repo_root), capture_output=True, text=True,
+            cwd=str(repo_root), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError) as exc:
         raise DispatchError(f"gh unavailable: {exc}") from exc
@@ -870,7 +870,7 @@ def ensure_worktree(
         result = subprocess.run(
             ["git", "worktree", "add", "-b", branch, str(target),
              *([base] if base else [])],
-            cwd=str(repo_root), capture_output=True, text=True,
+            cwd=str(repo_root), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError) as exc:
         raise DispatchError(f"git unavailable: {exc}") from exc
@@ -914,7 +914,7 @@ def remove_worktree(
     try:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(target)],
-            cwd=str(repo_root), capture_output=True, text=True,
+            cwd=str(repo_root), capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError):
         pass
@@ -923,7 +923,7 @@ def remove_worktree(
     try:
         subprocess.run(
             ["git", "worktree", "prune"], cwd=str(repo_root),
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except (FileNotFoundError, OSError):
         pass
@@ -931,7 +931,7 @@ def remove_worktree(
         try:
             subprocess.run(
                 ["git", "branch", "-d", branch], cwd=str(repo_root),
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
         except (FileNotFoundError, OSError):
             pass
@@ -1113,7 +1113,8 @@ def spawn_child(
         args.append("--")
     args.append(prompt)
     try:
-        result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
+        result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError) as exc:
         raise DispatchError(f"could not spawn claude: {exc}") from exc
 

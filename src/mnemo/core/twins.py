@@ -346,7 +346,7 @@ def pair_for_tree(
 def _git(args: Sequence[str], *, cwd: Path | str) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
-                              text=True)
+                              text=True, encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError) as exc:
         return subprocess.CompletedProcess(list(args), 1, "", str(exc))
 

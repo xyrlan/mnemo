@@ -97,7 +97,7 @@ def read_ps() -> str | None:
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid=,ppid=,rss=,etime=,command="],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
     except (OSError, subprocess.SubprocessError):
         return None

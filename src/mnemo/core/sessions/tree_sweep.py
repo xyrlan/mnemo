@@ -120,7 +120,8 @@ Runner = Callable[..., subprocess.CompletedProcess]
 def _run(args: Sequence[str], *, cwd: Path | str) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
-            list(args), cwd=str(cwd), capture_output=True, text=True, timeout=60,
+            list(args), cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
         return subprocess.CompletedProcess(list(args), 1, "", str(exc))

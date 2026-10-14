@@ -269,7 +269,7 @@ def _run_original(original_cmd: str | None) -> str:
             original_cmd,
             shell=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=COMPOSER_TIMEOUT_S,
         )
         return (proc.stdout or "").strip()

@@ -15,6 +15,7 @@ not UTF-8, so the tests cannot pass for the wrong reason.
 """
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -81,3 +82,64 @@ def test_a_non_ascii_branch_name_reads_back_as_written(locale_codec_is_cp1252, r
     _git(["checkout", "-b", "fix/ação"], repo)
 
     assert delivery._branch_of(repo) == "fix/ação"
+
+
+# --- the invariant: no call under src/ adds the pattern back ----------------
+#
+# The same shape as ``test_text_io_encoding.py`` (#255) for files: an AST walk
+# that fails on any call passing a literal true ``text=`` or
+# ``universal_newlines=`` without ``encoding=``. It keys on the keyword, not
+# the callee, so a seam such as ``llm._auth_status_run = subprocess.run`` or
+# ``check_output``/``Popen`` is caught too; a dataclass field named ``text``
+# is passed a string, never the literal ``True``, and is not.
+
+REPO = Path(__file__).resolve().parents[2]
+# A call that means the locale's codec says so on the line of its ``text=``.
+EXEMPT_MARKER = "# encoding: platform default"
+
+
+def bare_text_mode_calls(source: str, filename: str = "<string>") -> list[int]:
+    """Lines of calls that decode a subprocess's output in the locale's codec."""
+    lines = source.splitlines()
+    hits = []
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if not isinstance(node, ast.Call):
+            continue
+        kws = {kw.arg: kw.value for kw in node.keywords}
+        flag = kws.get("text", kws.get("universal_newlines"))
+        if not (isinstance(flag, ast.Constant) and flag.value is True) or "encoding" in kws:
+            continue
+        if EXEMPT_MARKER in lines[node.lineno - 1] or EXEMPT_MARKER in lines[flag.lineno - 1]:
+            continue
+        hits.append(node.lineno)
+    return hits
+
+
+def test_every_text_mode_subprocess_under_src_names_its_encoding() -> None:
+    offenders = [
+        f"{py.relative_to(REPO)}:{line}"
+        for py in sorted((REPO / "src").rglob("*.py"))
+        for line in bare_text_mode_calls(py.read_text(encoding="utf-8"), str(py))
+    ]
+    assert not offenders, (
+        f"{len(offenders)} call(s) under src/ pass text=True without encoding=, so "
+        "the output is decoded as cp1252 on Windows while git/gh/claude write "
+        "UTF-8. Pass encoding=\"utf-8\", errors=\"replace\":\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize("snippet, flagged", [
+    ("subprocess.run(a, capture_output=True, text=True)", True),
+    ("subprocess.run(a, universal_newlines=True)", True),
+    ("subprocess.check_output(a, text=True)", True),
+    ("subprocess.Popen(a, stdout=PIPE, text=True)", True),
+    ("_auth_status_run(a, capture_output=True, text=True)", True),
+    ("subprocess.run(a, text=True, encoding='utf-8')", False),
+    ("subprocess.run(a, text=True, encoding='utf-8', errors='replace')", False),
+    ("subprocess.run(a, capture_output=True)", False),
+    ("subprocess.run(a, text=False)", False),
+    ("Stall(kind='x', text=wanted)", False),
+    ("subprocess.run(a, text=True)  # encoding: platform default", False),
+])
+def test_scanner_recognises_each_shape(snippet: str, flagged: bool) -> None:
+    assert bool(bare_text_mode_calls(snippet)) is flagged

@@ -17,7 +17,7 @@ def _run(args: list[str], cwd: Path) -> str:
         result = subprocess.run(
             args,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             cwd=str(cwd),
         )
         if result.returncode == 0:

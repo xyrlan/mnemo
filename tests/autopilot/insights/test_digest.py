@@ -329,7 +329,7 @@ def test_post_digest_issue_returns_number_on_success(tmp_path: Path):
 
     d = generate_digest(vault_root=tmp_path, since_days=7)
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, encoding, errors):
         class R:
             returncode = 0
             stdout = "https://github.com/owner/repo/issues/42\n"
@@ -345,7 +345,7 @@ def test_post_digest_issue_returns_none_on_failure(tmp_path: Path):
 
     d = generate_digest(vault_root=tmp_path, since_days=7)
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, encoding, errors):
         class R:
             returncode = 1
             stdout = ""
@@ -361,7 +361,7 @@ def test_post_digest_issue_returns_none_when_gh_missing(tmp_path: Path):
 
     d = generate_digest(vault_root=tmp_path, since_days=7)
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, encoding, errors):
         raise FileNotFoundError("gh not found")
 
     result = post_digest_issue(digest=d, _run=fake_run)

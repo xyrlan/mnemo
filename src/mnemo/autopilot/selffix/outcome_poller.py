@@ -35,7 +35,8 @@ _ISSUE_REASON_MAP = {
 def _gh_json(cmd: list) -> list:
     """Run a ``gh`` command expected to print a JSON array; [] on any failure."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError):
         return []
     if result.returncode != 0:

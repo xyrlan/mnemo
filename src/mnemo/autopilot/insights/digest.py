@@ -240,7 +240,7 @@ def post_digest_issue(
         "--label", "mnemo:digest",
     ]
     try:
-        result = _run(cmd, capture_output=True, text=True)
+        result = _run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError):
         return None
 

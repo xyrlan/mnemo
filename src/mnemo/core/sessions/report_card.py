@@ -61,7 +61,8 @@ _PR_FIELDS = "number,url,state,isDraft,additions,deletions,changedFiles,headRefO
 def _run(argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
     try:
         result = subprocess.run(
-            list(argv), cwd=cwd, capture_output=True, text=True, timeout=60,
+            list(argv), cwd=cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)

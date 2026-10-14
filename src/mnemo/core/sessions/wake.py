@@ -209,7 +209,8 @@ def _resume(session_id: str, text: str, *, cwd: str, timeout: float) -> Optional
     try:
         result = subprocess.run(
             ["claude", "--bg", "--resume", session_id, text],
-            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+            cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError) as exc:
         return str(exc)
