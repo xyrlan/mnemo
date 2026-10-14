@@ -97,8 +97,9 @@ def test_session_end_briefing_keeps_the_cached_name_after_the_tree_is_removed(
     session.save("wt-gone", asdict(agent.resolve_canonical_agent(str(worktree))))
     # The transcript lives at the path Claude Code derives from the cwd string,
     # and outlives the tree.
-    encoded = str(worktree).replace(os.sep, "-")
-    jsonl = Path.home() / ".claude" / "projects" / encoded / "wt-gone.jsonl"
+    from mnemo.core.backfill.discover import encode_cwd
+
+    jsonl = Path.home() / ".claude" / "projects" / encode_cwd(str(worktree)) / "wt-gone.jsonl"
     jsonl.parent.mkdir(parents=True)
     jsonl.write_text("{}\n", encoding="utf-8")
     (hook_env / "mnemo.config.json").write_text(

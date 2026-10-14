@@ -225,10 +225,9 @@ def _inline_briefing(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Path, str]]:
 
 
 def _transcript(home: Path, cwd: Path, sid: str) -> Path:
-    encoded = str(cwd).replace(os.sep, "-")
-    if os.altsep:
-        encoded = encoded.replace(os.altsep, "-")
-    path = home / ".claude" / "projects" / encoded / f"{sid}.jsonl"
+    from mnemo.core.backfill.discover import encode_cwd
+
+    path = home / ".claude" / "projects" / encode_cwd(str(cwd)) / f"{sid}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     events = [
         {"type": "user", "timestamp": "2026-10-13T10:00:00.000Z",

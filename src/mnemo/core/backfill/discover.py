@@ -28,6 +28,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _DRIVE_LETTER = re.compile(r"^[A-Za-z]:$")
+_NOT_ALNUM = re.compile(r"[^A-Za-z0-9]")
+
+
+def encode_cwd(cwd: str) -> str:
+    """The project directory name Claude Code gives *cwd*: every character
+    that is not an ASCII letter or digit becomes a dash, so
+    ``C:\\Users\\me\\repo`` is ``C--Users-me-repo`` and ``~/.claude`` loses its
+    dot too. Checked on 2026-10-14 against 1,539 of the maintainer's
+    transcripts: 1,523 directories are named exactly this from the ``cwd``
+    their first event records, and the other 16 hold a session that recorded
+    its repo before it moved into a worktree.
+    """
+    return _NOT_ALNUM.sub("-", cwd)
 
 
 @dataclass(frozen=True)
@@ -52,14 +65,15 @@ def decode_project_dir(*, encoding: str) -> str:
     (:func:`recorded_cwd` is the source of truth); never use it to *find*
     anything.
 
-    Windows note: the encoder in ``session_end.py`` replaces both ``os.sep``
-    and ``os.altsep`` with ``-``, so a Windows cwd like ``C:\\Users\\me\\repo``
-    encodes to ``C:-Users-me-repo`` — the drive letter's colon is not a
-    separator and survives untouched. A plain ``"/" + "-".join(...)`` would
-    wrongly prepend a leading slash ahead of the drive letter and produce an
-    invalid path (``/C:/Users/me/repo``). Detect that case and join without
-    the leading slash instead.
+    Windows: :func:`encode_cwd` turns the drive's colon into a dash too, so
+    ``C:\\Users\\me\\repo`` is ``C--Users-me-repo``, decoded here as
+    ``C:/Users/me/repo`` rather than with a slash ahead of the drive letter.
+    ``C:-Users-me-repo``, the shape an earlier encoder in ``session_end.py``
+    assumed and Claude Code never writes, decodes the same way.
     """
+    drive = re.match(r"^([A-Za-z])-(?=-)", encoding)
+    if drive:
+        encoding = drive.group(1) + ":" + encoding[drive.end():]
     parts = [part for part in encoding.split("-") if part]
     if not parts:
         return "/"

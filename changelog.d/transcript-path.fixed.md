@@ -1,0 +1,12 @@
+- **SessionEnd finds the session's transcript on Windows, under an account
+  config dir, and in any directory with a dot or an underscore in its path.**
+  The hook rebuilt the transcript's path from the cwd by replacing the path
+  separators alone, where Claude Code turns every character that is not a
+  letter or a digit into a dash: on Windows the drive's colon stayed
+  (`C:-Users-you-repo` for Claude Code's `C--Users-you-repo`), so no briefing
+  was ever scheduled there and a sync satellite never pushed anything; on a
+  Mac, 141 of 1,539 transcripts missed the same way (`.claude/worktrees/…`,
+  temp dirs). The hook now reads the payload's `transcript_path` first and
+  falls back to Claude Code's own encoding under `$CLAUDE_CONFIG_DIR` and then
+  `~/.claude` (1,523 of the same 1,539 found; the other 16 recorded a cwd they
+  later left, which only `transcript_path` names).
