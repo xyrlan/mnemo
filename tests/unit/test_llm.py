@@ -362,6 +362,36 @@ def test_build_argv_falls_back_to_the_bare_name(monkeypatch):
     assert llm._build_argv("claude-haiku-4-5", None)[0] == "claude"
 
 
+def test_the_prompt_and_the_reply_cross_the_pipe_as_utf8(tmp_path, monkeypatch):
+    # A real child, so the pipe is encoded the way it is in production. On a
+    # Windows runner the locale's codec is cp1252: before the fix the emoji
+    # raised in the stdin writer and the child read nothing (2026-10-14).
+    # Elsewhere the locale is UTF-8 and only the reply line can tell.
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    child = (
+        "import sys; got = sys.stdin.buffer.read(); "
+        "sys.stdout.buffer.write(got.hex().encode() + b'\\n' + 'ação ✅ 🚀'.encode('utf-8'))"
+    )
+    prompt = "uma sessão com emoji ✅ 🚀 e acentos: ação, coração"
+    result = llm._invoke_once([sys.executable, "-c", child], prompt, 60)
+    assert result.returncode == 0, result.stderr
+    sent, reply = result.stdout.split("\n", 1)
+    assert bytes.fromhex(sent) == prompt.encode("utf-8")
+    assert reply == "ação ✅ 🚀"
+
+
+def test_a_lone_surrogate_in_the_prompt_does_not_fail_the_call(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    child = "import sys; print(len(sys.stdin.buffer.read()))"
+    result = llm._invoke_once([sys.executable, "-c", child], "half a pair: \ud83d", 60)
+    assert result.returncode == 0, result.stderr
+    assert int(result.stdout.strip()) == len("half a pair: ?".encode("utf-8"))
+
+
 def test_working_dir_keeps_an_existing_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert llm._working_dir() is None
