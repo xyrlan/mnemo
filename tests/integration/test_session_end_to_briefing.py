@@ -133,6 +133,58 @@ def test_session_end_spawns_briefing_and_cli_writes_file(tmp_path: Path, monkeyp
     assert "exponential backoff" in text
 
 
+@pytest.mark.real_spawn
+def test_session_end_briefs_the_transcript_the_payload_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The payload's ``transcript_path`` is where the briefing reads from.
+
+    Before 2026-10-14 the hook rebuilt the path from the cwd alone, keeping a
+    Windows drive's colon (``C:-Users-you-repo``) where Claude Code writes
+    ``C--Users-you-repo``: a Windows machine scheduled no briefing for any
+    session, and a satellite never pushed anything to its hub. Here nothing
+    sits under ``~/.claude/projects`` at all, so only the payload can find it.
+    """
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    (vault / ".mnemo").mkdir(parents=True)
+    (vault / "bots" / "repo" / "memory").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    transcript = tmp_path / "elsewhere" / "sidWIN.jsonl"
+    _write_jsonl(transcript, [
+        {"type": "user", "timestamp": "2026-10-14T10:00:00.000Z",
+         "message": {"role": "user", "content": "hi"}},
+    ])
+
+    cfg = {
+        "vaultRoot": str(vault),
+        "capture": {"sessionStartEnd": False},
+        "extraction": {"auto": {"enabled": False}},
+        "briefings": {"enabled": True},
+    }
+    monkeypatch.setattr("mnemo.core.config.load_config", lambda: cfg)
+    monkeypatch.setattr("mnemo.core.paths.vault_root", lambda _cfg: vault)
+    monkeypatch.setattr("mnemo.core.mirror.mirror_all", lambda _cfg: None)
+
+    spawns: list = []
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda argv, *a, **kw: spawns.append(list(argv)) or None,
+    )
+    payload = json.dumps({
+        "session_id": "sidWIN", "cwd": "C:\\Users\\you\\repo", "reason": "exit",
+        "transcript_path": str(transcript),
+    })
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+
+    assert session_end.main() == 0
+    briefing_spawns = [a for a in spawns if _is_briefing_spawn(a)]
+    assert len(briefing_spawns) == 1, f"expected one briefing spawn, got: {spawns}"
+    argv = briefing_spawns[0]
+    assert Path(argv[argv.index("briefing") + 1]) == transcript
+
+
 def test_session_end_does_not_spawn_briefing_when_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from mnemo.hooks import session_end
 

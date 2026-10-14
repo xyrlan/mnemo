@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -31,12 +31,7 @@ def _session(project_dir: Path, name: str, mtime: float) -> Path:
     return p
 
 
-def _encode_cwd(cwd: str) -> str:
-    """Mirror session_end.py's `_resolve_session_jsonl_path` encoder exactly."""
-    encoded = cwd.replace(os.sep, "-")
-    if os.altsep:
-        encoded = encoded.replace(os.altsep, "-")
-    return encoded
+_encode_cwd = discover.encode_cwd
 
 
 def test_decodes_dashed_dir_back_to_cwd():
@@ -46,10 +41,11 @@ def test_decodes_dashed_dir_back_to_cwd():
 
 
 def test_decodes_windows_drive_letter_without_leading_slash():
-    # session_end.py's encoder replaces os.sep/os.altsep with "-" but leaves
-    # the drive letter's colon untouched, so "C:\Users\me\repo" -> this.
-    encoded = "C:-Users-me-repo"
-    assert discover.decode_project_dir(encoding=encoded) == "C:/Users/me/repo"
+    # Claude Code turns the drive's colon into a dash as well, so
+    # "C:\Users\me\repo" is "C--Users-me-repo" (seen on a Windows machine,
+    # 2026-10-14). The colon-kept shape an earlier encoder assumed decodes too.
+    assert discover.decode_project_dir(encoding="C--Users-me-repo") == "C:/Users/me/repo"
+    assert discover.decode_project_dir(encoding="C:-Users-me-repo") == "C:/Users/me/repo"
 
 
 def test_finds_transcripts_and_ranks_newest_first(projects_root):
@@ -89,21 +85,22 @@ def test_resolves_real_repo_through_agent_module(projects_root):
     # than always falling into `_fallback_agent` or a full monkeypatch.
     #
     # decode_project_dir is a lossy, naive dash-split: it only round-trips
-    # exactly when no path segment contains a literal dash. pytest's own
-    # tmp_path base commonly does (e.g. "pytest-of-<user>/pytest-3"), so the
-    # repo is built under a dedicated, dash-free temp dir via tempfile
-    # instead of tmp_path, keeping the round trip honest rather than
-    # coincidentally broken by the test harness.
+    # exactly when every path segment is letters and digits. pytest's own
+    # tmp_path base commonly is not (e.g. "pytest-of-<user>/pytest-3"), nor
+    # is every system temp dir (a macOS runner's is
+    # "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T"), so the repo is
+    # built in a hex-named dir under /tmp, keeping the round trip honest
+    # rather than coincidentally broken by the test harness.
     if os.name == "nt":
         pytest.skip(
-            "the round trip cannot be staged on Windows: a real cwd there starts "
-            "with a drive letter, so the encoded directory name contains a colon "
-            "— which NTFS does not allow in a filename. How Claude Code actually "
-            "names those directories on Windows is unverified, and guessing it "
-            "into decode_project_dir would bake the guess into production."
+            "the round trip cannot be staged on Windows: the decode spells a "
+            "path with '/', never the backslashes of the cwd it came from."
         )
+    if not os.path.isdir("/tmp"):
+        pytest.skip("no /tmp to stage the round trip in")
 
-    base = Path(tempfile.mkdtemp(prefix="mnemodiscovertest"))
+    base = Path("/tmp") / f"mnemodiscovertest{uuid.uuid4().hex}"
+    base.mkdir()
     try:
         repo = base / "realrepo"
         (repo / ".git").mkdir(parents=True)

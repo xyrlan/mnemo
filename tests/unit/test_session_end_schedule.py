@@ -364,6 +364,83 @@ def test_resolve_session_jsonl_path_dash_encodes_cwd(tmp_path, monkeypatch):
     assert resolved == expected
 
 
+def test_encode_cwd_turns_every_character_but_letters_and_digits_into_a_dash():
+    from mnemo.core.backfill.discover import encode_cwd
+
+    # The names Claude Code gave these directories, read off a Windows
+    # machine and a Mac on 2026-10-14. Separators alone left the colon and
+    # the dot in place: "C:-Users-you-repo", "-Users-you-repo-.claude-…".
+    assert encode_cwd("C:\\Users\\you\\repo") == "C--Users-you-repo"
+    assert encode_cwd("/Users/you/repo/.claude/worktrees/a_b") == (
+        "-Users-you-repo--claude-worktrees-a-b"
+    )
+
+
+def test_resolve_session_jsonl_path_finds_a_windows_cwd(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    home = tmp_path / "home"
+    expected = home / ".claude" / "projects" / "C--Users-you-repo" / "sid.jsonl"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    resolved = session_end._resolve_session_jsonl_path("sid", "C:\\Users\\you\\repo")
+    assert resolved == expected
+
+
+def test_resolve_session_jsonl_path_looks_in_the_account_config_dir(tmp_path, monkeypatch):
+    from mnemo.hooks import session_end
+
+    account = tmp_path / "account"
+    expected = account / "projects" / "-tmp-cwd" / "sid.jsonl"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(account))
+
+    assert session_end._resolve_session_jsonl_path("sid", "/tmp/cwd") == expected
+
+
+def test_schedule_briefing_takes_the_payload_transcript_over_the_cwd(tmp_path, tmp_home, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    transcript = tmp_path / "anywhere" / "sid.jsonl"
+    transcript.parent.mkdir()
+    transcript.write_text("{}\n", encoding="utf-8")
+    called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing",
+                        lambda p, a: called.append((p, a)))
+
+    session_end._maybe_schedule_briefing(
+        {"briefings": {"enabled": True}}, vault, "agent_a",
+        session_id="sid", cwd="/no/such/dir", transcript_path=str(transcript),
+    )
+    assert called == [(transcript, "agent_a")]
+
+
+def test_schedule_briefing_skips_a_payload_transcript_that_is_not_there(tmp_path, tmp_home, monkeypatch):
+    from mnemo.hooks import session_end
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    called = []
+    monkeypatch.setattr(session_end, "_spawn_detached_briefing",
+                        lambda p, a: called.append((p, a)))
+
+    session_end._maybe_schedule_briefing(
+        {"briefings": {"enabled": True}}, vault, "agent_a",
+        session_id="sid", cwd="/no/such/dir",
+        transcript_path=str(tmp_path / "gone.jsonl"),
+    )
+    assert called == []
+
+
 def test_resolve_session_jsonl_path_returns_none_when_missing(tmp_home, monkeypatch):
     from mnemo.hooks import session_end
 

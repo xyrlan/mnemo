@@ -59,11 +59,9 @@ _REAL_SPAWN = session_start._spawn_detached_backfill
 # --------------------------------------------------------------------------
 
 def _encode_cwd(cwd: str) -> str:
-    """Claude Code's project-dir encoding: every separator becomes a dash.
+    """Claude Code's project-dir encoding (:func:`discover.encode_cwd`).
 
-    Mirrors the encoder inlined in ``session_end._resolve_session_jsonl_path``
-    (both separators, so a Windows ``C:\\Users\\me\\repo`` encodes the same way
-    it does in production). ``discover.decode_project_dir`` is the inverse and
+    ``discover.decode_project_dir`` is the inverse and
     is deliberately lossy: ``tmp_path`` always contains dashes
     (``pytest-of-<user>/pytest-N``), so the decode never round-trips here and
     discovery falls through to ``_fallback_agent`` — the last dash-segment of
@@ -72,10 +70,9 @@ def _encode_cwd(cwd: str) -> str:
     directory name) for any repo whose name has no dash, which is why the
     fixture repos below are called ``repo`` and ``other``.
     """
-    encoded = cwd.replace(os.sep, "-")
-    if os.altsep:
-        encoded = encoded.replace(os.altsep, "-")
-    return encoded
+    from mnemo.core.backfill import discover
+
+    return discover.encode_cwd(cwd)
 
 
 def _write_transcript(home: Path, repo: Path, session_id: str) -> Path:

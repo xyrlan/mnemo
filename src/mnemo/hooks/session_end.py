@@ -128,23 +128,46 @@ def _spawn_detached_extraction() -> None:
     spawn(self_argv("extract", "--background"))
 
 
+def _given_transcript(transcript_path):
+    """The hook payload's ``transcript_path`` when it names a file, else None."""
+    from pathlib import Path
+
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return None
+    path = Path(transcript_path)
+    return path if path.is_file() else None
+
+
 def _resolve_session_jsonl_path(session_id: str, cwd: str):
     """Return the Claude Code session transcript path, or None if missing.
 
-    Claude Code stores sessions at
-    `~/.claude/projects/<dash-encoded-cwd>/<session-id>.jsonl`, where the
-    cwd is encoded by replacing every path separator with a dash.
+    The fallback for a payload with no ``transcript_path``. Claude Code
+    stores sessions at
+    ``<config dir>/projects/<encoded cwd>/<session-id>.jsonl``, the cwd
+    encoded by :func:`mnemo.core.backfill.discover.encode_cwd`, the config dir
+    ``$CLAUDE_CONFIG_DIR`` when set and ``~/.claude`` otherwise; both are
+    tried. Until 2026-10-14 this replaced the path separators alone, which
+    names no directory on Windows (the drive's colon stays) nor any cwd with
+    a dot or an underscore in it: no briefing was ever scheduled for those
+    sessions, and nothing said so.
     """
     from pathlib import Path
 
+    from mnemo.core.backfill.discover import encode_cwd
+    from mnemo.core.sessions import accounts
+
     if not session_id or not cwd:
         return None
-    encoded = cwd.replace(os.sep, "-")
-    if os.altsep:
-        encoded = encoded.replace(os.altsep, "-")
-    home = Path(os.path.expanduser("~"))
-    path = home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
-    return path if path.exists() else None
+    encoded = encode_cwd(cwd)
+    homes = [Path(os.path.expanduser("~")) / ".claude"]
+    here = accounts.current()
+    if here is not None:
+        homes.insert(0, here)
+    for home in homes:
+        path = home / "projects" / encoded / f"{session_id}.jsonl"
+        if path.exists():
+            return path
+    return None
 
 
 def _spawn_detached_briefing(jsonl_path, agent: str) -> None:
@@ -166,6 +189,7 @@ def _maybe_schedule_briefing(
     *,
     session_id: str,
     cwd: str,
+    transcript_path=None,
 ) -> None:
     """Spawn a detached per-session briefing when briefings.enabled=True.
 
@@ -180,8 +204,9 @@ def _maybe_schedule_briefing(
     fires the cwd can be a path with nothing on disk. A fresh resolution then
     finds no ``.git`` above it and falls back to the directory basename —
     ``bots/<repo>-wt-N/briefings/``, one orphan namespace per stopped child,
-    while the log line beside it went under ``bots/<repo>/``. ``cwd`` is
-    still needed to locate the transcript, which outlives the tree.
+    while the log line beside it went under ``bots/<repo>/``. The transcript,
+    which outlives the tree, is the payload's ``transcript_path``; ``cwd``
+    finds it only when the payload names none.
 
     Unlike extraction, briefings skip the count+time debounce — they are
     cheap and run on every session end so no handoff state is dropped.
@@ -203,7 +228,8 @@ def _maybe_schedule_briefing(
         if not bool(briefings_cfg.get("enabled", False)):
             return
 
-        jsonl_path = _resolve_session_jsonl_path(session_id, cwd)
+        jsonl_path = (_given_transcript(transcript_path)
+                      or _resolve_session_jsonl_path(session_id, cwd))
         if jsonl_path is None:
             return
 
@@ -619,6 +645,7 @@ def main() -> int:
             cwd = str(payload.get("cwd") or os.getcwd())
             _maybe_schedule_briefing(
                 cfg, vault, agent_name, session_id=sid, cwd=cwd,
+                transcript_path=payload.get("transcript_path"),
             )
         except Exception as e:
             errors.log_error(vault, "session_end.briefing_wrap", e)
