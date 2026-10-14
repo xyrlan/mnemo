@@ -5,6 +5,935 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-14
+
+### Added
+
+- **A dispatched child's worktree and its branch are removed once its PR has
+  merged.** At most every half hour per repo, a session start spawns a
+  detached `mnemo tree-sweep`. Only children that have stopped, and have been
+  quiet for 15 minutes, are considered. The sweep removes a tree only when no
+  process is working in it, its status is clean, it has nothing unpushed, and
+  its tip is contained in the merged PR's head. The branch is deleted with
+  `git branch -d`, never `-D`. A tree that still holds work is kept, and the
+  reason goes into the repo's day log and to the parent session, once per
+  reason. A losing twin has no PR, so its tree is never touched. Set
+  `dispatch.removeMergedTrees` to `false` to keep removing trees by hand.
+  Measured on 2026-09-25: 12 of the 13 merged, clean trees would go on the
+  first sweep, and the thirteenth was held by a process running inside it.
+  (#503)
+
+- **`plugin/` holds the plugin and nothing else, for the Claude plugin
+  directory.** The directory's validator reads every file under a plugin's
+  root, and at the repository root that is the changelog, the design notes,
+  the docs and the source — prose it read as code, and more files than it
+  screens. `plugin/` is the same plugin byte for byte (manifest, icon,
+  commands, skills, hooks, launcher, `.mcp.json`, `LICENSE`) plus a short
+  README with a Privacy section, written by `tools/sync_plugin_manifest.py`
+  and checked for drift in CI. `/plugin install mnemo@mnemo-marketplace`
+  still installs the repository root, unchanged. (#514)
+
+- **`extraction.correctionCheck`: an opt-in second look at every verified
+  correction, off by default.** `corrections.verify` proves the user typed a
+  quote, not that it corrects anything: two blind raters call about 5 in 6
+  captured corrections approvals ("pode mergear"), requests or answers. With
+  `enabled: true`, each verified item on both capture paths (the briefing's
+  `## Corrections` and the corrections-only pass) is shown to a model
+  (default `claude-opus-5-5`) with the agent message it answered. An item it
+  answers "no" to leaves the briefing and never reaches the friction ledger,
+  so the evidence gate cannot cite it. It fails open: an error keeps every
+  item. It is off because it missed the bar set before measuring (precision
+  ≥ 80%, recall ≥ 90% of real corrections). On the held-out half it kept 8 of
+  10 real corrections at 61.5% precision, where today's capture is at 20%. It
+  costs one call per session with a verified correction, about 5 s and $0.02
+  notional. (#524)
+
+- **`mnemo doctor` says when a project's auto-memory `MEMORY.md` is longer
+  than Claude Code loads.** Claude Code loads only the first 200 lines or 25KB
+  of `~/.claude/projects/<project>/memory/MEMORY.md` at session start
+  (code.claude.com/docs/en/memory) and tells only the model when the rest is
+  cut, so nobody sees that part of their index is invisible. The new row lists
+  each such project with its lines, characters and bytes, the lines loaded,
+  and how many index entries sit past the cut; it is silent while every index
+  loads whole. The 25KB is counted as 25,000 characters cut at a whole line,
+  the limit #574 measured from the loads Claude Code records in its
+  transcripts. (#573)
+
+- **`mnemo init` keeps the transcripts mnemo learns from.** Claude Code deletes
+  every transcript older than `cleanupPeriodDays`, 30 days when unset, and
+  extraction, backfill, briefings, procedures and `mnemo replay` all read
+  them. A global `mnemo init` now raises that setting in
+  `~/.claude/settings.json` to 365 days when it is unset or lower, says so,
+  never lowers a higher value and leaves every other key alone; a project
+  install prints the line to add instead of writing under `$HOME`. `mnemo
+  doctor` warns when the value Claude Code would sweep with is below the floor.
+  Opt out with `mnemo init --no-transcript-retention` or
+  `install.keepTranscriptsDays: 0`, which also sets the floor. (#596)
+
+- **mnemo now keeps the reflex judge's picks itself, in a ledger that
+  outlives `reflex-log.jsonl`'s rotation.** With `reflex.judge` on, every
+  judged prompt appends one row to `.mnemo/judge-picks.jsonl`: session,
+  time, project and the rules the judge scored at or above `injectAt`, with
+  no prompt or rule text. The append is the hook's only cost and never
+  breaks it. Past 1 MiB, SessionStart's detached work rolls sessions older
+  than seven days into `.mnemo/judge-picks-summary.json`, per-rule distinct
+  session counts by day (by month after 90 days), so no rule's count is
+  lost. `mnemo.core.reflex.picks.picks_before(vault, project, t)` reads
+  both, and `tools/measure_relevance_block.py` uses it once
+  `tools/backfill_judge_picks.py` has filled in the history from the
+  reflex logs and transcripts. (#619)
+
+- **mnemo can merge a dispatched child's PR itself once it is ready, in the
+  repositories you name.** Set `dispatch.autoMerge.repos` to a list of
+  `owner/name` (empty, so off, by default) and the `pr-follow` watcher merges
+  a followed child's PR on the first poll that finds it open, not a draft,
+  `MERGEABLE` and with at least one check reported and every one passed, read
+  check by check: a skipped, cancelled or pending check is not a pass, and a
+  repository without CI gets no automatic merge. It reads the PR again right
+  before merging and runs `gh pr merge --squash --match-head-commit <head>`,
+  never with `--admin` or `--auto`. A refusal comes back in the dispatching
+  session's notice with `gh`'s own words, and "merged" is said only after
+  GitHub reports `MERGED`. It never merges a twin's PR, a PR while another
+  open PR targets the same issue, a contract piece, a PR whose head is not
+  the child's `HEAD` or whose tree is dirty or gone, a PR with an unanswered
+  trusted comment or changes still requested, or one whose child is still
+  running; each of those is told once. The child is still never granted
+  `merge` and its prompt still says "Do not merge"; the switch is read only
+  from mnemo's config, never from a config inside a dispatched worktree, and
+  no `mnemo dispatch` flag sets it. The report card's last line, the
+  `mnemo-loop` skill, `mnemo sessions`, the day log and the follow ledger
+  (`merged_by`) say who merges and who merged. It is not a merge queue: two
+  PRs green on their own can break together, and the base's own CI run is
+  where that shows. With the switch off nothing changes. Over the last 100
+  PRs merged in this repo (2026-10-13), 83 came from a child's branch, all
+  with every check green, and waited a median of 11 minutes and 71 hours in
+  total between the last check completing and the merge. (#638)
+
+- **`mnemo sync` keeps one vault on several of your own machines, through a
+  private git remote you already have.** `mnemo sync init <remote>` on the
+  machine that owns the vault makes it the primary and pushes; `mnemo sync
+  join <remote>` on another machine puts that vault there (one already there
+  is moved to `<vault>.pre-sync-<timestamp>`, never deleted) and writes its
+  config once from a seed the primary publishes; `pull`, `push` and `status`
+  do the rest. What travels is the live pages, staged pages, briefings,
+  mirrored memory, the extraction state and `HOME.md` — not `shared/_archive`,
+  logs, indexes, telemetry, `mnemo.config.json`, or the agent directories test
+  runs leave behind. Bytes are never converted, so a page hashes the same on
+  Windows; when both sides changed a file the primary's version wins and the
+  loser is kept under `shared/_archive/sync-losers/`; a push is refused,
+  naming the file and the kind and never the value, while anything it would
+  publish holds a secret shape. Off until you run `init` or `join`, and no
+  hook calls it: a vault that never synced behaves exactly as before. New
+  config key `sync.machineId` (default: the hostname). (#642)
+
+- **With `mnemo sync` on, the hooks pull before a session starts and push
+  what a session wrote, and a satellite writes only its own briefings.**
+  SessionStart gives a pull at most 3 s and runs one at most once per 5
+  minutes per vault, injecting from the vault as it is past the bound or
+  offline; a pull that did not finish completes in its own process, and a
+  dispatched child never pulls. On the primary, a pull that brought briefings
+  schedules an extraction behind SessionEnd's debounce and lock. The briefing
+  worker, the extraction and SessionStart's deferred work push when they
+  finish. On a satellite — any machine the hub's primary record does not
+  name — extraction, the memory mirror, the briefing prune, inbox apply and
+  expiry, auto-retire, the migrations, the install backfill, the `HOME.md`
+  dashboard and the autopilot's hook jobs stand down; a typed command still
+  works. A satellite's push carries additions and changes only, to its own
+  briefings and live `shared/` pages, never a deletion or the primary's
+  files, and what it lost or changed elsewhere comes back at its next pull;
+  the primary refuses the same things arriving in another machine's commit.
+  A briefing written with sync on carries `machine: <id>`. A sync failure
+  never fails a hook; `MNEMO_HOOKS_OFF` stops sync from hooks too. With sync
+  off — the default — every hook's output and every file it writes are what
+  they were. (#643)
+
+- **`mnemo doctor` and the statusline say how far this machine is from the sync hub, and `tools/measure_sync.py` measures the bars #641 set.** With sync on, `doctor` prints whether the hub answers (within 3 s, so it stays as fast as #571 left it), this machine's role and id, commits ahead and behind, how long since the last successful pull and push (a warning past a day), pushes the secret gate refused with the file and the shape, conflicts resolved in the primary's favour and where the losing versions are, and a hub format this mnemo does not know. With sync off, nothing. The statusline shows `sync 3↑` while tracked files wait to be pushed and `sync 2 d behind` when the last pull is older than a day; in step, or with sync off, it shows nothing. `tools/measure_sync.py` reports parity (a digest of what SessionStart would inject at the vault's current commit, paths normalised, the same on two machines at the same commit), push lag from a briefing's write to its commit reaching the hub (p50, p95, and how many waited for a later SessionStart), and conflicts resolved and left unresolved, then prints the four bars with a verdict each; `docs/getting-started.md` says how to read them. (#644)
+
+### Changed
+
+- **Design notes moved out of `docs/` into `design/`.** `docs/` now holds only
+  what a user reads — getting started, configuration, troubleshooting,
+  Obsidian. Specs, dispatch contracts, findings and the archive live under
+  `design/` (`design/specs/`, `design/contracts/`, …) with a README saying what
+  they are; the implementation plans under `docs/superpowers/plans/` are gone
+  from the tree (git history keeps them). Private repositories the maintainer
+  measured on are named by alias throughout, and home paths read
+  `/Users/you/…`. (#510)
+
+- **The plugin's slash commands allow only the line they run.** Each
+  `/mnemo:*` command declared `allowed-tools: Bash`; it now grants exactly
+  its own `"${CLAUDE_PLUGIN_ROOT}/bin/mnemo.cmd" <subcommand>` line (a prefix
+  rule for `/mnemo:dispatch`, which takes arguments), checked live under
+  `claude --plugin-dir`. Commands written by `mnemo init` are unchanged. (#514)
+
+- **The reflex injects each rule's whole body instead of a 300-character
+  preview.** #535 measured the preview as the bottleneck: on the same prompts,
+  two blind raters found net help of −0.02 with the preview and +0.22 with the
+  whole body, a paired difference of +0.24 [+0.09, +0.40]. A rule now arrives
+  as `• [[slug]]:` with its body on the lines under it and no
+  `read_mnemo_rule` suffix. The whole block is held under the 9,000-byte cap
+  SessionStart already uses, because Claude Code swaps any hook text over
+  10,000 characters for a 2 KB preview (#533). When the rules do not fit, each
+  gets a fair share, and a body over its share is cut at a line break and ends
+  with the page's path and the `read_mnemo_rule` pointer. Over the last 30
+  days of the maintainer's emissions that cut 7.2% of rules
+  (`tools/measure_reflex_fit.py`). Each `reflex-log.jsonl` emission row now
+  records `format`, `rule_bytes` and `rule_whole`. `reflex.body: "preview"`
+  restores the old line, and exists only so a later comparison can run that
+  arm. (#542)
+
+- **A session now starts with an index of the project's ten newest briefings
+  instead of the newest one pasted whole.** Each entry is a briefing's date and
+  its `## TL;DR`, newest first, in a `[recent-briefings]` block that shares
+  #533's 9,000-byte cap fairly. It is a median of about 4.6 KB, against 6.3 KB
+  for the whole briefing. The newest briefing was the right one for the
+  session's work in only 17.6% of sessions (#534), and a wrong one doubled the
+  replies that assume a wrong state of the work (#540). The index kept about
+  half of a right briefing's help with no picking and raised no wrong-state
+  replies (#548). The pool is now newest by file mtime: within one day the old
+  sort went by session id, so "newest" was a coin toss among that day's
+  sessions. `briefings.sessionStart` is `"index"` (default), `"last"` (the old
+  behaviour) or `"none"`; `injectLastOnSessionStart: false` still means
+  `"none"`. Each `briefing-log.jsonl` row now carries `mode`, `entries` and
+  `index_bytes`, one row per listed briefing. A pre-registered fresh check,
+  `tools/measure_briefing_index_fresh.py`, confirms or reverses the default
+  after 14 days and 100 sessions. (#551)
+
+- **Every hook in the plugin's `hooks.json` now declares a `timeout`, chosen from measured durations:** `SessionStart` 600 s, `UserPromptSubmit` 30 s, `PreToolUse` 30 s, `SessionEnd` 30 s. A hung hook now has a stated worst case. `SessionEnd` used to get Claude Code's 1.5 s default, which cut a run whose timed p99 is 5.3 s on a loaded machine; the late work, such as scheduling the briefing and sweeping sessions, now gets to finish. Installs made with `mnemo init` write their own settings entries and are unchanged. (#593)
+
+### Fixed
+
+- **A PR follow that times out while the woken child is still running now reports the PR as it is, not as it was at the wake.** A child woken for red CI that fixed it but never stopped used to get a `follow-stopped` notice saying "checks failing" even after its PR merged green. The watcher now looks at a woken child's PR every poll: a merge or close ends the follow quietly as `merged` / `closed`, and when `dispatch.followPR.hours` runs out, the hand-back carries only what is still outstanding, or no notice when nothing is. (#500)
+
+- **A dispatched child that stops is reported to its parent even when its
+  SessionEnd hook never runs.** Everything mnemo does when a child finishes
+  hung off that one hook, and on 2026-09-24/25 27 of 95 self-stopped children
+  never told their parent — for 22 the hook never got as far as clearing its
+  own session cache. A detached `mnemo child-notices` watcher, started by
+  every SessionStart and by `mnemo dispatch`, now reads Claude Code's roster
+  and, two minutes after a child reads `stopped` with no report row for that
+  stop, sends the same report card and registers the same `pr-follow` the
+  hook would have, marking the row `via: backstop` and writing a line to the
+  day log. The hook stands down if the backstop already answered the stop, so
+  no parent is told twice, and it now posts the notice before the slower
+  scheduling work instead of after it. Stops from before the upgrade are left
+  alone. (#502)
+
+- **A merged child's worktree is no longer held on disk by mnemo's own
+  background watchers.** `mnemo pr-follow`, `mnemo child-notices` and
+  `mnemo resume --watch` live for up to a day and used to start in the
+  directory of the session that spawned them — usually a dispatched child's
+  worktree — so the merged-tree sweep saw that tree in use and kept it. They
+  now start in the vault (or, for a `mnemo init --project` install, the
+  project root that holds its config, so they load the same config as
+  before), and do the same work from there: every child they act on carries
+  its own tree.
+
+- **A contract's `files` can name a path under a Next.js route group.**
+  `mnemo dispatch --contract` refused any entry with a parenthesis, so
+  `src/app/(dashboard)/page.tsx` was "not a path" and had to be disguised as a
+  glob. The boundary check now also admits `(`, `)`, `@` and `+`, the segment
+  characters Next.js, SvelteKit and Remix route by (`(group)`, `@slot`,
+  `+page.svelte`); a space, a semicolon or a backtick is still refused as
+  prose. `mnemo land` reads an entry spelled exactly as a tracked file or
+  directory literally before trying it as a glob, so a dynamic segment such as
+  `[id]` names that directory instead of matching only `i` or `d`. (#516)
+
+- **A correction made in a session that edited no file is now captured, and
+  every captured correction records the turn and time it was said.** Such a
+  session gets no briefing, so its corrections were never read: in the
+  2026-09-16 backfill, 11 of 50 corrections (22%) were in sessions like
+  that. At SessionEnd it now gets a corrections-only pass instead. The pass
+  sees the user's turns and the assistant text each one answered, applies the
+  briefing's definition of a correction and the same `verify` rules (no
+  dispatch-brief quotes, no `!` shell turns), and writes no briefing. A
+  briefed session's verified corrections are recorded the same way. Each
+  correction becomes one row in `.mnemo/friction-ledger.jsonl` carrying the
+  quoted turn's index, timestamp and uuid, whether a dispatch started the
+  session, its entrypoint, and which path found it (`capture: briefing` or
+  `corrections_only`). "Did the vault already know this when the user said
+  it?" can now be answered per correction. (#517)
+
+- **A held inbox page now expires `inbox.heldExpiryDays` after it first
+  entered the inbox, not after its last rewrite.** The extractor rewrites a
+  staged page every time the lesson is re-derived, and the pages the
+  reference judge lets go as `generic` are standard practice, the lessons
+  re-derived most often. Each rewrite restarted their 14 days, so they could
+  stay in the queue forever. Staged pages now carry a `staged_at` stamp.
+  The extractor writes it on first staging and keeps it on every rewrite.
+  A page staged before this release uses its current mtime, so nothing
+  expires early on upgrade. If a rewrite changes the judge's verdict, the
+  page still follows the new verdict. `mnemo inbox --json`'s `staged_at` and
+  `expires_at` read the same time the sweep does. (#518)
+
+- **The session-start envelope stays under the size at which Claude Code stops
+  showing it.** Claude Code saves a hook output of 10,000 characters or more to
+  a file and gives the agent a 2 KB preview; 28 of 343 envelopes in a month
+  went that way, and `[mnemo learned]`, which sat after the briefing, survived
+  the preview in none of them. The envelope is now capped at 9,000 bytes: the
+  notices, topic menu, `[mnemo learned]` and the offer come first and are never
+  cut, `[last-briefing]` goes last and alone is trimmed, on a line boundary,
+  ending with one line that gives the briefing's path so the rest is one Read
+  away. The `session_start.inject` row in `mcp-access-log.jsonl` now records
+  `envelope_chars` and `briefing_trimmed`. The limit was read from every
+  transcript on disk, not guessed: the largest hook text kept inline was 9,872
+  characters and the smallest persisted one 10,044, with no overlap, on every
+  Claude Code version from 2.1.241 to 2.1.283
+  (`tools/measure_persist_threshold.py`; `--since DATE` counts persisted
+  envelopes after a date, target 0). (#533)
+
+- **A worktree-cleanup notice reaches the dispatching session framed as
+  mnemo's, not as its user.** The `🧹 removed …` line arrived as a bare user
+  turn, and the unblock detector counted it as the maintainer answering the
+  parent. It now opens with the same `<mnemo-child-finished` marker and "this
+  is not your user speaking" line as the child's report card. (#553)
+- **`mnemo init` removes slash commands mnemo no longer ships.** A command
+  dropped from mnemo (`fix`, `open`) stayed in `~/.claude/commands/` for good,
+  and the old files carried their tag above the frontmatter, so Claude Code
+  listed them with the tag as their description and let the model invoke
+  them. Only files carrying mnemo's tag on a line of their own are removed; a
+  command you wrote is never touched. Re-run `mnemo init` to clear them.
+  (#553)
+- **`enrichment.maxRulesPerCall` and `enrichment.bodyPreviewChars` are gone
+  from the defaults and the docs.** Neither was ever read; the cap of 3 and
+  the 300-character preview were fixed in code, and still are, so nothing
+  changes. (#553)
+- **`mnemo doctor` says `friction.autoRetire: true` is inert.** Nothing calls
+  the automatic retirement, so the key has no effect; the doctor now says so
+  instead of letting it read as on. (#553)
+- **The extraction's reference-gate calls are logged with their cost.** They
+  were summed into the run summary but never written to
+  `mcp-access-log.jsonl`, so `mnemo telemetry` missed their spend. They are
+  now logged like the consolidation calls, under purpose `reference-gate`.
+  (#553)
+
+- **`mnemo doctor` no longer spends 20 s in two rows on a large vault.** The
+  universal-promotion row scored every same-type pair of rules — 2.27M
+  similarity calls on a 3,345-rule index — when a pair sharing no name token
+  cannot reach the 0.55 bar (the other two fields weigh 0.5 together); it now
+  scores only the 70k pairs that share one, in the same order, so the
+  candidates and their similarities are unchanged. The rediscovered-procedures
+  row re-read all 767 child transcripts on every run; what each one reads as is
+  now kept in `.mnemo/procedure-transcripts.json`, keyed on the transcript's
+  size and mtime and on a hash of the parsing code, so only a transcript that
+  changed is read again. The file is safe to delete — the next scan rebuilds
+  it. `mnemo procedures` uses the same cache. (#571)
+
+- **`pr-follow` no longer wakes a finished child for checks it cannot fix.**
+  A check GitHub never started — the annotation "The job was not started
+  because recent account payments have failed or your spending limit needs to
+  be increased", which a lapsed Actions bill puts on every job — and a failure
+  a rerun of the same check on the same commit passed no longer count as
+  `ci-red`. On 2026-09-30 two children were woken to "fix" checks that had
+  never run, and could only stop again. A PR red only by checks that never ran
+  now sends the parent one `follow-not-run` notice per head commit naming
+  them, and the follow stays open, so a rerun that then fails for real still
+  wakes the child. A real failure, alone or beside a never-run one, wakes it
+  as before. The reading is the one `tools/measure_dispatch_outcomes.py` gives
+  (now shared in `mnemo.core.sessions.check_runs`); it costs one check-runs
+  call and at most six annotation reads per poll, for a PR whose checks settled
+  red only; a run is read once; and a failed call counts the failure as the
+  child's, as before. (#575)
+
+- **A dispatching parent that restarts keeps hearing from its children.** After
+  a machine restart every session resumes at once; one parent's
+  `SessionStart` ran for 38 s, and its inbox address row was lost to another
+  session's rewrite of `session-inbox.jsonl`, so four children's notices went
+  nowhere. An address row is now appended before the log is compacted, and the
+  compaction keeps every row appended while it ran. A parent with no row
+  re-records itself before its next prompt. A notice that still cannot be
+  delivered is held in `.mnemo/held-notices.jsonl` and shown at the parent's
+  next prompt, exactly once, instead of only being logged as
+  `delivered: false`. (#586)
+
+- **The reflex judge's `timeoutSeconds` now bounds the whole stage, not just the request.** The key lookup and the rule-page reads used to run before the wall, so a slow disk let a judged prompt wait past its 2.5 s budget: 7 of 2,004 `ok` rows in the maintainer's `reflex-log` took longer than that, up to 3,517 ms. A stage that runs out of time now falls back to the shipped gates exactly as a timed-out request always has. (#593)
+
+- **A release no longer publishes a commit whose CI is not green.** The release
+  workflow checked the tag and the changelog, never the CI result of the commit
+  it ships, so a tag on a red commit — or one GitHub never ran CI on because
+  Actions billing lapsed — went to PyPI, npm and the plugin anyway. A first job
+  now reads the CI jobs on the tagged commit and stops the release unless every
+  one succeeded (a job a rerun cleared counts as green). A job GitHub never
+  started is reported as such, not as a red test. CI still running at tag time
+  is waited for, up to 30 minutes, after which the job says to re-run the
+  release once CI finishes. (#594)
+
+- **SessionStart no longer holds the session's first prompt for seconds.**
+  Claude Code waits for the hook before it takes the first prompt, and on a
+  10,000-page vault the hook took 16 s at the median, almost all of it
+  rebuilding the reflex index, whose postings merge was quadratic in the
+  pages sharing a word. The build is now linear (same index, byte for
+  byte), and that rebuild and the memory mirror, which nothing the hook
+  injects reads, run in a detached `mnemo session-start-deferred`. Timed on
+  a clone of that vault: p50 16,186 → 650 ms, p95 20,171 → 1,332 ms. What
+  the hook injects is unchanged. (#610)
+
+- **`mnemo init` and dispatched children now give mnemo's hooks the same
+  timeouts as the plugin.** #593 bounded each plugin hook from measured
+  durations (`SessionStart` 600 s, the other three 30 s), but `init` and the
+  lean child profile wrote none, so Claude Code ended `SessionEnd` at its
+  1.5 s default — under the 3.7 s median #593 measured — and cut the
+  briefing, the sweep and the child's report short. `HOOK_DEFINITIONS` now
+  carries the timeouts and a test holds both `hooks.json` files to it; a
+  child's hook with no timeout gets the shipped one; and an existing install
+  is repaired once at session start, through the same narrow write as the
+  matcher repair, with one stderr line: `[mnemo] hook timeout in
+  ~/.claude/settings.json predated this version — SessionEnd (no timeout →
+  30 s), … Repaired in place`. `mnemo doctor` and `mnemo status` name the
+  drift too. `install.autoRepairHooks=false` turns the repair off; a bound
+  you set after it is kept. (#611)
+
+- **A child's PR that conflicts with its base is no longer reported as
+  `ready`.** GitHub runs no `pull_request` workflow on a conflicting PR, so
+  the checks watch saw an empty list and posted `state="ready"` for PR #622
+  while it was `CONFLICTING` and its child was resolving the merge. Before
+  any verdict that could say `ready`, the watch now reads `mergeable` again:
+  `CONFLICTING` posts `state="conflict"` ("CI cannot run until the conflict
+  is resolved"), and `UNKNOWN` keeps polling. The first card reads
+  `mergeable` with the PR too. Once `pr-follow` wakes the child for that PR,
+  an earlier watch stands down without posting: the child's next card
+  reports. (#623)
+
+- **`mnemo disable-rule` now actually disables the rule.** It used to append
+  `runtime: false`, a key nothing reads — and one promote already stamps on
+  every project page, so most rules answered `already disabled` while they
+  kept blocking. It now writes `disabled: true` and rebuilds the indexes: the
+  rule stops blocking through its `enforce` block, stops being injected by the
+  reflex, and drops out of `list_rules_by_topic` and the topic menu from the
+  next tool call. `mnemo enable-rule <slug>` undoes it, and `mnemo
+  list-enforced` marks disabled rules. A rule you "disabled" before this
+  release is still live: run `mnemo disable-rule` on it again. (#629)
+
+- **A memory write from a non-default Claude account no longer stops for a permission prompt.** A session started with `CLAUDE_CONFIG_DIR=~/.claude-<slug>`, where that directory's `projects` is a symlink to `~/.claude/projects` (the layout the desktop app's accounts create), is told to keep its auto-memory under the account dir, and Claude Code prompts for every write spelled that way: on the maintainer's transcripts 110 such writes in six days waited for a person, the longest for 6 hours, and none of the 71 spelled through `~/.claude` did (`tools/measure_memory_write_prompts.py --days 6`, 2026-10-13). A dispatched child has nobody to answer. The `PreToolUse` hook now names the file by its real path: a `Write` that creates a memory file is rewritten to it, and an `Edit`, `MultiEdit` or overwriting `Write` is denied with the real path in the reason, so the model reads and edits it there (Claude Code refuses a rewritten edit as "File has not been read yet", and a hook's `allow` does not lift the prompt). Only `.md` files inside `<config dir>/projects/<project>/memory/` reached through that link are touched; the hook approves nothing, and any error leaves the call as it came. (#637)
+
+- **A background session is in the roster whichever Claude account runs it.**
+  Claude Code keeps a session's job record and daemon roster under its config
+  dir, and mnemo read `~/.claude` alone: with `CLAUDE_CONFIG_DIR` set (the
+  desktop app gives each account its own `~/.claude-<slug>`) every background
+  session was missing from `mnemo sessions`, `mnemo resume`, `mnemo deliver`,
+  the statusline count and the watchers, `mnemo dispatch` warned that
+  `jobs-state-json` "did not hold" for each healthy child, and `pr-follow`
+  closed such a child's follow as `session-gone` instead of waking it for red
+  CI. The roster now reads the current account's dir, the default one, and
+  every config dir a mnemo process has run under — remembered in
+  `.mnemo/claude-config-dirs.jsonl`, because a watcher outlives the session
+  that started it and a parent on one account can have children on another.
+  Liveness is asked of the daemon of the account that holds the job, an id
+  found under two accounts is one session (the running copy, else the newer),
+  and a dir that is missing or unreadable is skipped. With `CLAUDE_CONFIG_DIR`
+  unset and no other account ever seen, only `~/.claude` is read, as before.
+  (#640)
+
+- **Claude Code's memory is redacted on its way into the vault.** The mirror
+  that copies `~/.claude/projects/<cwd>/memory/` into `bots/<repo>/memory/` at
+  every session start was the one writer that bypassed `redact_secrets`, and
+  `mnemo redact --apply` leaves that directory alone, so a credential shape in
+  a note sat in the extractor's input and would have refused every
+  `mnemo sync push`. Every copy now passes through the same secrets-only pass
+  as briefings and pages; Claude Code's own files are only read. A file with
+  nothing to redact is copied byte for byte, so nothing is extracted again
+  because of this. A copy that differs from its source only by redaction is
+  up to date: a second run over unchanged sources rewrites no file. Copies made
+  before this change are brought in line by the first run, and again once
+  whenever the redactor's rules change. The mirror no longer shells out to
+  `rsync`, which cannot redact; `mnemo init`'s preflight stops suggesting it.
+  (#649)
+
+- **SessionEnd finds the session's transcript on Windows, under an account
+  config dir, and in any directory with a dot or an underscore in its path.**
+  The hook rebuilt the transcript's path from the cwd by replacing the path
+  separators alone, where Claude Code turns every character that is not a
+  letter or a digit into a dash: on Windows the drive's colon stayed
+  (`C:-Users-you-repo` for Claude Code's `C--Users-you-repo`), so no briefing
+  was ever scheduled there and a sync satellite never pushed anything; on a
+  Mac, 141 of 1,539 transcripts missed the same way (`.claude/worktrees/…`,
+  temp dirs). The hook now reads the payload's `transcript_path` first and
+  falls back to Claude Code's own encoding under `$CLAUDE_CONFIG_DIR` and then
+  `~/.claude` (1,523 of the same 1,539 found; the other 16 recorded a cwd they
+  later left, which only `transcript_path` names). (#656)
+
+### Security
+
+- **The session messaging token is no longer written to the vault.** Every
+  session start appended its `CLAUDE_CODE_MESSAGING_TOKEN` to
+  `.mnemo/session-inbox.jsonl` in plaintext, and nothing pruned the file, so
+  anything that could read the vault held a token for every session it had
+  seen. mnemo never needed it: Claude Code requires the auth line only on
+  Windows, where mnemo's notices do not travel, and the env value is the
+  session's own child token rather than a peer's. Rows now hold the address
+  alone, notices go out without an auth line, and the file is rewritten
+  `0600` at each session start without any old token and without rows whose
+  process has exited — existing vaults are scrubbed by the first session
+  after upgrading. No other log, ledger or telemetry row carried the token.
+  (#553)
+
+- **The reflex judge and the recall rerank redact secrets before anything
+  leaves the machine.** With `reflex.judge` on, the prompt you typed was
+  whitespace-collapsed, cut to 1,200 characters and posted to the provider
+  as-is; a token, a `.env` line or a password pasted into a prompt went with
+  it. It is now passed through `redact_secrets` first and cut second, so a
+  secret straddling the cut is replaced whole instead of leaving a head too
+  short for any pattern to catch. The `reflex-log` row's `judge` object
+  gains `redacted`, the number of secrets removed (never the text). The
+  `recall.rerank` query is redacted the same way before it is sent. (#591)
+
+- **`redact_secrets` now catches seven more secret shapes.** Before this change,
+  every one of them passed through the guards on briefings, the inbox, friction
+  capture, evidence and promotion. The new shapes are GitHub OAuth, app and
+  refresh tokens (`gho_`/`ghs_`/`ghu_`/`ghr_`), JWTs, PEM private-key bodies,
+  passwords in URLs (`postgres://user:[redacted]@host`), Stripe `sk_`/`rk_`
+  live and test keys, AWS `ASIA` temporary keys, and upper-case
+  `*_TOKEN`/`*_KEY`/`*_SECRET`/`*_PASSWORD` assignments. Every pattern
+  replaces the value and keeps the label, so `OPENAI_API_KEY=[redacted]`
+  still says which variable to set. Path values such as `~/.ssh/id_rsa`
+  are not redacted, and neither are words like `ASIAPACIFICREGION`. A
+  dry run over a 8,264-file vault changed nothing that was not a secret. (#592)
+
+- **The PreToolUse hook refuses to publish a private repository's name.**
+  When `<vault>/.mnemo/private-names.tsv` (`name<TAB>alias`) exists, a Bash
+  `git push` whose new commits name a listed repo in a message or an added
+  line, and a `gh issue|pr|release create|comment|edit|review|merge` or
+  `gh api` write whose text or `--body-file`/`--notes-file`/`-F`/`--input`
+  file names one, is denied with a message that gives the alias and never
+  the name. Pushing to, or commenting on, a repo whose own URL or `--repo`
+  names it is left alone. No file means no change and no extra cost; a
+  command that publishes nothing reads no file and runs no `git`. A broken
+  list fails open and is logged to `.errors.log`. (#597)
+
+### Internal
+
+- **`tools/measure_child_notices.py` counts the dispatched children whose
+  parent was never told.** It joins the roster, `child-reports.jsonl`, the
+  session cache, the transcripts and `daemon.log` as #502's table did, splits
+  out stops the backstop reported, prints how long the hook takes to write its
+  first row after the child's last turn, and with `--simulate` runs the
+  shipped `child_notices.scan` over the same files. (#502)
+
+- **`tools/measure_skill_relevance.py` asks whether routing skills per dispatched
+  piece would ever fire.** A lean child sees Claude Code's built-in skills and the
+  repo's own, never the maintainer's `~/.claude/skills` — read off each child's own
+  `skill_listing`, not assumed. The tool asks Jev, per recent piece, which skills are
+  relevant to it, and prints the share of pieces with a relevant skill the child did
+  not get against the 20% line registered before any score existed, with a seeded
+  sample for the hand check. Nothing leaves the machine without `--send`. (#508)
+
+- **`tools/measure_corrections_capture.py` counts, per ISO week, the human
+  sessions, the sessions with at least one captured correction, the
+  corrections, and the share from sessions with no edit.** `--capture-into
+  DIR` runs the shipped corrections-only pass over past no-edit sessions into
+  a scratch ledger, which reproduces the before/after comparison in #517's
+  PR. (#517)
+
+- **`tools/measure_held_expiry.py` reports when the expiring inbox pages
+  leave.** It gives the pre-#518 expiry date (mtime), the shipped one
+  (`staged_at`) and the offer-ledger alternative side by side, and it counts
+  pages the ledger shows were rewritten since they were first offered. It
+  reads a vault and never writes one. (#518)
+
+- **`tools/measure_repeated_corrections.py` measures how many real human
+  corrections restate something the agent already had when the user typed
+  them.** Two blind raters (Opus 5.5 and Fable 5.1) first label each captured
+  item "is it a correction at all?", with the precision reported per capture
+  path. For the items both raters call real corrections, they judge them
+  against the vault cut to the turn's timestamp, the repo's `CLAUDE.md` at the
+  last commit before it, and the auto-memory notes created before it. The
+  report gives strict (gate-verified rule), broad (any rule) and native
+  readings with 95% CIs, Cohen's kappa, a per-week table and the notional
+  cost. Sends are paced and every answer is cached, so a stopped run resumes.
+  (#519)
+
+- **`tools/measure_prevented_repeats.py` estimates how many repeated mistakes
+  mnemo prevents per human session: frequency × delivery × lift, each factor
+  with a 95% CI, and a verdict against the maintainer's pre-set bar of one per
+  15 sessions.** Two blind raters (Opus 5.5 and Fable 5.1) judge which
+  already-taught rule applies to each real prompt. The strict reading counts
+  only rules whose evidence quote both raters call a real correction, using
+  #519's labeller and cache. Delivery is read from what the transcripts
+  recorded the hooks putting in context, per channel (SessionStart, reflex,
+  MCP); a rule Claude Code's own `CLAUDE.md` or auto-memory already carried
+  counts as redundant. Lift is #434's per-pair data, resampled together with
+  the sessions. The report also splits the numbers before and after the reflex
+  judge went live, names the bottleneck factor, and prints mnemo's token cost
+  and the judge's latency beside the number. First run on the maintainer's
+  history, 120 sessions: strict 0.005 per session, 95% CI [0, 0.026], null.
+  Sends are paced and cached, so a stopped run resumes. (#520)
+
+- **`tools/measure_correction_check.py` scores the correction check on #519's
+  rater-labelled items and counts what today's verified pages rest on.** The
+  check is scored through the stage's own prompt and parser, on a split by id
+  parity. The test half is guarded: a second prompt scoring it is refused
+  unless `--again`. `--gate` locates each gate-verified feedback page's
+  `evidence.quote` in its transcript and labels any quote #519 has not seen
+  with the same two raters, without touching a page. On the maintainer's
+  vault, 35 of the 44 pages whose quote could be located (79.5%) rest on a
+  quote both raters call not a correction; 5 rest on one both call a
+  correction. (#524)
+
+- **`tools/measure_broad_value.py` asks whether an answer is *better* when
+  mnemo puts a rule in context that Claude Code's own memory lacked, with a
+  verdict against the maintainer's pre-set bar of one helpful change per 15
+  human sessions.** Its units are every rule #520's broad reading counted as
+  relevant and delivered-and-new (`measure_prevented_repeats` now writes them
+  to `units.json` beside its report). At each unit's prompt, two arms answer
+  on the model the session ran on: *with* the context the transcript recorded
+  (mnemo's SessionStart envelope, `CLAUDE.md` and auto-memory, and every block
+  that carried the rule, exactly as delivered), and *without* the same minus
+  that rule's bytes. Two raters on different models (Opus 5.5 and Fable 5.1)
+  compare the two replies blind: they see the repo's `CLAUDE.md`, the previous
+  turn and the prompt, never the rule. The reply order is flipped between the
+  raters, so position bias cancels instead of agreeing. Net help `h` per unit
+  times #520's units per session gives helpful changes per session,
+  bootstrapped over sessions. The report also splits `h` by channel, by
+  whether the reflex judge was live, by page type and by the 2026-09-22 audit
+  label, and prints the share of losses with examples. First run, on all 265 of the
+  maintainer's human sessions (#520 extended from 120 to reach 138 units):
+  0.036 helpful changes per session, 95% CI [−0.019, +0.094], and `h` +0.069
+  [−0.038, +0.174]. That is inconclusive with no sessions left to extend
+  into, so by the bar it is null. #520's own run, extended to 265 sessions,
+  is still null on the strict reading (0.006 [0.001, 0.019]). (#527)
+
+- **`tools/measure_jev_agreement.py` finds out, question by question, whether
+  TypeSafe's `jev-1.13.0` can answer the raters' questions in their place.**
+  The questions are: is this rule relevant to this prompt (strict and broad),
+  is it redundant with `CLAUDE.md` and auto-memory, is this turn a correction,
+  is this rule generic or a story, which reply is better, and is this briefing
+  about the session's work. Each is graded against the two-rater labels that
+  #519, #520, #527 and the 2026-09-22 audit already left on the vault. The
+  items are rebuilt from those studies' own functions and caches, so Jev reads
+  what the raters read. Items are split by a hash of their session. Every
+  wording is tuned on the dev half, the best wording and threshold are locked
+  once, and only then is the test half sent. Jev qualifies when its mean
+  Cohen's kappa against each rater is at least the raters' kappa with each
+  other; bootstrap CIs and an AUC against the label both raters agree on are
+  printed beside it. Pairwise questions are asked in both orders, so position
+  bias cancels. Sends are paced and cached. The briefing question had no
+  labels, so the tool drew 80 human sessions and labelled them with Opus 5.5
+  and Fable 5.1 (kappa 0.88): **both call only 14 of the 80 briefings about the
+  work their session went on to do.** Jev's own answers are pending: the
+  session that built the tool was not allowed to send to the third party, so
+  `--send` (about $2.56 for the dev half) is the maintainer's to run. (#529)
+
+- **`tools/measure_memory_panorama.py` explains, with zero model calls, why
+  #520 and #527 came out null, and ranks the hypotheses a fresh test should
+  settle.** It reads what those studies left in the vault (#520's units and
+  the rules its raters were shown, #527's arms and verdicts), `reflex-log`,
+  the MCP, enrichment and denial logs, and the last 30 days of transcripts.
+  For each entry point it prints how often it fires and the bytes it adds:
+  the SessionStart envelope by section, the reflex, each MCP tool,
+  enrichment and enforcement. It then slices #527's net help by page type ×
+  channel, judge era × answering model, the judge's own score, rule age,
+  body length, gate verification and a printed text-class rule set, and
+  prints the bytes spent on rules Claude Code already had. Every number is
+  labelled a lead, not a finding. On the maintainer's vault the
+  before/after-judge gap is not the judge's: units the judge never selected
+  dropped more (−0.38 [−0.63, −0.13]). Also, 78% of rule bytes go to rules no
+  rater found relevant, and 8 of 1,336 reflexed rules were ever read in
+  full. Private project names are aliased in the output. (#530)
+
+- **`tools/measure_briefing_pick.py` tests whether mnemo can choose the right briefing, or none, instead of pasting the newest. Measured on 227 human sessions against two blind raters, it cannot yet, so the hooks are unchanged.** For each session, both raters read every briefing it could have been handed and listed the ones about its work (κ 0.91). A right one existed in 110 of 227. Newest-wins handed it in 40 (17.6%). The combined policy was set before measuring: a deterministic signal at SessionStart, else a lexical match at the first prompt, else nothing. Its thresholds were tuned on the dev half and scored once on the test half. It reached 58.3% precision and 14.0% coverage, short of the 80% and 60% bars. Both layers fail. The same branch was right 1 time in 10, because a feature branch stays checked out through unrelated sessions. Ungated, the first-prompt lexical top pick is right in only 47% of the sessions that have a right candidate. Jev was not measured, because #529 has no Jev answer yet. (#534)
+
+- **`tools/measure_full_body.py` asks whether the whole rule helps where the
+  reflex's one-line preview did not, as a third arm on #527's reflex
+  units.** The panorama (#530) found the agent reads the preview and almost
+  never the rule (8 of 1,336 reflex injections were followed by
+  `read_mnemo_rule`), and that among #527's reflex units the long-bodied
+  rules beat the short ones — post-hoc. This tool takes #527's frozen *with*
+  prompt for each of its 82 reflex units and swaps only the rule's reflex
+  line for the rule's full body under the same `[[slug]]` header, answers
+  that arm on the session's own model, and has #527's two blind raters judge
+  it against #527's cached *without* replies, order flipped between raters,
+  ties allowed; #527's answers are reused, never regenerated, and its cache
+  is never written. The paired difference `h(full) − h(preview)` is
+  bootstrapped over units against a bar set before the run (helps at ≥ +0.10
+  with the CI above zero). Ten rules had been rewritten since their session
+  and the vault keeps no history, so the verdict reads the 72 whose rule is
+  still the one the preview was cut from; all 82 are reported beside it.
+  First run: h(full) +0.215 [+0.062, +0.368] against h(preview) −0.021
+  [−0.160, +0.118], difference +0.236 [+0.090, +0.396] — **full body
+  helps**, the first positive reading in this series; both page types and
+  both text classes move the same way, and the older Opus 5 sessions (where
+  the preview already helped) do not. The price is a median 1,209 bytes per
+  injection (p90 5,538) against 391 for the preview. (#535)
+
+- **`tools/label_better_pairs.py` checks #527's two "better answer" raters
+  against the maintainer, blind, once.** The two raters agree with each other
+  at kappa 0.24, and every "is the answer better?" verdict rests on them.
+  `--export` draws 30 of #527's comparisons with a fixed seed, a third each
+  where both raters said *with* better, *without* better and tie, and at most
+  one per unit. It writes `rater-check/pairs.md` into the vault for Obsidian.
+  The file shows the prompt, the previous turn and `CLAUDE.md` as the raters
+  saw them, the two replies as Reply 1 and Reply 2 in a seeded order, and the
+  raters' own question. It shows no rule, arm, slug or rater answer. The key
+  is kept apart in `.mnemo/rater-check/key.json`, where Obsidian cannot show
+  it. `pairs.md` is not under `.mnemo/` as the issue first had it, because
+  Obsidian does not index dot-folders. The replies are 30
+  pairs of about 2,400 characters each, so 15 minutes of reading was not
+  reachable: each reply shows its first 1,200 characters, the same cap for
+  both, and the rest is folded under it. That is about 50 minutes on the
+  maintainer's cache. `--import` reports agreement and Cohen's kappa with the
+  both-raters reading and with each rater, and `h` as the maintainer judges
+  it beside the raters' on the same items. It then reads the bar set before
+  labelling: at least 70% agreement with the both-raters reading, or future
+  "better answer" tests need a different rater setup. (#536)
+
+- **`tools/measure_briefing_value.py` measures whether the right briefing helps a session pick up its work, and whether the wrong one hurts. A right briefing helps; a wrong one is not shown to make the reply worse, but it doubles wrong assumptions about the state of the work.** For the 110 sessions where #534's two raters agree a right briefing exists, it answers the first typed prompt on the session's own model three ways: with the right briefing, with none, and, in 70 sessions, with the hook's pick where that was not right. Each arm sits inside the SessionStart envelope as the hook builds it today, under #533's cap. Two blind raters never see a briefing. They judge each reply against what the session actually did next, and agree at κ 0.52, against 0.24 for #527's "better" question. The right briefing beat none by h +0.218 [+0.105, +0.327], clearing the pre-set bar of +0.15 with a CI above 0. The hook's wrong pick gave h −0.057 [−0.171, +0.064], so it is not shown to hurt, but it raised replies with a wrong-state assumption from 5.0% to 10.0% (+0.050 [+0.007, +0.100]). Choosing the briefing is worth the effort; #534 found no picker that can yet. (#540)
+
+- **`measure_prevented_repeats` and `measure_broad_value` read full-format
+  reflex blocks by entry, and `tools/measure_full_body_fresh.py` is ready to run
+  #543's pre-registered fresh check.** Since #542 the reflex writes a rule's whole
+  body under its `• [[slug]]:` head, and 23% of bodies link other rules. #520's
+  unit builder would have counted those linked rules as delivered, and #527's
+  *without* arm would have kept the removed rule's body lines. Both tools now
+  split a full-format block at its heads: the heads are the rules delivered, and
+  a rule's entry is removed whole. Old one-line blocks read exactly as before.
+  Rerun from cache with a fixed hash seed, the #520, #527 and #535 reports, and
+  #527's 137 and #535's 81 arms rebuilt from the transcripts, match master byte
+  for byte. The fresh runner takes #527's units from human sessions started
+  after the change went live (2026-09-28T23:09Z) whose reflex carried the rule
+  in the full format. It answers `full` and `without` on each unit's own model,
+  has the two blind raters judge them, and prints both bars with a verdict for
+  each, plus the whole-vs-cut split. It refuses to send before 2026-10-12 and 60
+  fresh units unless `--force`. The hook's log keeps only about 4.5 days of rows,
+  so the runner archives the fresh rows it sees and otherwise reads the same
+  facts from the block itself. (#545)
+
+- **`tools/measure_briefing_judge_pick.py` asks whether a model can pick the right briefing, or none, from what a first-prompt hook has. On #534's 227 labelled sessions neither Haiku nor Sonnet can, so the hooks are unchanged.** The picker gets the session's first typed message and the ten newest candidate briefings, each shown as its date, its TL;DR (up to 800 characters) and its state block when that is 600 characters or shorter, capped at 1,400 per note, under shuffled letters. It answers one letter or `none`, through `llm.resolve` as a hook would call it. Five wordings were tried on the dev half, each model's best was locked, and the test half was scored once against #534's bar (precision ≥ 80%, coverage ≥ 60%). Haiku almost always says `none`: on test it named 2 notes, both wrong. Sonnet reached 70.8% precision and 34.0% coverage. It hands the right note about as often as today's newest-wins (17 vs 16 of 50), but a wrong one in 7 sessions instead of 88. Coverage stops short because the first prompt often says nothing about which work it continues ("go ahead", a screenshot, "look at the open issue"). Per session: Haiku 2.3 s median, 4.2 s p90, $0.004 notional; Sonnet 2.8 s median, 4.7 s p90, $0.019 notional. (#547)
+
+- **`tools/measure_briefing_index.py` measures whether an index of the ten newest briefings' TL;DRs can stand in for picking one briefing. The result is inconclusive: the index helps a little, less than the right briefing, and plants no wrong assumptions.** For #540's 110 sessions it replaces the `[last-briefing]` slot with the date and `## TL;DR` of each of the ten newest briefings at session start. The right one is in the index in all 110. The index is a median 4.6 KB and the envelope stays under #533's 9 KB cap, so no TL;DR was cut. The first typed prompt is answered on the session's own model, and #540's two grounded blind raters (κ 0.56) compare the answers with #540's cached answers. Against no briefing, h_index is +0.109 [+0.005, +0.218]. That is above 0 but short of the pre-set +0.15 bar. Against the right briefing the index loses, −0.118 [−0.223, −0.018], and keeps about half of its help. Most of that help comes from sessions where the newest briefing was the right one (+0.212, against +0.050 elsewhere). Wrong-state replies stay at none's rate (5.9% against 6.8%). (#548)
+
+- **The full-body fresh check now reads #540's grounded question first.**
+  `tools/measure_full_body_fresh.py` asks its two blind raters which reply is
+  more consistent with where the session's work actually went, and whether
+  either reply assumes a wrong state of the work. The raters see the developer's
+  later typed messages and the agent's last message after the unit's prompt.
+  #527's "which reply better serves" question stays as a secondary reading, so
+  the fresh result can still be compared with #535. The bars do not change:
+  `h(full)` ≥ +0.10 with CI lower bound > 0, and ≥ 1 helpful change per 15
+  sessions. Both readings report kappa, and the grounded one also reports each
+  arm's wrong-state rate. The amendment was made on 2026-09-29, before any fresh
+  unit was judged: the dry run counted 0 fresh units and there was no verdict
+  cache. `--history` re-judges #535's cached pairs on the grounded question
+  without rewriting #535's caches. It was stopped partway, on request, and gave
+  no reading. (#554)
+
+- **`tools/measure_dispatch_outcomes.py` reads what every `claude --bg` job
+  delivered, dispatched or not, without a model.** It finds each background
+  session by the `sessionKind: "bg"` Claude Code writes into its transcript,
+  so jobs Claude Code has since pruned from `~/.claude/jobs` still count. It
+  splits them into mnemo-dispatched children (issue, piece, twin, read-only)
+  and plain jobs. For each it reads the PR (including those `mnemo deliver`
+  opened, found by the child's branch), whether it merged and how fast, and the
+  check runs on the handed-off commit and on the last one. A red commit is
+  split into a real failure, a flaky one (a same-OS matrix sibling passed, in
+  tests the PR never touched, or a rerun passed) and a job GitHub never started
+  (lapsed Actions billing). It also reads who fixed a red hand-off, commits
+  made after the child's last turn, `pr-follow` wakes, rate-limit resumes,
+  human input, the parent's notice, output tokens, and whether any mnemo hook
+  or MCP call reached the job. `--followups` looks for a revert or follow-up
+  fix within 7 days of each merge. `--pilot` reports issue pairs run in both
+  arms against the dispatch-vs-plain study's pre-registered bar, and `--size`
+  sizes that study. (#556)
+
+- **The full-body fresh check's dry run no longer crashes before its first
+  send.** `tools/measure_full_body_fresh.py` handed the briefing module's
+  loader the session path #520 stores as a string, so every dry run before
+  the fresh sessions were rated raised `'str' object has no attribute
+  'read_text'`. It now passes a `Path`, and a test drives it with the real
+  loader. (#562)
+
+- **`tools/measure_jev_pool.py` asks whether a deeper Jev judge pool doubles what the reflex delivers.** The judge sees only the ranking's top 3 rules. The tool reuses #520's two-rater labels as ground truth, has Jev score each prompt's top 50 in one request, and replays pools of 3, 10, 25 and 50 at bars 0.4–0.7 through the hook's dedupe and session cap. It reports coverage of the relevant rules Claude Code's own memory lacked, precision (rating a sample of injected pairs the raters never saw), load, and Jev latency per pool size. The config is chosen on a dev split and read once on test against a bar set before any data: coverage ≥ 2× what #520 recorded, precision ≥ 40%, p90 ≤ 1.5 s. (#563)
+
+- **#545's fresh check now counts its units against what Claude Code actually loaded.** #520's delivery judge credited native memory with the bodies of the two auto-memory notes closest to a rule, which Claude Code never loads (it loads only the `MEMORY.md` index), so it undercounted the delivered-and-new units the check multiplies by h. On #520's own cache that is 137 units against 205. `measure_prevented_repeats.py --native loaded` reads Text B as what was loaded: no note bodies, and `MEMORY.md` capped at 200 lines. The default is unchanged, so every published #520 number reproduces. The fresh check runs both readings on shared ratings, answers and judges the union of their units, and reads its verdict on the loaded one. The registered reading stays beside it, and the due date is unchanged. (#565)
+
+- **`tools/measure_jev_pool.py --query context` asks whether the agent's previous message helps the reflex reach what a short prompt misses.** On #563's replay, 28% of the relevant rules Claude Code's memory lacked never reach the top 50 of the ranking, almost all at a short continuation prompt (median 7.5 words). In context mode, a prompt under 400 characters is ranked together with the last 750 characters of the agent's previous message, and the judge's state carries that text beside the developer's message; the question and rule text are unchanged. The bar is set in #567 against the shipped config replayed in prompt mode: coverage +10 pp at no less precision, and p90 ≤ 1.5 s. (#567)
+
+- **The offer → decision latency tests stamp each ledger row at a chosen instant instead of the wall clock.** `P.record` and `I.record` stamp rows to the second, so an offer and a decision written back to back landed on either side of a second boundary now and then and `median_decision_days` read one second (`1.157e-05`) where the test asserted zero — seen on CI in a PR that did not touch procedures. The procedures stats test, the `mnemo procedures --stats` CLI test and the inbox stats test now write the decision 36 hours after the offer and assert exactly 1.5 days, so a regression in the latency arithmetic still fails; the inbox test's single frozen instant (#408) had made the latency zero whatever the arithmetic did. Nothing `stats` reports changes. (#569)
+
+- **No test reads the host's process table any more.** `mnemo doctor` counts
+  `claude --print` helpers and daemon residents through
+  `residents.read_ps`, and 34 doctor tests (in `test_cli_status_doctor.py`,
+  `test_cli_activation.py`, `test_doctor_share.py` and
+  `test_cold_start_backfill.py`) let it read the real `ps`, so five helpers
+  from another session's measurement turned
+  `test_doctor_activation_fidelity_info_line_for_complex_globs` red on any
+  commit. An autouse conftest fixture now hands every test an empty listing;
+  tests that want processes pass `ps_stdout=`, and tests of `read_ps` itself
+  opt out with `@pytest.mark.real_ps`. A test pins by effect that neither
+  process row spawns `ps` under the suite. No change to the doctor. (#570)
+
+- **`tools/measure_doctor_rows.py` times each `mnemo doctor` row.** Each row
+  in `DOCTOR_CHECKS` runs on its own with its output swallowed; `--rounds`
+  repeats the sweep and the report shows median and spread, because on a
+  shared machine one sweep samples the load as much as the code. It is what
+  the #571 before/after per-row timings were taken with. (#571)
+
+- **Test stubs are now checked against the functions they replace, by running
+  the suite.** `tools/measure_stub_calls.py` is a pytest plugin that records
+  every call production code makes into a stub a test defined — monkeypatched,
+  mocked, or passed in as a `load=`/`run=`/`provider` argument — and binds the
+  values production passed to the real function's signature and annotations,
+  the check that would have caught #562's `str`-for-`Path` crash. Over the
+  whole suite it found no other mismatch. (#572)
+
+- **Counted the auto-memory Claude Code's own loading cuts off, and how often
+  the reflex delivered it anyway.** `tools/measure_native_memory_cut.py`
+  reports, per project, the `MEMORY.md` lines past Claude Code's load limit
+  (200 lines or 25,000 characters; transcripts show the "25KB" is
+  characters) and the topic files no index line links. For each reflex
+  injection since the full-body reflex went live, it follows the rule's page
+  `sources:` back to the memory file and reads, from the session's own
+  transcript, the index text Claude Code loaded there, so "native loading
+  could not have shown it" is judged per session, not from today's index.
+  Human sessions and background jobs are reported apart. Read-only, no LLM
+  calls. (#574)
+
+- **`tools/measure_hook_durations.py` counts the reflex judge's `ok` rows over its wall and each mnemo hook's duration spread from Claude Code transcripts.** `--timed` adds timed runs of `UserPromptSubmit` and `SessionEnd` against a cloned vault; transcripts do not record a successful run of either. These are the numbers behind the hook timeouts. (#593)
+
+- **Every `tools/measure_*` report now says what it was measured with.** A
+  shared `tools/_provenance.py` stamps each JSON report (printed or written as
+  `report.json`) with one `provenance` key, and puts the same object as the
+  first line of a text report: tool, argv, UTC time, Python, the git commit and
+  dirty flag of the checkout, the directory `import mnemo` resolved to, a cheap
+  vault fingerprint (page count, newest mtime, digest of path/size/mtime) and
+  the tool's `blind_spots`, such as where Claude Code's transcript history on
+  disk begins. Home paths print as `~` and private names as their alias. No
+  existing result field changes, and a test fails for any new measure tool
+  that skips the helper without a listed reason. (#595)
+
+- **Measured whether a fixed SessionStart block of the most-corrected rules
+  would have delivered #520's units.** `tools/measure_settled_block.py` reads
+  #520's `units.json` and needs no model calls. It prints three things. The
+  ceiling is #520's estimate with every unit Claude Code's loaded memory
+  lacked delivered. The block is rebuilt as of each session's start with no
+  hindsight: it holds rules that existed then, ranked by distinct sessions
+  with a both-rater-verified correction before that start. For K = 5, 10 and
+  15 the tool prints coverage and the estimate with that block as the
+  delivery, each with session-bootstrap CIs, on the strict and broad
+  readings. A line beside each estimate drops the rule that carried the most
+  units. The tool also prints the block's byte cost and the decision against
+  the bar #598 declared before measuring. (#598)
+
+- **`tools/measure_action_reviewer.py` measures whether a judge reading what
+  the agent did finds the corrected rule better than the prompt does.** It
+  pairs #519's verified corrections with the agent turn each one answered and
+  ranks two queries through the reflex's own `decide` over the rules that
+  existed then: the prompt that opened the turn, and the turn's tool calls plus
+  its final message. A judge (Haiku 5.5 by default) then scores whether the turn
+  breaks each candidate. The tool reports recall at the candidate stage and
+  after the judge, the paired CI, flag precision against two blind raters, false
+  flags per 100 edit turns, kappa, and the verdict against #599's bar. When the
+  primary set cannot decide, it sizes the sample that would. It is dry by
+  default; `--send` calls the models. (#599)
+
+- **`MNEMO_HOOK_PHASES=1` makes SessionStart log its per-phase times** to
+  `.mnemo/session-start-phases.jsonl`, and `tools/measure_hook_durations.py
+  --timed` now times SessionStart too and prints the phases of its p50 and
+  p95 runs. Its timed hooks import the mnemo the tool imported (a relative
+  `PYTHONPATH=src` used to resolve in `--cwd` and time the main checkout),
+  and the transcript report counts whether the first prompt waited for
+  SessionStart. (#610)
+
+- **The test suite's real-path guard no longer fails a test because another
+  Claude Code session wrote to `~/.claude/projects`.** It used to stat that
+  directory around every test, so every dispatched child creating its project
+  directory failed whichever test was running in a sibling's suite. A test is
+  now blamed only for writes it makes itself — caught by an audit hook, at any
+  depth under the real vault, `~/.claude/projects`, `~/.cursor` and `~/.codex`
+  — or through a process it starts: the stat check runs only for tests that
+  start one, and a new `~/.claude/projects` entry counts only when it is named
+  after the test's temp root or cwd. (#612)
+
+- **Measured a SessionStart block filled by relevance history, and a rule's
+  lift when the block sits many turns before the prompt.**
+  `tools/measure_relevance_block.py` rebuilds #598's block as of each of
+  #520's sessions with no hindsight. It ranks rules by the earlier sessions in
+  which they were relevant, by #520's rater labels or by the live reflex
+  judge's picks (reflex logs, the archived rows, and judge-era reflex blocks
+  recorded in transcripts), for K = 5, 10, 15 and 25. For each it prints
+  coverage, bytes, the estimate and the line without the top rule. It
+  re-asks #434's pairs with the session's real preceding turns behind a
+  SessionStart block (`--dry-run`, then `--send`). First run: the distance
+  lift is +28.3 pp [+15.8, +40.8]. The judge's picks clear #613's bar at
+  K = 15 and 25 over the sessions they cover. But those blocks are 5–7 times
+  mnemo's 9,000-byte SessionStart envelope. (#613)
+
+- **`tools/measure_relevance_block.py` measures whether #613's block still
+  carries when it fits.** It renders (b)'s block in three forms: whole
+  bodies, `mnemo export`'s compact entry, and one line per rule. For each K it
+  prints median and p95 bytes, and which K fits two budgets: (a) the room
+  today's SessionStart envelope leaves (from `session_start.inject` rows), and
+  (b) a separate 9,000-byte hook entry. It counts, from transcripts, whether
+  Claude Code holds each hook entry to its 10,000-character threshold alone.
+  It re-asks #616's 64 pairs with the target among K − 1 block mates. Arm A is
+  reused from #616, since it is the same prompt. It then decides #618's
+  declared bar for each fitting K. (#618)
+
+- **Breaker tests read the clock once per test, so a minute boundary between writes no longer flakes them.** The breaker counts one strike per `(where, kind)` per minute (#314); test helpers that called `datetime.now()` per row could put two rows in one minute when the clock ticked over between them, and `test_should_run_still_agrees_with_recent_summary` failed on a slow macOS runner. The helpers in `test_errors_recent_summary.py`, `test_errors.py`, `test_breaker_visibility.py` and `test_cli_status_doctor.py` now take one reading, and a ticking-clock test forces the straddle. (#625)
+
+- **`tools/measure_full_body_fresh.py --until T` ends the check's window at
+  `T`.** #627 read the full-body fresh check once, on the units that existed
+  at its send, and that send stopped after the raters' pass. A later `--send`
+  would first rate every session started since, the costly step (1,286 rater
+  calls for 91 sessions on 2026-10-08), and read a different set. With the
+  first send's own bound, only sessions started before it are counted, rated
+  and read, so the read finishes on the units it declared. A bound inside the
+  24 h settle leaves the raters at the settle. (#627)
+
+- **`tools/measure_guards.py` measures whether corrected rules could have
+  become mechanical guards that catch their repeats.** A guard is a
+  deterministic check at action time with no model call: a `PreToolUse` deny
+  (a tool name and a regex over the command, path or written content) or a
+  `Stop` block (a predicate over one turn's calls and final message). One
+  proposer call per rule with a verified correction (#598's sources and #599's
+  hindsight targets) sees only the page and its evidence quote and answers
+  `none` or a guard. Every guard is then replayed over every transcript on
+  disk: recall on the corrected turn, and forward fires in the rule's scope
+  after it was learned, human sessions and dispatched children apart. Two
+  blind raters judge each fire, or a seeded sample per rule. The tool reports
+  true violations and false fires per human session with session-bootstrap
+  CIs, the estimate without the top rule, precision, kappa, and the decision
+  against the bar #631 declared before measuring. It is dry by default;
+  `--send` calls the models. (#631)
+
+- **`tools/measure_curated_head.py` measures whether mnemo curating the
+  `MEMORY.md` head Claude Code loads would carry the rules its own memory
+  leaves on disk.** As of each session's start it rebuilds the head from the
+  auto-memory notes (and, in a second arm, vault rules), ranks entries by
+  earlier relevance, fits Claude Code's 200-line / 25,000-character load limit,
+  and has #520's redundancy judge read it. The full two-judge read was stopped
+  for cost; a declared reduced read (one judge, 40 of the 262 units a note body
+  says but the loaded head does not) found the one-line entry carries the rule
+  in 10 of 40 (25% [14, 40]), an upper bound of 0.033 per session against the
+  1/15 bar: do not build. (#633)
+
+- **`tools/measure_issue_query.py` measures whether ranking and judging on the
+  issue an agent reads would reach the rules a prompt that only points at it
+  ("read issue 255") cannot.** It replays the shipped reflex (as-of BM25F, Jev
+  over the top 3 at 0.4, cap and dedupe) on three texts per session — the
+  pointer, the whole issue, and the issue's first 1,200 characters — over the
+  human sessions that open the issue they name with `gh issue view` and a
+  seeded sample of 200 dispatch children, has one blind rater label every
+  injected rule against the issue, and grades #635's pre-registered bar with
+  paired session-bootstrap intervals. It also ships the issue's two scratch
+  counters. First run, 2026-10-13: **do not build**. Pooled reach rises
+  only +4.2 pp [-2.8, +11.3], because the children's pointer already carries
+  the issue's title. On the 12 human sessions it goes from 3 to 9, which was
+  not the pre-registered decision. (#635)
+
+- **`tools/measure_memory_write_prompts.py` counts which auto-memory writes waited for a person.** Per path spelling (account dir, default dir), every `Write`/`Edit`/`MultiEdit` of a memory file by its `permissionDecision` source and `reasonType`, the call-to-result wait, and how many the hook rewrote. (#637)
+
+- **`tools/measure_merge_wait.py` reports, per repository, how long a child's
+  green PR waited for its merge and who merged it.** Minutes from the last
+  check completing to the merge (median, p75, p90, max, hours summed), the PRs
+  merged before their last check completed, and the watcher's merges told
+  apart from a person's by the follow ledger's `merged_by`. (#638)
+
+- **CI's Windows job gets 25 minutes instead of 10.** The limit was sized when
+  the job took 62–108 s; over the 37 successful runs from 2026-10-07 to
+  2026-10-13 it took 267–533 s (median 463 s), and a PR whose tests run `git`
+  was cancelled at the limit with nothing failing. The comment in `ci.yml`
+  carries the numbers and how to measure them again. (#653)
+
 ## [1.7.0] — 2026-09-24
 
 ### Added
