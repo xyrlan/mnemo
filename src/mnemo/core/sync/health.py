@@ -149,7 +149,6 @@ def summary(vault: Path, machine: str, *, max_age: float = CACHE_SECONDS,
         "pullStale": pull_ago is None or pull_ago > STALE_AFTER_SECONDS,
         "lastPush": state.get("lastPush"),
         "lastPushAgoSeconds": push_ago,
-        "pushStale": push_ago is None or push_ago > STALE_AFTER_SECONDS,
         "pushesRefused": int(state.get("pushesRefused") or 0),
         "refused": [r for r in state.get("refused") or [] if isinstance(r, dict)],
         "conflictsResolved": int(state.get("conflictsResolved") or 0),
@@ -162,6 +161,10 @@ def summary(vault: Path, machine: str, *, max_age: float = CACHE_SECONDS,
         "staleAfterSeconds": STALE_AFTER_SECONDS,
     }
     out.update(counts(vault, max_age=max_age, now=now))
+    # A push is late only when there is something to push: a satellite that
+    # joined and has written nothing yet has never needed one (#655).
+    waiting = bool(out.get("pending") or out.get("ahead"))
+    out["pushStale"] = waiting and (push_ago is None or push_ago > STALE_AFTER_SECONDS)
     return out
 
 

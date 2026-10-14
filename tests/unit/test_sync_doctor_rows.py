@@ -216,3 +216,52 @@ def test_pending_files_and_a_stale_pull_show_on_the_real_summary(tmp_path, monke
     out = _printed(rows._doctor_check_sync, vault)
     assert "1 file waiting to push" in out
     assert "⚠ Sync last pull: 2026-01-01T00:00:00Z (" in out and "no successful pull in 1 d" in out
+
+
+def _satellite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A satellite 'win' freshly joined to the hub :func:`primary` made,
+    with the config the process loads naming it."""
+    primary(tmp_path, monkeypatch)
+    vault = tmp_path / "win" / "mnemo"
+    config = tmp_path / "win" / "cfg.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"vaultRoot": str(vault), "sync": {"machineId": "win"}}),
+                      encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(config))
+    result = sync.join(vault, str(tmp_path / "hub.git"), machine="win", config_path=config)
+    assert result.ok, result.message
+    return vault
+
+
+@needs_git
+def test_a_satellite_that_never_pushed_with_nothing_waiting_is_not_warned(tmp_path, monkeypatch,
+                                                                          git_env):
+    """#655: one second after `join`, doctor said no push in a day."""
+    vault = _satellite(tmp_path, monkeypatch)
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "ℹ Sync role: satellite (machine 'win', primary 'mac')" in out
+    assert "0 files waiting to push" in out
+    assert "ℹ Sync last pull: 20" in out and "last push: never" in out
+    assert "⚠" not in out
+    assert rows._doctor_check_sync(vault) is True
+
+
+@needs_git
+def test_a_satellite_with_files_waiting_past_the_threshold_is_still_warned(tmp_path, monkeypatch,
+                                                                           git_env):
+    vault = _satellite(tmp_path, monkeypatch)
+    sessions = vault / "bots" / "app" / "briefings" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "s1.md").write_text("# a briefing from win\n", encoding="utf-8")
+    health.drop_cache(vault)
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "1 file waiting to push" in out
+    assert "last push: never — no successful push in 1 d" in out
+    assert rows._doctor_check_sync(vault) is False
+
+    state_file = vault / ".mnemo" / "sync-state.json"
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    state["lastPush"] = "2026-01-01T00:00:00Z"
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "last push: 2026-01-01T00:00:00Z (" in out and "no successful push in 1 d" in out
