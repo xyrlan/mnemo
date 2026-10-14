@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -87,17 +86,20 @@ def test_resolves_real_repo_through_agent_module(projects_root):
     #
     # decode_project_dir is a lossy, naive dash-split: it only round-trips
     # exactly when every path segment is letters and digits. pytest's own
-    # tmp_path base commonly is not (e.g. "pytest-of-<user>/pytest-3"), and
-    # mkdtemp's suffix can hold an underscore, so the repo is built under a
-    # dedicated temp dir named in hex instead, keeping the round trip honest
+    # tmp_path base commonly is not (e.g. "pytest-of-<user>/pytest-3"), nor
+    # is every system temp dir (a macOS runner's is
+    # "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T"), so the repo is
+    # built in a hex-named dir under /tmp, keeping the round trip honest
     # rather than coincidentally broken by the test harness.
     if os.name == "nt":
         pytest.skip(
             "the round trip cannot be staged on Windows: the decode spells a "
             "path with '/', never the backslashes of the cwd it came from."
         )
+    if not os.path.isdir("/tmp"):
+        pytest.skip("no /tmp to stage the round trip in")
 
-    base = Path(tempfile.gettempdir()) / f"mnemodiscovertest{uuid.uuid4().hex}"
+    base = Path("/tmp") / f"mnemodiscovertest{uuid.uuid4().hex}"
     base.mkdir()
     try:
         repo = base / "realrepo"
