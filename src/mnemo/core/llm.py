@@ -184,11 +184,20 @@ def _working_dir() -> str | None:
 
 
 def _invoke_once(argv: list[str], prompt: str, timeout: int):
+    # UTF-8 both ways, whatever the locale says. `text=True` alone encodes the
+    # prompt and decodes the reply in the locale's codec, cp1252 on Windows:
+    # the first emoji in a transcript raised in the stdin writer, `claude`
+    # got an empty stdin ("no stdin data received in 3s") and no briefing was
+    # written on a Windows machine (2026-10-14), and a reply that did come
+    # back would have read `ação` as `aÃ§Ã£o`. `replace` keeps a lone
+    # surrogate from a transcript from failing the call.
     return _subprocess_run(
         argv,
         input=prompt,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         env=_build_env(),
         cwd=_working_dir(),
