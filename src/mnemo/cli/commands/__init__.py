@@ -38,6 +38,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     recall_sessions,
     reclassify,
     redact,
+    review,
     regen_graph_edges,
     replay,
     rerank,

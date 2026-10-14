@@ -54,6 +54,10 @@ def _reveal(pair) -> None:
     for label, tag in zip(twins.LABELS, pair.order):
         twin = pair.twin(tag)
         print(f"  {label} was {twin.short_id or '(id unknown)'}  {twin.tree}")
+        if twin.arm:
+            # An --arms pair (#661): which twin had the review checkpoints,
+            # said only now that the blind answer is on record.
+            print(f"    arm: {twin.arm}")
         # After the answer, like the names: what reached a twin mid-run is
         # for the measurement, not for the judgment (#453).
         found = twins.describe(pair.conditions.get(tag))

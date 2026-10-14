@@ -97,6 +97,12 @@ DEFAULTS: dict[str, Any] = {
         # that is dirty, has unpushed commits or commits the merged PR lacks
         # is kept, and the day log says why. Turn off to remove trees by hand.
         "removeMergedTrees": True,
+        # #661: a fresh-context reviewer subagent at two checkpoints inside
+        # each issue child (design, before code; pre-PR, on the finished diff
+        # while the offline gate passes). Off until the A/B twins pilot reads
+        # positive; `mnemo dispatch --review` turns it on for one dispatch.
+        # Never for `--read-only` children or contract pieces.
+        "review": False,
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads

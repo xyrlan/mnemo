@@ -1,0 +1,91 @@
+{
+ "_how": "Calls read on 2026-10-14. Candidates: caught iff a finding names the fix's file AND its failure mechanism. Controls: real iff the claim holds at the PR head and is a defect (wrong result, crash, lost data, or a contradiction in shipped docs), checked by running the code at the head where possible.",
+ "candidates": {
+  "199": {
+   "caught": false,
+   "why": "findings are a premature consumption of live sessions, markers that never resolve, and an unlocked read-modify-write of session-queue.json; none is N concurrent unlocked sweeps per SessionEnd"
+  },
+  "205": {
+   "caught": false,
+   "why": "findings are branch left on rollback, no start point, label truncation; none reads the id parse of the --bg output"
+  },
+  "219": {
+   "caught": false,
+   "why": "findings are pr_lookup never wired and find_worktree not filtering; none of --fill without Closes, --state all, or BASE='master'"
+  },
+  "241": {
+   "caught": false,
+   "why": "findings are a stale base on resume and local-vs-remote ref; same file, not the column-zero assignment regex"
+  },
+  "285": {
+   "caught": false,
+   "why": "finding is one-sided enrichment dedupe; not the matcher never reaching existing installs nor the destructive changelog remedy"
+  },
+  "295-296": {
+   "caught": false,
+   "why": "#295 got no finding; #296's are a missing recorder on that branch and a raising=False stub, not the author-vs-reader session_id"
+  },
+  "342": {
+   "caught": false,
+   "why": "findings are failed links cached, --apply ignoring filters, unpadded --since, parser import; none about probe sessions under jobs/<id>/tmp"
+  },
+  "445": {
+   "caught": false,
+   "why": "closest: finding 1 cites in_childs_hands, but for a review comment lost to the moving cutoff, not the stale events at window close; nothing about the watcher's cwd"
+  },
+  "450": {
+   "caught": false,
+   "why": "findings are a #-prefixed deliver hint, a crashed second spawn read as started, autopilot analyzing a held twin; not the no-commit message hiding the reason"
+  },
+  "648": {
+   "caught": false,
+   "why": "findings are extraction-state conflicts and the extract lock; not the empty index after join"
+  }
+ },
+ "controls": {
+  "263": {
+   "0": "real"
+  },
+  "278": {
+   "0": "real"
+  },
+  "318": {
+   "0": "false"
+  },
+  "319": {
+   "0": "false"
+  },
+  "326": {
+   "0": "real",
+   "1": "real"
+  },
+  "365": {
+   "0": "false",
+   "1": "real"
+  },
+  "369": {
+   "0": "real"
+  },
+  "389": {
+   "0": "false",
+   "1": "false"
+  },
+  "399": {
+   "0": "real",
+   "1": "real",
+   "2": "false",
+   "3": "real"
+  },
+  "421": {
+   "0": "real",
+   "1": "false"
+  },
+  "488": {
+   "0": "real",
+   "1": "real"
+  },
+  "557": {
+   "0": "real"
+  }
+ }
+}

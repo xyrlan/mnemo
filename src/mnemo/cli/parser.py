@@ -43,6 +43,7 @@ ADVANCED_COMMANDS: frozenset[str] = frozenset({
     "stale",
     "redact",
     "twins",
+    "review",
 })
 
 # Internal subparsers that should never appear in user-facing help (wired
@@ -285,6 +286,33 @@ def _build_parser() -> argparse.ArgumentParser:
     dispatch_p.add_argument("--twins", action="store_true",
                             help="run one issue as two blind children that publish "
                                  "nothing; judge them with `mnemo twins show`")
+    # #661: the review checkpoints. Off unless `dispatch.review` is on in the
+    # config or this flag is typed; `--no-review` overrides a config that is
+    # on. `--arms` is the pilot: with --twins, one twin reviewed, one not.
+    dispatch_p.add_argument("--review", dest="review", action="store_true", default=None,
+                            help="each child hands its work to a fresh-context "
+                                 "read-only reviewer subagent at a design and a "
+                                 "pre-PR checkpoint (default: dispatch.review in "
+                                 "the config, off)")
+    dispatch_p.add_argument("--no-review", dest="review", action="store_false",
+                            help="no review checkpoints, whatever the config says")
+    dispatch_p.add_argument("--arms", action="store_true",
+                            help="with --twins: one twin gets the review "
+                                 "checkpoints and the other does not; the read "
+                                 "stays blind")
+    # The epilog is the JSON shape: the child's prompt sends it here to read it.
+    from mnemo.core.review import RECORD_HELP
+
+    review_p = sub.add_parser(
+        "review",
+        help="the review checkpoints' outcome: `mnemo review record` keeps the "
+             "ledger and prints the PR-body section (#661)",
+        epilog=RECORD_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    review_p.add_argument("action", choices=("record",),
+                          help="record: read the outcome as JSON on stdin")
+    review_p.add_argument("--vault", default=None,
+                          help="the vault whose ledger to append to "
+                               "(default: the configured one)")
     twins_p = sub.add_parser(
         "twins",
         help="issues run twice with `dispatch --twins`: list them, read a pair "
