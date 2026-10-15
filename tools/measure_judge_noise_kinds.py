@@ -128,12 +128,19 @@ def injected(units: Iterable[Dict[str, Any]], labels: Dict[str, Dict[str, int]])
             for u in units for c in u["pool"]]
 
 
-def asked_pool(unit: Dict[str, Any]) -> Optional[List[str]]:
-    """The rules Jev was asked about for this prompt; None when nothing was sent."""
+def asked_pool(unit: Dict[str, Any]) -> Optional[List[Optional[str]]]:
+    """The rules Jev was asked about for this prompt; None when nothing was sent.
+
+    #479 recorded how many rules went out (``asked``) but named only the ones
+    that came back scored, so a rule the judge skipped, and every rule of a
+    failed request, is a ``None`` member: sent, of no known name or kind (#672).
+    """
     j = unit.get("judge") or {}
-    if not j.get("asked"):
+    asked = int(j.get("asked") or 0)
+    if not asked:
         return None
-    return [s for s, _ in j.get("scores") or []]
+    named: List[Optional[str]] = [s for s, _ in j.get("scores") or []]
+    return named + [None] * max(0, asked - len(named))
 
 
 def kind(letters: Sequence[Optional[str]]) -> Dict[str, bool]:
@@ -184,7 +191,7 @@ def requests(units: Sequence[Dict[str, Any]], drop: Set[str], known: Set[str]) -
     return {"requests": len(pools),
             "all_dropped": sum(1 for p in pools if p and all(s in drop for s in p)),
             "any_dropped": sum(1 for p in pools if any(s in drop for s in p)),
-            "with_unrated": sum(1 for p in pools if any(s not in known for s in p))}
+            "with_unrated": sum(1 for p in pools if any(s is None or s not in known for s in p))}
 
 
 def retire(index: Dict[str, Any], drop: Set[str]) -> Dict[str, Any]:
@@ -193,25 +200,33 @@ def retire(index: Dict[str, Any], drop: Set[str]) -> Dict[str, Any]:
     return dict(index, docs=docs)
 
 
-def cached_scores(units: Iterable[Dict[str, Any]]) -> Dict[Tuple[str, float], Dict[str, float]]:
-    """(session, ts) -> the scores Jev gave that prompt's pool in #479's run."""
-    out = {}
+def cached_scores(units: Iterable[Dict[str, Any]]) -> Dict[Tuple[str, float], Optional[Dict[str, float]]]:
+    """(session, ts) -> the scores Jev gave that prompt's pool in #479's run, or
+    None where the request failed and the gates answered instead."""
+    out: Dict[Tuple[str, float], Optional[Dict[str, float]]] = {}
     for u in units:
         j = u.get("judge") or {}
-        if j.get("asked") and not j.get("fallback"):
-            out[(u["session_id"], u["ts"])] = {s: float(v) for s, v in j.get("scores") or []}
+        if j.get("asked"):
+            out[(u["session_id"], u["ts"])] = (None if j.get("fallback") else
+                                               {s: float(v) for s, v in j.get("scores") or []})
     return out
 
 
-def cached_stage(cached: Dict[Tuple[str, float], Dict[str, float]], at: float,
-                 log: Dict[Tuple[str, float], Dict[str, Any]]) -> Callable[[Any, List[str]], List[str]]:
+def cached_stage(cached: Dict[Tuple[str, float], Optional[Dict[str, float]]], at: float,
+                 log: Dict[Tuple[str, float], Dict[str, Any]]) -> Callable[[Any, List[str]], Optional[List[str]]]:
     """The judge stage, answered from ``cached``. A rule never scored on the prompt
     is unknown and not injected, as :func:`mnemo.core.reflex.judge.scores` treats
-    a rule the judge skipped."""
+    a rule the judge skipped. A prompt whose request failed in #479's run answers
+    None, as #479's hook did, and :func:`mnemo.core.reflex.replay.run` then
+    injects the gates' picks (#672)."""
     from mnemo.core.reflex import judge
 
-    def _stage(prompt: Any, pool: List[str]) -> List[str]:
-        known = cached.get((prompt.session_id, prompt.ts)) or {}
+    def _stage(prompt: Any, pool: List[str]) -> Optional[List[str]]:
+        key = (prompt.session_id, prompt.ts)
+        if key in cached and cached[key] is None:
+            log[key] = {"pool": list(pool), "unknown": [], "fallback": True}
+            return None
+        known = cached.get(key) or {}
         log[(prompt.session_id, prompt.ts)] = {
             "pool": list(pool), "unknown": [s for s in pool if s not in known]}
         return judge.chosen({s: known[s] for s in pool if s in known}, at)
@@ -273,7 +288,7 @@ def replayed(recorded: Sequence[Dict[str, Any]], mine: Sequence[Dict[str, Any]],
     pools = [u for u in mine if u.get("stage")]
     unknown = [(u["uid"], s) for u in pools for s in u["stage"]["unknown"]]
     known_labels = [(labels.get(uid) or {}).get(s) for uid, s in unknown]
-    out.update({"requests": len(pools), "requests_recorded": sum(1 for u in recorded if asked_pool(u)),
+    out.update({"requests": len(pools), "requests_recorded": requests(recorded, set(), set())["requests"],
                 "requests_with_unknown": sum(1 for u in pools if u["stage"]["unknown"]),
                 "unknown": {"pairs": len(unknown), "rules": len({s for _, s in unknown}),
                             "labelled": {str(k): known_labels.count(k) for k in (NOISE, MARGINAL, ON_POINT)
@@ -325,7 +340,7 @@ def gather(state: Dict[str, Any], work: Path, arm_a_work: Path) -> Dict[str, Dic
             continue
         vault = arm_vault_path(arm, work, arm_a_work)
         inj = {c["slug"] for u in units for c in u["pool"]}
-        pool = {s for u in units for s in (asked_pool(u) or [])}
+        pool = {s for u in units for s in (asked_pool(u) or []) if s is not None}
         facts = {s: nc.page_facts(nc.page_of(vault, s)) for s in sorted(inj | pool)}
         out[arm] = {"units": units, "vault": vault, "injected": inj, "pool": pool, "facts": facts}
     return out
