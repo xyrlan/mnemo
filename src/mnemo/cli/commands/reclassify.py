@@ -83,7 +83,11 @@ def cmd_reclassify(args: argparse.Namespace) -> int:
     model = extraction.get("model") or "claude-haiku-4-5"
     timeout = int(extraction.get("subprocessTimeout") or 60)
     from mnemo.core import llm
-    provider = llm.resolve(cfg)
+    try:
+        provider = llm.resolve(cfg)
+    except llm.UnknownProviderError as exc:
+        print(str(exc))
+        return 1
 
     rules = R.collect_rules(vault)
     limit = getattr(args, "limit", None)

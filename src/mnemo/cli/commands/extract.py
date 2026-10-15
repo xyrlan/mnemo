@@ -14,7 +14,7 @@ from mnemo.cli.parser import command
 
 @command("extract")
 def cmd_extract(args: argparse.Namespace) -> int:
-    from mnemo.core import config as cfg_mod, extract as extract_mod
+    from mnemo.core import config as cfg_mod, extract as extract_mod, llm
 
     cfg = cfg_mod.load_config()
     if bool(getattr(args, "background", False)):
@@ -22,7 +22,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     try:
         summary = extract_mod.run_extraction(cfg, dry_run=bool(args.dry_run), force=bool(args.force))
-    except extract_mod.ExtractionIOError as exc:
+    except (extract_mod.ExtractionIOError, llm.UnknownProviderError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

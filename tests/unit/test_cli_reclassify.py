@@ -1,3 +1,5 @@
+import pytest
+
 from mnemo.cli.parser import ADVANCED_COMMANDS, COMMANDS, _build_parser
 
 
@@ -85,3 +87,22 @@ def test_fmt_keep_without_link_stays_one_line():
 
     line = _fmt(Verdict(slug="s", verdict="keep", quote="q", source="src"))
     assert "\n" not in line and "link" not in line
+
+
+def test_a_mistyped_provider_is_one_line_and_rc_1(tmp_vault, tmp_home, monkeypatch, capsys):
+    """#670: UnknownProviderError used to escape cli.main as a traceback."""
+    import json
+
+    from mnemo import cli
+    from mnemo.core import reclassify as R
+
+    cfg_path = tmp_vault / "mnemo.config.json"
+    cfg_path.write_text(json.dumps(
+        {"vaultRoot": str(tmp_vault), "extraction": {"provider": "claud"}}), encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(cli, "_resolve_vault", lambda: tmp_vault)
+    monkeypatch.setattr(R, "plan", lambda *a, **k: pytest.fail("planned past a bad provider"))
+
+    assert cli.main(["reclassify", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert out.splitlines() == ["unknown extraction.provider 'claud'; known: claude-cli"]

@@ -79,3 +79,18 @@ def test_extract_prints_dollar_amount_when_not_subscription(tmp_vault, tmp_home,
     assert "$0.0250" in out or "$0.025" in out
     # tokens figure in output (flexible match)
     assert "tokens" in out
+
+
+def test_extract_with_a_mistyped_provider_is_one_line_and_rc_2(tmp_vault, tmp_home, monkeypatch, capsys):
+    """#670: UnknownProviderError used to escape cli.main as a traceback. It is
+    a could-not-run error, so rc 2 like the other one this command reports."""
+    cfg_path = tmp_vault / "mnemo.config.json"
+    cfg_path.write_text(json.dumps(
+        {"vaultRoot": str(tmp_vault), "extraction": {"provider": "claud"}}), encoding="utf-8")
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(cfg_path))
+
+    assert cli.main(["extract"]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.splitlines() == [
+        "Error: unknown extraction.provider 'claud'; known: claude-cli"]
+    assert captured.out == ""
