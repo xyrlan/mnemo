@@ -320,3 +320,58 @@ def test_live_pid_silent_for_an_hour_is_taken_for_a_reused_pid(tmp_path):
     assert locks.holder(lock).alive is True
     _backdate(lock, 4000)
     assert locks.holder(lock).alive is False
+
+
+def _deny_mkdir(monkeypatch, locks, path):
+    """``mkdir`` of *path* fails as it does on Windows while the directory is
+    being removed by someone else: access denied, not FileExistsError."""
+    real_mkdir = os.mkdir
+
+    def mkdir(target, *args, **kwargs):
+        if Path(target) == Path(path):
+            raise PermissionError(5, "Access is denied", str(target))
+        return real_mkdir(target, *args, **kwargs)
+
+    monkeypatch.setattr(locks.os, "mkdir", mkdir)
+
+
+@pytest.mark.parametrize("which", ["try_lock", "owned_lock"])
+def test_a_lock_being_removed_on_windows_is_contended_not_an_error(tmp_path, monkeypatch, which):
+    from mnemo.core import locks
+
+    lock = tmp_path / "x.lock"
+    monkeypatch.setattr(locks, "DELETE_PENDING_DENIES", True)
+    _deny_mkdir(monkeypatch, locks, lock)
+    with getattr(locks, which)(lock) as held:
+        assert held is False
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize("which", ["try_lock", "owned_lock"])
+def test_access_denied_elsewhere_still_raises(tmp_path, monkeypatch, which):
+    """Off Windows a denied ``mkdir`` is a real permission problem, never
+    quietly read as somebody else holding the lock."""
+    from mnemo.core import locks
+
+    lock = tmp_path / "x.lock"
+    monkeypatch.setattr(locks, "DELETE_PENDING_DENIES", False)
+    _deny_mkdir(monkeypatch, locks, lock)
+    with pytest.raises(PermissionError):
+        with getattr(locks, which)(lock):
+            pass
+
+
+def test_a_denied_takeover_lock_leaves_the_dead_lock_to_the_other_contender(tmp_path, monkeypatch):
+    """The Windows failure #674's contention test hit: one contender is
+    removing ``x.lock.takeover`` when another tries to create it."""
+    import socket
+
+    from mnemo.core import locks
+
+    lock = tmp_path / "x.lock"
+    _plant_owner(lock, pid=_dead_pid(), host=socket.gethostname())
+    monkeypatch.setattr(locks, "DELETE_PENDING_DENIES", True)
+    _deny_mkdir(monkeypatch, locks, lock.with_name(lock.name + ".takeover"))
+    with locks.owned_lock(lock) as held:
+        assert held is False
+    assert lock.exists()

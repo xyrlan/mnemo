@@ -12,6 +12,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
+#: On Windows a directory another process or thread is removing stays "delete
+#: pending" until its last handle closes, and ``mkdir`` on that path fails with
+#: access denied (WinError 5), not ``FileExistsError``: the lock is changing
+#: hands, which is contention, not an error. A module constant so a test on
+#: another platform can take the Windows branch.
+DELETE_PENDING_DENIES = os.name == "nt"
+
+
+def _contended(exc: OSError) -> bool:
+    """Whether a failed ``mkdir`` of a lock means someone else has it."""
+    return isinstance(exc, PermissionError) and DELETE_PENDING_DENIES
+
 
 @contextlib.contextmanager
 def try_lock(lock_dir: Path, stale_after: float = 60.0) -> Iterator[bool]:
@@ -40,6 +52,9 @@ def try_lock(lock_dir: Path, stale_after: float = 60.0) -> Iterator[bool]:
                     held = True
                 except OSError:
                     held = False
+        except PermissionError as exc:
+            if not _contended(exc):
+                raise
         yield held
     finally:
         if held:
@@ -232,6 +247,9 @@ def owned_lock(lock_dir: Path) -> Iterator[bool]:
                     held = True
                 except OSError:
                     held = False
+        except PermissionError as exc:
+            if not _contended(exc):
+                raise
         if held:
             try:
                 _write_owner(lock_dir, token)
