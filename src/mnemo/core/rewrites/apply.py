@@ -15,6 +15,7 @@ from typing import Callable
 
 from mnemo.core import locks
 from mnemo.core.extract.inbox.io import atomic_write, content_hash
+from mnemo.core.extract.inbox.state_io import write_state_bytes
 from mnemo.core.rewrites import merge as M
 from mnemo.core.rewrites.classify import classify
 from mnemo.core.rewrites.types import ApplyPlan, ApplyReport, Rewrite
@@ -79,7 +80,8 @@ def _fresh_run_id(vault_root: Path) -> str:
 def _atomic_json(path: Path, payload: dict, run_id: str) -> None:
     """Write *payload* as JSON via a run-scoped ``.tmp`` + ``os.replace``.
 
-    Shared by the manifest and the ledger so neither can be left truncated. The
+    Written for the manifest so it cannot be left truncated (the ledger goes
+    through ``state_io.write_state_bytes``, which keeps its replica too). The
     ``run_id`` in the temp name keeps two runs from colliding on one scratch
     path even if the lock above ever fails to hold.
     """
@@ -190,8 +192,7 @@ def _apply_locked(plan_obj: ApplyPlan, vault_root: Path, report: ApplyReport) ->
             "notes": report.notes,
             "state_backup": state_backup,
         }, plan_obj.run_id)
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_json(state_path, state, plan_obj.run_id)
+        write_state_bytes(state_path, json.dumps(state, indent=2).encode("utf-8"))
 
     try:
         _apply_entries(
@@ -343,7 +344,6 @@ def undo(vault_root: Path, run_id: str) -> int:
         backup = vault_root / str(backup_rel)
         if backup.exists():
             state_path = vault_root / ".mnemo" / "extraction-state.json"
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_bytes(backup.read_bytes())
+            write_state_bytes(state_path, backup.read_bytes())
             restored += 1
     return restored
