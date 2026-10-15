@@ -619,3 +619,43 @@ def test_summary_no_longer_counts_a_shell_row_already_in_the_ledger(world, telem
     s = BF.summarize(vault)
 
     assert s["records"] == 0 and s["contradicted_live"] == []
+
+
+# --- #669: a cached quote is located again, not only checked for a shell tag --
+
+STDOUT_ONLY = "never retry on 4xx, only on 5xx"
+
+
+def test_a_cached_quote_found_only_inside_shell_output_is_dropped(world, telemetry_on):
+    """A plan saved before #360 can hold a quote the briefing lifted from a
+    `!` command's output: it carries no shell tag itself, so only locating it
+    in the transcript again shows that no typed turn holds it."""
+    vault, projects, briefer = world
+    _transcript(projects, S_FOUND,
+                ["fix the merge step", QUOTE,
+                 f"<bash-stdout>policy.md: {STDOUT_ONLY}</bash-stdout>"],
+                mtime=2_000_000_000)
+    p = _plan(vault, projects, briefer)
+    s = {x.session_id: x for x in p.sessions}[S_FOUND]
+    s.corrections.append(BF.PlannedCorrection(quote=STDOUT_ONLY, rule=RULE))
+    BF.save_plan(p, BF.plan_path(vault))
+    resolver = _resolver(["merge-requires-admin"])
+
+    again = _plan(vault, projects, briefer, resolver=resolver)
+
+    s = {x.session_id: x for x in again.sessions}[S_FOUND]
+    assert [c.quote for c in s.corrections] == [QUOTE]
+    assert s.rejected == 1 and s.status == BF.FOUND
+    assert resolver.calls == [] and again.briefing_calls == 0
+    BF.apply(vault, again)
+    assert STDOUT_ONLY not in ledger.ledger_path(vault).read_text(encoding="utf-8")
+
+
+def test_a_cached_quote_still_typed_by_the_user_is_kept(world):
+    vault, projects, briefer = world
+    _plan(vault, projects, briefer)
+
+    again = _plan(vault, projects, Briefer({}))
+
+    s = {x.session_id: x for x in again.sessions}[S_FOUND]
+    assert [c.quote for c in s.corrections] == [QUOTE] and s.rejected == 0
