@@ -206,14 +206,15 @@ def test_one_refusal_does_not_strand_the_others(
 
 
 def test_an_existing_pr_stops_a_second_delivery(
-    in_repo: Path, pushed: list, monkeypatch, capsys
+    in_repo: Path, origin: Path, pushed: list, monkeypatch, capsys
 ) -> None:
     """Delivering twice would open a duplicate PR for the same branch.
 
     Not a failure, though (#317): an open PR is what a child dispatched with
     `--may pr` leaves behind, so finding one is the delivery already done.
     """
-    _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
+    tree = _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
+    _run(["git", "push", "-q", "-u", "origin", "feat/f/delivery"], cwd=tree)
     monkeypatch.setattr(
         delivery, "pr_info",
         lambda b, **kw: delivery.PR(url="https://x/pull/7", state="OPEN"),
@@ -225,7 +226,7 @@ def test_an_existing_pr_stops_a_second_delivery(
 
 
 def test_a_pr_the_child_opened_itself_is_delivered(
-    in_repo: Path, stopped: list, monkeypatch, capsys
+    in_repo: Path, origin: Path, stopped: list, monkeypatch, capsys
 ) -> None:
     """The `--may pr` path end to end, from deliver's side (#317).
 
@@ -234,6 +235,7 @@ def test_a_pr_the_child_opened_itself_is_delivered(
     left it off — and stops the finished child as after any delivery (#311).
     """
     tree = _ready_tree(in_repo, "317", "fix/issue-317")
+    _run(["git", "push", "-q", "-u", "origin", "fix/issue-317"], cwd=tree)
     monkeypatch.setattr(
         delivery, "pr_info",
         lambda b, **kw: delivery.PR(url="https://x/pull/320", state="OPEN"),
@@ -256,6 +258,159 @@ def test_a_pr_the_child_opened_itself_is_delivered(
     out = capsys.readouterr().out
     assert "PR already exists — https://x/pull/320" in out
     assert "stopped 5eed0317" in out
+
+
+# --- an open PR is delivered only once it holds the whole branch (#666) -----
+
+
+@pytest.fixture
+def origin(in_repo: Path) -> Path:
+    """A bare repo standing in for ``origin``: local git, no network."""
+    bare = in_repo.parent / "origin.git"
+    _run(["git", "init", "--bare", "-b", "master", str(bare)], cwd=in_repo.parent)
+    _run(["git", "remote", "add", "origin", str(bare)], cwd=in_repo)
+    _run(["git", "push", "-q", "origin", "master"], cwd=in_repo)
+    return bare
+
+
+def _child_opened_its_pr(in_repo: Path, monkeypatch, target: str, branch: str) -> Path:
+    """A child that pushed its branch and opened its own PR (`--may pr`)."""
+    tree = _ready_tree(in_repo, target, branch)
+    _run(["git", "push", "-q", "-u", "origin", branch], cwd=tree)
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/9", state="OPEN"),
+    )
+    monkeypatch.setattr(delivery, "close_on_merge", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        delivery, "sessions_in",
+        lambda t: [_session("0666abcd", t, state="done", tempo="idle")]
+        if Path(t) == tree else [],
+    )
+    return tree
+
+
+def _commit(tree: Path, name: str, text: str) -> None:
+    (tree / name).write_text(text, encoding="utf-8")
+    _run(["git", "add", name], cwd=tree)
+    _run(["git", "commit", "-q", "-m", f"add {name}"], cwd=tree)
+
+
+def _sha(ref: str, *, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", ref], cwd=str(cwd), capture_output=True, text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_commits_made_after_the_pr_opened_are_pushed_to_it(
+    in_repo: Path, origin: Path, monkeypatch, capsys
+) -> None:
+    """The repro in #666: one commit after the PR opened, never pushed.
+
+    Before, deliver printed "PR already exists", returned 0 and stopped the
+    child while the PR lacked that commit. Naming the id approves publishing
+    the branch as it stands, so the commit reaches the PR — a plain push,
+    never a force — and only then is the delivery counted and the child
+    stopped.
+    """
+    tree = _child_opened_its_pr(in_repo, monkeypatch, "666", "fix/issue-666")
+    _commit(tree, "follow_up.py", "y = 2\n")
+    order: list = []
+    real_push = delivery.push
+    monkeypatch.setattr(
+        delivery, "push",
+        lambda branch, *, worktree: (order.append("push"),
+                                     real_push(branch, worktree=worktree))[1],
+    )
+    monkeypatch.setattr(delivery, "stop_session", lambda sid: order.append(sid))
+
+    assert deliver.cmd_deliver(_args(ids=["666"])) == 0
+
+    assert _sha("fix/issue-666", cwd=origin) == _sha("HEAD", cwd=tree)
+    assert order == ["push", "0666abcd"]  # pushed before the child is stopped
+    out = capsys.readouterr().out
+    assert "pushed 1 commit to the open PR — https://x/pull/9" in out
+
+
+def test_an_open_pr_that_holds_the_whole_branch_pushes_nothing(
+    in_repo: Path, origin: Path, pushed: list, monkeypatch, capsys
+) -> None:
+    """The ordinary case is unchanged: delivered, nothing pushed, child stopped."""
+    _child_opened_its_pr(in_repo, monkeypatch, "666", "fix/issue-666")
+    monkeypatch.setattr(delivery, "stop_session", lambda sid: pushed.append(("stop", sid)))
+
+    assert deliver.cmd_deliver(_args(ids=["666"])) == 0
+
+    assert pushed == [("stop", "0666abcd")]
+    assert "PR already exists — https://x/pull/9" in capsys.readouterr().out
+
+
+def test_unpublished_commits_that_cannot_be_pushed_are_refused(
+    in_repo: Path, origin: Path, monkeypatch, capsys
+) -> None:
+    """The remote branch moved on without these commits: never forced over.
+
+    Not delivered (exit 1), and the child holding the only copy of the work
+    is left running.
+    """
+    tree = _child_opened_its_pr(in_repo, monkeypatch, "666", "fix/issue-666")
+    # Someone else pushed to the PR branch; the child committed on top of the
+    # old head.
+    other = in_repo.parent / "other"
+    _run(["git", "clone", "-q", "-b", "fix/issue-666", str(origin), str(other)],
+         cwd=in_repo.parent)
+    _run(["git", "config", "user.email", "o@example.com"], cwd=other)
+    _run(["git", "config", "user.name", "o"], cwd=other)
+    _commit(other, "theirs.py", "z = 3\n")
+    _run(["git", "push", "-q", "origin", "fix/issue-666"], cwd=other)
+    remote_head = _sha("fix/issue-666", cwd=origin)
+    _commit(tree, "follow_up.py", "y = 2\n")
+    monkeypatch.setattr(
+        delivery, "stop_session",
+        lambda sid: pytest.fail(f"stopped {sid} while it holds unpushed work"),
+    )
+
+    assert deliver.cmd_deliver(_args(ids=["666"])) == 1
+
+    assert _sha("fix/issue-666", cwd=origin) == remote_head  # nothing overwritten
+    out = capsys.readouterr().out
+    assert "PR already exists — https://x/pull/9" in out
+    assert "push failed" in out
+    assert "not delivered" in out
+
+
+def test_an_open_pr_with_no_remote_ref_to_count_against_is_pushed(
+    in_repo: Path, pushed: list, monkeypatch
+) -> None:
+    """No ``origin/<branch>`` here: what the PR holds is unknown, not "all".
+
+    The push settles it — a no-op if the remote already has the commits, a
+    refusal if it cannot take them.
+    """
+    _ready_tree(in_repo, "c-delivery", "feat/f/delivery")
+    monkeypatch.setattr(
+        delivery, "pr_info",
+        lambda b, **kw: delivery.PR(url="https://x/pull/7", state="OPEN"),
+    )
+    monkeypatch.setattr(delivery, "close_on_merge", lambda *a, **kw: None)
+
+    assert deliver.cmd_deliver(_args(ids=["c-delivery"])) == 0
+    assert pushed == [("push", "feat/f/delivery")]
+
+
+def test_review_counts_the_commits_an_open_pr_does_not_have(
+    in_repo: Path, origin: Path, monkeypatch, capsys
+) -> None:
+    """The maintainer reads, before naming the id, that naming it will push."""
+    tree = _child_opened_its_pr(in_repo, monkeypatch, "666", "fix/issue-666")
+    _commit(tree, "a.py", "a = 1\n")
+    _commit(tree, "b.py", "b = 1\n")
+
+    deliver.cmd_deliver(_args(review=True))
+
+    out = capsys.readouterr().out
+    assert "PR already exists: https://x/pull/9 — 2 commits not pushed to it" in out
 
 
 @pytest.mark.parametrize("state", ["MERGED", "CLOSED"])

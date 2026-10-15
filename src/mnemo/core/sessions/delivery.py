@@ -231,6 +231,27 @@ def _ahead(branch: str, *, base: str, worktree: Path) -> int:
         return 0
 
 
+def unpushed(branch: str, *, worktree: Path | str) -> int | None:
+    """How many commits *branch* has that ``origin/<branch>`` does not.
+
+    ``None`` when there is no ``origin/<branch>`` to count against — the
+    branch was never pushed from this repo, or its ref is gone — which means
+    "unknown", not "none". Read from the local remote-tracking ref, so it
+    touches no network (#666): an open PR on this branch is delivered only
+    when this is 0, and a push is what settles the unknown case.
+    """
+    remote = f"refs/remotes/origin/{branch}"
+    if _git(["rev-parse", "--verify", "--quiet", remote], cwd=worktree).returncode != 0:
+        return None
+    result = _git(["rev-list", "--count", f"{remote}..{branch}"], cwd=worktree)
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
 def _diffstat(branch: str, *, base: str, worktree: Path) -> str:
     """One line of what this branch changed, or ''.
 

@@ -1271,11 +1271,15 @@ because the child with nothing to deliver is the one most worth stopping.
 `gh pr create --fill` — the commits are the description — and appends
 `Closes #N` for an issue child so the merge closes the issue. Its one
 invariant is that naming an id **is** the approval: there is no `--all`, and
-each refusal (not ahead of `master`, a dirty tree, a PR that already exists)
-is printed against the name you typed. A PR that is already open — one a
-child granted `--may pr` opened itself — counts as delivered: it is printed,
-given the `Closes #N` trailer if it lacks one, and the finished child is
-stopped. A delivered child prints its PR:
+each refusal (not ahead of `master`, a dirty tree, a push git rejects) is
+printed against the name you typed. A PR that is already open, such as one a
+child granted `--may pr` opened itself, is never opened twice. It counts as
+delivered once it holds the whole branch. Commits the child made after
+opening it are pushed to it first, never with a force, and `--review` says
+how many there are on that PR's row. Then the PR is printed, given the
+`Closes #N` trailer if it lacks one, and the finished child is stopped. If
+git rejects that push, the id is not delivered: deliver exits 1 and leaves
+the child running with its commits. A delivered child prints its PR:
 
 ```
 #205: https://github.com/you/app/pull/199
