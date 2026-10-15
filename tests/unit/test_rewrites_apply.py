@@ -273,6 +273,8 @@ def test_undo_restores_bytes_and_state_exactly(tmp_vault: Path):
     assert restored == 3
     assert live.read_bytes() == live_before
     assert json.loads(state_path.read_bytes()) == json.loads(state_before)
+    # #665: the replica a lost state file is restored from follows the undo.
+    assert state_path.with_name(state_path.name + ".replica").read_bytes() == state_path.read_bytes()
     # Assert the proposal is actually back, not merely counted. Mutation-tested:
     # deleting undo's `prop_dest.write_bytes` while leaving its `restored += 1`
     # slipped past the count-and-bytes assertions above, so a test named

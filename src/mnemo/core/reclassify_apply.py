@@ -19,6 +19,7 @@ from mnemo.core.extract.inbox.io import atomic_write, content_hash
 from mnemo.core.extract.machine_edits import edit_session, page_key
 from mnemo.core.extract.scanner import ExtractionState, StateEntry
 from mnemo.core.extract.inbox.rendering import _render_nested_block
+from mnemo.core.extract.inbox.state_io import write_state_bytes
 from mnemo.core.reclassify_types import ApplyReport, Plan, split_frontmatter
 
 
@@ -443,8 +444,7 @@ def undo(vault_root: Path, run_id: str) -> int:
         backup = vault_root / str(backup_rel)
         if backup.exists():
             state_path = vault_root / ".mnemo" / "extraction-state.json"
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_bytes(backup.read_bytes())
+            write_state_bytes(state_path, backup.read_bytes())
             restored += 1
 
     return restored
