@@ -102,17 +102,18 @@ def _debounce_passes(
 
 
 def _lock_held(lock_path) -> bool:
-    """True if the extract lock exists and is younger than the stale threshold.
+    """True while an extraction holds the extract lock.
 
-    Matches the 5-minute self-heal in locks.try_lock.
+    The same judgment ``run_extraction`` makes before taking it (#674): one
+    small JSON read and a pid probe.
     """
+    from mnemo.core import locks
+
     try:
-        if not lock_path.exists():
-            return False
-        age = time.time() - lock_path.stat().st_mtime
-        return age < 300  # 5 minutes
+        found = locks.holder(lock_path)
     except OSError:
         return False
+    return found is not None and found.alive
 
 
 def _spawn_detached_extraction() -> None:

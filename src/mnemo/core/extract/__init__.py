@@ -1055,7 +1055,7 @@ def run_extraction(
     started_at = run_id
     caught_error: BaseException | None = None
 
-    with locks.try_lock(lock_path) as acquired:
+    with locks.owned_lock(lock_path) as acquired:
         if not acquired:
             raise ExtractionIOError(
                 "another extraction is in progress (lock held); try again later"
