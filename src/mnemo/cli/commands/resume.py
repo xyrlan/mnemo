@@ -132,6 +132,8 @@ def _watch(args: argparse.Namespace) -> int:
         print(f"  resumed: {line}")
     for line in report.failed:
         print(f"  failed: {line}")
+    for line in report.skipped:
+        print(f"  skipped: {line}")
     print(f"{len(report.woken)} resumed over {report.ticks} check(s); "
           f"stopped: {report.stopped}")
     return 0

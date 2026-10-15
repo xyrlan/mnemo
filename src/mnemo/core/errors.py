@@ -60,6 +60,10 @@ def _breaker_relevant(entry: dict, cutoff: datetime) -> bool:
     # it is never silent; it is not a hook failing.
     if where == "child_report.undelivered":
         return False
+    # An automatic wake that failed or was skipped (#667) is the same: a
+    # record of a child, bounded per window, not a hook failing.
+    if where.startswith("rewake."):
+        return False
     return datetime.fromisoformat(entry["timestamp"]) >= cutoff
 
 
