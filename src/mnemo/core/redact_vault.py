@@ -95,7 +95,7 @@ def apply(vault_root: Path) -> Report:
     vault_root = Path(vault_root)
     lock_path = vault_root / ".mnemo" / "extract.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with locks.try_lock(lock_path) as held:
+    with locks.owned_lock(lock_path) as held:
         if not held:
             raise VaultBusy("an extraction is in progress (lock held); try again later")
         report = scan(vault_root)

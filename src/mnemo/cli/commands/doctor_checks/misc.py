@@ -89,7 +89,6 @@ def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
 def _doctor_check_auto_brain(vault: Path) -> bool:
     """Return True if no warnings were emitted."""
     import json as _json
-    import time
     from datetime import datetime, timedelta
     from mnemo.core import config as cfg_mod
 
@@ -98,15 +97,16 @@ def _doctor_check_auto_brain(vault: Path) -> bool:
     enabled = bool(auto.get("enabled", False))
     ok = True
 
+    from mnemo.core import locks
+
     lock_path = vault / ".mnemo" / "extract.lock"
-    if lock_path.exists():
-        try:
-            age = time.time() - lock_path.stat().st_mtime
-            if age > 600:
-                print(f"  ⚠ Auto-brain: stale extract.lock at {lock_path} ({int(age)}s old); will auto-reclaim on next run")
-                ok = False
-        except OSError:
-            pass
+    try:
+        found = locks.holder(lock_path)
+    except OSError:
+        found = None
+    if found is not None and not found.alive:
+        print(f"  ⚠ Auto-brain: stale extract.lock at {lock_path} ({found.reason}); will auto-reclaim on next run")
+        ok = False
 
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     if not enabled:

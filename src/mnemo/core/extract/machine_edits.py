@@ -129,7 +129,7 @@ def edit_session(vault_root: Path, *, create: bool = False) -> Iterator[EditSess
     vault_root = Path(vault_root)
     lock_path = vault_root / LOCK_REL
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with locks.try_lock(lock_path) as held:
+    with locks.owned_lock(lock_path) as held:
         if not held:
             raise VaultBusy("an extraction is in progress (lock held); try again later")
         state_path = vault_root / STATE_REL
