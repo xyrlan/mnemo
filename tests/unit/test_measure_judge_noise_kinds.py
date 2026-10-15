@@ -98,8 +98,45 @@ def test_the_cached_stage_injects_what_jev_scored_and_logs_the_rest_unknown():
     stage = mk.cached_stage(mk.cached_scores(units), 0.4, log)
     assert stage(_P("s", 5.0), ["b", "a", "new"]) == ["a"]
     assert log[("s", 5.0)] == {"pool": ["b", "a", "new"], "unknown": ["new"]}
-    assert stage(_P("s", 6.0), ["a"]) == [], "a fallback run left no scores to reuse"
-    assert log[("s", 6.0)]["unknown"] == ["a"]
+    assert stage(_P("s", 6.0), ["a"]) is None, "a failed request replays as the gates' picks (#672)"
+    assert log[("s", 6.0)] == {"pool": ["a"], "unknown": [], "fallback": True}
+
+
+def test_a_failed_request_replays_as_the_gates_picks_not_as_inject_nothing():
+    """#479's hook answered None on a judge failure, and replay.run then injects
+    what the gates accepted; [] would silence the prompt instead (#672)."""
+    failed = {"uid": "u1", "session_id": "s", "ts": 1.0, "pool": [],
+              "judge": {"asked": 2, "scores": [], "status": "error", "fallback": True}}
+    stage = mk.cached_stage(mk.cached_scores([failed]), 0.5, {})
+    assert stage(_P("s", 1.0), ["g", "x"]) is None
+    assert stage(_P("s", 9.0), ["g"]) == [], "a prompt #479 never asked still has no scores"
+
+
+def test_the_asked_pool_keeps_the_rules_the_judge_skipped_as_unnamed():
+    skipped = _unit("u2", scores=[("g", 0.9)])
+    skipped["judge"]["asked"] = 2  # a second rule went out and came back unscored
+    assert mk.asked_pool(skipped) == ["g", None]
+    failed = _unit("u1", scores=[])
+    failed["judge"].update(asked=2, status="error", fallback=True)
+    assert mk.asked_pool(failed) == [None, None]
+    assert mk.asked_pool(_unit("u3")) is None
+
+
+def test_a_skipped_rule_keeps_a_request_from_counting_as_all_dropped():
+    skipped = _unit("u2", scores=[("g", 0.9)], ts=2.0)
+    skipped["judge"]["asked"] = 2
+    failed = _unit("u1", scores=[], ts=1.0)
+    failed["judge"].update(asked=2, status="error", fallback=True)
+    q = mk.requests([failed, skipped], {"g"}, known={"g", "s"})
+    assert q == {"requests": 2, "all_dropped": 0, "any_dropped": 1, "with_unrated": 2}
+
+
+def test_requests_as_run_count_a_failed_request_the_way_requests_does():
+    failed = _unit("u1", scores=[], ts=1.0)
+    failed["judge"].update(asked=2, status="error", fallback=True)
+    units = [failed, _unit("u2", scores=[("g", 0.9)], ts=2.0), _unit("u3", ts=3.0)]
+    r = mk.replayed(units, [], {})
+    assert r["requests_recorded"] == mk.requests(units, set(), set())["requests"] == 2
 
 
 def test_replayed_reads_unknowns_requests_and_labels():
