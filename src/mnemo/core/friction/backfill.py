@@ -471,7 +471,8 @@ def plan(
             cached = previous.get(sid)
             if cached is not None and cached.status in (FOUND, NONE_FOUND) \
                     and cached.transcript_sha256 == sha and cached.project == proj:
-                emit(_without_shell_quotes(cached))
+                turns = user_turns(_load_jsonl_events(path)) if cached.corrections else []
+                emit(_reverified(cached, turns))
                 continue
 
             entry = SessionPlan(session_id=sid, project=proj, status=NONE_FOUND,
@@ -525,15 +526,17 @@ def plan(
     return result
 
 
-def _without_shell_quotes(entry: SessionPlan) -> SessionPlan:
-    """A cached session as today's ``verify`` would have planned it.
+def _reverified(entry: SessionPlan, turns: list) -> SessionPlan:
+    """A cached session as today's ``verify`` would plan it from *turns*.
 
     A plan saved before ``verify`` refused shell-mode turns (#360) can hold a
-    ``<bash-input>`` quote; reusing it verbatim would put that quote back in
-    the dry run and, on ``--apply``, in the ledger. Dropping it needs no model
-    call — the verdict is mechanical — so the cache stays a cache.
+    quote found only in a ``!`` command or its output. Checking the quote for
+    a shell tag is not enough: a line lifted from ``<bash-stdout>`` carries no
+    tag of its own (#669). So every cached quote is located again in the
+    transcript's turns, as a fresh ``verify`` would. That needs no model call
+    — the verdict is mechanical — so the cache stays a cache.
     """
-    kept = [c for c in entry.corrections if not corrections.is_shell_turn(c.quote)]
+    kept = [c for c in entry.corrections if corrections.locate(c.quote, turns) is not None]
     if len(kept) == len(entry.corrections):
         return entry
     entry.rejected += len(entry.corrections) - len(kept)
@@ -589,7 +592,7 @@ def apply(vault_root: Path, plan: BackfillPlan) -> BackfillReport:
         report.sessions += 1
         for c in s.corrections:
             if corrections.is_shell_turn(c.quote):
-                continue  # a plan saved before #360; see _without_shell_quotes
+                continue  # a plan saved before #360; see _reverified
             key = (s.session_id, corrections.normalize(c.quote))
             if key in seen:
                 report.duplicates += 1
