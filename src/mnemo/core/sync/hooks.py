@@ -37,6 +37,14 @@ PULL_BUDGET_SECONDS = 3.0
 PULL_INTERVAL_SECONDS = 300
 #: Stamped before a pull starts, so a resume storm pulls once.
 PULL_STAMP = ".mnemo/sync-hook-pull.stamp"
+#: How far the stamp may sit ahead of the clock and still count as just
+#: written (#684). On Windows before Python 3.13, ``os.utime(path, None)`` and
+#: ``time.time()`` read the same ``GetSystemTimeAsFileTime`` tick, but
+#: ``st_mtime`` is built as ``sec + 1e-9*nsec`` and ``time.time()`` as
+#: ``ns / 1e9``: about one same-tick pair in seven comes out with the mtime one
+#: ulp (2.4e-7 s) ahead. FAT's 2-second mtimes are the coarsest a vault sits
+#: on. A clock set back by more than this still makes a pull due.
+CLOCK_SLACK_SECONDS = 2.0
 
 #: What :func:`pull_at_session_start` says it did.
 OFF = "off"
@@ -72,13 +80,14 @@ def _log(vault: Path, where: str, exc: BaseException) -> None:
 
 def pull_is_due(vault: Path, *, now: Optional[float] = None) -> bool:
     """Whether :data:`PULL_INTERVAL_SECONDS` have passed since the last pull
-    a hook started here."""
+    a hook started here. A stamp more than :data:`CLOCK_SLACK_SECONDS` in
+    the future means the clock went back, and a pull is due."""
     stamp = Path(vault) / PULL_STAMP
     try:
         age = (now if now is not None else time.time()) - stamp.stat().st_mtime
     except OSError:
         return True
-    return age >= PULL_INTERVAL_SECONDS or age < 0
+    return age >= PULL_INTERVAL_SECONDS or age < -CLOCK_SLACK_SECONDS
 
 
 def stamp_pull(vault: Path) -> None:

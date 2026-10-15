@@ -1060,3 +1060,33 @@ def test_measure_tool_can_make_every_timed_start_pull(tmp_path):
     tool.reset_sync_throttle(str(tmp_path))
     assert not (tmp_path / sync_hooks.PULL_STAMP).exists()
     assert sync_hooks.pull_is_due(tmp_path)
+
+
+def _filetime_floats(ticks: int):
+    """``(time.time(), st_mtime)`` as CPython 3.11 builds them on Windows
+    from one ``GetSystemTimeAsFileTime`` value (pytime.c, posixmodule.c)."""
+    ns = (ticks - 116444736000000000) * 100
+    sec, nsec = divmod(ns, 10 ** 9)
+    return ns / 1e9, sec + 1e-9 * nsec
+
+
+def test_one_windows_tick_can_put_the_stamp_ahead_of_the_clock():
+    # The mechanism behind #684, on any OS: the same tick read both ways.
+    base = 116444736000000000 + 1_792_000_000 * 10 ** 7
+    ahead = [m - t for t, m in (_filetime_floats(base + i * 156_250) for i in range(2000)) if m > t]
+    assert ahead, "no tick rounds the mtime ahead: the #684 mechanism is gone"
+    assert max(ahead) < sync_hooks.CLOCK_SLACK_SECONDS
+
+
+def test_a_stamp_rounded_ahead_of_the_clock_is_not_due(tmp_path):
+    sync_hooks.stamp_pull(tmp_path)
+    mtime = (tmp_path / sync_hooks.PULL_STAMP).stat().st_mtime
+    assert not sync_hooks.pull_is_due(tmp_path, now=mtime - 2.384185791015625e-07)
+    assert not sync_hooks.pull_is_due(tmp_path, now=mtime - sync_hooks.CLOCK_SLACK_SECONDS)
+
+
+def test_a_clock_set_back_makes_a_pull_due(tmp_path):
+    sync_hooks.stamp_pull(tmp_path)
+    mtime = (tmp_path / sync_hooks.PULL_STAMP).stat().st_mtime
+    assert sync_hooks.pull_is_due(tmp_path, now=mtime - sync_hooks.CLOCK_SLACK_SECONDS - 1)
+    assert sync_hooks.pull_is_due(tmp_path, now=mtime - 3600)
