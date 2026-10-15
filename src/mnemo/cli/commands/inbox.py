@@ -6,7 +6,9 @@
     mnemo inbox --promote KEY       # move it into shared/<type>/ (recall sees it)
     mnemo inbox --drop KEY          # archive it and take it out of the queue
     mnemo inbox --stats             # depth, age, and what drained lately
-    mnemo inbox --json [--origin backfill] [--project P]   # the listing, for a program
+    mnemo inbox --json [--origin backfill] [--project P]   # the listing, for a program:
+                                    # reason, judge, age, header, other projects
+    mnemo inbox --stats --json      # every --stats number, for a program
     mnemo inbox --promote K1 K2 ... [--json]   # several at once; --keys-stdin reads them
     mnemo inbox --review [--origin backfill]   # a checklist: uncheck, keep the rest
 
@@ -326,6 +328,12 @@ def cmd_inbox(args: argparse.Namespace) -> int:
         return 1
 
     if getattr(args, "stats", False):
+        if as_json:
+            from datetime import datetime
+
+            now = datetime.now()
+            _print_json(I.stats_json(I.stats(vault, now=now), now=now))
+            return 0
         _print_stats(I.stats(vault))
         return 0
 
@@ -394,7 +402,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
 
         _print_json(I.listing(vault, pages, project=project,
                               origin=getattr(args, "origin", "any") or "any",
-                              cfg=cfg_mod.load_config()))
+                              cfg=cfg_mod.load_config(), other=other))
         return 0
 
     if not pages:
