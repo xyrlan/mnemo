@@ -1,8 +1,8 @@
 """The offline gate for #661's pre-PR review checkpoint.
 
-Runs the pre-PR reviewer — the subagent :mod:`mnemo.core.review` defines,
-imported, not copied, and handed :data:`mnemo.core.review.PRE_PR_TASK` the way
-a child hands it — over past child PRs whose own change later needed a bug
+Runs the pre-PR reviewer — the subagent #661 handed dispatched children,
+defined below (:func:`agents_json`) since #682 removed it from dispatch, and
+handed :data:`PRE_PR_TASK` the way a child would have — over past child PRs whose own change later needed a bug
 fix, and over controls that needed none. It then prints the bar #661 declared:
 
     pass  <=>  the reviewer catches the known bug in at least a third of the
@@ -66,8 +66,112 @@ try:
 except ImportError:  # run as a script: tools/ is sys.path[0]
     import _provenance  # type: ignore[no-redef]
 
-from mnemo.core import hook_guard, review  # noqa: E402
+from mnemo.core import hook_guard  # noqa: E402
 from mnemo.core.sync.engine import _rmtree  # noqa: E402  (git's read-only objects on Windows)
+
+# --- the reviewer, as #661 shipped it -------------------------------------
+#
+# Moved here from ``mnemo.core.review`` when #682 removed the checkpoint from
+# dispatch. Byte for byte what the 2026-10-14 run handed ``claude``, so its
+# cached runs and its labels still read as they did.
+
+#: The subagent's name, as the child's Agent tool addresses it.
+AGENT_NAME = "mnemo-reviewer"
+
+#: The reviewer's tools: it reads, runs read-only commands and asks the vault.
+#: No ``Edit``/``Write``/``NotebookEdit``. mnemo's rule tools are named the
+#: way Claude Code exposes the MCP server the lean profile hands back.
+REVIEWER_TOOLS = (
+    "Read", "Grep", "Glob", "Bash",
+    "mcp__mnemo__get_mnemo_topics",
+    "mcp__mnemo__list_rules_by_topic",
+    "mcp__mnemo__read_mnemo_rule",
+)
+
+REVIEWER_PROMPT = """You review one change to this repository, at a checkpoint the implementer
+chose. You did not write it and you have not seen the conversation that
+produced it: judge the code and the note you are given, not the author's
+account of them.
+
+Judge against the project's own written standards and nothing else:
+- the vault's rules, through the mnemo MCP tools when they are available
+  (list_rules_by_topic with the task as the query, then read_mnemo_rule);
+- the CLAUDE.md files in the repository;
+- precedent elsewhere in the repository: how the same problem is already
+  solved here, cited as file:line.
+A defect needs no rule: a concrete failure (this input or this state leads to
+this wrong result, crash or lost data) anchored at the file:line that
+produces it.
+
+Scope is the blast radius of the change: what it touches and what depends on
+it. Anything wider (refactor a neighbour, change the architecture) is a
+suggested issue, never a finding.
+
+On a front end, UX is read from the code only: consistency with the existing
+components, loading/error/empty states, basic accessibility.
+
+At the design checkpoint you get a design note, not code. Judge the decision
+(schema, API or CLI shape, UI flow, concurrency) against the repository's
+precedent and rules: a finding there names what the design will break, or
+which precedent it departs from and where.
+
+At the pre-PR checkpoint you get a commit range. Read the diff yourself, then
+the code it touches and the code that calls it.
+
+You may read and run read-only commands. Do not write, edit, create or delete
+any file, and do not commit, push or comment anywhere.
+
+Report three lists:
+- findings: defects, and departures from a written standard, each with an
+  anchor. Only these go back to the implementer, who decides each one.
+- suggestions: taste with no anchor ("better UX", "more scalable").
+- suggested_issues: work wider than the blast radius.
+An empty findings list is a valid answer. Do not invent a finding to have one.
+
+End your reply with exactly one JSON object in a ```json block:
+{"findings": [{"category": "bug|schema|api|ui|concurrency|test|standard",
+  "file": "path/in/repo", "anchor": "file:line, a rule slug, or CLAUDE.md:line",
+  "finding": "what fails, and how"}],
+ "suggestions": ["..."], "suggested_issues": ["..."]}"""
+
+
+#: The pre-PR hand-off, filled in the way a reviewed child filled it in.
+PRE_PR_TASK = """Pre-PR checkpoint for: {what}
+
+The change is the commit range {base}..HEAD in this repository. Read it with
+`git diff {base} HEAD`, then read whatever it touches and whatever depends on
+it. Report as your instructions say."""
+
+
+def agent_definition() -> Dict[str, Any]:
+    """The reviewer, as one entry of ``claude --agents``."""
+    return {
+        "description": "Fresh-context reviewer for this change's review "
+                       "checkpoints. Read-only; judges against the project's "
+                       "own written standards.",
+        "prompt": REVIEWER_PROMPT,
+        "tools": list(REVIEWER_TOOLS),
+        "model": "inherit",
+    }
+
+
+def agents_json() -> str:
+    """The ``--agents`` value a reviewed child was spawned with."""
+    return json.dumps({AGENT_NAME: agent_definition()}, sort_keys=True)
+
+
+def findings_json(text: str) -> Optional[Dict[str, Any]]:
+    """The reviewer's closing JSON object out of its reply, or ``None``."""
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text or "", re.DOTALL)
+    for raw in reversed(blocks):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("findings"), list):
+            return data
+    return None
+
 
 #: The candidates of #661, re-verified on 2026-10-14 from each fix's issue or
 #: PR: the child PR introduced the code the fix changed. ``prs`` are reviewed
@@ -313,7 +417,7 @@ def _gh_merged() -> List[Dict[str, Any]]:
 def reviewer_argv(agents_file: Path, model: Optional[str]) -> List[str]:
     """The reviewer as a ``claude --print`` session: the child's subagent, no hindsight."""
     argv = [shutil.which("claude") or "claude", "--print",
-            "--agents", str(agents_file), "--agent", review.AGENT_NAME,
+            "--agents", str(agents_file), "--agent", AGENT_NAME,
             "--restricted", "--strict-mcp-config", "--no-session-persistence",
             "--settings", json.dumps({"autoMemoryEnabled": False}),
             "--tools", "Read,Grep,Glob,Bash",
@@ -390,13 +494,13 @@ def review_pr(source: Path, number: int, work: Path, *, model: Optional[str],
     repo = work / f"pr-{number}" / "repo"
     base, head = snapshot(source, info["base"], info["head"], repo)
     agents_file = work / f"pr-{number}" / "agents.json"
-    agents_file.write_text(review.agents_json(), encoding="utf-8")
-    task = review.PRE_PR_TASK.format(what=info["title"], base=base)
+    agents_file.write_text(agents_json(), encoding="utf-8")
+    task = PRE_PR_TASK.format(what=info["title"], base=base)
     proc = run(reviewer_argv(agents_file, model), input=task, capture_output=True,
                text=True, encoding="utf-8", errors="replace", cwd=str(repo),
                env=reviewer_env())
     stream = read_stream(proc.stdout or "", repo)
-    answer = review.findings_json(stream["result"])
+    answer = findings_json(stream["result"])
     return {
         "pr": number, "title": info["title"], "base": info["base"], "head": info["head"],
         "returncode": proc.returncode, "stderr": (proc.stderr or "")[-2000:],

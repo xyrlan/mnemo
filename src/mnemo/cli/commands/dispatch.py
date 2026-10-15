@@ -183,18 +183,6 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     lean = not getattr(args, "full_profile", False)
 
-    typed_review = getattr(args, "review", None)
-    if getattr(args, "arms", False) and not getattr(args, "twins", False):
-        print("--arms is the review pilot's A/B pair: it needs --twins")
-        return 1
-    if typed_review and read_only:
-        print("--review: a read-only child builds nothing for a reviewer to read")
-        return 1
-    if typed_review and contract_path:
-        print("--review: contract pieces are out of scope until the pilot passes (#661)")
-        return 1
-    review = _review_on(typed_review)
-
     if getattr(args, "twins", False):
         return _dispatch_twins(
             issues, contract_path=contract_path, root=root, args=args, lean=lean,
@@ -213,37 +201,16 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
             print(f"#{issue}  {core.branch_name(issue)}  {tree}"
-                  f"{_model_suffix(model, effort)}{_may_suffix(may)}"
-                  f"{'  review' if review and not read_only else ''}")
+                  f"{_model_suffix(model, effort)}{_may_suffix(may)}")
         return 0
 
     return _report(
         core.dispatch_all(
             issues, repo_root=root, model=model, lean=lean, may=may, effort=effort,
             read_only=read_only,
-            # Only when on: a dispatch without it hands the core the call it
-            # always did (#661).
-            **({"review": True} if review else {}),
         ),
         lean=lean,
     )
-
-
-def _review_on(typed: bool | None) -> bool:
-    """Whether children get the review checkpoints (#661).
-
-    What was typed wins; otherwise ``dispatch.review`` in the config, off by
-    default until the A/B pilot reads positive.
-    """
-    if typed is not None:
-        return bool(typed)
-    try:
-        from mnemo.core import config as cfg_mod
-
-        cfg = cfg_mod.load_config()
-    except Exception:  # noqa: BLE001 — the switch must never fail a dispatch
-        return False
-    return (cfg.get("dispatch") or {}).get("review") is True
 
 
 def _dispatch_twins(
@@ -275,13 +242,6 @@ def _dispatch_twins(
         print("--twins: twins publish nothing — you deliver the one you prefer "
               "after reading both blind, so --may can only be none")
         return 1
-    arms = bool(getattr(args, "arms", False))
-    if getattr(args, "review", None) and not arms:
-        # Both twins reviewed, or neither, is not what a pair is for: the
-        # one difference a pair may carry is the arm (#661).
-        print("--twins: a pair differs only by its arm — use --arms for one "
-              "reviewed twin and one not")
-        return 1
 
     issue = issues[0]
     if getattr(args, "dry_run", False):
@@ -294,7 +254,6 @@ def _dispatch_twins(
     try:
         pair_id, results = twins.dispatch_twins(
             issue, repo_root=root, model=model, lean=lean, effort=effort,
-            **({"arms": True} if arms else {}),
         )
     except core.DispatchError as exc:
         print(f"#{issue}  FAILED: {exc}")

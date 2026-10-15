@@ -1071,56 +1071,6 @@ It publishes nothing and approves nothing, so it is not an `--all` in
 disguise; naming ids or `--review` alongside it is refused, because each of
 those is a different command.
 
-### Review checkpoints (off by default)
-
-`mnemo dispatch 197 --review` (or `"review": true` under `dispatch` in
-`mnemo.config.json`) gives each issue child a reviewer: a subagent with a
-fresh context, spawned on the child's own model, that reads but has no file
-tools that write. The child hands it its work at up to two checkpoints:
-
-- **Design**, after exploring and before writing code — only when the change
-  touches persisted data or a schema, a public API or CLI, a UI flow, or
-  concurrency/scale. The child passes a short design note inline (never into
-  the tree); otherwise it records `design checkpoint: skipped, no design
-  decision`.
-- **Pre-PR**, on the finished diff before it publishes — included only while
-  the offline gate below passes (`PRE_PR_GATE` in `mnemo.core.review`). It
-  does not today: on 2026-10-14 the reviewer named the known bug in 0 of 10
-  past child PRs, against a bar of 4, so children get the design checkpoint
-  alone.
-
-The reviewer judges against your project's own written standards: vault
-rules through the mnemo MCP tools, `CLAUDE.md`, and precedent in the repo
-cited as `file:line`. Taste with no such anchor goes to a low-priority
-suggestions list, and anything wider than the change's blast radius to a
-suggested-issues list; neither goes back to the child as a finding. The child
-decides every finding — accepted or rejected, with a one-line reason — and
-pipes the outcome to `mnemo review record`, which appends one row per finding
-to `<vault>/.mnemo/review-ledger.jsonl` and prints a `## Review checkpoints`
-section for the PR body and the closing report. `--no-review` turns it off
-for one dispatch when the config has it on. `--read-only` children and
-contract pieces get no review.
-
-**The gate.** `tools/measure_review_gate.py --out DIR --labels FILE` runs the
-same pre-PR reviewer over past child PRs whose change later needed a bug fix,
-and over twelve seeded controls, each in a repository holding only the PR's
-base and head — so the later fix is not there to find. It prints every
-finding next to the fix, reads your match calls from `--labels`, and ends on
-the verdict: the reviewer must catch the known bug in a third of the
-candidates and average at most one false blocking finding per control.
-
-**The pilot.** `mnemo dispatch 197 --twins --arms` runs an issue as two blind
-twins that differ only in the checkpoints; which tag got which arm is drawn
-and recorded with each prompt's sha256. `mnemo twins show` strips the review
-section from the closing reports and refuses, saying why, if a diff or report
-still carries a review marker; `mnemo twins prefer` reveals the arm with the
-labels. `tools/measure_review_pilot.py` prints pairs, decided pairs, review-arm
-wins, ties, tokens per arm and the findings' accepted/rejected counts, then
-the verdict: **positive** when the review arm wins at least 80% of the decided
-pairs and at least six are decided — then `dispatch.review` defaults on.
-Anything else removes the feature, with no second round. Cost is printed and
-does not decide.
-
 ### What a child already knows about your repo
 
 A child is handed the issue, a worktree and its scope limits — never an

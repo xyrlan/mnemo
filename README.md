@@ -369,13 +369,6 @@ other's work never shipped, so it teaches the vault nothing.
 `tools/measure_child_pairs.py` reads the pairs back, and `--exclude
 human-input` leaves out a pair where you answered one twin and not the other.
 
-`mnemo dispatch 449 --review` (off by default) has each child hand its work
-to a fresh-context, read-only reviewer subagent at a design checkpoint and,
-while its offline gate passes, a pre-PR one; the child decides every finding
-and records it with `mnemo review record`. `--twins --arms` is the pilot: one
-twin reviewed, one not, read blind
-([details](docs/getting-started.md#review-checkpoints-off-by-default)).
-
 When the unit of work is a feature rather than issues, ask any session to
 "decompose this for dispatch": the `decomposing-for-dispatch` skill writes a
 contract — the pieces, the files each may touch, the signatures each `exposes`
