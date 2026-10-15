@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools import measure_review_gate as gate  # noqa: E402
 from tools import measure_review_pilot as pilot  # noqa: E402
 
-from mnemo.core import review, twins  # noqa: E402
+from mnemo.core import twins  # noqa: E402
 
 
 def _run(args, *, cwd) -> str:
@@ -79,10 +79,13 @@ def test_a_rerun_rebuilds_the_snapshot_from_scratch(origin, tmp_path: Path) -> N
 # --- the reviewer, as the child's own subagent -------------------------------
 
 
-def test_the_reviewer_is_the_one_src_defines_with_hooks_off(tmp_path: Path) -> None:
-    assert gate.review is review
+def test_the_reviewer_is_the_one_661_shipped_with_hooks_off(tmp_path: Path) -> None:
+    # Moved out of src by #682; a read-only subagent on the child's model.
+    agent = json.loads(gate.agents_json())[gate.AGENT_NAME]
+    assert agent["model"] == "inherit"
+    assert not {"Edit", "Write", "NotebookEdit"} & set(agent["tools"])
     argv = gate.reviewer_argv(tmp_path / "agents.json", None)
-    assert argv[argv.index("--agent") + 1] == review.AGENT_NAME
+    assert argv[argv.index("--agent") + 1] == gate.AGENT_NAME
     assert argv[argv.index("--agents") + 1] == str(tmp_path / "agents.json")
     for flag in ("--print", "--restricted", "--strict-mcp-config", "--no-session-persistence"):
         assert flag in argv
@@ -91,7 +94,7 @@ def test_the_reviewer_is_the_one_src_defines_with_hooks_off(tmp_path: Path) -> N
     assert gate.reviewer_env()["MNEMO_HOOKS_OFF"] == "1"
 
 
-def test_review_pr_hands_the_pre_pr_task_from_src(origin, tmp_path: Path, monkeypatch) -> None:
+def test_review_pr_hands_the_pre_pr_task(origin, tmp_path: Path, monkeypatch) -> None:
     root, base, head, _later = origin
     seen = {}
 
@@ -109,11 +112,11 @@ def test_review_pr_hands_the_pre_pr_task_from_src(origin, tmp_path: Path, monkey
     out = gate.review_pr(root, 7, tmp_path / "work", model=None, run=run)
     snap_base = _run(["git", "rev-list", "--max-parents=0", "HEAD"],
                      cwd=tmp_path / "work" / "pr-7" / "repo").strip()
-    assert seen["input"] == review.PRE_PR_TASK.format(what="the PR", base=snap_base)
+    assert seen["input"] == gate.PRE_PR_TASK.format(what="the PR", base=snap_base)
     assert Path(seen["cwd"]) == tmp_path / "work" / "pr-7" / "repo"
     assert seen["env"]["MNEMO_HOOKS_OFF"] == "1"
     assert json.loads((tmp_path / "work" / "pr-7" / "agents.json").read_text(encoding="utf-8")) == \
-        json.loads(review.agents_json())
+        json.loads(gate.agents_json())
     assert out["parsed"] and out["findings"][0]["anchor"] == "src/a.py:1"
     assert out["cost_usd"] == 0.5
 
@@ -245,42 +248,94 @@ def test_the_report_puts_each_finding_next_to_its_fix_and_ends_on_the_verdict() 
 
 
 def _pair(i, choice, reviewed_wins, tokens=(30000, 20000), arms=True):
+    """A pair, and its ``{tag: arm}`` as the log records it (``{}`` for a plain one)."""
     review_tag, control_tag = f"r{i:05d}", f"c{i:05d}"
-    tw = (twins.Twin(tag=review_tag, tree="t1", branch="b1", short_id="s1",
-                     arm="review" if arms else ""),
-          twins.Twin(tag=control_tag, tree="t2", branch="b2", short_id="s2",
-                     arm="control" if arms else ""))
+    tw = (twins.Twin(tag=review_tag, tree="t1", branch="b1", short_id="s1"),
+          twins.Twin(tag=control_tag, tree="t2", branch="b2", short_id="s2"))
     preferred = "" if choice == "tie" else (review_tag if reviewed_wins else control_tag)
-    return twins.Pair(pair=f"p{i}", issue=i, repo_root="/r", base="b", twins=tw,
+    pair = twins.Pair(pair=f"p{i}", issue=i, repo_root="/r", base="b", twins=tw,
                       order=(review_tag, control_tag), choice=choice, preferred=preferred,
-                      arms=arms, metrics={review_tag: {"tokens": tokens[0]},
-                                          control_tag: {"tokens": tokens[1]}})
+                      metrics={review_tag: {"tokens": tokens[0]},
+                               control_tag: {"tokens": tokens[1]}})
+    return pair, ({review_tag: "review", control_tag: "control"} if arms else {})
+
+
+def _readout(made, ledger=()):
+    return pilot.readout([p for p, _ in made], {p.pair: a for p, a in made if a},
+                         list(ledger))
 
 
 def test_positive_needs_eighty_percent_of_at_least_six_decided() -> None:
     five_of_six = [_pair(i, "A", reviewed_wins=i != 0) for i in range(6)]
-    r = pilot.readout(five_of_six, [])
+    r = _readout(five_of_six)
     assert (r["decided"], r["review_wins"], r["verdict"]) == (6, 5, "positive")
 
     four_of_six = [_pair(i, "A", reviewed_wins=i > 1) for i in range(6)]
-    assert pilot.readout(four_of_six, [])["verdict"] == "negative"      # 67%
+    assert _readout(four_of_six)["verdict"] == "negative"      # 67%
 
     five_of_five = [_pair(i, "A", reviewed_wins=True) for i in range(5)]
-    assert pilot.readout(five_of_five, [])["verdict"] == "negative"     # too few decided
+    assert _readout(five_of_five)["verdict"] == "negative"     # too few decided
 
     with_ties = five_of_six + [_pair(9, "tie", False), _pair(10, "", False)]
-    r = pilot.readout(with_ties, [])
+    r = _readout(with_ties)
     assert (r["pairs"], r["answered"], r["decided"], r["ties"]) == (8, 7, 6, 1)
     assert r["tokens_review"] == 8 * 30000 and r["tokens_control"] == 8 * 20000
 
 
 def test_plain_pairs_are_not_the_pilot_and_ledger_rows_count_per_review_arm() -> None:
-    pairs = [_pair(1, "A", True), _pair(2, "A", True, arms=False)]
+    made = [_pair(1, "A", True), _pair(2, "A", True, arms=False)]
     ledger = [{"twin_tag": "r00001", "outcome": "accepted"},
               {"twin_tag": "r00001", "outcome": "rejected"},
               {"twin_tag": "r00001", "outcome": "accepted"},
               {"twin_tag": "c00001", "outcome": "accepted"}]
-    r = pilot.readout(pairs, ledger)
+    r = _readout(made, ledger)
     assert r["pairs"] == 1
     assert (r["findings_accepted"], r["findings_rejected"]) == (2, 1)
     assert r["then"] == "remove the feature; no second round"
+
+
+def _log(vault: Path, *events) -> None:
+    path = twins.log_path(vault)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+
+
+def test_the_arms_and_the_ledger_are_read_from_the_vault_without_src(tmp_path: Path) -> None:
+    # #682 took the arms out of twins.read_pairs and the ledger reader out of
+    # src; the pilot's log still has both, and the tool reads them itself.
+    entries = [{"tag": "aaaaaa", "tree": "/t/a", "branch": "b-a", "arm": "review"},
+               {"tag": "bbbbbb", "tree": "/t/b", "branch": "b-b", "arm": "control"}]
+    _log(tmp_path,
+         {"event": "pair", "pair": "p1", "issue": 7, "repo_root": "/r", "base": "x",
+          "arms": True, "twins": entries},
+         {"event": "pair", "pair": "p2", "issue": 8, "repo_root": "/r", "base": "x",
+          "twins": [{k: v for k, v in e.items() if k != "arm"} for e in entries]},
+         {"event": "started", "pair": "p1", "tag": "aaaaaa", "short_id": "s1", "error": ""},
+         {"event": "started", "pair": "p1", "tag": "bbbbbb", "short_id": "s2", "error": ""},
+         {"event": "shown", "pair": "p1", "order": ["bbbbbb", "aaaaaa"],
+          "metrics": {"aaaaaa": {"tokens": 9}, "bbbbbb": {"tokens": 4}}},
+         {"event": "prefer", "pair": "p1", "choice": "B"})
+    ledger = tmp_path / ".mnemo" / pilot.LEDGER_NAME
+    ledger.write_text('{"twin_tag": "aaaaaa", "outcome": "accepted"}\nnot json\n',
+                      encoding="utf-8")
+
+    assert pilot.read_arms(tmp_path) == {"p1": {"aaaaaa": "review", "bbbbbb": "control"}}
+    assert pilot.read_ledger(tmp_path) == [{"twin_tag": "aaaaaa", "outcome": "accepted"}]
+    assert pilot.read_arms(tmp_path / "nowhere") == {}
+
+
+def test_main_reads_the_review_arm_win_off_the_log(tmp_path: Path, capsys) -> None:
+    _log(tmp_path,
+         {"event": "pair", "pair": "p1", "issue": 7, "repo_root": "/r", "base": "x",
+          "arms": True,
+          "twins": [{"tag": "aaaaaa", "tree": "/t/a", "branch": "b-a", "arm": "review"},
+                    {"tag": "bbbbbb", "tree": "/t/b", "branch": "b-b", "arm": "control"}]},
+         {"event": "started", "pair": "p1", "tag": "aaaaaa", "short_id": "s1", "error": ""},
+         {"event": "started", "pair": "p1", "tag": "bbbbbb", "short_id": "s2", "error": ""},
+         {"event": "shown", "pair": "p1", "order": ["bbbbbb", "aaaaaa"],
+          "metrics": {"aaaaaa": {"tokens": 9}, "bbbbbb": {"tokens": 4}}},
+         {"event": "prefer", "pair": "p1", "choice": "B"})   # B is aaaaaa, the review arm
+    assert pilot.main(["--vault", str(tmp_path), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert (out["answered"], out["decided"], out["review_wins"]) == (1, 1, 1)
+    assert (out["tokens_review"], out["tokens_control"]) == (9, 4)

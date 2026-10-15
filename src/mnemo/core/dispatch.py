@@ -346,7 +346,7 @@ evidence in the repo. If the issue proposes a fix that the code shows to be
 wrong, say so and refuse it — a measured refusal is a better outcome than a
 faithful implementation of a bad plan, and reporting that is finishing the
 job, not failing it.
-{review}{closing}"""
+{closing}"""
 
 
 #: The read-only posture's opening prompt. Deliberately parallel to `_PROMPT`:
@@ -627,15 +627,6 @@ def _publish_clause(
     )
 
 
-def _review_clause(names: Sequence[str]) -> str:
-    """The checkpoint block (#661), or ``""`` when no checkpoint was asked for."""
-    if not names:
-        return ""
-    from mnemo.core import review
-
-    return review.checkpoint_clause(names)
-
-
 def _wrap(text: str, **indent: str) -> str:
     return textwrap.fill(
         text, width=78, break_on_hyphens=False, break_long_words=False, **indent
@@ -654,7 +645,6 @@ def build_prompt(
     may: grants.Grant = (), read_only: bool = False,
     siblings: Sequence[Issue] = (),
     blind: bool = False,
-    review: Sequence[str] = (),
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -685,11 +675,6 @@ def build_prompt(
     the branch is not named, because each twin has its own. Nothing else
     changes, and nothing says another run exists. Without it the prompt is
     the one every issue child was given before twins existed.
-
-    *review* names the checkpoints this child runs (#661,
-    :func:`mnemo.core.review.checkpoints`). Empty, the default, renders the
-    prompt byte for byte as before. A read-only child gets none: it builds
-    nothing for a reviewer to read.
     """
     branch = branch_name(issue)
     roster = _siblings_clause(
@@ -717,7 +702,6 @@ def build_prompt(
             _publish_clause(may, branch=branch, issue=issue),
             initial_indent="- ", subsequent_indent="  ",
         ),
-        review=_review_clause(review),
         closing=_closing_clause(may),
     )
 
@@ -976,7 +960,6 @@ def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
     effort: str | None = None, read_only: bool = False,
     settings: Mapping[str, Any] | None = None,
-    agents: str | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -1093,10 +1076,6 @@ def spawn_child(
     child they join mnemo's hooks in the one file the lean profile already
     passes; on the full profile they are the file's only content. ``None``
     (every caller but twins) leaves the argv byte-identical.
-
-    **Extra subagents (#661).** *agents* is a ``--agents`` JSON object — the
-    review checkpoints' reviewer, :func:`mnemo.core.review.agents_json`.
-    ``None`` leaves the argv byte-identical.
     """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
@@ -1118,8 +1097,6 @@ def spawn_child(
         args += ["--model", model]
     if effort:
         args += ["--effort", effort]
-    if agents:
-        args += ["--agents", agents]
     if child_profile.is_lean(lean):
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.
@@ -1161,7 +1138,6 @@ def _spawn_into(
     effort: str | None = None,
     read_only: bool = False,
     settings: Mapping[str, Any] | None = None,
-    agents: str | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -1184,9 +1160,7 @@ def _spawn_into(
     """
     # Only when given, so every other caller hands the chokepoint exactly
     # the call it always did (#453: nothing changes for non-twin children).
-    extra: dict = {"settings": settings} if settings else {}
-    if agents:
-        extra["agents"] = agents
+    extra = {"settings": settings} if settings else {}
     try:
         short_id = spawn_child(
             prompt, cwd=tree, model=model, lean=lean, effort=effort,
@@ -1241,7 +1215,6 @@ def dispatch_issue(
     read_only: bool = False,
     details: Issue | None = None,
     siblings: Sequence[Issue] = (),
-    review: bool = False,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -1256,32 +1229,18 @@ def dispatch_issue(
     one, *fetch* is not called: re-reading would be a second ``gh`` round-trip
     for an answer already in hand, and a second answer that could differ from
     the one the siblings were told about.
-
-    *review* turns on the review checkpoints (#661): the prompt gains
-    :func:`mnemo.core.review.checkpoint_clause` and the spawn the reviewer
-    subagent. Ignored for a read-only child, which builds nothing to review.
     """
     if details is None:
         details = fetch(issue, repo_root=repo_root)  # before any git state exists
-    checkpoints, agents = review_args(review and not read_only)
     tree = ensure_worktree(issue, repo_root=repo_root)
     return _spawn_into(
         issue, tree,
         build_prompt(issue, title=details.title, body=details.body,
                      repo_root=repo_root, may=may, read_only=read_only,
-                     siblings=siblings, review=checkpoints),
+                     siblings=siblings),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
-        may=may, effort=effort, read_only=read_only, agents=agents,
+        may=may, effort=effort, read_only=read_only,
     )
-
-
-def review_args(on: bool) -> tuple[tuple[str, ...], str | None]:
-    """``(checkpoints, --agents JSON)`` for a reviewed child, ``((), None)`` otherwise."""
-    if not on:
-        return (), None
-    from mnemo.core import review
-
-    return review.checkpoints(), review.agents_json()
 
 
 def dispatch_all(
@@ -1291,7 +1250,6 @@ def dispatch_all(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
-    review: bool = False,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -1339,7 +1297,7 @@ def dispatch_all(
                     issue, repo_root=repo_root, fetch=fetch, details=details,
                     siblings=roster,
                     model=model, lean=lean, may=may, effort=effort,
-                    read_only=read_only, review=review,
+                    read_only=read_only,
                 )
             )
         except DispatchError as exc:

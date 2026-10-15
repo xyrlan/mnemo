@@ -198,3 +198,24 @@ def test_defaults_include_injection_max_topics():
     from mnemo.core.config import load_config
     cfg = load_config(missing_path=Path("/nonexistent/path.json"))
     assert cfg["injection"]["maxTopicsPerScope"] == 15
+
+
+def test_a_config_left_with_dispatch_review_still_loads(tmp_path: Path):
+    # #682 removed #661's review checkpoints; a file that still turns them on
+    # loads as before, and nothing reads the key.
+    p = tmp_path / "mnemo.config.json"
+    p.write_text(json.dumps({"dispatch": {"review": True}}), encoding="utf-8")
+    cfg = config.load_config(p)
+    assert cfg["dispatch"]["removeMergedTrees"] is True
+    assert "review" not in config.DEFAULTS["dispatch"]
+
+
+def test_dispatch_no_longer_takes_the_review_flags():
+    from mnemo.cli.parser import _build_parser
+
+    parser = _build_parser()
+    for flag in ("--review", "--no-review", "--arms"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["dispatch", "1", "--twins", flag])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["review", "record"])

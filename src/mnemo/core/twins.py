@@ -86,15 +86,6 @@ with two refusals: not before a preference is recorded (delivering first
 would tell the maintainer which diff is whose before the blind read), and not
 a second twin of a pair already delivered (one issue, one PR).
 
-**Arms (#661).** ``--twins --arms`` is the one pair whose prompts are *meant*
-to differ: one twin runs with the review checkpoints
-(:mod:`mnemo.core.review`) and the other without, everything else the same.
-Which tag got which arm is drawn once and recorded with each twin's own
-prompt sha256, so "only the checkpoints differ" stays checkable. The read
-stays blind: ``show`` strips the review section from the closing reports, and
-refuses, saying why, when a diff or a report still carries a review marker.
-The arm is printed only by ``prefer``, with the labels.
-
 Recorded as an append-only event log beside the other dispatch records,
 ``<vault>/.mnemo/dispatch-twins.jsonl``. ``tools/measure_child_pairs.py``
 reads it.
@@ -111,7 +102,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from mnemo.core import dispatch, review
+from mnemo.core import dispatch
 
 LOG_NAME = "dispatch-twins.jsonl"
 
@@ -120,10 +111,6 @@ LABELS = ("A", "B")
 
 #: What a reader may answer, besides a label.
 TIE = "tie"
-
-#: The two arms of an ``--arms`` pair.
-REVIEW_ARM = "review"
-CONTROL_ARM = "control"
 
 #: What stands in for a twin's tag, branch, tree or id in a blind diff.
 PLACEHOLDER = "<twin>"
@@ -156,10 +143,6 @@ class Twin:
     branch: str
     short_id: str = ""
     error: str = ""
-    #: ``review`` or ``control`` in an ``--arms`` pair, ``""`` otherwise.
-    arm: str = ""
-    #: This twin's own prompt sha256 in an ``--arms`` pair, ``""`` otherwise.
-    prompt_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -193,8 +176,6 @@ class Pair:
     released: Tuple[str, ...] = ()
     #: ``{tag: conditions_of(...)}`` — what each twin's transcript showed.
     conditions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    #: True for an ``--arms`` pair: one twin reviewed, one not (#661).
-    arms: bool = False
 
     @property
     def started(self) -> Tuple[Twin, ...]:
@@ -265,9 +246,7 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
         if kind == "pair":
             try:
                 twins = tuple(
-                    Twin(tag=str(t["tag"]), tree=str(t["tree"]), branch=str(t["branch"]),
-                         arm=str(t.get("arm") or ""),
-                         prompt_sha256=str(t.get("prompt_sha256") or ""))
+                    Twin(tag=str(t["tag"]), tree=str(t["tree"]), branch=str(t["branch"]))
                     for t in ev.get("twins") or []
                 )
                 pairs[pid] = Pair(
@@ -276,7 +255,7 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
                     model=ev.get("model"), effort=ev.get("effort"),
                     lean=bool(ev.get("lean", True)), created_at=str(ev.get("at") or ""),
                     settings=ev["settings"] if isinstance(ev.get("settings"), dict) else {},
-                    twins=twins, arms=bool(ev.get("arms")),
+                    twins=twins,
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -383,10 +362,6 @@ def _head(repo_root: Path | str) -> str:
     return sha
 
 
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _fresh_tags(issue: int, *, repo_root: Path | str, count: int,
                 draw: Callable[[], str]) -> List[str]:
     """*count* distinct tags whose trees do not exist yet."""
@@ -407,8 +382,6 @@ def dispatch_twins(
     model: Optional[str] = None, lean: bool = True, effort: Optional[str] = None,
     vault_root: Path | str | None = None,
     draw: Callable[[], str] = dispatch.new_twin_tag,
-    arms: bool = False,
-    pick: Optional[Callable[[Sequence[str]], str]] = None,
 ) -> Tuple[str, List[dispatch.Dispatched]]:
     """Dispatch *issue* as two blind twins. Returns the pair id and both outcomes.
 
@@ -417,10 +390,6 @@ def dispatch_twins(
     written *first* so a twin that ends before the second one has spawned is
     still known to be a twin; its briefing is held either way, on the shape
     of its cwd.
-
-    *arms* gives one twin the review checkpoints (#661) and the other the
-    plain prompt; *pick* chooses which tag is reviewed (the system's random
-    source when ``None``). Each twin's prompt sha256 and arm are recorded.
 
     A twin that fails to start is reported and recorded; the other keeps
     running. It is not stopped: it is doing real work, and a lone twin can
@@ -435,48 +404,23 @@ def dispatch_twins(
         blind=True,
     )
     tags = _fresh_tags(issue, repo_root=repo_root, count=len(LABELS), draw=draw)
-    # tag -> (prompt, --agents JSON or None, arm)
-    plan: Dict[str, Tuple[str, Optional[str], str]] = {
-        tag: (prompt, None, "") for tag in tags}
-    if arms:
-        checkpoints, agents = dispatch.review_args(True)
-        reviewed = (pick or secrets.SystemRandom().choice)(tags)
-        review_prompt = dispatch.build_prompt(
-            issue, title=details.title, body=details.body, repo_root=repo_root,
-            blind=True, review=checkpoints,
-        )
-        plan = {tag: (review_prompt, agents, REVIEW_ARM) if tag == reviewed
-                else (prompt, None, CONTROL_ARM) for tag in tags}
     pair_id = secrets.token_hex(3)
     twins = [
         Twin(
             tag=tag,
             tree=str(dispatch.worktree_path(issue, repo_root=repo_root, tag=tag)),
             branch=dispatch.branch_name(issue, tag=tag),
-            arm=plan[tag][2],
-            prompt_sha256=_sha(plan[tag][0]) if arms else "",
         )
         for tag in tags
     ]
-    entries = []
-    for t in twins:
-        entry = {"tag": t.tag, "tree": t.tree, "branch": t.branch}
-        if arms:
-            entry.update(arm=t.arm, prompt_sha256=t.prompt_sha256)
-        entries.append(entry)
-    event = {
-        "event": "pair", "pair": pair_id, "issue": issue,
-        "repo_root": str(repo_root), "base": base,
-        # One prompt for both twins, except in an --arms pair, where each
-        # twin carries its own and this one is the control's.
-        "prompt_sha256": _sha(prompt),
-        "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
-        "twins": entries,
-    }
-    if arms:
-        event["arms"] = True
     try:
-        _append(vault, event)
+        _append(vault, {
+            "event": "pair", "pair": pair_id, "issue": issue,
+            "repo_root": str(repo_root), "base": base,
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
+            "twins": [{"tag": t.tag, "tree": t.tree, "branch": t.branch} for t in twins],
+        })
     except OSError as exc:
         # Refused, not degraded: a pair nobody can find again is a pilot run
         # whose result cannot be read back, which is the whole of its value.
@@ -488,12 +432,9 @@ def dispatch_twins(
             tree = dispatch.ensure_worktree(
                 issue, repo_root=repo_root, tag=twin.tag, base=base,
             )
-            twin_prompt, agents, _arm = plan[twin.tag]
-            extra = {"agents": agents} if agents else {}
             result = dispatch._spawn_into(
-                issue, tree, twin_prompt, repo_root=repo_root, branch=twin.branch,
+                issue, tree, prompt, repo_root=repo_root, branch=twin.branch,
                 model=model, lean=lean, may=(), effort=effort, settings=SETTINGS,
-                **extra,
             )
         except dispatch.DispatchError as exc:
             result = dispatch.Dispatched(issue=issue, error=str(exc))
@@ -764,19 +705,6 @@ def _diff(pair: Pair, twin: Twin) -> str:
     return text
 
 
-def _blind_text(pair: Pair, twin: Twin,
-                state: Callable[[str], Optional[Dict[str, Any]]]) -> str:
-    """*twin*'s diff and closing report as the blind reader sees them.
-
-    In an ``--arms`` pair the review section is stripped from the report
-    first (#661); what is left is checked for markers by :func:`show`.
-    """
-    report = _report(pair, twin, state)
-    if pair.arms:
-        report = review.strip_section(report)
-    return _scrub(_diff(pair, twin) + report, pair)
-
-
 def show(
     vault_root: Path | str, name: str, *,
     rng: Optional[Any] = None,
@@ -803,17 +731,6 @@ def show(
             f"pair {pair.pair}: {len(busy)} twin(s) still working — "
             "judge the finished diffs, not a half-written one"
         )
-    texts = {t.tag: _blind_text(pair, t, state) for t in pair.started}
-    if pair.arms:
-        for tag, text in texts.items():
-            left = review.markers_in(text)
-            if left:
-                raise TwinsError(
-                    f"pair {pair.pair}: one twin's diff or closing report still "
-                    f"carries a review marker ({', '.join(repr(m) for m in left)}) "
-                    "after the review section was stripped — reading it would "
-                    "say which twin was reviewed, so it is not shown blind"
-                )
     if not pair.order:
         order = [t.tag for t in pair.started]
         (rng or secrets.SystemRandom()).shuffle(order)
@@ -829,8 +746,9 @@ def show(
 
     parts = [f"pair {pair.pair} — issue #{pair.issue}, both from {pair.base[:12]}\n"]
     for label, tag in zip(LABELS, pair.order):
+        twin = pair.twin(tag)
         parts.append(f"\n{'=' * 30} {label} {'=' * 30}\n")
-        parts.append(texts[tag])
+        parts.append(_scrub(_diff(pair, twin) + _report(pair, twin, state), pair))
     parts.append(
         f"\nWhich would you merge? mnemo twins prefer {pair.pair} A|B|tie\n"
         "(one answer per pair, recorded before the labels are revealed)\n"

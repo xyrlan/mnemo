@@ -1,0 +1,222 @@
+{
+ "what": "#661's A/B twins pilot: each pair's two fresh-context judge verdicts, one per order, and the answer the twins log kept. Built from the maintainer's judges.jsonl and dispatch-twins.jsonl on 2026-10-15; notes and paths dropped.",
+ "fields": {
+  "shown": "which arm `mnemo twins show` printed as A and as B (from the log's pair and shown events)",
+  "judges[].order": "1 = the judge read the diffs as shown; 2 = A and B swapped before the judge read them",
+  "judges[].verdict_shown": "the judge's pick, mapped back to the shown label",
+  "logged_choice": "the first `twins prefer` answer in the log, which the log keeps and measure_review_pilot.py counts"
+ },
+ "rule": "a pair is won when both orders pick the same shown label; otherwise it is a tie",
+ "pairs": [
+  {
+   "pair": "ed5ec5",
+   "issue": "xyrlan/mnemo#665",
+   "shown": {
+    "A": "control",
+    "B": "review"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "B"
+  },
+  {
+   "pair": "9a2ac3",
+   "issue": "xyrlan/mnemo-desktop#403",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "A",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "A",
+     "confidence": "high"
+    }
+   ],
+   "logged_choice": "A"
+  },
+  {
+   "pair": "be4955",
+   "issue": "xyrlan/mnemo-desktop#404",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "A",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "A",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "A"
+  },
+  {
+   "pair": "3c536f",
+   "issue": "xyrlan/mnemo#674",
+   "shown": {
+    "A": "control",
+    "B": "review"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "high"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "B"
+  },
+  {
+   "pair": "7fff3c",
+   "issue": "xyrlan/mnemo-desktop#405",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "B"
+  },
+  {
+   "pair": "5ba03b",
+   "issue": "xyrlan/mnemo-desktop#407",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "B"
+  },
+  {
+   "pair": "dcddfa",
+   "issue": "xyrlan/mnemo#667",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "B"
+  },
+  {
+   "pair": "a9b631",
+   "issue": "xyrlan/mnemo#673",
+   "shown": {
+    "A": "review",
+    "B": "control"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "A"
+  },
+  {
+   "pair": "c2df5c",
+   "issue": "xyrlan/mnemo#666",
+   "shown": {
+    "A": "control",
+    "B": "review"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "A",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "tie"
+  },
+  {
+   "pair": "1d6ec9",
+   "issue": "xyrlan/mnemo-desktop#406",
+   "shown": {
+    "A": "control",
+    "B": "review"
+   },
+   "judges": [
+    {
+     "order": 1,
+     "verdict_shown": "A",
+     "confidence": "medium"
+    },
+    {
+     "order": 2,
+     "verdict_shown": "B",
+     "confidence": "medium"
+    }
+   ],
+   "logged_choice": "tie"
+  }
+ ]
+}

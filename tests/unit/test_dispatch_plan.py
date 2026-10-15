@@ -126,13 +126,9 @@ def test_prompt_never_prescribes_an_approach() -> None:
     # caller does not write. `blind` is one bit too (#449): whether the branch
     # is named, so two twins can share one prompt. A summary of the parent's
     # reasoning would be an approach with a citation attached, and there is
-    # still no way to pass one. `review` names checkpoints (#661) from a
-    # closed set of two; anything else is dropped, so free text cannot ride it.
+    # still no way to pass one.
     assert params == {"issue", "title", "body", "repo_root", "may", "read_only",
-                      "siblings", "blind", "review"}
-    smuggled = dispatch.build_prompt(1, title="t", body="b",
-                                     review=("use a regex to parse it",))
-    assert smuggled == dispatch.build_prompt(1, title="t", body="b")
+                      "siblings", "blind"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:
