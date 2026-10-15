@@ -88,7 +88,15 @@ def _review(*, repo_root: Path) -> int:
                 # was already delivered — but a branch pushed again after
                 # review comments is the same row, and only the maintainer
                 # knows which one this is.
-                print(f"      PR already exists: {r.pr}")
+                line = f"      PR already exists: {r.pr}"
+                behind = (delivery.unpushed(r.branch, worktree=r.worktree)
+                          if r.pr_state == "OPEN" else 0)
+                if behind:
+                    # Delivering this id pushes them (#666); said here, where
+                    # the decision to name it is taken.
+                    line += (f" — {behind} commit" + ("s" if behind != 1 else "")
+                             + " not pushed to it")
+                print(line)
         print()
 
     if blocked:
@@ -160,10 +168,7 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         return False
 
     if state.pr and state.pr_state == "OPEN":
-        # Not a push. Delivering twice would open a duplicate PR for the same
-        # branch, and the maintainer who wants the existing one updated can
-        # push it themselves — that is a different decision from the one this
-        # command takes, and it is already reviewed.
+        # Never a second PR: delivering twice would duplicate this one.
         #
         # Not an error either, and since #317 the expected outcome: a child
         # dispatched with `--may pr` opened this PR itself. So it counts as
@@ -171,11 +176,31 @@ def _deliver_one(named: str, *, repo_root: Path) -> bool:
         # added, and the finished child is stopped, exactly as after a PR this
         # command opened.
         #
+        # But only once the PR holds the whole branch (#666). Commits the
+        # child made after opening it are on no remote, and stopping the child
+        # would leave them in a worktree nobody is looking at. Naming the id
+        # approves publishing the branch as it stands — `--review` counted
+        # those commits in its diffstat and names them on the PR row — so they
+        # are pushed, never forced. A push git refuses is a refusal here too:
+        # not delivered, child left running.
+        #
         # Only an OPEN one. A MERGED or CLOSED PR on this branch name is a
         # previous life of the name — `fix/issue-158` was dispatched twice,
         # two days apart — and the commits ahead of the base now are new work
         # that `gh pr create` will open a new PR for.
         print(f"{state.label}: PR already exists — {state.pr}")
+        behind = delivery.unpushed(state.branch, worktree=tree)
+        if behind != 0:
+            try:
+                delivery.push(state.branch, worktree=tree)
+            except delivery.DeliveryError as exc:
+                print(f"{state.label}: push failed: {exc}")
+                print(f"{state.label}: not delivered — the branch holds commits "
+                      f"its PR does not, and its child is left running")
+                return False
+            if behind:
+                commits = f"{behind} commit" + ("s" if behind != 1 else "")
+                print(f"{state.label}: pushed {commits} to the open PR — {state.pr}")
         delivery.close_on_merge(state.pr, target=state.target, worktree=tree)
         _delivered_twin(vault, tree, label=state.label)
         _stop_finished(tree, label=state.label)
