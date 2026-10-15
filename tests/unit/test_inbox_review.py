@@ -110,11 +110,15 @@ def test_json_listing_has_the_contract_shape(tmp_vault: Path, monkeypatch, cfg):
 
     assert rc == 0
     doc = json.loads(out)
-    assert set(doc) == {"project", "origin", "pages", "counts"}
+    # #673 added keys; every key a reader of the #495 document knew is still here,
+    # with the same meaning.
+    assert set(doc) == {"schema_version", "generated_at", "project", "origin", "pages",
+                        "counts", "median_age_days", "oldest_age_days", "other_projects"}
     assert doc["project"] == "demo" and doc["origin"] == "any"
     assert doc["counts"] == {"project": 2, "feedback": 1}
     row = next(p for p in doc["pages"] if p["key"] == "project/demo__cron")
-    assert set(row) == {"key", "type", "name", "description", "excerpt", "staged_at", "expires_at"}
+    assert set(row) == {"key", "type", "name", "description", "excerpt", "staged_at", "expires_at",
+                        "reason", "judge", "modified_at", "age_days"}
     assert row["type"] == "project"
     assert row["name"] == "Annual cron blocked until #183"
     assert row["description"] == "what it says"
@@ -221,7 +225,12 @@ def test_an_empty_queue_is_still_one_json_document(tmp_vault: Path, monkeypatch,
     rc, out = _run(tmp_vault, monkeypatch, json=True, origin="backfill")
 
     assert rc == 0
-    assert json.loads(out) == {"project": "demo", "origin": "backfill", "pages": [], "counts": {}}
+    doc = json.loads(out)
+    assert datetime.fromisoformat(doc.pop("generated_at"))
+    assert doc == {
+        "schema_version": 1, "project": "demo", "origin": "backfill", "pages": [], "counts": {},
+        "median_age_days": None, "oldest_age_days": None, "other_projects": 0,
+    }
 
 
 def test_json_is_utf8_whatever_the_page_is_named(tmp_vault: Path, monkeypatch, cfg):

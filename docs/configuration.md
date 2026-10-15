@@ -660,7 +660,21 @@ mnemo inbox --promote KEY         # into shared/<type>/, where recall reaches it
 mnemo inbox --drop KEY            # archived under shared/_archive/dropped-<run>/
 mnemo inbox --restore KEY         # undo a drop or an expiry: back into the queue
 mnemo inbox --stats               # depth, median age, what drained this week
+mnemo inbox --json                # the listing for a program: reason, judge, age, header
+mnemo inbox --stats --json        # every --stats number for a program
 ```
+
+The two `--json` documents carry everything the text prints, so a program
+never parses the prose. They have `schema_version: 1`; one without it came
+from an older mnemo, whose listing lacks the fields below and whose
+`--stats --json` printed text. Each listed page has `reason` (`demotion`,
+`backfill`, `multi-source` or `other`), `judge` (the `reference_gate` verdict,
+or `null`), and two times: `staged_at`, when it first entered the inbox, which
+its expiry counts from, and `modified_at`, its last write, which the age counts
+from. `age_days` is that age against the document's `generated_at`. The
+document also has the header's `median_age_days` and `oldest_age_days`, and
+`other_projects`, the count `--all` would add (0 under `--all`). Times are
+local and carry no UTC offset, like every time mnemo writes.
 
 `KEY` is `<type>/<slug>`, or a bare slug while only one type holds it. Both
 decisions also write `.mnemo/extraction-state.json`, which a hand `mv` did not:

@@ -862,11 +862,33 @@ def _excerpt(path: Path) -> str:
     return clean[:EXCERPT_CHARS]
 
 
-def page_record(page: StagedPage, *, cfg: dict, restored: frozenset) -> dict:
+#: The version of the two ``--json`` documents below (#673). A document
+#: without it came from a mnemo that predates the field — one whose listing
+#: has no reason, age or header, and whose ``--stats --json`` is not JSON.
+JSON_SCHEMA_VERSION = 1
+
+
+def _local_iso(epoch: float) -> str:
+    """Naive local time, second precision — how every mnemo time is spelled."""
+    return datetime.fromtimestamp(epoch).isoformat(timespec="seconds")
+
+
+def page_record(
+    page: StagedPage, *, cfg: dict, restored: frozenset, now: float | None = None,
+) -> dict:
     """One ``pages[]`` row of the ``--json`` listing — the shape the desktop reads.
 
     ``expires_at`` is :func:`expires_at`'s answer, the rule the sweep itself
     runs (#496), so the date shown is the date it happens.
+
+    Two times, because a rewritten page has two ages (#673): ``staged_at`` is
+    when it first entered the inbox, which the expiry counts from;
+    ``modified_at`` is its last write, which the text listing's age counts
+    from. ``age_days`` is that age as the text prints it, against *now* — the
+    document's ``generated_at`` — and a reader that outlives the moment
+    recounts it from ``modified_at``. ``reason`` and ``judge`` are values, not
+    the labels the terminal prints: ``judge`` is the ``reference_gate``
+    verdict, or None for a page the judge never answered.
     """
     ends = expires_at(page, cfg, restored=restored)
     return {
@@ -875,24 +897,43 @@ def page_record(page: StagedPage, *, cfg: dict, restored: frozenset) -> dict:
         "name": page.name,
         "description": page.description,
         "excerpt": _excerpt(page.path),
-        "staged_at": datetime.fromtimestamp(page.staged_since).isoformat(timespec="seconds"),
+        "staged_at": _local_iso(page.staged_since),
         "expires_at": ends.isoformat(timespec="seconds") if ends else None,
+        "reason": page.reason,
+        "judge": page.gate_verdict or None,
+        "modified_at": _local_iso(page.mtime),
+        "age_days": page.age_days(now),
     }
 
 
 def listing(
     vault_root: Path, pages: list[StagedPage], *, project: str | None, origin: str, cfg: dict,
+    other: int = 0, now: float | None = None,
 ) -> dict:
-    """The ``mnemo inbox --json`` document for *pages*, already scoped by the caller."""
+    """The ``mnemo inbox --json`` document for *pages*, already scoped by the caller.
+
+    ``median_age_days``/``oldest_age_days`` are the text header's, over the
+    pages listed; ``other_projects`` is the count the text sends to
+    ``mnemo inbox --all`` — 0 under ``--all``, where nothing is left out.
+    """
+    import time
+
+    ref = time.time() if now is None else now
     restored = restored_keys(vault_root)
     counts: dict[str, int] = {}
     for page in pages:
         counts[page.type] = counts.get(page.type, 0) + 1
+    ages = sorted(p.age_days(ref) for p in pages)
     return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "generated_at": _local_iso(ref),
         "project": project,
         "origin": origin,
-        "pages": [page_record(p, cfg=cfg, restored=restored) for p in pages],
+        "pages": [page_record(p, cfg=cfg, restored=restored, now=ref) for p in pages],
         "counts": counts,
+        "median_age_days": median(ages),
+        "oldest_age_days": ages[-1] if ages else None,
+        "other_projects": other,
     }
 
 
@@ -1016,4 +1057,31 @@ def stats(vault_root: Path, *, window_days: int = 7, now: datetime | None = None
         "expired": expired,
         "restored": restored,
         "median_decision_days": median(latencies),
+    }
+
+
+def stats_json(numbers: dict, *, now: datetime | None = None) -> dict:
+    """The ``mnemo inbox --stats --json`` document: every number the text prints.
+
+    Mapped key by key rather than dumping :func:`stats`, so a rename inside
+    :func:`stats` breaks this function — and its test — instead of silently
+    changing what a program reads. ``median_age_days`` and
+    ``median_decision_days`` are None where the text says there is nothing to
+    measure; ``expired`` and ``restored`` are always present, though the text
+    prints their line only when one is nonzero.
+    """
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "generated_at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "window_days": numbers["window_days"],
+        "staged": numbers["staged"],
+        "median_age_days": numbers["median_age_days"],
+        "oldest_age_days": numbers["oldest_age_days"],
+        "offered": numbers["offered"],
+        "promoted": numbers["promoted"],
+        "dropped": numbers["dropped"],
+        "resolved": numbers["resolved"],
+        "expired": numbers["expired"],
+        "restored": numbers["restored"],
+        "median_decision_days": numbers["median_decision_days"],
     }
