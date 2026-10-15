@@ -547,3 +547,174 @@ def test_wakes_in_the_childs_tree_from_the_watchers_cwd(bench, monkeypatch):
                           wake_fn=lambda sid, *, cwd, **kw: seen.append(cwd))
     assert len(report.woken) == 1
     assert seen == [str(bench["trees"][380])]
+
+
+# ---------------------------------------------------------------------------
+# a wake that fails, or is skipped (#667)
+# ---------------------------------------------------------------------------
+
+#: What :func:`wake._resume` returns when ``claude --bg --resume`` forked: the
+#: ``ContractBroken`` text, which names the assumption that moved.
+COPY = ("claude CLI assumption `resume-under-own-id` did not hold (installed "
+        "claude 2.1.0; last verified against 2.0.0): `claude --bg --resume "
+        "594436f2-a282-4a1c-b04a-08441296047e` started a copy instead of "
+        "waking the session")
+
+
+def _stalled_watch(bench, monkeypatch, wake_fn, *, tree=None):
+    """A watcher over one child stalled on a passed reset, until it stops."""
+    now, sleep, state = _clock(NOW)
+    stalled = child("594436f2", tree or bench["trees"][380])
+    monkeypatch.setattr(rewake.stalls_mod, "stalls_for",
+                        lambda found, **k: {"594436f2": FREE} if found else {})
+    report = rewake.watch(CFG, vault_root=bench["vault"], clock=now,
+                          sleeper=sleep, reader=lambda: [stalled],
+                          wake_fn=wake_fn)
+    return report, state["now"] - NOW
+
+
+def _error_rows(vault: Path) -> List[Dict[str, Any]]:
+    path = vault / ".errors.log"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_failing_wake_is_not_retried_on_every_tick(bench, monkeypatch):
+    """On master the watcher called a failing wake 391 times over 6.5 hours.
+
+    A failure that may clear (a non-zero exit, a timeout) gets a few tries
+    spread over the window, and then the watcher has nothing left to do and
+    ends — long before the idle deadline.
+    """
+    calls: List[float] = []
+
+    def _wake(session_id, *, cwd, **kwargs):
+        calls.append(session_id)
+        return "exit 1"
+
+    report, lived = _stalled_watch(bench, monkeypatch, _wake)
+    assert 1 < len(calls) <= 3
+    assert report.stopped == "idle"
+    assert lived < 3600
+    assert len(report.failed) == len(calls)
+
+
+def test_a_wake_that_started_a_copy_is_never_retried(bench, monkeypatch):
+    """Each retry of this one starts another copy in the child's tree."""
+    calls: List[str] = []
+
+    def _wake(session_id, *, cwd, **kwargs):
+        calls.append(session_id)
+        return COPY
+
+    report, _ = _stalled_watch(bench, monkeypatch, _wake)
+    assert len(calls) == 1
+    assert report.stopped == "idle"
+
+
+def test_the_watcher_ends_when_the_worktree_is_gone(bench, monkeypatch):
+    """Nothing it could ever wake: the first tick records it and the watcher
+    goes, instead of holding on to the deadline and being re-spawned."""
+    report, lived = _stalled_watch(bench, monkeypatch, bench["wake"],
+                                   tree=bench["trees"][380] / "removed")
+    assert report.stopped == "idle" and report.ticks == 1
+    assert bench["woken"] == []
+
+
+def test_a_retry_that_succeeds_is_a_wake(bench, monkeypatch):
+    results = ["exit 1", None]
+    calls: List[str] = []
+
+    def _wake(session_id, *, cwd, **kwargs):
+        calls.append(session_id)
+        return results.pop(0)
+
+    stalled = child("594436f2", bench["trees"][380])
+    now, sleep, state = _clock(NOW)
+    monkeypatch.setattr(rewake.stalls_mod, "stalls_for",
+                        lambda found, **k: {"594436f2": FREE} if found else {})
+    report = rewake.watch(CFG, vault_root=bench["vault"], clock=now,
+                          sleeper=sleep,
+                          reader=lambda: [] if len(calls) == 2 else [stalled],
+                          wake_fn=_wake)
+    assert len(calls) == 2 and len(report.woken) == 1
+    assert rewake.already_woken(rewake.load_ledger(bench["vault"]),
+                                stalled.session_id, RESET)
+    # The success clears the attempt record; the failure stays in .errors.log.
+    assert rewake.load_ledger(bench["vault"]).get("attempts", {}) == {}
+    assert len(_error_rows(bench["vault"])) == 1
+
+
+def test_a_failed_wake_leaves_a_trace(bench):
+    """In the ledger beside the wakes, and in ``.errors.log``."""
+    sessions = [child("594436f2", bench["trees"][380])]
+    rewake.sweep(CFG, vault_root=bench["vault"], sessions=sessions,
+                 stalls={"594436f2": FREE}, now=NOW,
+                 wake_fn=lambda sid, *, cwd, **kw: COPY)
+    ledger = rewake.load_ledger(bench["vault"])
+    entry = ledger["attempts"][sessions[0].session_id]
+    assert entry["resets_at"] == RESET and entry["tries"] == 1
+    assert entry["outcome"] == "gave_up" and "started a copy" in entry["error"]
+    assert Path(entry["cwd"]) == bench["trees"][380]
+    # A failure is not a wake: the ledger's readers see none.
+    assert ledger["wakes"] == {}
+    assert rewake.recent_wakes(bench["vault"], now=NOW + 60) == []
+    rows = _error_rows(bench["vault"])
+    assert [r["where"] for r in rows] == ["rewake.wake_failed"]
+    assert "594436f2" in rows[0]["message"]
+
+
+def test_a_skipped_wake_leaves_a_trace(bench):
+    gone = child("594436f2", bench["trees"][380] / "removed")
+    rewake.sweep(CFG, vault_root=bench["vault"], sessions=[gone],
+                 stalls={"594436f2": FREE}, now=NOW, wake_fn=bench["wake"])
+    entry = rewake.load_ledger(bench["vault"])["attempts"][gone.session_id]
+    assert entry["outcome"] == "gave_up" and "gone" in entry["error"]
+    rows = _error_rows(bench["vault"])
+    assert [r["where"] for r in rows] == ["rewake.wake_skipped"]
+
+
+def test_failed_wakes_do_not_trip_the_hook_breaker(bench):
+    """They are reported, not a hook failing: a dispatch whose wakes keep
+    failing over an hour must not switch every hook off."""
+    from datetime import datetime, timedelta
+
+    from mnemo.core import errors
+
+    start = datetime.now() - timedelta(minutes=30)
+    with open(bench["vault"] / ".errors.log", "w", encoding="utf-8") as fh:
+        for n in range(errors.THRESHOLD_PER_HOUR + 2):
+            stamp = (start + timedelta(minutes=n)).isoformat(timespec="seconds")
+            fh.write(json.dumps({"timestamp": stamp, "where": "rewake.wake_failed",
+                                 "kind": "WakeFailed", "message": f"child {n}"}) + "\n")
+    assert errors.should_run(bench["vault"])
+
+
+def test_a_new_window_gets_fresh_tries(bench):
+    """Giving up is per window, like the wake itself."""
+    sessions = [child("594436f2", bench["trees"][380])]
+    rewake.sweep(CFG, vault_root=bench["vault"], sessions=sessions,
+                 stalls={"594436f2": FREE}, now=NOW,
+                 wake_fn=lambda sid, *, cwd, **kw: COPY)
+    again = Stall(kind=Kind.RATE_LIMIT, error="rate_limit",
+                  resets_at=NEXT_RESET, limit="five_hour")
+    report = rewake.sweep(CFG, vault_root=bench["vault"], sessions=sessions,
+                          stalls={"594436f2": again}, now=NEXT_RESET + 1,
+                          wake_fn=bench["wake"])
+    assert len(report.woken) == 1
+
+
+def test_session_start_spawns_nothing_for_a_child_it_gave_up_on(bench, monkeypatch):
+    """The other half of the loop: after the watcher ends, the next
+    SessionStart must not start another one for the same dead child."""
+    gone = child("594436f2", bench["trees"][380] / "removed")
+    monkeypatch.setattr(rewake.stalls_mod, "stalls_for",
+                        lambda found, **k: {"594436f2": FREE})
+    monkeypatch.setattr(rewake, "_read_sessions", lambda: [gone])
+    rewake.sweep(CFG, vault_root=bench["vault"], sessions=[gone],
+                 stalls={"594436f2": FREE}, now=NOW, wake_fn=bench["wake"])
+    spawned: List[int] = []
+    assert rewake.on_session_start(CFG, vault_root=bench["vault"],
+                                   spawn=lambda: spawned.append(1)) == "nothing"
+    assert spawned == []

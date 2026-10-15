@@ -78,6 +78,26 @@ spawns work:
 - the SessionStart trigger runs under ``hooks_off()`` like every other hook,
   so a ``claude --print`` helper of mnemo's own never reaches it.
 
+**What bounds a wake that fails (#667).** Only a success used to be
+written down, so a child whose wake failed stayed free and the watcher called
+``wake`` again on every tick until its deadline — 391 times over 6.5 hours —
+and a failure of the "started a copy" kind started a copy each time. Failures
+now go in the same ledger file, under ``attempts`` and beside ``wakes`` (which
+keeps its shape, so its readers are untouched), keyed like a wake on
+``(session, reset epoch)``:
+
+- A failure that may clear — a non-zero exit, a timeout — is tried again
+  after :data:`RETRY_DELAYS`, at most :data:`MAX_TRIES` times per window.
+- A failure that cannot — the worktree is gone, or ``claude`` forked a copy
+  (:data:`PERMANENT_MARKERS`) — is given up on at once: retrying the first
+  changes nothing and retrying the second starts another copy.
+
+A child given up on is in neither half of :func:`split`, so a watcher with
+nothing else ends at once and the next SessionStart starts none for it. The
+next window, like a wake, makes it eligible again. Every failed or skipped
+attempt also writes one line to ``.errors.log`` under ``rewake.*``, which the
+hook breaker does not count: it is a report, not a hook failing.
+
 **How the maintainer knows it happened.** The ledger, a line in the day log
 of the repo the child was working in, and a footer under ``mnemo sessions``.
 Not only a line in the child's transcript.
@@ -153,7 +173,26 @@ WATCH_LIFETIME_SECONDS = 24 * 3600
 #: notice that the machine was suspended for three hours in between.
 MAX_SLEEP_SECONDS = 60.0
 
+#: Waits before the second and third try of a wake that failed in a way that
+#: may clear. A limit that did not quite lift, or a ``claude`` that timed out,
+#: is minutes, not hours; three tries over 35 minutes cover that and cost at
+#: most two more spawns per child per window.
+RETRY_DELAYS: Tuple[float, ...] = (5 * 60.0, 30 * 60.0)
+
+#: Tries per child per reset window, the first one included.
+MAX_TRIES = len(RETRY_DELAYS) + 1
+
+#: Text in a failure that retrying cannot fix. ``resume-under-own-id`` is the
+#: ``claude_cli`` assumption both of :func:`wake._resume`'s copy reports name —
+#: an id ``--resume`` would fork, and a ``--resume`` that forked anyway — and
+#: each retry of those starts one more copy in the child's tree.
+PERMANENT_MARKERS: Tuple[str, ...] = ("resume-under-own-id",)
+
 SCHEMA_VERSION = 1
+
+
+class WakeFailed(RuntimeError):
+    """What ``.errors.log`` records for a wake that failed or was skipped."""
 
 
 def enabled(cfg: Optional[Dict[str, Any]]) -> bool:
@@ -246,11 +285,92 @@ def record_wake(
         "cwd": getattr(session, "cwd", None),
         "resets_at": None if stall is None else stall.resets_at,
         "limit": None if stall is None else stall.limit,
-        "at": datetime.fromtimestamp(moment, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "at": _iso(moment),
         "count": int(previous.get("count") or 0) + 1,
     }
+    # The failures before this success are in .errors.log; the record that
+    # held the child back has done its job.
+    attempts = data.get("attempts")
+    if isinstance(attempts, dict):
+        attempts.pop(key, None)
     data["schema_version"] = SCHEMA_VERSION
     _save_ledger(vault_root, data)
+
+
+def is_permanent(why: str) -> bool:
+    """True when retrying the wake that failed with *why* cannot help."""
+    return any(marker in (why or "") for marker in PERMANENT_MARKERS)
+
+
+def _attempt(ledger: Dict[str, Any], session_id: str,
+             resets_at: Any) -> Optional[Dict[str, Any]]:
+    """The failed-attempt record for this child in *this* window, if any."""
+    entry = (ledger.get("attempts") or {}).get(session_id)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return entry if int(entry.get("resets_at")) == int(resets_at) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def gave_up(ledger: Dict[str, Any], session_id: str, resets_at: int) -> bool:
+    """True when this child's wake has failed for good in this window."""
+    entry = _attempt(ledger, session_id, resets_at)
+    return entry is not None and entry.get("outcome") == "gave_up"
+
+
+def retry_pending(ledger: Dict[str, Any], session_id: str, resets_at: int,
+                  *, now: float) -> bool:
+    """True when this child failed in this window and its next try is later."""
+    entry = _attempt(ledger, session_id, resets_at)
+    if entry is None or entry.get("outcome") == "gave_up":
+        return False
+    try:
+        return float(entry.get("next_at")) > now
+    except (TypeError, ValueError):
+        return False
+
+
+def record_attempt(vault_root: Path, session, stall, why: str, *,
+                   permanent: bool, now: Optional[float] = None) -> Dict[str, Any]:
+    """Note a wake that failed or was skipped, and when it may be tried again.
+
+    Re-reads the file for the reason :func:`record_wake` does. The count
+    starts over in a new window; :data:`MAX_TRIES` in one, or a *permanent*
+    failure, gives up on the child until the next.
+    """
+    moment = time.time() if now is None else now
+    data = load_ledger(vault_root)
+    attempts = data.get("attempts")
+    if not isinstance(attempts, dict):
+        attempts = data["attempts"] = {}
+    key = str(getattr(session, "session_id", "") or "")
+    resets_at = None if stall is None else stall.resets_at
+    previous = _attempt(data, key, resets_at) or {}
+    tries = int(previous.get("tries") or 0) + 1
+    done = permanent or tries >= MAX_TRIES
+    entry = {
+        "short_id": getattr(session, "short_id", None),
+        "label": getattr(session, "label", None),
+        "cwd": getattr(session, "cwd", None),
+        "resets_at": resets_at,
+        "limit": None if stall is None else stall.limit,
+        "tries": tries,
+        "at": _iso(moment),
+        "next_at": None if done else moment + RETRY_DELAYS[tries - 1],
+        "outcome": "gave_up" if done else "retrying",
+        "error": why,
+    }
+    if key:
+        attempts[key] = entry
+        data["schema_version"] = SCHEMA_VERSION
+        _save_ledger(vault_root, data)
+    return entry
+
+
+def _iso(moment: float) -> str:
+    return datetime.fromtimestamp(moment, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def recent_wakes(vault_root: Path, *, within_seconds: float = 24 * 3600,
@@ -305,10 +425,11 @@ def split(sessions: Sequence[Any], stalls: Dict[str, Any], ledger: Dict[str, Any
     """``(free now, still waiting)`` among *sessions*, for a trigger.
 
     ``free`` is what :func:`sweep` would wake: abandoned, clock-named, past
-    the reset and not already woken for this window. ``waiting`` is what a
-    watcher is waiting *for*: the same thing before its reset. Everything
-    else — a human stall, a transient one, a child already woken for this
-    window — is in neither, which is what makes "nothing left to watch" a
+    the reset, not already woken for this window and not given up on or due
+    a retry later. ``waiting`` is what a watcher is waiting *for*: the same
+    thing before its reset, or before its next try. Everything else — a
+    human stall, a transient one, a child already woken or given up on for
+    this window — is in neither, which is what makes "nothing left to watch" a
     decidable question.
     """
     moment = time.time() if now is None else now
@@ -325,6 +446,12 @@ def split(sessions: Sequence[Any], stalls: Dict[str, Any], ledger: Dict[str, Any
             continue
         session_id = getattr(session, "session_id", "") or ""
         if session_id and already_woken(ledger, session_id, stall.resets_at):
+            continue
+        if session_id and gave_up(ledger, session_id, stall.resets_at):
+            continue
+        if session_id and retry_pending(ledger, session_id, stall.resets_at,
+                                        now=moment):
+            waiting.append((session, stall))
             continue
         free.append((session, stall))
     return free, waiting
@@ -384,7 +511,7 @@ class WakeReport:
     failed: List[str] = field(default_factory=list)
     #: Children whose worktree is gone: nothing to carry on with.
     skipped: List[str] = field(default_factory=list)
-    #: Clock-named stalls whose reset has not come round yet.
+    #: Clock-named stalls whose reset, or next try, has not come round yet.
     waiting: int = 0
     #: Free children this pass did not reach because of its bound.
     remaining: int = 0
@@ -460,13 +587,20 @@ def sweep(
 
 def _wake_one(cfg, vault_root: Path, session, stall, report: WakeReport, *,
               now: float, wake_fn, announce: bool) -> None:
-    """One child, with the ledger written before the report is believed."""
+    """One child, with the ledger written before the report is believed.
+
+    A success goes under ``wakes``; a failure or a skip under ``attempts``
+    and into ``.errors.log`` — see the module docstring for the retry policy.
+    """
     label = f"{getattr(session, 'short_id', '?')} {getattr(session, 'label', '')}".strip()
     cwd = getattr(session, "cwd", None)
     if not cwd or not os.path.isdir(cwd):
         # `--resume` would wake the session into a directory that is not
         # there, and there is no uncommitted work left to carry on with.
-        report.skipped.append(f"{label} — worktree {cwd} is gone")
+        why = f"worktree {cwd} is gone"
+        report.skipped.append(f"{label} — {why}")
+        _trace(vault_root, session, stall, why, permanent=True, now=now,
+               where="rewake.wake_skipped")
         return
     try:
         why = wake_fn(getattr(session, "session_id", "") or "", cwd=cwd)
@@ -474,6 +608,8 @@ def _wake_one(cfg, vault_root: Path, session, stall, report: WakeReport, *,
         why = str(exc) or type(exc).__name__
     if why:
         report.failed.append(f"{label} — {why}")
+        _trace(vault_root, session, stall, why, permanent=is_permanent(why),
+               now=now, where="rewake.wake_failed")
         return
     report.woken.append(label)
     try:
@@ -482,6 +618,33 @@ def _wake_one(cfg, vault_root: Path, session, stall, report: WakeReport, *,
         pass
     if announce:
         _announce(cfg, session, stall)
+
+
+def _trace(vault_root: Path, session, stall, why: str, *, permanent: bool,
+           now: float, where: str) -> None:
+    """Record a failed or skipped wake in the ledger and ``.errors.log``.
+
+    The ledger entry is what keeps the next tick from trying again; the log
+    line is what the maintainer finds afterwards, since the watcher's own
+    output goes nowhere. Never raises.
+    """
+    try:
+        entry = record_attempt(vault_root, session, stall, why,
+                               permanent=permanent, now=now)
+    except Exception:
+        entry = {}
+    try:
+        from mnemo.core import errors
+
+        if entry.get("outcome") == "retrying":
+            tail = f"try {entry['tries']} of {MAX_TRIES}, retried later"
+        else:
+            tail = f"try {entry.get('tries', '?')}, given up for this window"
+        errors.log_error(vault_root, where, WakeFailed(
+            f"{getattr(session, 'short_id', '?')} {getattr(session, 'label', '')} "
+            f"(session {getattr(session, 'session_id', '?')}; {tail}): {why}"))
+    except Exception:
+        pass
 
 
 def _announce(cfg, session, stall) -> None:
@@ -547,6 +710,7 @@ class WatchReport:
     ticks: int = 0
     woken: List[str] = field(default_factory=list)
     failed: List[str] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
     #: Why it stopped: ``idle`` (nothing left to watch), ``deadline`` (a wait
     #: with no sign of life for :data:`WATCH_MAX_SECONDS`), ``retired`` (old
     #: enough to hand over to a fresh one), ``locked`` (another watcher
@@ -626,6 +790,7 @@ def watch(
                                 stalls=stall_map, now=moment, wake_fn=wake_fn)
             report.woken.extend(pass_report.woken)
             report.failed.extend(pass_report.failed)
+            report.skipped.extend(pass_report.skipped)
 
             if pass_report.woken:
                 # The roster the sleep decision is about has just changed —
