@@ -156,8 +156,9 @@ def session_id(env: Mapping[str, str] | None = None) -> str | None:
     The environment says which session the server was *spawned* for, and one
     server outlives that session: ``/clear`` starts a new one in the same
     process and the environment keeps the old id. So the live id is read per
-    call from ``~/.claude/sessions/<pid>.json``, the file Claude Code keeps
-    for its own process — found through the messaging socket it exported,
+    call from ``<config dir>/sessions/<pid>.json``, the file Claude Code keeps
+    for its own process — ``<config dir>`` being ``$CLAUDE_CONFIG_DIR`` when
+    that is set and ``~/.claude`` otherwise (#671) — found through the messaging socket it exported,
     ``/tmp/cc-socks/<pid>.sock``, and trusted only when that file names the
     same socket. Without a socket or a matching file the spawn id is the
     answer, which is right until the first ``/clear``.
@@ -171,8 +172,11 @@ def session_id(env: Mapping[str, str] | None = None) -> str | None:
     pid = Path(socket).stem if socket else ""
     if not pid.isdigit():
         return spawned
+    from mnemo.core.sessions import accounts
+
+    config_dir = accounts.current(env) or Path.home() / ".claude"
     try:
-        data = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json")
+        data = json.loads((config_dir / "sessions" / f"{pid}.json")
                           .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return spawned

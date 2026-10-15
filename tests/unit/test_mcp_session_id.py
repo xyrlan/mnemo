@@ -22,8 +22,8 @@ LIVE = "22222222-2222-4222-8222-222222222222"
 SOCKET = "/tmp/cc-socks/4242.sock"
 
 
-def _sessions_file(home: Path, pid: str, body) -> Path:
-    path = home / ".claude" / "sessions" / f"{pid}.json"
+def _sessions_file(home: Path, pid: str, body, config_dir: str = ".claude") -> Path:
+    path = home / config_dir / "sessions" / f"{pid}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body if isinstance(body, str) else json.dumps(body), encoding="utf-8")
     return path
@@ -69,6 +69,26 @@ def test_a_missing_sessions_file_or_a_socket_not_named_by_a_pid_falls_back(tmp_h
     pipe = r"\\.\pipe\claude-4242"
     _sessions_file(tmp_home, "4242", {"sessionId": LIVE, "messagingSocketPath": pipe})
     assert server.session_id(_env(**{server.SOCKET_ENV: pipe})) == SPAWNED
+
+
+def test_under_claude_config_dir_the_sessions_file_is_read_from_that_dir(tmp_home):
+    # #671: Claude Code keeps <pid>.json under $CLAUDE_CONFIG_DIR when that is
+    # set, and ~/.claude/sessions then has nothing for this process.
+    config_dir = tmp_home / ".claude-acct"
+    _sessions_file(tmp_home, "4242", {"sessionId": LIVE, "messagingSocketPath": SOCKET},
+                   config_dir=config_dir.name)
+    assert server.session_id(_env(CLAUDE_CONFIG_DIR=str(config_dir))) == LIVE
+    # The variable is what says which dir is Claude Code's: without it, the
+    # account dir's file is not looked for and the spawn id stands.
+    assert server.session_id(_env()) == SPAWNED
+
+
+def test_under_claude_config_dir_the_default_dir_does_not_answer(tmp_home):
+    # A stale file of the default account that happens to name the same socket
+    # (pids are reused) must not speak for a session on another account.
+    _sessions_file(tmp_home, "4242", {"sessionId": LIVE, "messagingSocketPath": SOCKET})
+    config_dir = tmp_home / ".claude-acct"
+    assert server.session_id(_env(CLAUDE_CONFIG_DIR=str(config_dir))) == SPAWNED
 
 
 def test_the_assumption_it_rests_on_is_registered():
