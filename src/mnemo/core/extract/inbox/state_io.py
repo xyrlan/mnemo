@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -21,8 +22,36 @@ class StateSchemaError(Exception):
     """Unknown or incompatible state file schema version."""
 
 
-def atomic_write_state(state: ExtractionState, path: Path) -> None:
+def replica_path(path: Path) -> Path:
+    """The second copy of the state file at *path* (#665)."""
+    return path.with_name(f"{path.name}.replica")
+
+
+def write_state_bytes(path: Path, data: bytes) -> None:
+    """Write the extraction state *data* to *path*, then to its replica.
+
+    The one door every writer of ``extraction-state.json`` goes through, so
+    the replica never lags the file it backs (#665). Each write is atomic on
+    its own; a crash between the two leaves the replica one write behind,
+    which only matters if the main file is then lost as well. Raises
+    :class:`OSError`.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    for dest in (path, replica_path(path)):
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, dest)
+        except OSError:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            raise
+
+
+def atomic_write_state(state: ExtractionState, path: Path) -> None:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "last_run": state.last_run,
@@ -40,32 +69,51 @@ def atomic_write_state(state: ExtractionState, path: Path) -> None:
             for k, v in state.entries.items()
         },
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp.write_bytes(json.dumps(payload, indent=2).encode("utf-8"))
-        os.replace(tmp, path)
+        write_state_bytes(path, json.dumps(payload, indent=2).encode("utf-8"))
     except OSError as exc:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
         raise ExtractionIOError(f"failed to write state file: {exc}") from exc
 
 
-def load_state(path: Path) -> ExtractionState:
-    if not path.exists():
-        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
+def _read_payload(path: Path):
+    """The parsed state at *path*, or None when it is missing or unreadable."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        # Back up and return empty
-        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def load_state(path: Path) -> ExtractionState:
+    """Read the extraction state at *path*.
+
+    A missing or corrupt file is not an empty ledger while its replica (see
+    :func:`write_state_bytes`) still reads: with no entries every page the
+    extractor promoted would read as a person's (#248) and never be refreshed
+    again, a ``dismissed`` page would come back, and a backfill origin would
+    be forgotten (#665). So the replica is read instead and copied back over
+    *path*. A corrupt file is kept as ``.bak.<stamp>`` either way.
+    """
+    if path.exists():
+        payload = _read_payload(path)
+        if payload is None:
+            stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+            try:
+                path.rename(path.with_name(f"{path.name}.bak.{stamp}"))
+            except OSError:
+                pass
+    else:
+        payload = None
+    if payload is None:
+        replica = replica_path(path)
+        payload = _read_payload(replica) if replica.exists() else None
+        if payload is None:
+            return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
         try:
-            path.rename(path.with_name(f"{path.name}.bak.{stamp}"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(replica, path)
         except OSError:
             pass
-        return ExtractionState(last_run=None, entries={}, schema_version=SCHEMA_VERSION)
 
     version = int(payload.get("schema_version", 0) or 0)
     if version > SCHEMA_VERSION:

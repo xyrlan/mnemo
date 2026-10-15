@@ -534,6 +534,7 @@ def _update_state_entry(vault_root: Path, key: str, *, status: str, page: Path |
     source hash no source ever produced. Never raises.
     """
     from mnemo.core.extract.inbox.io import content_hash
+    from mnemo.core.extract.inbox.state_io import write_state_bytes
 
     path = _state_path(vault_root)
     try:
@@ -552,10 +553,8 @@ def _update_state_entry(vault_root: Path, key: str, *, status: str, page: Path |
             entry["written_hash"] = content_hash(page)
         except OSError:
             pass
-    tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp.write_bytes(json.dumps(state, indent=2).encode("utf-8"))
-        tmp.replace(path)
+        write_state_bytes(path, json.dumps(state, indent=2).encode("utf-8"))
     except OSError:
         return False
     return True

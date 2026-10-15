@@ -105,6 +105,8 @@ def test_apply_moves_files_writes_manifest_and_undo_restores_bytes(vault, tmp_pa
         assert p.read_bytes() == data
     assert not demoted.exists()
     assert (vault / ".mnemo" / "extraction-state.json").read_bytes() == state_before
+    # #665: the replica a lost state file is restored from follows the undo.
+    assert (vault / ".mnemo" / "extraction-state.json.replica").read_bytes() == state_before
 
 
 def test_plan_batches_and_parses_llm_verdicts(vault, tmp_path):
