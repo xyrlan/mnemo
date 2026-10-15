@@ -46,3 +46,38 @@ def test_nonblocking_does_not_wait(tmp_path: Path):
     with locks.try_lock(lock) as held:
         assert held is False
     assert time.time() - start < 0.5
+
+
+def test_process_lock_keeps_fresh_legacy_directory(tmp_path: Path):
+    lock = tmp_path / "extract.lock"
+    lock.mkdir()
+
+    with locks.try_process_lock(lock) as held:
+        assert held is False
+    assert lock.is_dir()
+
+
+def test_process_lock_reclaims_old_legacy_directory(tmp_path: Path):
+    lock = tmp_path / "extract.lock"
+    lock.mkdir()
+    old = time.time() - 600
+    os.utime(lock, (old, old))
+
+    with locks.try_process_lock(lock, stale_after=60.0) as held:
+        assert held is True
+    assert not lock.exists()
+
+
+def test_process_lock_release_preserves_replacement_owner(tmp_path: Path):
+    lock = tmp_path / "extract.lock"
+    owner = lock / ".owner"
+
+    with locks.try_process_lock(lock) as held:
+        assert held is True
+        owner.unlink()
+        lock.rmdir()
+        lock.mkdir()
+        owner.write_text("replacement-owner", encoding="ascii")
+
+    assert lock.is_dir()
+    assert owner.read_text(encoding="ascii") == "replacement-owner"

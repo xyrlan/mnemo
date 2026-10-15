@@ -102,17 +102,12 @@ def _debounce_passes(
 
 
 def _lock_held(lock_path) -> bool:
-    """True if the extract lock exists and is younger than the stale threshold.
+    """Use the same process and legacy-lock check as extraction and doctor."""
+    from pathlib import Path
 
-    Matches the 5-minute self-heal in locks.try_lock.
-    """
-    try:
-        if not lock_path.exists():
-            return False
-        age = time.time() - lock_path.stat().st_mtime
-        return age < 300  # 5 minutes
-    except OSError:
-        return False
+    from mnemo.core import locks
+
+    return locks.process_lock_held(Path(lock_path))
 
 
 def _spawn_detached_extraction() -> None:

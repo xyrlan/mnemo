@@ -394,12 +394,16 @@ def _print_auto_brain_status(vault: Path) -> None:
     print("Auto-brain:")
 
     lock_path = vault / ".mnemo" / "extract.lock"
-    if lock_path.exists():
+    from mnemo.core import locks
+
+    if locks.process_lock_held(lock_path):
         try:
             age = int(time.time() - lock_path.stat().st_mtime)
             print(f"  running now: extract.lock held, started {age}s ago")
         except OSError:
             print("  running now: extract.lock present")
+    elif lock_path.exists():
+        print("  stale extract.lock present")
 
     if not enabled:
         print("  enabled:     no (set extraction.auto.enabled=true to activate)")
