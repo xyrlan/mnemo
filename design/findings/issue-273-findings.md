@@ -27,13 +27,15 @@ A `check:` field would be a strictly weaker `enforce:`: post-hoc instead of
 pre-flight, advisory instead of blocking, and a second schema to validate,
 index, export, document, and keep from drifting.
 
-## 2. `mnemo export` deliberately drops it — this is a security boundary, not an oversight
+## 2. `mnemo publish` deliberately drops it — this is a security boundary, not an oversight
 
 The third bullet ("`mnemo export` carries `check:` so a teammate's CI can run
-it") asks to reverse a decision that is load-bearing, stated twice in
-`core/share/format.py`:
+it") names `export`, but the command that hands a rule to a teammate's vault
+is `mnemo publish`, and it drops `enforce:` on purpose. That decision is
+load-bearing, stated twice in `core/share/format.py` — the module whose first
+line reads *"what `mnemo publish` writes and `mnemo import` reads"*:
 
-> `:389` — *never `enforce` and never `activates_on`: a rule that can block a
+> `:390` — *never `enforce` and never `activates_on`: a rule that can block a
 > tool call is not something another vault gets to install.*
 
 > `:4` — *a vault rule page is one person's: its `enforce:` block can block a
@@ -45,6 +47,14 @@ boundary means a rule authored elsewhere runs code in your CI on import. If
 cross-vault checks are wanted, that is a separate decision about a trust
 boundary, and it should be argued on its own — not smuggled in as a field on a
 new feature.
+
+`mnemo export` never had the field to drop. It writes prose for another
+tool's context file (a `CLAUDE.md` block, a Cursor rule), not a rule page:
+an `ExportRule` holds only slug, name, body, quote and a few flags
+(`core/export/select.py:24-35`), and `render_entry` turns each into a heading
+plus its first paragraph or full body (`core/export/render.py:42-53`). No
+frontmatter crosses, so neither `enforce:` nor any other executable shape
+could ride along without a new design.
 
 ## 3. The proposed shape cannot express the prototype it cites
 
