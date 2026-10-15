@@ -929,6 +929,10 @@ def join(vault: Path, remote: str, *, machine: str, config_path: Optional[Path] 
                                      "machine that owns the vault first")
             _check_format(git, state, tips)
             _integrate(git, machine, state, tips)
+            # The pull leaves the index as it was, and here that is empty: a
+            # plain `git status` would read every file as a staged deletion
+            # (#655). Stage what is on disk, as the first push would.
+            _stage(git)
             primary = st.primary_of(staging)
             if primary is None:
                 raise _Stop("error", "that hub names no primary: it is not a vault "

@@ -493,6 +493,23 @@ def test_join_over_an_existing_vault_moves_it_aside(mac: Box, win: Box, hub: Pat
     assert win.read("HOME.md") == mac.read("HOME.md")
 
 
+def test_git_status_is_clean_right_after_join_and_the_next_push_has_nothing(mac: Box, win: Box,
+                                                                           hub: Path):
+    """#655: the join left the index empty, so a plain `git status` read every
+    file as a staged deletion until the satellite's first push."""
+    assert mac.init(hub).ok
+    assert _git(mac.vault, "status", "--porcelain") == ""
+    assert win.join(hub).ok
+    assert _git(win.vault, "status", "--porcelain") == ""
+    assert sorted(_git(win.vault, "ls-files").splitlines()) == _hub_files(hub)
+    tip = _git(hub, "rev-parse", "main")
+    on_disk = _snapshot(win.vault)
+    out = win.push()
+    assert out.ok and out.outcome == "nothing", out.message
+    assert _git(hub, "rev-parse", "main") == tip
+    assert _snapshot(win.vault) == on_disk
+
+
 def test_join_twice_does_not_move_the_joined_vault_aside(pair, hub: Path):
     _mac, win = pair
     out = win.join(REMOTE)
