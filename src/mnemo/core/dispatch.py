@@ -1230,20 +1230,6 @@ GROK_TURN_TIMEOUT = 120.0
 #: (credentials among them) are never read.
 GROK_MODELS_CACHE = "models_cache.json"
 
-#: Why ``--read-only`` is refused on Grok rather than approximated. Read from
-#: the source (``xai-grok-shell/src/agent/mvp_agent/session_setup.rs`` at
-#: ``2bdd1d6``): ``session/new`` takes no tool list — tool removal
-#: (``--disallowed-tools``) is a flag of the leader *process*, shared by every
-#: session of the account — and a deny rule written into the worktree's
-#: ``.claude/settings.local.json`` is dropped when the folder is untrusted,
-#: which a fresh worktree in a non-interactive session is
-#: (``xai-grok-permission-rules/src/folder_trust.rs``, ``claude_settings.rs``).
-GROK_READ_ONLY_REFUSAL = (
-    "--read-only: not supported on Grok yet — a Grok leader session cannot "
-    "have its file-editing tools closed; dispatch it with --agent claude"
-)
-
-
 class _GrokTurnPending(Exception):
     """The session exists but the leader had not taken its opening turn in time."""
 
@@ -1349,11 +1335,13 @@ def check_grok(
 
     Returns the Grok home the child will run under — *home*, else the
     dispatching process's (``$GROK_HOME``, else ``~/.grok``). Raises
-    :class:`DispatchError` saying what to do when: the posture is read-only
-    (:data:`GROK_READ_ONLY_REFUSAL`); ``grok`` is not on ``PATH``; the home
+    :class:`DispatchError` saying what to do when: ``grok`` is not on ``PATH``; the home
     does not exist or holds no login; *effort* is not one Grok parses; or
     the home's own model list (:func:`grok_vocabulary`) has no *model*, or
     the model it would run does not take *effort*.
+
+    *read_only* is no reason to refuse (#718): :func:`_spawn_grok` marks the
+    session and mnemo's PreToolUse hook closes its editing tools.
 
     A Claude model name (``haiku``, ``opus``) is refused here by the same
     rule: it is not in Grok's list. Grok itself would not refuse it — it
@@ -1363,8 +1351,6 @@ def check_grok(
     from mnemo.core.grok import acp
     from mnemo.core.grok import paths as grok_paths
 
-    if read_only:
-        raise DispatchError(GROK_READ_ONLY_REFUSAL)
     if effort and effort not in acp.EFFORTS:
         raise DispatchError(
             f"--effort: Grok takes no effort {effort!r}; it takes {', '.join(acp.EFFORTS)}"
@@ -1449,8 +1435,6 @@ def _spawn_grok(
     """
     from mnemo.core.grok import acp
 
-    if read_only:
-        raise DispatchError(GROK_READ_ONLY_REFUSAL)
     leader = acp.Leader(Path(home) if home is not None else None)
     prefix = "could not start the Grok child"
     try:
@@ -1464,6 +1448,21 @@ def _spawn_grok(
         ) from exc
     except acp.GrokUnavailable as exc:
         raise DispatchError(f"{prefix}: {exc}") from exc
+
+    if read_only:
+        # Before the opening turn, so not one of its calls runs unmarked.
+        # Grok has no per-session tool list; mnemo's PreToolUse hook denies a
+        # marked session's editing tools (#718, :mod:`mnemo.core.grok.read_only`).
+        from mnemo.core.grok import read_only as grok_read_only
+
+        try:
+            grok_read_only.mark(session_id, cwd)
+        except Exception as exc:  # noqa: BLE001
+            _close_quietly(leader, session_id)
+            raise DispatchError(
+                f"{prefix}: its read-only mark could not be written ({exc}), and "
+                "without it its editing tools would be open"
+            ) from exc
 
     try:
         leader.prompt(session_id, str(cwd), prompt, wait=False, timeout=GROK_TURN_TIMEOUT)

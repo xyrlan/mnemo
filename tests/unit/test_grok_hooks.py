@@ -543,3 +543,95 @@ def test_an_unreadable_hand_off_ends_nothing(tmp_path: Path, monkeypatch) -> Non
     handoff.write_text("not json", encoding="utf-8")
     monkeypatch.setenv(session_end.GROK_PAYLOAD_ENV, str(handoff))
     assert session_end.main() == 0 and ran == [] and not handoff.exists()
+
+
+# --- --read-only on Grok (#718) ---------------------------------------------------
+
+PARENT_SID = "01a144cd-0000-7000-8000-0000000a7e47"
+OTHER_SID = "01a144cd-0000-7000-8000-00000000babe"
+
+
+@pytest.mark.parametrize("tool, tool_input", [
+    ("write", {"file_path": "a.py", "content": "x"}),
+    ("search_replace", {"file_path": "a.py", "old_string": "a", "new_string": "b"}),
+    ("hashline_edit", {"file_path": "a.py", "edits": []}),
+])
+def test_a_read_only_childs_edits_are_denied_and_no_one_elses(
+    tmp_path: Path, tmp_vault: Path, monkeypatch, tool: str, tool_input: dict,
+) -> None:
+    """The deny fires for the marked child only: never its parent, never another session."""
+    from mnemo.core.grok import read_only
+
+    _config(tmp_vault, monkeypatch)
+    tree = tmp_path / "proj-wt-718"
+    tree.mkdir()
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    read_only.mark(SID, tree, vault_root=tmp_vault)
+
+    child = json.loads(_run("pre_tool_use", tool_payload(tool, tool_input, tree), monkeypatch))
+    assert child["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert child["hookSpecificOutput"]["permissionDecisionReason"] == read_only.REASON
+
+    for sid, cwd in ((PARENT_SID, repo), (OTHER_SID, repo), (OTHER_SID, tree)):
+        out = _run("pre_tool_use", tool_payload(tool, tool_input, cwd, sid), monkeypatch)
+        assert not grok.is_deny(out), (sid, cwd)
+
+
+def test_a_read_only_childs_shell_and_reads_stay_open(
+    tmp_path: Path, tmp_vault: Path, monkeypatch,
+) -> None:
+    """The meaning --read-only has on Claude: the editing tools close, the shell still writes."""
+    from mnemo.core.grok import read_only
+
+    _config(tmp_vault, monkeypatch)
+    read_only.mark(SID, tmp_path, vault_root=tmp_vault)
+    for tool, tool_input in (("run_terminal_command", {"command": "printf x > a"}),
+                             ("read_file", {"target_file": "a"}), ("grep", {"pattern": "x"})):
+        out = _run("pre_tool_use", tool_payload(tool, tool_input, tmp_path), monkeypatch)
+        assert not grok.is_deny(out), tool
+
+
+def test_a_subagent_in_the_read_only_tree_is_denied_and_one_elsewhere_is_not(
+    tmp_path: Path, tmp_vault: Path, monkeypatch,
+) -> None:
+    """A Grok subagent has a session id of its own; Claude's flag reaches subagents, so this does too."""
+    from mnemo.core.grok import read_only
+
+    _config(tmp_vault, monkeypatch)
+    tree = tmp_path / "proj-wt-718"
+    (tree / "src").mkdir(parents=True)
+    read_only.mark(SID, tree, vault_root=tmp_vault)
+
+    def sub(cwd: Path) -> str:
+        payload = tool_payload("write", {"file_path": "a", "content": "x"}, cwd, OTHER_SID)
+        payload["subagentType"] = "general-purpose"
+        return _run("pre_tool_use", payload, monkeypatch)
+
+    assert grok.is_deny(sub(tree))
+    assert grok.is_deny(sub(tree / "src"))
+    assert not grok.is_deny(sub(tmp_path))
+
+
+def test_no_mark_no_deny_and_a_broken_vault_fails_open(tmp_path: Path, monkeypatch) -> None:
+    from mnemo.core.grok import read_only
+
+    assert not read_only.denies(tool_payload("write", {}, tmp_path), vault_root=tmp_path)
+    monkeypatch.setattr(read_only, "_default_vault",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no config")))
+    monkeypatch.setenv("MNEMO_CONFIG_PATH", str(tmp_path / "missing.json"))
+    out = _run("pre_tool_use", tool_payload("write", {"file_path": "a"}, tmp_path), monkeypatch)
+    assert not grok.is_deny(out)
+
+
+def test_a_claude_payload_never_asks_whether_it_is_read_only(tmp_vault: Path, monkeypatch) -> None:
+    """Claude's read-only path is --disallowedTools at spawn; the hook adds nothing to it."""
+    from mnemo.core.grok import read_only
+
+    _config(tmp_vault, monkeypatch)
+    read_only.mark("c1a0de00", tmp_vault, vault_root=tmp_vault)
+    monkeypatch.setattr(read_only, "denies", lambda *_a, **_k: pytest.fail("asked"))
+    out = _run("pre_tool_use", {"session_id": "c1a0de00", "hook_event_name": "PreToolUse",
+                                "tool_name": "Write", "cwd": str(tmp_vault),
+                                "tool_input": {"file_path": str(tmp_vault / "x")}}, monkeypatch)
+    assert out == ""

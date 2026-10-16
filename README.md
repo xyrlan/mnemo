@@ -318,7 +318,10 @@ and NotebookEdit, its own subagents included — so habit cannot turn an
 investigation into a branch. It can still write through the shell if it sets
 out to, which is why it keeps a worktree of its own: the restriction is there
 to prevent drift, not to contain a child that means to build. It publishes
-nothing, so `--may` is refused alongside it.
+nothing, so `--may` is refused alongside it. On Grok, which has no per-session tool
+list, mnemo's own PreToolUse hook denies the child's `write`,
+`search_replace` and `hashline_edit` instead — the same closing, with no
+setting of yours touched.
 
 `mnemo sessions` is the queue. Blocked on a human comes first, because nothing
 happens there until you act:
