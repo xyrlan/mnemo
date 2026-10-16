@@ -8,7 +8,7 @@ import pytest
 def test_registry_lists_the_three_hosts_and_resolves_by_name():
     from mnemo.hosts import HOSTS, get_host
 
-    assert list(HOSTS) == ["claude", "cursor", "codex"]
+    assert list(HOSTS) == ["claude", "cursor", "codex", "grok"]
     assert get_host("cursor").name == "cursor"
     with pytest.raises(KeyError):
         get_host("vim")
