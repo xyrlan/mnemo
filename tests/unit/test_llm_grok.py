@@ -59,12 +59,26 @@ def test_claude_stays_the_default_without_a_grok_signal(cfg):
 
 
 @pytest.mark.parametrize("env", [{"MNEMO_AGENT": "grok"}, {"GROK_SESSION_ID": "abc"}])
-@pytest.mark.parametrize("cfg", [None, {}, {"extraction": {"provider": ""}},
-                                 {"extraction": {"provider": "claude-cli"}}])
+@pytest.mark.parametrize("cfg", [None, {}, {"extraction": {}},
+                                 {"extraction": {"provider": ""}}])
 def test_unset_provider_follows_the_current_cli(monkeypatch, env, cfg):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     assert llm.resolve(cfg) is llm.PROVIDERS["grok-cli"]
+
+
+@pytest.mark.parametrize("env", [{"MNEMO_AGENT": "grok"}, {"GROK_SESSION_ID": "abc"}])
+def test_a_named_claude_cli_wins_on_a_grok_machine(monkeypatch, env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert llm.resolve({"extraction": {"provider": "claude-cli"}}) is llm.PROVIDERS["claude-cli"]
+
+
+def test_shipped_default_config_follows_the_cli(monkeypatch):
+    from mnemo.core import config
+    assert llm.resolve(config.DEFAULTS) is llm.PROVIDERS["claude-cli"]
+    monkeypatch.setenv("MNEMO_AGENT", "grok")
+    assert llm.resolve(config.DEFAULTS) is llm.PROVIDERS["grok-cli"]
 
 
 def test_grok_pin_holds_on_a_claude_machine(monkeypatch):

@@ -92,5 +92,5 @@ def test_extract_with_a_mistyped_provider_is_one_line_and_rc_2(tmp_vault, tmp_ho
     assert cli.main(["extract"]) == 2
     captured = capsys.readouterr()
     assert captured.err.splitlines() == [
-        "Error: unknown extraction.provider 'claud'; known: claude-cli"]
+        "Error: unknown extraction.provider 'claud'; known: claude-cli, grok-cli"]
     assert captured.out == ""

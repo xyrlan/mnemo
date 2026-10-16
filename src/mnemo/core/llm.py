@@ -552,22 +552,21 @@ PROVIDERS: dict[str, Provider] = {
 def resolve(cfg: Mapping[str, Any] | None) -> Provider:
     """The provider ``cfg["extraction"]["provider"]`` names.
 
-    Absent, empty or :data:`DEFAULT_PROVIDER` means "the CLI this process
-    drives" (``agent_cli.current_cli``): ``claude-cli`` normally, ``grok-cli``
-    under ``MNEMO_AGENT=grok`` or inside a Grok session. ``claude-cli`` is
-    also what the shipped config default holds, so it cannot tell an untouched
-    config from a pin; name ``grok-cli`` to pin Grok on a Claude machine.
+    A name always wins, ``claude-cli`` on a Grok machine included. Absent or
+    empty (the shipped default) means "the CLI this process drives"
+    (``agent_cli.current_cli``): ``grok-cli`` under ``MNEMO_AGENT=grok`` or
+    inside a Grok session, :data:`DEFAULT_PROVIDER` otherwise.
     Anything else that is not a registered name raises
     :class:`UnknownProviderError` here, so callers resolve before their first
     call rather than failing mid-run.
     """
     extraction = (cfg or {}).get("extraction") or {}
-    name = extraction.get("provider") or DEFAULT_PROVIDER
-    if name == DEFAULT_PROVIDER:
+    name = extraction.get("provider")
+    if not name:
         from mnemo.core import agent_cli
 
-        if agent_cli.current_cli() == agent_cli.GROK:
-            name = GROK_PROVIDER
+        grok = agent_cli.current_cli() == agent_cli.GROK
+        name = GROK_PROVIDER if grok else DEFAULT_PROVIDER
     provider = PROVIDERS.get(name) if isinstance(name, str) else None
     if provider is None:
         known = ", ".join(sorted(PROVIDERS))

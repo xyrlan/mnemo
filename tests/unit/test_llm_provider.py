@@ -22,8 +22,8 @@ def _envelope(text: str) -> str:
 # ------------------------------------------------------------------ resolve
 
 
-def test_default_config_names_the_claude_cli_provider():
-    assert config.DEFAULTS["extraction"]["provider"] == "claude-cli"
+def test_default_config_names_no_provider_so_the_current_cli_decides():
+    assert config.DEFAULTS["extraction"]["provider"] == ""
     assert llm.DEFAULT_PROVIDER == "claude-cli"
 
 
