@@ -91,6 +91,10 @@ child was spawned on (never the current one):
 A verb on a Grok child that cannot reach its leader reports it and leaves
 the child's ledgers as they were.
 
+Found in wave 1 (grok-hooks, PR #711): `pr_follow` still keys a session by
+`session_id[:8]`. For a Grok child that collides (UUIDv7, spec decision 5);
+every ledger this piece touches keys Grok children by `paths.short_id`.
+
 ## grok-notices
 
 - **files:** src/mnemo/core/sessions/inbox.py, src/mnemo/core/sessions/child_notices.py, src/mnemo/core/sessions/report_card.py, src/mnemo/core/sessions/held_notices.py, src/mnemo/cli/commands/child_report.py, src/mnemo/cli/commands/child_notices.py, src/mnemo/hooks/session_end.py, tests/unit/test_notices_grok.py
@@ -114,3 +118,24 @@ finished, as a Claude parent does today:
   it as a user turn through the leader — waking it if it is dormant. A
   notice that cannot be delivered is held, as today, and handed over at the
   parent's next turn through the channel grok-hooks built.
+
+## grok-backfill
+
+- **files:** src/mnemo/core/backfill/ledger.py, src/mnemo/core/backfill/harvest.py, src/mnemo/core/friction/capture.py, src/mnemo/cli/commands/backfill.py, tests/unit/test_backfill_grok.py
+- **exposes:** `mnemo backfill` covers Grok sessions
+- **consumes:** nothing
+- **effort:** medium
+
+Found by wave 1's grok-transcripts (PR #707): `find_transcripts(grok=True)`
+adds Grok sessions, but the backfill ledger, harvest and friction capture
+key a session by its file's stem, and every Grok history is
+`chat_history.jsonl`. Turned on as they are, backfill would file every Grok
+session under one entry and re-run each one, with a model call, on every
+sweep, and a Grok session's corrections would be recorded under
+`chat_history`.
+
+- Every session these files record is keyed by its real id
+  (`briefing.session_id_for`), Grok and Claude alike; a Claude session's key
+  is what it is today, byte for byte, and existing ledger lines still match.
+- `mnemo backfill` then asks discovery for Grok sessions too, and a second
+  sweep over the same sessions spends nothing.

@@ -159,7 +159,7 @@ machine that may have only `grok` (spec decision 9).
 
 ## grok-install
 
-- **files:** src/mnemo/hosts/grok.py, src/mnemo/hosts/__init__.py, src/mnemo/cli/commands/init.py, src/mnemo/cli/commands/doctor.py, src/mnemo/cli/commands/doctor_checks/grok.py, src/mnemo/install/grok_hooks.py, tests/unit/test_host_grok.py, tests/unit/test_doctor_grok.py
+- **files:** src/mnemo/hosts/grok.py, src/mnemo/hosts/__init__.py, src/mnemo/core/export/writers.py, tests/unit/test_export_writers_grok.py, src/mnemo/cli/commands/init.py, src/mnemo/cli/commands/doctor.py, src/mnemo/cli/commands/doctor_checks/grok.py, src/mnemo/install/grok_hooks.py, tests/unit/test_host_grok.py, tests/unit/test_doctor_grok.py
 - **exposes:** `HOSTS["grok"]`, `mnemo init --host grok`, `mnemo uninstall --host grok`, `mnemo export --host grok`
 - **consumes:** nothing
 - **model:** sonnet
