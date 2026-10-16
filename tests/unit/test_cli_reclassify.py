@@ -105,4 +105,4 @@ def test_a_mistyped_provider_is_one_line_and_rc_1(tmp_vault, tmp_home, monkeypat
 
     assert cli.main(["reclassify", "--yes"]) == 1
     out = capsys.readouterr().out
-    assert out.splitlines() == ["unknown extraction.provider 'claud'; known: claude-cli"]
+    assert out.splitlines() == ["unknown extraction.provider 'claud'; known: claude-cli, grok-cli"]

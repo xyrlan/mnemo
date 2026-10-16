@@ -18,7 +18,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "extraction": {
         # #358: which provider answers the model calls (``core.llm.PROVIDERS``).
-        "provider": "claude-cli",
+        # Empty = follow the CLI this process drives (``claude-cli``, or
+        # ``grok-cli`` under MNEMO_AGENT=grok); a name here always wins.
+        "provider": "",
         "model": "claude-haiku-4-5",
         "chunkSize": 10,
         "subprocessTimeout": 60,

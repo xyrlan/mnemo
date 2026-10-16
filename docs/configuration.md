@@ -44,6 +44,7 @@ turn off:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `extraction.provider` | `""` | Which CLI answers mnemo's own model calls (extraction, briefings, judges): `claude-cli` or `grok-cli`. A name always wins, `claude-cli` on a Grok machine included. Empty follows the CLI the process drives: `grok-cli` under `MNEMO_AGENT=grok` or inside a Grok session, `claude-cli` otherwise. `grok-cli` runs `grok --prompt-file` with Grok's hooks off; a Claude model id in `extraction.model` is not sent to it, so the account's default model answers |
 | `extraction.model` | `claude-haiku-4-5` | Model used for extraction |
 | `extraction.chunkSize` | `10` | Source files per LLM call |
 | `extraction.subprocessTimeout` | `60` | Seconds before an extraction call is abandoned |
