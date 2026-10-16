@@ -5,6 +5,157 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-10-16
+
+### Added
+
+- **`mnemo inbox --json` carries what the text listing prints, and `mnemo inbox --stats --json` prints JSON.** Each page now has its `reason`, the judge's verdict as `judge`, `modified_at` and `age_days` (the age the text prints, counted from the last write; `staged_at` stays the first-staged time the expiry counts from). The document has the header's `median_age_days` and `oldest_age_days`, `other_projects` (the "N more staged for other projects" count), `generated_at` and `schema_version: 1`. Every existing key keeps its name and meaning, so a reader of today's document sees only new keys. `--stats --json` used to print the text and exit 0; it now prints every number the text does, `null` where the text says there is nothing to measure. A program can drop its regular expressions over the prose. A document without `schema_version` came from an older mnemo. (#673)
+
+### Fixed
+
+- **Right after `mnemo sync join`, `git status` in the vault is clean, and
+  `mnemo doctor` no longer warns of no push on a machine with nothing to
+  push.** The join left git's index empty, so a plain `git status` listed
+  every file as a staged deletion until the satellite's first push. That is
+  output that invites a `git reset` on a vault that is fine. The join now
+  stages what it wrote, so the next push publishes exactly what it did
+  before. Doctor's "no successful push in 1 d" now needs files or commits
+  waiting: a freshly joined or read-only satellite has never needed to push.
+  One with files waiting and no push for a day still warns. (#655)
+
+- **`claude -p` gets the prompt and gives the reply in UTF-8 on Windows.**
+  `llm._invoke_once` piped both through the locale's codec, cp1252 there:
+  the first emoji in a transcript raised in the stdin writer and `claude`
+  got an empty stdin ("no stdin data received in 3s"), so `mnemo briefing`
+  never wrote one on a Windows machine; accents went over as cp1252 bytes,
+  which `claude` reads as broken UTF-8; and a reply was decoded as cp1252
+  (`ação` → `aÃ§Ã£o`). Setting `PYTHONUTF8=1` was the workaround and is no
+  longer needed. A lone surrogate in a prompt is replaced instead of failing
+  the call. 53 other text-mode subprocess calls under `src/` still decode in
+  the locale's codec; none of them sends input.
+
+- **Every `git`, `gh` and `claude` call reads its output as UTF-8 on
+  Windows.** 41 subprocess calls under `src/` decoded what those programs
+  wrote in the locale's codec, cp1252 there: a commit subject, a branch name
+  or a PR body came back as mojibake (`ação` → `aÃ§Ã£o`), and a character
+  holding a byte cp1252 cannot map (`┐`) raised
+  `UnicodeDecodeError` — swallowed into an empty answer at some sites, a
+  crash at others. `deliver` read a PR body that way and wrote the mojibake
+  back with `gh pr edit`. They now decode as UTF-8, with an undecodable byte
+  shown as `�` instead of failing the call; `PYTHONUTF8=1` is not needed for
+  any of them. A test fails on any new `text=True` call under `src/` that
+  does not name its encoding. (#659)
+
+- **A lost or corrupt `.mnemo/extraction-state.json` no longer freezes every
+  page extraction promoted.** With no entries, each live `shared/<type>/` page
+  read as hand-written, so none was refreshed again, not even under
+  `--force`; a page you had deleted came back, and backfill origins were
+  forgotten. Every writer now keeps a copy beside it,
+  `extraction-state.json.replica`, and a missing or unreadable state file is
+  restored from it. A corrupt file is still kept as `.bak.<stamp>`. To reset
+  the ledger by hand, delete both files. (#665)
+
+- **`mnemo deliver <id>` no longer counts an open PR as delivered while the
+  branch holds commits the PR never got.** A child that opened its own PR and
+  kept committing afterwards had those commits left unpublished, and was
+  stopped anyway. Deliver now pushes them to the open PR (a plain push, never
+  a force) before it adds the closing trailer and stops the child. If git
+  refuses the push, deliver prints why, exits 1 and leaves the child running.
+  `mnemo deliver --review` shows how many commits each open PR is missing.
+  A branch that matches its remote is delivered as before, with nothing
+  pushed. (#666)
+
+- **A failed automatic wake is no longer retried on every watcher tick, and
+  it leaves a trace.** Only a successful wake used to be recorded, so the
+  `mnemo resume --watch` watcher called a failing wake again every minute
+  until its 6.5-hour deadline (391 times in the issue's repro), started a
+  fresh copy on each try when `claude --bg --resume` forked, and wrote
+  nothing anywhere. Now a failure that may clear gets at most 3 tries per
+  reset window, 5 and 30 minutes apart. A child whose worktree is gone, or
+  whose wake started a copy, is given up on at once until the next window.
+  Each attempt is recorded under `attempts` in `.mnemo/resume-wakes.json`,
+  next to the unchanged `wakes`, and as a `rewake.*` line in `.errors.log`,
+  which the hook circuit breaker does not count. A watcher left with nothing
+  it can wake exits, and the next SessionStart does not start another one
+  for that child. (#667)
+
+- **The #273 findings now credit `mnemo publish`, not `mnemo export`, with dropping `enforce:`.** Section 2 of `design/findings/issue-273-findings.md` quoted `core/share/format.py` — `publish`'s module — as evidence about `export`, whose code never names `enforce`. It now names `publish`, fixes the stale line citation, and says why `export` has nothing to drop: it writes heading-plus-prose blocks for another tool's context file and carries no frontmatter at all. (#668)
+
+- **`mnemo friction --backfill` re-locates every cached quote in the
+  transcript, so a reused plan reaches the same verdict as a fresh one.** A
+  plan saved before #360 could hold a quote the briefing lifted from a `!`
+  command's output; the cache path only dropped quotes that themselves began
+  with a shell tag, so such a line survived and `--apply` wrote it to the
+  ledger. Each cached quote is now checked with the same `locate` a fresh
+  `verify` uses, still with no model call. A plan file applied without
+  rerunning `--backfill` first is not re-checked: rerun `--backfill` before
+  `--apply`. (#669)
+
+- **A mistyped `extraction.provider` now stops `mnemo reclassify` and
+  `mnemo extract` with one line instead of a traceback.** Both printed a raw
+  `UnknownProviderError` traceback. `reclassify` now prints the bad name and
+  the known ones and exits 1, the way it reports its other errors; `extract`
+  prints the same line as `Error: …` on stderr and exits 2, its code for a run
+  that could not start. `backfill`, `friction --backfill`, `briefing` and the
+  background extraction already reported it. (#670)
+
+- **The MCP access log keeps the live session id after `/clear` under
+  `CLAUDE_CONFIG_DIR` too.** The server read Claude Code's
+  `sessions/<pid>.json` from `~/.claude` only, so on a non-default account it
+  never found the file and every row after a `/clear` carried the id the
+  server was spawned with. It now reads the config dir Claude Code uses, and
+  still falls back to the spawn id when no file vouches for the socket. (#671)
+
+- `tools/measure_judge_noise_kinds.py` replays a prompt whose judge request failed in #479's run as the gates' picks, as #479's hook did, instead of injecting nothing; a rule the judge skipped stays in the request's pool as a rule of no known kind, so that request no longer counts as "all dropped"; and the "as run" and "saved" request figures count a failed request the same way the requests row does. The published #488 numbers are unchanged: that run had no failed requests.
+
+- **An extraction keeps `extract.lock` for as long as it runs.** The lock was
+  taken over by the next `mnemo extract`, `learn`, background extraction,
+  `redact` or page-editing tool once it was 60 s old, while the first run was
+  still going, and both runs then wrote `extraction-state.json` whole, dropping
+  each other's entries. The lock now records its holder (pid, host, a token)
+  and a heartbeat its holder refreshes; it is taken back only once that holder
+  is gone, a release removes only the releaser's own lock, and SessionEnd,
+  `mnemo doctor` and `mnemo status` all ask the lock the same question. A lock
+  left by an older mnemo is still reclaimed once it is 60 s old. (#674)
+
+- **A resume storm on Windows starts one sync pull, not two.** On Python
+  before 3.13, Windows reads the pull stamp's mtime and the clock from the
+  same tick but rounds them differently, so a stamp written a moment earlier
+  could look a fraction of a microsecond in the future, and a future stamp
+  counted as a clock gone back: the next session start pulled again. A stamp
+  up to two seconds ahead now counts as just written; a clock set back
+  further still makes a pull due. (#684)
+
+### Internal
+
+- **`tools/measure_attention.py` measures how long dispatched children wait on
+  their human, before and after the desktop's Nexus.** A "needs you" episode is a
+  `blocked` stretch in a job's `timeline.jsonl`. It closes when the human's reply
+  lands, not when the state next changes. Rate-limit stalls are set apart by
+  `core/sessions/stalls.py` reading the job's transcript. Episodes still open when
+  the job's record ends get their own count. "After" starts at the earliest proof
+  that a Nexus build was installed: `--after`, the `install-app` stamp when a
+  desktop checkout confirms it holds the Nexus, or the first `nexus.*` usage
+  event. "After" is then split into days the Nexus was opened and days it was
+  not. Report-only. The first reading has 13 ended episodes, median 7 min and
+  p90 57 min, with 12 more open. (#662)
+
+- **#661's design-checkpoint pilot read negative (the reviewed arm won 4 of 8
+  decided pairs against a bar of 80%), so the checkpoint never ships.** The
+  report and the judges' verdicts it rebuilds from are in
+  `design/findings/2026-10-15-review-pilot-661*`. `tools/measure_review_gate.py`
+  and `tools/measure_review_pilot.py` now carry the reviewer definition and the
+  arm/ledger readers they need, and reproduce their published numbers. (#682)
+
+- **A PR's CI asks for 2 macOS jobs instead of 5, and every test job runs the
+  suite once instead of twice.** GitHub runs at most 5 macOS jobs at a time
+  per account, so with 7 PRs open a macOS job queued for 75 minutes. A PR now
+  runs macOS on py3.8 and py3.12, the ends of the supported range; a push to
+  master keeps all five, so a break on a middle version is still caught one
+  merge later. The separate unit, integration and e2e steps are gone: the
+  coverage run already collected all of `tests/` (including three
+  directories they never ran) and failed on any failing test. (#692)
+
 ## [1.8.0] — 2026-10-14
 
 ### Added
