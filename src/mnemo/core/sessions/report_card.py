@@ -114,6 +114,37 @@ class Card:
 # ---------------------------------------------------------------------------
 
 
+def _grok_events(transcript: Optional[Path]) -> Optional[List[dict]]:
+    """A Grok child's history as Claude-shaped events; ``None`` for a Claude
+    transcript, which is read line by line as it always was.
+
+    Every Grok history is ``chat_history.jsonl`` and no Claude transcript is
+    (:func:`mnemo.core.grok.transcript.is_grok_history`); its records carry
+    no ``message`` and its tool results are records of their own, so it is
+    read through the converter every other reader of a Grok session uses.
+    """
+    if not transcript:
+        return None
+    from mnemo.core.grok import transcript as grok_transcript
+
+    try:
+        if not grok_transcript.is_grok_history(Path(transcript)):
+            return None
+    except (OSError, ValueError):
+        return None
+    return grok_transcript.load_events(Path(transcript))
+
+
+def _texts(record: dict) -> List[str]:
+    out = []
+    for block in (record.get("message") or {}).get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = str(block.get("text") or "").strip()
+            if text:
+                out.append(text)
+    return out
+
+
 def closing_report(transcript: Optional[Path]) -> str:
     """The last text the child wrote, or ``""``.
 
@@ -122,9 +153,20 @@ def closing_report(transcript: Optional[Path]) -> str:
     calls (push, ``gh pr create``, ``claude stop``) with no prose. A child cut
     off by a rate limit ends on Claude Code's own "You've hit your session
     limit" line instead, which is exactly what a parent should read then.
+
+    A Grok child ends its last turn with the report instead of stopping, so
+    its last assistant text is the report too, read from ``chat_history.jsonl``.
     """
     if not transcript:
         return ""
+    grok = _grok_events(transcript)
+    if grok is not None:
+        last = ""
+        for record in grok:
+            if record.get("type") == "assistant":
+                for text in _texts(record):
+                    last = text
+        return last
     last = ""
     try:
         with open(transcript, encoding="utf-8") as fh:
@@ -137,11 +179,8 @@ def closing_report(transcript: Optional[Path]) -> str:
                     continue
                 if not isinstance(record, dict) or record.get("type") != "assistant":
                     continue
-                for block in (record.get("message") or {}).get("content") or []:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = str(block.get("text") or "").strip()
-                        if text:
-                            last = text
+                for text in _texts(record):
+                    last = text
     except OSError:
         return ""
     return last
@@ -158,6 +197,11 @@ def pr_urls_in(transcript: Optional[Path]) -> List[str]:
     if not transcript:
         return []
     found: List[str] = []
+    grok = _grok_events(transcript)
+    if grok is not None:
+        for record in grok:
+            _tool_result_urls(record, found)
+        return found
     try:
         with open(transcript, encoding="utf-8") as fh:
             for line in fh:
@@ -167,20 +211,25 @@ def pr_urls_in(transcript: Optional[Path]) -> List[str]:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                content = (record.get("message") or {}).get("content")
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if not isinstance(block, dict) or block.get("type") != "tool_result":
-                        continue
-                    body = block.get("content")
-                    text = body if isinstance(body, str) else json.dumps(body)
-                    for url in _PR_URL.findall(text):
-                        if url not in found:
-                            found.append(url)
+                _tool_result_urls(record, found)
     except OSError:
         return []
     return found
+
+
+def _tool_result_urls(record: dict, found: List[str]) -> None:
+    """Add the PR URLs in *record*'s tool results to *found*, in order."""
+    content = (record.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        body = block.get("content")
+        text = body if isinstance(body, str) else json.dumps(body)
+        for url in _PR_URL.findall(text):
+            if url not in found:
+                found.append(url)
 
 
 def _pr_from(row: object) -> Optional[PR]:
