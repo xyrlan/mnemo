@@ -191,6 +191,7 @@ def _maybe_schedule_briefing(
     session_id: str,
     cwd: str,
     transcript_path=None,
+    grok: bool = False,
 ) -> None:
     """Spawn a detached per-session briefing when briefings.enabled=True.
 
@@ -221,6 +222,11 @@ def _maybe_schedule_briefing(
     One exception (#449): a twin's briefing is held until the maintainer
     delivers it, and the twin never delivered is never briefed — see
     :mod:`mnemo.core.twins` for why the losing run must not teach the vault.
+
+    ``grok``: this already runs in the detached worker a Grok SessionEnd
+    starts (:func:`_grok_hand_off`), so the briefing runs here, to the end,
+    and then the project's rules file is rewritten with it for the next Grok
+    session (:mod:`mnemo.core.grok.briefing_file`).
     """
     try:
         from mnemo.core import errors as err_mod
@@ -239,6 +245,9 @@ def _maybe_schedule_briefing(
         if twins.hold_briefing(vault_root, cwd=cwd, jsonl=jsonl_path, agent=agent_name):
             return
 
+        if grok:
+            _grok_brief_and_refresh(cfg, vault_root, jsonl_path, agent_name, cwd)
+            return
         try:
             _spawn_detached_briefing(jsonl_path, agent_name)
         except OSError as exc:
@@ -249,6 +258,45 @@ def _maybe_schedule_briefing(
             _e.log_error(vault_root, "session_end.briefing", exc)
         except Exception:
             pass
+
+
+#: How long the Grok worker waits on its session's briefing before it gives up
+#: on refreshing the rules file with it. A briefing is one model call.
+GROK_BRIEFING_TIMEOUT_S = 900
+
+
+def _run_briefing(jsonl_path, agent: str) -> None:
+    """``mnemo briefing <jsonl_path> <agent>``, waited on."""
+    import subprocess
+
+    from mnemo._selfexec import self_argv
+
+    subprocess.run(
+        self_argv("briefing", str(jsonl_path), agent),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=GROK_BRIEFING_TIMEOUT_S, check=False,
+    )
+
+
+def _grok_brief_and_refresh(cfg: dict, vault_root, jsonl_path, agent: str, cwd: str) -> None:
+    """Brief a finished Grok session, then hand that briefing to the next one.
+
+    The rules file is rewritten even when the briefing fails: SessionStart
+    wrote it from the vault as it was then, and this pass is never worse.
+    """
+    from pathlib import Path
+
+    from mnemo.core import errors as err_mod
+    from mnemo.core.grok import briefing_file
+
+    try:
+        _run_briefing(jsonl_path, agent)
+    except Exception as exc:  # noqa: BLE001
+        err_mod.log_error(vault_root, "session_end.grok_briefing", exc)
+    try:
+        briefing_file.refresh(vault_root, cfg, Path(cwd), agent)
+    except Exception as exc:  # noqa: BLE001
+        err_mod.log_error(vault_root, "session_end.grok_briefing_file", exc)
 
 
 def _maybe_schedule_extraction(cfg: dict, vault_root, agent_name: str) -> None:
@@ -478,6 +526,7 @@ def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transc
 
 def _maybe_notify_parent(
     cfg, vault, *, session_id: str, cwd: str = "", transcript=None, via: str = "",
+    short: str = "",
 ) -> None:
     """Tell the dispatching session that this child finished (#357).
 
@@ -502,7 +551,9 @@ def _maybe_notify_parent(
         return
     from mnemo.core.sessions import child_notices, inbox, parents, report_card
 
-    short_id = (session_id or "")[:8]
+    # ``short``: a Grok session's key is the end of its id, not the start
+    # (:func:`mnemo.core.grok.paths.short_id`).
+    short_id = short or (session_id or "")[:8]
     if not short_id or short_id == "unknown"[:8]:
         return
     parent = parents.read(vault).get(short_id)
@@ -562,15 +613,130 @@ def main() -> int:
     # `claude --print` helpers that brief and extract run under the user's own
     # settings, mnemo's hooks included, so an unguarded hook here schedules the
     # work whose helper is running it. See :mod:`mnemo.core.hook_guard`.
-    from mnemo.core.hook_guard import hooks_off, throwaway_session
+    from mnemo.core.hook_guard import hooks_off
 
     if hooks_off():
         return 0
 
+    # A Grok Build session ends here too (spec decision 7), in two steps: the
+    # hook hands the payload to a worker, and the worker runs what follows.
+    handed = _grok_handed_payload()
+    if handed is not None:
+        # An unreadable hand-off names no session: nothing to end.
+        return _run(handed, grok=True) if handed else 0
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
+    grok = _grok_session(payload)
+    if grok is None:
+        return 0
+    if grok:
+        return _grok_hand_off(payload)
+    return _run(payload)
+
+
+#: Names the payload file of a Grok SessionEnd for the worker it hands off to.
+GROK_PAYLOAD_ENV = "MNEMO_GROK_SESSION_END"
+
+
+def _grok_session(payload: object):
+    """``True`` for a Grok session's first copy of this event, ``False`` for
+    a Claude payload, ``None`` for a Grok copy another hook process already
+    has (:func:`mnemo.core.grok.hooks.claim_once`). Fail-open to ``False``."""
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        if not isinstance(payload, dict) or not grok.is_grok_payload(payload):
+            return False
+        return True if grok.claim_once(payload) else None
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return False
+
+
+def _grok_hand_off(payload: dict) -> int:
+    """Run a Grok session's end in a detached worker and return at once.
+
+    Grok gives SessionEnd hooks 1.5 s (``GROK_SESSION_END_HOOKS_TIMEOUT_MS``)
+    and the work below reads every session's state, mirrors memory and runs
+    the proposer, so none of it runs here: the payload goes to a file, a
+    worker (:func:`_spawn_grok_worker`) picks it up, and this returns.
+    """
+    import tempfile
+    from pathlib import Path
+
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        sid = grok.session_id(payload) or "unknown"
+        folder = Path(tempfile.gettempdir()) / "mnemo" / "grok-session-end"
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=str(folder), prefix=sid[-12:] + ".", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        _spawn_grok_worker(name)
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        pass
+    return 0
+
+
+def _spawn_grok_worker(payload_file: str) -> None:
+    """Fire-and-forget ``mnemo hook session_end`` over ``payload_file``."""
+    from mnemo._detach import spawn
+    from mnemo._selfexec import self_argv
+
+    os.environ[GROK_PAYLOAD_ENV] = payload_file
+    try:
+        spawn(self_argv("hook", "session_end"))
+    finally:
+        os.environ.pop(GROK_PAYLOAD_ENV, None)
+
+
+def _grok_handed_payload():
+    """The payload a Grok SessionEnd handed this worker, read once; else None."""
+    name = os.environ.pop(GROK_PAYLOAD_ENV, "")
+    if not name:
+        return None
+    from pathlib import Path
+
+    path = Path(name)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return payload if isinstance(payload, dict) else {}
+
+
+def _grok_history(payload: dict):
+    """A Grok session's ``chat_history.jsonl``: beside the ``updates.jsonl``
+    its ``transcript_path`` names, else found by session id. None if neither."""
+    from pathlib import Path
+
+    from mnemo.core.grok import paths as grok_paths
+
+    named = payload.get("transcript_path") or payload.get("transcriptPath")
+    if isinstance(named, str) and named:
+        beside = Path(named).with_name(grok_paths.CHAT_HISTORY)
+        if beside.is_file():
+            return beside
+    from mnemo.core.grok import briefing_file
+
+    sid = str(payload.get("session_id") or payload.get("sessionId") or "")
+    where = briefing_file.session_dir(sid, str(payload.get("cwd") or "")) if sid else None
+    if where is not None and grok_paths.chat_history_path(where).is_file():
+        return grok_paths.chat_history_path(where)
+    return None
+
+
+def _run(payload: dict, grok: bool = False) -> int:
+    """The end of one session. ``grok``: a Grok session's, in its worker."""
+    from mnemo.core.hook_guard import throwaway_session
+
     try:
         from mnemo.core import agent, config, errors, log_writer, mirror, paths, session
 
@@ -619,6 +785,19 @@ def main() -> int:
             _ss.evict_session(vault, sid)
         except Exception as e:
             errors.log_error(vault, "session_end.evict_reflex_state", e)
+        # A Grok session's transcript is its chat_history.jsonl, never the
+        # updates.jsonl its payload names, and its key is its id's end.
+        grok_history = None
+        grok_short = ""
+        if grok:
+            try:
+                from mnemo.core.grok import hooks as grok_hooks
+                from mnemo.core.grok import paths as grok_paths
+                grok_hooks.drop(vault, sid)
+                grok_short = grok_paths.short_id(sid) if sid != "unknown" else ""
+                grok_history = _grok_history(payload)
+            except Exception as e:
+                errors.log_error(vault, "session_end.grok_transcript", e)
         # The parent's notice and the PR follow go first of the scheduled work
         # (#502): the hook runs under a 1.5 s bound on a lean child, and the
         # sweep and schedulers below read every session's state. What a hook
@@ -626,10 +805,18 @@ def main() -> int:
         # and a stop whose hook never got here is child_notices' to report.
         try:
             cwd = str(payload.get("cwd") or os.getcwd())
-            transcript = payload.get("transcript_path") or _resolve_session_jsonl_path(sid, cwd)
-            _maybe_notify_parent(
-                cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
-            )
+            if grok:
+                transcript = str(grok_history) if grok_history is not None else None
+                _maybe_notify_parent(
+                    cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
+                    short=grok_short,
+                )
+            else:
+                transcript = (payload.get("transcript_path")
+                              or _resolve_session_jsonl_path(sid, cwd))
+                _maybe_notify_parent(
+                    cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
+                )
         except Exception as e:
             errors.log_error(vault, "session_end.notify_parent", e)
         try:
@@ -644,10 +831,17 @@ def main() -> int:
             errors.log_error(vault, "session_end.schedule_wrap", e)
         try:
             cwd = str(payload.get("cwd") or os.getcwd())
-            _maybe_schedule_briefing(
-                cfg, vault, agent_name, session_id=sid, cwd=cwd,
-                transcript_path=payload.get("transcript_path"),
-            )
+            if grok:
+                if grok_history is not None:
+                    _maybe_schedule_briefing(
+                        cfg, vault, agent_name, session_id=sid, cwd=cwd,
+                        transcript_path=str(grok_history), grok=True,
+                    )
+            else:
+                _maybe_schedule_briefing(
+                    cfg, vault, agent_name, session_id=sid, cwd=cwd,
+                    transcript_path=payload.get("transcript_path"),
+                )
         except Exception as e:
             errors.log_error(vault, "session_end.briefing_wrap", e)
         try:
