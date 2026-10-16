@@ -18,6 +18,8 @@ DEFAULTS: dict[str, Any] = {
     },
     "extraction": {
         # #358: which provider answers the model calls (``core.llm.PROVIDERS``).
+        # ``claude-cli`` here means "the CLI this process drives": it becomes
+        # ``grok-cli`` under MNEMO_AGENT=grok. Name ``grok-cli`` to pin Grok.
         "provider": "claude-cli",
         "model": "claude-haiku-4-5",
         "chunkSize": 10,

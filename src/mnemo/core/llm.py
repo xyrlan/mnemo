@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
@@ -417,20 +418,156 @@ def _claude_cli(
     return call(prompt, system=system, model=model, timeout=timeout)
 
 
+GROK_PROVIDER = "grok-cli"
+
+
+def _resolve_grok() -> str:
+    """Absolute path to ``grok`` (PATHEXT-aware on Windows), or the bare name."""
+    return shutil.which("grok") or "grok"
+
+
+def _grok_env() -> dict[str, str]:
+    """Parent env + ``GROK_CLAUDE_HOOKS_ENABLED=0`` + ``MNEMO_HOOKS_OFF=1``.
+
+    Grok reads hooks from ``~/.claude/settings.json``, so a helper ``grok -p``
+    would fire mnemo's SessionStart/End like any session and schedule another
+    extraction behind itself (#329's loop). Both switches go in: the first
+    stops Grok loading Claude-format hooks, the second stops the ones it
+    still runs.
+    """
+    from mnemo.core import hook_guard
+
+    env = os.environ.copy()
+    env["GROK_CLAUDE_HOOKS_ENABLED"] = "0"
+    return hook_guard.disable_hooks(env)
+
+
+def _grok_argv(prompt_file: str, model: str, system: str | None) -> list[str]:
+    argv = [
+        _resolve_grok(),
+        "--prompt-file", prompt_file,
+        "--output-format", "json",
+        "--tools", "",
+    ]
+    # ``extraction.model`` defaults to a Claude id; a Grok account lists one
+    # model and rejects a name it does not have, so a Claude id means "the
+    # account's default" and is not passed.
+    if model and not model.startswith("claude"):
+        argv.extend(["--model", model])
+    if system is not None:
+        argv.extend(["--system-prompt-override", system])
+    return argv
+
+
+def _grok_cli(
+    prompt: str, *, system: str | None, model: str, timeout: int,
+) -> LLMResponse:
+    """One model call through ``grok --prompt-file`` (``--output-format json``).
+
+    The prompt travels in a file, not argv: a transcript chunk is far past
+    Windows' command-line limit. Same retry rules as :func:`call`: one retry
+    after a timeout or a rate limit. Cost is Grok's own notional figure and
+    ``api_key_source`` stays ``None`` (unknown), since the account kind is not
+    in the reply.
+    """
+    fd, path = tempfile.mkstemp(prefix="mnemo-grok-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="") as fh:
+            fh.write(prompt)
+        argv = _grok_argv(path, model, system)
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                result = _subprocess_run(
+                    argv, capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=timeout, env=_grok_env(),
+                    cwd=_working_dir(),
+                )
+            except FileNotFoundError as exc:
+                raise LLMSubprocessError(
+                    "grok CLI not found; install Grok Build first"
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                if attempts == 1:
+                    time.sleep(2.0)
+                    continue
+                raise LLMTimeoutError(
+                    f"subprocess timed out twice after {timeout}s"
+                ) from exc
+            if result.returncode != 0:
+                if _is_rate_limit(result.stderr) and attempts == 1:
+                    time.sleep(5.0)
+                    continue
+                raise LLMSubprocessError(
+                    f"grok exited with code {result.returncode}: "
+                    f"{(result.stderr or '').strip()}"
+                )
+            break
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    try:
+        parsed: Any = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise LLMEnvelopeError(
+            f"envelope JSON invalid: {getattr(exc, 'msg', exc)}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise LLMEnvelopeError("envelope is not a JSON object")
+    text = parsed.get("text")
+    if not isinstance(text, str):
+        raise LLMEnvelopeError("no text in response")
+
+    usage = parsed.get("usage") or {}
+    raw_in = usage.get("input_tokens")
+    cache_create = usage.get("cache_creation_input_tokens") or 0
+    cache_read = usage.get("cache_read_input_tokens") or 0
+    if raw_in is None and (cache_create or cache_read):
+        input_total: int | None = int(cache_create + cache_read)
+    elif raw_in is None:
+        input_total = None
+    else:
+        input_total = int(raw_in) + int(cache_create) + int(cache_read)
+    return LLMResponse(
+        text=text,
+        total_cost_usd=parsed.get("total_cost_usd"),
+        input_tokens=input_total,
+        output_tokens=usage.get("output_tokens"),
+        api_key_source=None,
+        raw={"result": parsed},
+        provider=GROK_PROVIDER,
+    )
+
+
 PROVIDERS: dict[str, Provider] = {
     DEFAULT_PROVIDER: _claude_cli,
+    GROK_PROVIDER: _grok_cli,
 }
 
 
 def resolve(cfg: Mapping[str, Any] | None) -> Provider:
     """The provider ``cfg["extraction"]["provider"]`` names.
 
-    Absent or empty means :data:`DEFAULT_PROVIDER`. Anything else that is not a
-    registered name raises :class:`UnknownProviderError` here, so callers
-    resolve before their first call rather than failing mid-run.
+    Absent, empty or :data:`DEFAULT_PROVIDER` means "the CLI this process
+    drives" (``agent_cli.current_cli``): ``claude-cli`` normally, ``grok-cli``
+    under ``MNEMO_AGENT=grok`` or inside a Grok session. ``claude-cli`` is
+    also what the shipped config default holds, so it cannot tell an untouched
+    config from a pin; name ``grok-cli`` to pin Grok on a Claude machine.
+    Anything else that is not a registered name raises
+    :class:`UnknownProviderError` here, so callers resolve before their first
+    call rather than failing mid-run.
     """
     extraction = (cfg or {}).get("extraction") or {}
     name = extraction.get("provider") or DEFAULT_PROVIDER
+    if name == DEFAULT_PROVIDER:
+        from mnemo.core import agent_cli
+
+        if agent_cli.current_cli() == agent_cli.GROK:
+            name = GROK_PROVIDER
     provider = PROVIDERS.get(name) if isinstance(name, str) else None
     if provider is None:
         known = ", ".join(sorted(PROVIDERS))
