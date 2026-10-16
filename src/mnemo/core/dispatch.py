@@ -99,6 +99,20 @@ licenses. The other half — "low confidence asks instead of building" — has n
 reader: of those 180 children, exactly one received a turn typed by the
 maintainer, and it was an instruction at tool use 75, not an answer. That is
 #357 from the child's side, and a rating does not fix it.
+
+**A Grok child** (``design/specs/2026-10-16-grok-host.md``). When
+``agent_cli.current_cli`` names ``grok``, the same tree, branch, prompt,
+grant and parent link are made, and the child is a session of Grok Build's
+leader instead of a ``claude --bg`` job: :meth:`acp.Leader.new_session` in the
+worktree, under the dispatching process's ``GROK_HOME`` (the account selected
+when it was dispatched), with the opening prompt as its first turn
+(:func:`_spawn_grok`). Its id, home and CLI are written once, at spawn, to
+:mod:`mnemo.core.sessions.child_agents`, and every ledger keys it by
+``grok.paths.short_id`` — the *last* eight hex digits, since two UUIDv7 ids
+minted together share their first eight. A dormant Grok session fires no
+SessionEnd, so its prompt does not end on ``claude stop``: it ends its last
+turn on its closing report (:data:`_GROK_CLOSING_STEPS`). Everything Grok
+cannot take is refused before a worktree exists (:func:`check_grok`).
 """
 from __future__ import annotations
 
@@ -109,10 +123,10 @@ import subprocess
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
-from mnemo.core import child_profile, claude_cli, contracts, redact
-from mnemo.core.sessions import grants, parents
+from mnemo.core import agent_cli, child_profile, claude_cli, contracts, redact
+from mnemo.core.sessions import child_agents, grants, parents
 
 WORKTREE_SUFFIX = "-wt-"
 
@@ -196,6 +210,13 @@ class Dispatched:
     #: because a child whose id is missing from the queue still loses its
     #: posture there if this field silently reverted to the default.
     read_only: bool = False
+    #: The agent CLI the child runs on (``agent_cli.AGENT_CLIS``).
+    agent: str = agent_cli.CLAUDE
+    #: A Grok child's full session id and the home whose leader hosts it,
+    #: which the attach hint needs and ``short_id`` cannot give back. ``None``
+    #: for a Claude child, whose job directory is named by its short id.
+    session_id: str | None = None
+    home: str | None = None
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -548,11 +569,33 @@ _READ_ONLY_CLOSING_STEPS = (
     _CLOSING_STEPS[2],
 )
 
+#: A Grok child's closing (the Grok round). Grok has no ``claude stop`` and no
+#: SessionEnd to count on: a session left idle when its client goes is
+#: unloaded as dormant and fires none (measured on grok 1.0.60). What marks
+#: it finished is the turn it ends on its report, so the report moves to the
+#: end and the stop goes. The publish check is `_CLOSING_STEPS`' own, word for
+#: word, so the grant reads the same on both CLIs.
+_GROK_CLOSING_STEPS = (
+    _CLOSING_STEPS[1],
+    "End your last turn with your closing report — what you did, what you "
+    "decided and why, what you refused — and write nothing after it. This is "
+    "the only copy: it becomes the session's briefing, and the turn that ends "
+    "on it is how mnemo knows you finished. Do not close the session "
+    "yourself; ending that turn is the whole of finishing.",
+)
+
+#: The read-only closing on Grok: the comment, then the report, last.
+_GROK_READ_ONLY_CLOSING_STEPS = (
+    _READ_ONLY_CLOSING_STEPS[1],
+    _GROK_CLOSING_STEPS[1],
+)
+
 _CLOSING_HEADING = "\nHow to finish, whatever you decided:\n"
 
 
 def _closing_clause(
     may: grants.Grant = (), *, read_only: bool = False, issue: Target | None = None,
+    agent: str = agent_cli.CLAUDE,
 ) -> str:
     """The end-of-life instructions every child gets, grant or no grant.
 
@@ -568,14 +611,20 @@ def _closing_clause(
     *read_only* swaps step 2 for a comment on *issue*: a read-only child has
     nothing to publish, and the check for commits ahead would be asking it to
     look for something the posture guarantees is not there.
+
+    *agent* ``grok`` takes :data:`_GROK_CLOSING_STEPS` instead: the same
+    publish check, then the report as the last thing the turn says, and no
+    Claude command anywhere.
     """
     # `.format()` unconditionally, never guarded on a placeholder being
     # present: it collapses `{{` to `{` whether or not it substitutes
     # anything, and `_CLOSING_STEPS[2]` relies on that to render
     # `${CLAUDE_CODE_SESSION_ID:0:8}`. An extra kwarg is harmless; a skipped
     # call silently doubles those braces.
+    grok = agent == agent_cli.GROK
     if read_only:
-        steps_source = tuple(step.format(issue=issue) for step in _READ_ONLY_CLOSING_STEPS)
+        template = _GROK_READ_ONLY_CLOSING_STEPS if grok else _READ_ONLY_CLOSING_STEPS
+        steps_source = tuple(step.format(issue=issue) for step in template)
     else:
         if "pr" in may:
             hint = ", push it and open the pull request you were granted"
@@ -583,7 +632,8 @@ def _closing_clause(
             hint = ", push it (do not open a pull request)"
         else:
             hint = ", say so in your report and leave it for `mnemo deliver`"
-        steps_source = tuple(step.format(publish_hint=hint) for step in _CLOSING_STEPS)
+        template = _GROK_CLOSING_STEPS if grok else _CLOSING_STEPS
+        steps_source = tuple(step.format(publish_hint=hint) for step in template)
     steps = "\n".join(
         _wrap(step, initial_indent=f"{number}. ", subsequent_indent="   ")
         for number, step in enumerate(steps_source, start=1)
@@ -675,6 +725,10 @@ def build_prompt(
     the branch is not named, because each twin has its own. Nothing else
     changes, and nothing says another run exists. Without it the prompt is
     the one every issue child was given before twins existed.
+
+    A Grok child's prompt is this one with its closing swapped
+    (:func:`for_agent`) — deliberately not a parameter here, so the set of
+    things a caller can pass stays the set ``test_dispatch_plan`` pins.
     """
     branch = branch_name(issue)
     roster = _siblings_clause(
@@ -703,6 +757,30 @@ def build_prompt(
             initial_indent="- ", subsequent_indent="  ",
         ),
         closing=_closing_clause(may),
+    )
+
+
+def for_agent(
+    prompt: str, agent: str, *, may: grants.Grant = (), read_only: bool = False,
+    issue: Target | None = None,
+) -> str:
+    """*prompt* as *agent*'s child reads it: the same, with *agent*'s closing.
+
+    Every opening prompt ends on :func:`_closing_clause`, so the closing it
+    was rendered with is swapped for *agent*'s and nothing else is touched —
+    a Grok child is told the same issue, tree, grant and scope a Claude child
+    is (the Grok round's contract). *may*, *read_only* and *issue* must be
+    what *prompt* was rendered with; a prompt that does not end on that
+    closing raises ``ValueError`` rather than gaining a second one. Claude
+    returns *prompt* unchanged.
+    """
+    if agent == agent_cli.CLAUDE:
+        return prompt
+    rendered = _closing_clause(may, read_only=read_only, issue=issue)
+    if not prompt.endswith(rendered):
+        raise ValueError("the prompt does not end on the closing it was rendered with")
+    return prompt[: -len(rendered)] + _closing_clause(
+        may, read_only=read_only, issue=issue, agent=agent,
     )
 
 
@@ -765,6 +843,8 @@ def build_piece_prompt(
     batches collided — so naming the owners would buy nothing measured, while
     putting another piece's files inside this prompt weakens the one thing
     that makes the boundary hard: that they are not in it.
+
+    A Grok child's is this one through :func:`for_agent`, as for an issue.
     """
     branch = branch_name(piece.slug, feature=feature)
     consumes = ""
@@ -960,8 +1040,14 @@ def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
     effort: str | None = None, read_only: bool = False,
     settings: Mapping[str, Any] | None = None,
+    agent: str = agent_cli.CLAUDE, home: Path | str | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
+
+    *agent* ``grok`` starts it in Grok's leader instead and returns the
+    **full** session id (:func:`_spawn_grok`; *home* is the Grok home, *lean*
+    and *settings* are Claude's and ignored). Everything below is the Claude
+    path, which an omitted *agent* leaves byte-identical.
 
     ``--bg`` with the prompt **positional**. Never ``-p``/``--print``: the CLI
     rejects the combination, and ``--print`` would never start the interactive
@@ -1077,6 +1163,9 @@ def spawn_child(
     passes; on the full profile they are the file's only content. ``None``
     (every caller but twins) leaves the argv byte-identical.
     """
+    if agent == agent_cli.GROK:
+        return _spawn_grok(prompt, cwd=cwd, model=model, effort=effort,
+                           read_only=read_only, home=home)
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
             f"unknown effort {effort!r}: "
@@ -1125,6 +1214,286 @@ def spawn_child(
     return claude_cli.require_short_id(result.stdout)
 
 
+# --- grok ------------------------------------------------------------------
+
+#: Seconds Grok's leader gets to take a child's opening turn. Taking it is
+#: quick — 0.5 s live, on a dormant session that had to be loaded first
+#: (grok-acp, PR #710) — and waiting for the turn to *end* is never done: the
+#: leader runs it with no client attached.
+GROK_TURN_TIMEOUT = 120.0
+
+#: Where Grok keeps the model list its account was offered, refreshed by
+#: ``grok`` itself: ``{"models": {<id>: {"info": {"id", "hidden",
+#: "supports_reasoning_effort", "reasoning_efforts": [{"value"}…]}}}}``. Read
+#: off a real home on grok 1.0.60 (2026-10-16): one model, ``grok-4.7``,
+#: taking ``xhigh``, ``high``, ``medium`` and ``low``. Other keys in it
+#: (credentials among them) are never read.
+GROK_MODELS_CACHE = "models_cache.json"
+
+#: Why ``--read-only`` is refused on Grok rather than approximated. Read from
+#: the source (``xai-grok-shell/src/agent/mvp_agent/session_setup.rs`` at
+#: ``2bdd1d6``): ``session/new`` takes no tool list — tool removal
+#: (``--disallowed-tools``) is a flag of the leader *process*, shared by every
+#: session of the account — and a deny rule written into the worktree's
+#: ``.claude/settings.local.json`` is dropped when the folder is untrusted,
+#: which a fresh worktree in a non-interactive session is
+#: (``xai-grok-permission-rules/src/folder_trust.rs``, ``claude_settings.rs``).
+GROK_READ_ONLY_REFUSAL = (
+    "--read-only: not supported on Grok yet — a Grok leader session cannot "
+    "have its file-editing tools closed; dispatch it with --agent claude"
+)
+
+
+class _GrokTurnPending(Exception):
+    """The session exists but the leader had not taken its opening turn in time."""
+
+    def __init__(self, session_id: str, message: str):
+        super().__init__(message)
+        self.session_id = session_id
+
+
+@dataclass(frozen=True)
+class GrokVocabulary:
+    """What one Grok home's account can run, as Grok itself last recorded it.
+
+    ``models`` maps a model id to the efforts it takes — ``()`` for a model
+    that takes none, ``None`` when unknown (a custom model from
+    ``config.toml``, which the cache does not describe). ``default`` is the
+    model a session gets when none is named, when it can be told.
+    """
+
+    models: Dict[str, Optional[Tuple[str, ...]]]
+    default: Optional[str]
+
+
+_TOML_TABLE_RE = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:#.*)?$")
+_TOML_DEFAULT_RE = re.compile(r"""^\s*default\s*=\s*["']([^"']+)["']""")
+
+
+def _custom_models(config_text: str) -> Tuple[Dict[str, None], Optional[str]]:
+    """``[model.<name>]`` tables and ``[models] default`` out of a ``config.toml``.
+
+    By pattern rather than a TOML parser: the package supports Python 3.8,
+    which has no ``tomllib``, and these two shapes are all that is read.
+    """
+    names: Dict[str, None] = {}
+    default: Optional[str] = None
+    table = ""
+    for line in config_text.splitlines():
+        header = _TOML_TABLE_RE.match(line)
+        if header:
+            table = header.group(1).strip()
+            if table.startswith("model."):
+                names[table[len("model."):].strip().strip("\"'")] = None
+            continue
+        if table == "models":
+            found = _TOML_DEFAULT_RE.match(line)
+            if found:
+                default = found.group(1)
+    return names, default
+
+
+def grok_vocabulary(home: Path | str) -> GrokVocabulary | None:
+    """The models and efforts *home* can run, or ``None`` when Grok left no list.
+
+    ``None`` is not a refusal: a home that never fetched its model list (or
+    whose cache this version cannot read) is checked by the leader itself at
+    spawn — :meth:`acp.Leader.new_session` refuses an unknown model, and the
+    tree made for it is rolled back.
+    """
+    home = Path(home)
+    try:
+        data = json.loads((home / GROK_MODELS_CACHE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    raw = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        return None
+    models: Dict[str, Optional[Tuple[str, ...]]] = {}
+    for key, entry in raw.items():
+        info = entry.get("info") if isinstance(entry, dict) else None
+        if not isinstance(info, dict):
+            continue
+        model_id = str(info.get("id") or key)
+        if info.get("supports_reasoning_effort") is False:
+            efforts: Optional[Tuple[str, ...]] = ()
+        else:
+            listed = info.get("reasoning_efforts")
+            efforts = tuple(
+                str(e.get("value") or e.get("id")) for e in listed
+                if isinstance(e, dict) and (e.get("value") or e.get("id"))
+            ) if isinstance(listed, list) else None
+        models[model_id] = efforts
+        if key != model_id:
+            models[str(key)] = efforts
+    if not models:
+        return None
+    try:
+        custom, default = _custom_models((home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        custom, default = {}, None
+    for name in custom:
+        models.setdefault(name, None)
+    if default is None:
+        shown = {e.get("info", {}).get("id") or k for k, e in raw.items()
+                 if isinstance(e, dict) and not (e.get("info") or {}).get("hidden")}
+        default = next(iter(shown)) if len(shown) == 1 else None
+    return GrokVocabulary(models=models, default=default)
+
+
+def check_grok(
+    model: str | None = None, effort: str | None = None, *,
+    home: Path | str | None = None, read_only: bool = False,
+) -> Path:
+    """Refuse what a Grok child cannot be, before any worktree exists.
+
+    Returns the Grok home the child will run under — *home*, else the
+    dispatching process's (``$GROK_HOME``, else ``~/.grok``). Raises
+    :class:`DispatchError` saying what to do when: the posture is read-only
+    (:data:`GROK_READ_ONLY_REFUSAL`); ``grok`` is not on ``PATH``; the home
+    does not exist or holds no login; *effort* is not one Grok parses; or
+    the home's own model list (:func:`grok_vocabulary`) has no *model*, or
+    the model it would run does not take *effort*.
+
+    A Claude model name (``haiku``, ``opus``) is refused here by the same
+    rule: it is not in Grok's list. Grok itself would not refuse it — it
+    swaps an unknown model for its default without a word (grok-acp, PR
+    #710) — which is why a list is checked at all.
+    """
+    from mnemo.core.grok import acp
+    from mnemo.core.grok import paths as grok_paths
+
+    if read_only:
+        raise DispatchError(GROK_READ_ONLY_REFUSAL)
+    if effort and effort not in acp.EFFORTS:
+        raise DispatchError(
+            f"--effort: Grok takes no effort {effort!r}; it takes {', '.join(acp.EFFORTS)}"
+        )
+    resolved = Path(home).expanduser() if home is not None else grok_paths.grok_home()
+    if shutil.which("grok") is None:
+        raise DispatchError(
+            "grok is not on PATH: install Grok Build (xAI's `grok` CLI) and make "
+            "sure `grok --version` runs in this shell, or dispatch with --agent claude"
+        )
+    if not resolved.is_dir():
+        raise DispatchError(
+            f"Grok home {resolved} does not exist: log in with "
+            f"`GROK_HOME={resolved} grok login`, or select another account"
+        )
+    if not acp.has_login(resolved):
+        raise DispatchError(
+            f"Grok home {resolved} has no login: run `GROK_HOME={resolved} grok login`"
+        )
+    vocabulary = grok_vocabulary(resolved)
+    if vocabulary is None:
+        return resolved
+    if model and model not in vocabulary.models:
+        offered = ", ".join(sorted(vocabulary.models)) or "nothing"
+        raise DispatchError(
+            f"--model: Grok has no model {model!r} for {resolved}; it offers {offered}"
+        )
+    running = model or vocabulary.default
+    takes = vocabulary.models.get(running) if running else None
+    if effort and takes is not None and effort not in takes:
+        offered = ", ".join(takes) or "no effort setting"
+        raise DispatchError(
+            f"--effort: Grok's {running} takes no effort {effort!r}; it takes {offered}"
+        )
+    return resolved
+
+
+def check_grok_contract(
+    contract: contracts.Contract, *, model: str | None = None,
+    effort: str | None = None, read_only: bool = False,
+    home: Path | str | None = None,
+) -> Path:
+    """:func:`check_grok` for every piece, as each would be spawned. Before any tree.
+
+    One piece Grok cannot run refuses the whole contract: the pieces were
+    decomposed to be built together, and half of them on the wrong footing
+    is the merge the contract exists to prevent.
+
+    The dispatch-wide *model* and *effort* are checked only where a piece
+    takes them: a ``--model`` every piece overrides spawns nothing.
+    """
+    resolved = check_grok(home=home)
+    for piece in contract.pieces:
+        try:
+            check_grok(piece.model or model, piece.effort or effort, home=resolved,
+                       read_only=piece_read_only(piece, read_only))
+        except DispatchError as exc:
+            raise DispatchError(f"{piece.slug}: {exc}") from exc
+    return resolved
+
+
+def _spawn_grok(
+    prompt: str, *, cwd: Path | str, model: str | None = None,
+    effort: str | None = None, read_only: bool = False,
+    home: Path | str | None = None,
+) -> str:
+    """Start a Grok child: a leader session in *cwd* whose first turn is *prompt*.
+
+    Returns the session's full id. The session is created with yolo, so its
+    turn runs to its end with nobody attached (measured, grok-acp), and
+    :meth:`acp.Leader.prompt` returns once the leader has *taken* the turn,
+    never after it ends.
+
+    Raises :class:`DispatchError` when no session could be started — no
+    ``grok``, no login, the leader would not come up, a model Grok swapped —
+    with the message Grok's client wrote for a person to act on. A session
+    that was created but whose turn failed (a rate limit, a login refused
+    mid-way) is closed again first, so nothing is left running in a tree
+    about to be removed. A turn the leader had not taken within
+    :data:`GROK_TURN_TIMEOUT` raises :class:`_GrokTurnPending`: the session
+    exists and may still run it, so the caller keeps its tree.
+    """
+    from mnemo.core.grok import acp
+
+    if read_only:
+        raise DispatchError(GROK_READ_ONLY_REFUSAL)
+    leader = acp.Leader(Path(home) if home is not None else None)
+    prefix = "could not start the Grok child"
+    try:
+        session_id = leader.new_session(str(cwd), model=model, effort=effort, yolo=True)
+    except ValueError as exc:
+        raise DispatchError(f"{prefix}: {exc}") from exc
+    except TimeoutError as exc:
+        raise DispatchError(
+            f"{prefix}: {exc}; `mnemo grok roster --home {leader.home}` shows "
+            "whether its leader answers"
+        ) from exc
+    except acp.GrokUnavailable as exc:
+        raise DispatchError(f"{prefix}: {exc}") from exc
+
+    try:
+        leader.prompt(session_id, str(cwd), prompt, wait=False, timeout=GROK_TURN_TIMEOUT)
+    except TimeoutError as exc:
+        raise _GrokTurnPending(
+            session_id,
+            f"Grok's leader had not taken the opening turn of {session_id} after "
+            f"{GROK_TURN_TIMEOUT:.0f}s; it may still run it — `mnemo grok roster "
+            f"--home {leader.home}` shows its activity",
+        ) from exc
+    except BaseException as exc:
+        _close_quietly(leader, session_id)
+        if isinstance(exc, acp.RateLimited):
+            raise DispatchError(
+                f"{prefix}: the account in {leader.home} is past its usage limit "
+                f"({exc}); wait for it to reset, or dispatch on another account"
+            ) from exc
+        if isinstance(exc, acp.GrokUnavailable):
+            raise DispatchError(f"{prefix}: {exc}") from exc
+        raise
+    return session_id
+
+
+def _close_quietly(leader: Any, session_id: str) -> None:
+    try:
+        leader.close(session_id)
+    except Exception:  # noqa: BLE001 — the error being reported is the one that matters
+        pass
+
+
 # --- orchestration ---------------------------------------------------------
 
 Fetcher = Callable[..., Issue]
@@ -1138,6 +1507,8 @@ def _spawn_into(
     effort: str | None = None,
     read_only: bool = False,
     settings: Mapping[str, Any] | None = None,
+    agent: str = agent_cli.CLAUDE,
+    home: Path | str | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -1157,7 +1528,14 @@ def _spawn_into(
     A spawn that did read an id back is then checked against the jobs dir
     (``jobs-state-json``); a mismatch there is likewise a warning, since the
     child is running either way.
+
+    *agent* ``grok`` takes :func:`_spawn_grok_into` instead.
     """
+    if agent == agent_cli.GROK:
+        return _spawn_grok_into(
+            target, tree, prompt, repo_root=repo_root, branch=branch, model=model,
+            may=may, effort=effort, read_only=read_only, home=home,
+        )
     # Only when given, so every other caller hands the chokepoint exactly
     # the call it always did (#453: nothing changes for non-twin children).
     extra = {"settings": settings} if settings else {}
@@ -1192,6 +1570,50 @@ def _spawn_into(
     )
 
 
+def _spawn_grok_into(
+    target: Target, tree: Path, prompt: str, *, repo_root: Path | str, branch: str,
+    model: str | None = None, may: grants.Grant = (), effort: str | None = None,
+    read_only: bool = False, home: Path | str | None = None,
+) -> Dispatched:
+    """:func:`_spawn_into` for a Grok child. The same two failure shapes.
+
+    No session: the tree and the branch are removed and the error propagates.
+    A session whose opening turn was not seen taken (:class:`_GrokTurnPending`)
+    keeps its tree, is recorded like any other child, and carries the reason
+    on ``warning`` — the leader may still run it, as a ``claude --bg`` that
+    printed no id most likely still runs.
+
+    Recorded in the order a reader needs: the agent line first (the full id
+    and home every other ledger's short id points back to), then the parent
+    link, the watcher and the grant, exactly as for Claude.
+    """
+    from mnemo.core.grok import paths as grok_paths
+
+    resolved = Path(home).expanduser() if home is not None else grok_paths.grok_home()
+    warning = None
+    try:
+        session_id = spawn_child(prompt, cwd=tree, model=model, effort=effort,
+                                 read_only=read_only, agent=agent_cli.GROK, home=resolved)
+    except _GrokTurnPending as exc:
+        session_id, warning = exc.session_id, str(exc)
+    except BaseException:
+        remove_worktree(tree, repo_root=repo_root, branch=branch)
+        raise
+    common = dict(issue=target, worktree=tree, model=model, effort=effort, may=may,
+                  read_only=read_only, agent=agent_cli.GROK, home=str(resolved))
+    if not session_id:
+        return Dispatched(short_id="", warning=warning, **common)
+    short_id = grok_paths.short_id(session_id)
+    child_agents.record(child_agents.ChildAgent(
+        short_id=short_id, agent=agent_cli.GROK, session_id=session_id,
+        home=str(resolved), cwd=str(tree),
+    ))
+    parents.record(short_id)
+    _ensure_notice_watcher()
+    grants.record(short_id, may)
+    return Dispatched(short_id=short_id, warning=warning, session_id=session_id, **common)
+
+
 def _ensure_notice_watcher() -> None:
     """Start ``mnemo child-notices`` unless one runs. Never raises: a missing
     watcher costs a notice that the hook usually sends anyway, never a
@@ -1215,6 +1637,8 @@ def dispatch_issue(
     read_only: bool = False,
     details: Issue | None = None,
     siblings: Sequence[Issue] = (),
+    agent: str = agent_cli.CLAUDE,
+    home: Path | str | None = None,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -1229,17 +1653,27 @@ def dispatch_issue(
     one, *fetch* is not called: re-reading would be a second ``gh`` round-trip
     for an answer already in hand, and a second answer that could differ from
     the one the siblings were told about.
+
+    *agent* ``grok`` spawns the child in Grok's leader under *home*; what
+    Grok cannot take is refused by :func:`check_grok` before the tree exists.
     """
+    grok = {}
+    if agent == agent_cli.GROK:
+        home = check_grok(model, effort, home=home, read_only=read_only)
+        grok = {"agent": agent, "home": home}
     if details is None:
         details = fetch(issue, repo_root=repo_root)  # before any git state exists
     tree = ensure_worktree(issue, repo_root=repo_root)
     return _spawn_into(
         issue, tree,
-        build_prompt(issue, title=details.title, body=details.body,
-                     repo_root=repo_root, may=may, read_only=read_only,
-                     siblings=siblings),
+        for_agent(
+            build_prompt(issue, title=details.title, body=details.body,
+                         repo_root=repo_root, may=may, read_only=read_only,
+                         siblings=siblings),
+            agent, may=may, read_only=read_only, issue=issue,
+        ),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
-        may=may, effort=effort, read_only=read_only,
+        may=may, effort=effort, read_only=read_only, **grok,
     )
 
 
@@ -1250,6 +1684,8 @@ def dispatch_all(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
+    agent: str = agent_cli.CLAUDE,
+    home: Path | str | None = None,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -1277,7 +1713,19 @@ def dispatch_all(
     its siblings were told about it leaves them naming an issue nobody took.
     That is the cheap direction — a child reads an issue and finds no branch —
     and closing it would mean spawning the batch twice.
+
+    On Grok (*agent*), :func:`check_grok` runs once, first: what it refuses
+    — no ``grok``, no login, a model the account does not offer — refuses
+    every issue alike, so each is reported failed with its words and no
+    issue is read.
     """
+    grok = {}
+    if agent == agent_cli.GROK:
+        try:
+            home = check_grok(model, effort, home=home, read_only=read_only)
+        except DispatchError as exc:
+            return [Dispatched(issue=issue, error=str(exc), agent=agent) for issue in issues]
+        grok = {"agent": agent, "home": home}
     batch: list[tuple[int, Issue | None, str]] = []
     for issue in issues:
         try:
@@ -1297,11 +1745,11 @@ def dispatch_all(
                     issue, repo_root=repo_root, fetch=fetch, details=details,
                     siblings=roster,
                     model=model, lean=lean, may=may, effort=effort,
-                    read_only=read_only,
+                    read_only=read_only, **grok,
                 )
             )
         except DispatchError as exc:
-            out.append(Dispatched(issue=issue, error=str(exc)))
+            out.append(Dispatched(issue=issue, error=str(exc), agent=agent))
     return out
 
 
@@ -1312,6 +1760,8 @@ def dispatch_piece(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
+    agent: str = agent_cli.CLAUDE,
+    home: Path | str | None = None,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -1331,16 +1781,26 @@ def dispatch_piece(
     *may* resolves the same way, with one difference: a piece's ``may: none``
     is ``()``, not absent, and still wins — so a contract can withhold from
     one piece what the flag granted the rest (#317).
+
+    *agent* and *home* as in :func:`dispatch_issue`.
     """
     target = f"c-{piece.slug}"
     granted = piece_grant(piece, may)
+    grok = {}
+    if agent == agent_cli.GROK:
+        home = check_grok(piece.model or model, piece.effort or effort, home=home,
+                          read_only=read_only)
+        grok = {"agent": agent, "home": home}
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
     return _spawn_into(
         target, tree,
-        build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
+        for_agent(
+            build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
+            agent, may=granted,
+        ),
         repo_root=repo_root, branch=branch_name(target, feature=feature),
         model=piece.model or model, lean=lean, may=granted,
-        effort=piece.effort or effort, read_only=read_only,
+        effort=piece.effort or effort, read_only=read_only, **grok,
     )
 
 
@@ -1360,6 +1820,8 @@ def dispatch_contract(
     may: grants.Grant = (),
     effort: str | None = None,
     read_only: bool = False,
+    agent: str = agent_cli.CLAUDE,
+    home: Path | str | None = None,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -1375,12 +1837,21 @@ def dispatch_contract(
 
     *model* and *effort* are the defaults for every piece that does not name
     its own; see :func:`dispatch_piece` for why the piece wins.
+
+    On Grok (*agent*), every piece is checked (:func:`check_grok_contract`)
+    before the first tree exists, and one piece Grok cannot run raises
+    :class:`DispatchError` for the whole contract.
     """
     if not contract.is_dispatchable:
         raise DispatchError(
             f"contract verdict is {contract.verdict!r}, not 'parallel' — "
             "this work does not divide; run it in one session"
         )
+    grok = {}
+    if agent == agent_cli.GROK:
+        home = check_grok_contract(contract, model=model, effort=effort,
+                                   read_only=read_only, home=home)
+        grok = {"agent": agent, "home": home}
 
     out: list[Dispatched] = []
     for piece in contract.pieces:
@@ -1389,9 +1860,9 @@ def dispatch_contract(
                 dispatch_piece(
                     piece, feature=contract.feature, repo_root=repo_root,
                     model=model, lean=lean, may=may, effort=effort,
-                    read_only=piece_read_only(piece, read_only),
+                    read_only=piece_read_only(piece, read_only), **grok,
                 )
             )
         except DispatchError as exc:
-            out.append(Dispatched(issue=f"c-{piece.slug}", error=str(exc)))
+            out.append(Dispatched(issue=f"c-{piece.slug}", error=str(exc), agent=agent))
     return out

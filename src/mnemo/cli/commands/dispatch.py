@@ -14,6 +14,11 @@ and it deliberately does not: a child blocks exactly when it wants human
 judgement, and an invented answer is the #187 failure again. So the closing
 hint points the maintainer at the queue, ``mnemo sessions``, which is
 pipe-safe, rather than at ``claude agents``, which requires a TTY.
+
+The CLI the children run on is ``agent_cli.current_cli(override=--agent)``:
+the flag, then ``MNEMO_AGENT`` (the account mnemo-desktop has selected), then
+Grok inside a Grok session, else Claude. On Grok everything a child cannot
+be is refused before the first tree exists, ``--twins`` among it.
 """
 from __future__ import annotations
 
@@ -36,6 +41,11 @@ AGENT_NOTE = (
     "  do not poll them or promise to watch or report back unless the maintainer",
     "  asked you to. The queue and attach lines above are for the maintainer.",
 )
+
+#: Said when ``--twins`` meets Grok. Twins are a pilot measured on Claude
+#: children only (#449); a pair on Grok would be a second, unmeasured pilot.
+TWINS_ON_GROK = ("--twins: not supported on Grok yet — twins are measured on "
+                 "Claude children only; dispatch them with --agent claude")
 
 #: The same note when ``dispatch.notifyParent`` is on, the default (#426). The
 #: finish notice is a mechanism, so the note can name it — but only for what
@@ -128,10 +138,19 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     model = getattr(args, "model", None) or None
     effort = getattr(args, "effort", None) or None
 
-    from mnemo.core import claude_cli
+    from mnemo.core import agent_cli, claude_cli
     from mnemo.core.sessions import grants
 
-    if effort is not None and effort not in claude_cli.EFFORT_LEVELS:
+    try:
+        agent = agent_cli.current_cli(override=getattr(args, "agent", None))
+    except agent_cli.UnknownAgentError as exc:
+        # An unknown MNEMO_AGENT is refused, never read as Claude: a typo must
+        # not run the children on the other account.
+        print(f"--agent: {exc}")
+        return 1
+    grok = agent == agent_cli.GROK
+
+    if not grok and effort is not None and effort not in claude_cli.EFFORT_LEVELS:
         # argparse's `choices` already refuses this on the command line; this
         # is for a namespace built by hand. Before anything could spawn (#351).
         print(f"--effort: unknown level {effort!r}: "
@@ -184,6 +203,9 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     lean = not getattr(args, "full_profile", False)
 
     if getattr(args, "twins", False):
+        if grok:
+            print(TWINS_ON_GROK)
+            return 1
         return _dispatch_twins(
             issues, contract_path=contract_path, root=root, args=args, lean=lean,
             model=model, effort=effort,
@@ -192,8 +214,19 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     if contract_path:
         return _dispatch_contract(
             contract_path, root=root, args=args, lean=lean, may=may,
-            read_only=read_only,
+            read_only=read_only, agent=agent,
         )
+
+    on = {}
+    if grok:
+        # Before the dry run as well as the spawn: a plan Grok would refuse is
+        # not a plan, and the refusal costs nothing to read.
+        try:
+            home = core.check_grok(model, effort, read_only=read_only)
+        except core.DispatchError as exc:
+            print(str(exc))
+            return 1
+        on = {"agent": agent, "home": home}
 
     if getattr(args, "dry_run", False):
         # Printable without side effects: the paths and branches are pure
@@ -201,13 +234,13 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
             print(f"#{issue}  {core.branch_name(issue)}  {tree}"
-                  f"{_model_suffix(model, effort)}{_may_suffix(may)}")
+                  f"{_model_suffix(model, effort, agent)}{_may_suffix(may)}")
         return 0
 
     return _report(
         core.dispatch_all(
             issues, repo_root=root, model=model, lean=lean, may=may, effort=effort,
-            read_only=read_only,
+            read_only=read_only, **on,
         ),
         lean=lean,
     )
@@ -299,7 +332,9 @@ def _print_example(contract_path: str | None) -> int:
     return 0
 
 
-def _model_suffix(model: str | None, effort: str | None = None) -> str:
+def _model_suffix(
+    model: str | None, effort: str | None = None, agent: str | None = None,
+) -> str:
     """``"  [haiku]"``, or nothing when no model was chosen (#268).
 
     An effort, when one was chosen, joins the same tag (#351):
@@ -314,8 +349,13 @@ def _model_suffix(model: str | None, effort: str | None = None) -> str:
     Only the model: the profile is a property of the whole dispatch, not of
     one child, so it is reported once in the footer (#270) rather than
     repeated per row.
+
+    A Grok child names its CLI first — ``"  [grok, effort high]"`` — because
+    the CLI is the choice a row must not hide. Claude, the unchanged case,
+    adds nothing.
     """
-    parts = [p for p in (model, effort and f"effort {effort}") if p]
+    parts = [p for p in (agent == "grok" and agent, model,
+                         effort and f"effort {effort}") if p]
     return f"  [{', '.join(parts)}]" if parts else ""
 
 
@@ -331,7 +371,7 @@ def _may_suffix(may: tuple[str, ...]) -> str:
 
 def _dispatch_contract(
     path: str, *, root: Path, args: argparse.Namespace, lean: bool = True,
-    may: tuple[str, ...] = (), read_only: bool = False,
+    may: tuple[str, ...] = (), read_only: bool = False, agent: str = "claude",
 ) -> int:
     """Read, validate, then dispatch — refusing before any tree is created."""
     from mnemo.core import contracts
@@ -350,6 +390,16 @@ def _dispatch_contract(
     model = getattr(args, "model", None) or None
     effort = getattr(args, "effort", None) or None
 
+    on = {}
+    if agent == "grok":
+        try:
+            home = core.check_grok_contract(contract, model=model, effort=effort,
+                                            read_only=read_only)
+        except core.DispatchError as exc:
+            print(str(exc))
+            return 1
+        on = {"agent": agent, "home": home}
+
     if getattr(args, "dry_run", False):
         for piece in contract.pieces:
             target = f"c-{piece.slug}"
@@ -359,14 +409,14 @@ def _dispatch_contract(
             # dry run shows what would actually be spent per child, which is
             # the one question the flag creates.
             print(f"{piece.slug}  {branch}  {tree}"
-                  f"{_model_suffix(piece.model or model, piece.effort or effort)}"
+                  f"{_model_suffix(piece.model or model, piece.effort or effort, agent)}"
                   f"{_may_suffix(core.piece_grant(piece, may))}")
         return 0
 
     try:
         results = core.dispatch_contract(
             contract, repo_root=root, model=model, lean=lean, may=may,
-            effort=effort, read_only=read_only,
+            effort=effort, read_only=read_only, **on,
         )
     except core.DispatchError as exc:
         print(str(exc))
@@ -396,7 +446,7 @@ def _report(results: list, *, lean: bool = True) -> int:
 
     for r in started:
         print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}"
-              f"{_model_suffix(getattr(r, 'model', None), getattr(r, 'effort', None))}"
+              f"{_model_suffix(getattr(r, 'model', None), getattr(r, 'effort', None), getattr(r, 'agent', None))}"
               f"{_may_suffix(getattr(r, 'may', ()))}")
         if r.warning:
             # The child is running — the tree was kept for it — but something
@@ -409,7 +459,10 @@ def _report(results: list, *, lean: bool = True) -> int:
         # they will assume is running.
         print(f"{_label(r.issue)}  FAILED: {r.error}")
 
-    if started:
+    grok_started = [r for r in started if getattr(r, "agent", None) == "grok"]
+    if grok_started:
+        _grok_footer(grok_started)
+    elif started:
         from mnemo.core import child_profile
 
         print()
@@ -449,6 +502,7 @@ def _report(results: list, *, lean: bool = True) -> int:
         if any(r.warning for r in started):
             print("  check:  pytest -m live_claude   # the claude CLI contract, "
                   "against the installed binary")
+    if started:
         from mnemo.core.sessions import parents
 
         # Inside a session this output is read by the model, not the
@@ -462,3 +516,40 @@ def _report(results: list, *, lean: bool = True) -> int:
                 print(line)
 
     return 1 if failed else 0
+
+
+def _grok_footer(started: list) -> None:
+    """The footer for Grok children: the account, the queue, how to open one.
+
+    No ``profile:`` line: the lean profile is a set of ``claude`` flags, and a
+    Grok child runs on its account's own configuration, which is the one
+    thing the ``agent:`` line names. The attach line is Grok's own command
+    (``grok --resume <id>``, read from Grok's bundled docs), run in the
+    child's tree, with the home named when it is not Grok's default — a
+    resume under the wrong account finds no such session.
+    """
+    from mnemo.core.grok import paths as grok_paths
+
+    homes = sorted({r.home for r in started if r.home})
+    print()
+    print(f"  agent:  grok — account {', '.join(homes) or grok_paths.grok_home({})}")
+    print("  queue:  mnemo sessions")
+    attachable = next((r for r in started if r.session_id), None)
+    if attachable is not None:
+        print(f"  attach: {grok_attach_command(attachable)}")
+
+
+def grok_attach_command(result) -> str:
+    """``cd <tree> && [GROK_HOME=<home> ]grok --resume <session id>``."""
+    import os
+    import shlex
+
+    from mnemo.core.grok import paths as grok_paths
+
+    default = grok_paths.grok_home({})
+    prefix = ""
+    if result.home and os.path.normcase(os.path.realpath(result.home)) != \
+            os.path.normcase(os.path.realpath(str(default))):
+        prefix = f"GROK_HOME={shlex.quote(result.home)} "
+    where = f"cd {shlex.quote(str(result.worktree))} && " if result.worktree else ""
+    return f"{where}{prefix}grok --resume {result.session_id}"

@@ -37,6 +37,17 @@ written and the row reads ``parent_session: null``, which is the truth.
 Reading and writing both fail open. A link that cannot be written costs the
 maintainer a ``null``, never a dispatch; a log that cannot be read costs the
 queue a column, never the queue.
+
+**A Grok dispatcher** (the Grok round, ``design/specs/2026-10-16-grok-host.md``).
+Grok Build sets ``GROK_SESSION_ID`` in every command its shell tool runs, and
+that id wins over ``CLAUDE_CODE_SESSION_ID`` for the reason
+:func:`mnemo.core.agent_cli.current_cli` gives: a ``grok`` started inside a
+Claude Code session inherits the Claude variable too. The link line is the
+same shape either way. What a Grok parent needs besides is its home, because
+a notice reaches it through its own account's leader: :func:`record` writes
+it once into :mod:`mnemo.core.sessions.child_agents`, keyed by
+``paths.short_id``. With no ``GROK_SESSION_ID`` in the environment nothing
+here differs from before, byte for byte.
 """
 from __future__ import annotations
 
@@ -44,12 +55,17 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Optional
 
 from mnemo.core.sessions.jobs import Session
 
 #: The variable Claude Code sets to the running session's full id.
 PARENT_ENV = "CLAUDE_CODE_SESSION_ID"
+
+#: The variable Grok Build sets to the running session's full id, in every
+#: command its shell tool runs (``agent_cli.GROK_SESSION_ENV``, measured on
+#: grok 1.0.60). Checked first: see the module docstring.
+GROK_PARENT_ENV = "GROK_SESSION_ID"
 
 #: One JSON object per dispatched child. Append-only: a line is ~100 bytes, so
 #: a thousand dispatches is a tenth of a megabyte, and nothing here is worth
@@ -61,11 +77,24 @@ def log_path(vault_root: Path | str) -> Path:
     return Path(vault_root) / ".mnemo" / LOG_NAME
 
 
-def parent_from_env(env: Mapping[str, str] | None = None) -> str | None:
-    """The session running this process, or ``None`` outside Claude Code."""
-    value = (os.environ if env is None else env).get(PARENT_ENV, "")
-    value = value.strip() if isinstance(value, str) else ""
-    return value or None
+def _env_value(env: Mapping[str, str], name: str) -> str:
+    value = env.get(name, "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def parent_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """The session running this process, or ``None`` outside an agent session.
+
+    Grok's ``GROK_SESSION_ID`` first, then Claude Code's
+    ``CLAUDE_CODE_SESSION_ID``; an empty or blank value counts as unset.
+    """
+    env = os.environ if env is None else env
+    return _env_value(env, GROK_PARENT_ENV) or _env_value(env, PARENT_ENV) or None
+
+
+def _grok_parent(env: Mapping[str, str]) -> Optional[str]:
+    """The dispatching Grok session's id, when the parent is a Grok session."""
+    return _env_value(env, GROK_PARENT_ENV) or None
 
 
 def _default_vault() -> Path:
@@ -87,18 +116,63 @@ def record(
     could not be written. Called only once a child's id has been read back:
     a child whose id is unknown cannot be looked up by it either.
     """
+    env = os.environ if env is None else env
     parent = parent_from_env(env)
     if not parent or not short_id:
         return None
     try:
-        path = log_path(_default_vault() if vault_root is None else vault_root)
+        vault = _default_vault() if vault_root is None else Path(vault_root)
+        path = log_path(vault)
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"short_id": short_id, "parent_session": parent})
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except Exception:  # noqa: BLE001 — a missing link must not fail a dispatch
         return None
+    if _grok_parent(env) == parent:
+        _record_grok_parent(parent, vault_root=vault, env=env)
     return parent
+
+
+def _record_grok_parent(
+    session_id: str, *, vault_root: Path, env: Mapping[str, str],
+) -> None:
+    """Write the Grok parent's id, home and cwd into the agent ledger, once.
+
+    Once: a dispatch of eight pieces would otherwise write eight identical
+    lines. A parent that is itself a dispatched Grok child already has its
+    line, with the worktree as its cwd, and keeps it.
+
+    The cwd is the one Grok filed the session under (its ``summary.json``),
+    because that is the directory a leader reloads a dormant session in; the
+    shell's own cwd may have moved since. ``GROK_WORKSPACE_ROOT``, then this
+    process's cwd, when the session's directory cannot be read. Never raises.
+    """
+    try:
+        from mnemo.core.grok import paths as grok_paths
+        from mnemo.core.sessions import child_agents
+
+        short_id = grok_paths.short_id(session_id)
+        if short_id in child_agents.read(vault_root):
+            return
+        home = grok_paths.grok_home(env)
+        cwd = _grok_session_cwd(session_id, home) or _env_value(env, "GROK_WORKSPACE_ROOT")
+        child_agents.record(
+            child_agents.ChildAgent(
+                short_id=short_id, agent="grok", session_id=session_id,
+                home=str(home), cwd=cwd or os.getcwd(),
+            ),
+            vault_root=vault_root,
+        )
+    except Exception:  # noqa: BLE001 — the parent link above is already written
+        return
+
+
+def _grok_session_cwd(session_id: str, home: Path) -> Optional[str]:
+    from mnemo.core.grok import acp, paths as grok_paths
+
+    found = grok_paths.find_session_dir(session_id, home)
+    return acp.session_cwd(found) if found is not None else None
 
 
 def read(vault_root: Path | str) -> dict[str, str]:
