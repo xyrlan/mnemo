@@ -4,7 +4,9 @@ mnemo's core is host-neutral (vault, extraction, indexes, the stdio MCP
 server). What binds it to Claude Code is a thin layer; this package holds
 the part of that layer another tool can use today: MCP registration and
 the rules file `mnemo export` writes. Hooks and transcript readers stay
-Claude-only (issue #127 tracks the rest).
+Claude-only (issue #127 tracks the rest), except Grok, which reads Claude's
+hook file itself and gets its own hook file where it cannot (``mnemo init
+--host grok``, ``mnemo.install.grok_hooks``).
 
 Each host implements four methods and nothing more:
 
@@ -24,7 +26,7 @@ from mnemo.core.export.writers import Target
 @dataclass(frozen=True)
 class RegisterResult:
     path: str            # file the registration lives in (or would live in)
-    method: str          # "json" | "codex-cli" | "snippet"
+    method: str          # "json" | "codex-cli" | "grok-cli" | "inherited" | "snippet"
     note: Optional[str]  # something the user must do by hand, else None
 
 
@@ -59,8 +61,9 @@ def _build_registry() -> Dict[str, Host]:
     from mnemo.hosts.claude import ClaudeHost
     from mnemo.hosts.codex import CodexHost
     from mnemo.hosts.cursor import CursorHost
+    from mnemo.hosts.grok import GrokHost
 
-    return {h.name: h for h in (ClaudeHost(), CursorHost(), CodexHost())}
+    return {h.name: h for h in (ClaudeHost(), CursorHost(), CodexHost(), GrokHost())}
 
 
 HOSTS: Dict[str, Host] = _build_registry()
