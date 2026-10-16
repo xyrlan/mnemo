@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
@@ -442,10 +443,53 @@ def _grok_env() -> dict[str, str]:
     return hook_guard.disable_hooks(env)
 
 
-def _grok_argv(prompt_file: str, model: str, system: str | None) -> list[str]:
+def _grok_helper_cwd() -> str | None:
+    """The directory every helper ``grok`` runs in, never the user's project.
+
+    Grok saves each run under ``<home>/sessions/<encoded cwd>/<id>/`` and has no
+    ``--no-session-persistence``. Run in the hook's cwd, every extraction call
+    would join that project's ``/resume`` list and be found by anything that
+    discovers Grok sessions by project, which would then learn from mnemo's own
+    prompts. A fixed directory of its own keeps them apart. ``None`` when it
+    cannot be made; the caller falls back to :func:`_working_dir`.
+    """
+    # realpath: Grok names the session directory after the resolved cwd, and
+    # macOS' temp dir is a symlink (/var -> /private/var).
+    path = os.path.realpath(os.path.join(tempfile.gettempdir(), "mnemo-grok-helper"))
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return _working_dir()
+    return path
+
+
+def _forget_grok_session(cwd: str | None, session_id: Any) -> None:
+    """Delete the one session this call created, found by the id mnemo gave it.
+
+    Only ``<home>/sessions/<helper cwd>/<session_id>`` can match, so a user's
+    session is out of reach; an id that is not a plain name is ignored.
+    """
+    if not cwd or not isinstance(session_id, str):
+        return
+    if not re.fullmatch(r"[0-9A-Za-z-]{8,64}", session_id):
+        return
+    from mnemo.core.grok import paths
+
+    try:
+        target = paths.session_dir(cwd, session_id)
+        if target is not None:
+            shutil.rmtree(target, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def _grok_argv(
+    prompt_file: str, model: str, system: str | None, session_id: str,
+) -> list[str]:
     argv = [
         _resolve_grok(),
         "--prompt-file", prompt_file,
+        "--session-id", session_id,
         "--output-format", "json",
         "--tools", "",
     ]
@@ -471,10 +515,14 @@ def _grok_cli(
     in the reply.
     """
     fd, path = tempfile.mkstemp(prefix="mnemo-grok-", suffix=".txt")
+    helper_cwd = _grok_helper_cwd()
+    # mnemo names the session itself, so it can delete it whether the call
+    # answers, fails or times out (a failed run leaves one too).
+    session_id = str(uuid.uuid4())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="") as fh:
             fh.write(prompt)
-        argv = _grok_argv(path, model, system)
+        argv = _grok_argv(path, model, system, session_id)
         attempts = 0
         while True:
             attempts += 1
@@ -482,7 +530,7 @@ def _grok_cli(
                 result = _subprocess_run(
                     argv, capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=timeout, env=_grok_env(),
-                    cwd=_working_dir(),
+                    cwd=helper_cwd,
                 )
             except FileNotFoundError as exc:
                 raise LLMSubprocessError(
@@ -509,6 +557,7 @@ def _grok_cli(
             os.unlink(path)
         except OSError:
             pass
+        _forget_grok_session(helper_cwd, session_id)
 
     try:
         parsed: Any = json.loads(result.stdout)
@@ -565,7 +614,12 @@ def resolve(cfg: Mapping[str, Any] | None) -> Provider:
     if not name:
         from mnemo.core import agent_cli
 
-        grok = agent_cli.current_cli() == agent_cli.GROK
+        try:
+            grok = agent_cli.current_cli() == agent_cli.GROK
+        except agent_cli.UnknownAgentError as exc:
+            # A mistyped MNEMO_AGENT reaches the caller the way a mistyped
+            # extraction.provider does: one line, not a traceback.
+            raise UnknownProviderError(str(exc)) from exc
         name = GROK_PROVIDER if grok else DEFAULT_PROVIDER
     provider = PROVIDERS.get(name) if isinstance(name, str) else None
     if provider is None:

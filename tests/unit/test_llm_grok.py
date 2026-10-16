@@ -161,3 +161,73 @@ def test_missing_usage_is_unknown_not_zero(monkeypatch):
     _capture(monkeypatch, [_ok({"text": "t"})])
     resp = llm.PROVIDERS["grok-cli"]("p", system=None, model="m", timeout=5)
     assert (resp.input_tokens, resp.output_tokens, resp.total_cost_usd) == (None, None, None)
+
+
+def test_helper_runs_outside_the_project_and_forgets_its_session(monkeypatch, tmp_path):
+    from mnemo.core.grok import paths
+
+    home = tmp_path / "grokhome"
+    monkeypatch.setenv("GROK_HOME", str(home))
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    helper = llm._grok_helper_cwd()
+    assert helper and Path(helper) != project
+    bystander = "01a144c9-0000-7472-a3f1-aaaaaaaaaaaa"
+    other = paths.sessions_root(home) / paths.encode_cwd(helper) / bystander
+    other.mkdir(parents=True)
+    made = []
+
+    def run(argv, **kw):
+        sid = argv[argv.index("--session-id") + 1]
+        made.append((sid, kw["cwd"]))
+        for cwd in (kw["cwd"], str(project)):  # grok saves it where it ran
+            (paths.sessions_root(home) / paths.encode_cwd(cwd) / sid).mkdir(parents=True)
+        return _ok()
+
+    monkeypatch.setattr(llm, "_subprocess_run", run)
+    llm.PROVIDERS["grok-cli"]("p", system=None, model="m", timeout=5)
+    sid, cwd = made[0]
+    assert Path(cwd) == Path(helper)
+    assert not (paths.sessions_root(home) / paths.encode_cwd(helper) / sid).exists()
+    # nothing but the call's own session under the helper's cwd is touched
+    assert other.exists()
+    assert (paths.sessions_root(home) / paths.encode_cwd(str(project)) / sid).exists()
+
+
+def test_a_failed_call_forgets_its_session_too(monkeypatch, tmp_path):
+    from mnemo.core.grok import paths
+
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    helper = llm._grok_helper_cwd()
+    dirs = []
+
+    def run(argv, **kw):
+        sid = argv[argv.index("--session-id") + 1]
+        d = paths.sessions_root(tmp_path) / paths.encode_cwd(helper) / sid
+        d.mkdir(parents=True)
+        dirs.append(d)
+        return SimpleNamespace(returncode=1, stdout="", stderr="usage limit")
+
+    monkeypatch.setattr(llm, "_subprocess_run", run)
+    with pytest.raises(llm.LLMSubprocessError):
+        llm.PROVIDERS["grok-cli"]("p", system=None, model="m", timeout=5)
+    assert dirs and not dirs[0].exists()
+
+
+@pytest.mark.parametrize("sid", ["../../x", "a/b", "", None, 7])
+def test_a_session_id_that_is_not_a_plain_name_deletes_nothing(monkeypatch, tmp_path, sid):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    llm._forget_grok_session(str(tmp_path), sid)
+    assert victim.exists()
+
+
+def test_a_mistyped_mnemo_agent_is_an_unknown_provider_error(monkeypatch):
+    monkeypatch.setenv("MNEMO_AGENT", "grk")
+    with pytest.raises(llm.UnknownProviderError) as info:
+        llm.resolve({})
+    assert "grk" in str(info.value) and "grok" in str(info.value)
+    # a named provider never consults the environment
+    assert llm.resolve({"extraction": {"provider": "claude-cli"}}) is llm.PROVIDERS["claude-cli"]
