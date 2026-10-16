@@ -55,7 +55,13 @@ from __future__ import annotations
 
 import subprocess
 import textwrap
-from typing import Optional
+from typing import Any, Optional
+
+from mnemo.core import agent_cli
+from mnemo.core.sessions import grok_verbs
+
+#: :func:`_resume`'s "not looked up yet", since ``None`` means "not Grok".
+_LOOK_UP: Any = object()
 
 #: Opens the wake turn. In ``detector.SYNTHETIC_PREFIXES``, pinned by a test.
 NUDGE_PREFIX = "<mnemo-resume"
@@ -108,6 +114,11 @@ def wake(session_id: str, *, cwd: str, timeout: float = 120.0) -> Optional[str]:
     *cwd* is the child's own worktree. ``--resume`` restores the session's
     recorded ``cwd`` regardless, but running from anywhere else would make a
     failed wake spawn a fresh session in the wrong tree.
+
+    A child dispatched on Grok (:mod:`.grok_verbs` reads which from the
+    dispatch ledger) gets the same :data:`NUDGE` as a user turn through its
+    leader; a leader it cannot reach comes back as a
+    :class:`~mnemo.core.sessions.grok_verbs.NotReached` message.
     """
     return _resume(session_id, NUDGE, cwd=cwd, timeout=timeout)
 
@@ -157,19 +168,39 @@ pushed branch; bring the base in with a merge. If what failed is not caused
 by your change, or you cannot fix it, say so in your report and change
 nothing.
 
-Then finish as your opening prompt says: the closing report, publishing only
-what it granted, and stopping yourself last.
+{finish}
 </mnemo-pr-follow>"""
 
+#: How the PR nudge ends, per CLI. A Claude child stops itself last; a Grok
+#: child has no stop of its own and finishes by ending its last turn with its
+#: report (the wave-2 contract: nothing in a Grok child's prompt names a
+#: Claude command).
+_PR_FINISH = {
+    "claude": (
+        "Then finish as your opening prompt says: the closing report, publishing only\n"
+        "what it granted, and stopping yourself last."
+    ),
+    "grok": (
+        "Then finish as your opening prompt says: publish only what it granted, and\n"
+        "end your last turn with your closing report."
+    ),
+}
 
-def pr_nudge(pr: int, events) -> str:
+
+def pr_nudge(pr: int, events, *, agent: str = "claude") -> str:
     """The whole of what a child woken for its PR is told.
 
     Built from :data:`PR_EVENTS` and an integer, never from text read off the
     PR: a check name or a comment body put here would land as
     ``origin.kind: "human"``, in the maintainer's own voice. The child reads
     those itself, through ``gh``, where they arrive as tool output.
+
+    *agent* is the CLI the child runs on, which only changes how it is told
+    to finish (:data:`_PR_FINISH`).
     """
+    finish = _PR_FINISH.get(agent)
+    if finish is None:
+        raise ValueError(f"no PR nudge for agent CLI {agent!r}")
     number = int(pr)
     names = [name for name in PR_EVENTS if name in set(events or ())]
     if not names:
@@ -182,6 +213,7 @@ def pr_nudge(pr: int, events) -> str:
     )
     return _PR_NUDGE.format(
         prefix=PR_NUDGE_PREFIX, pr=number, names=",".join(names), events=lines,
+        finish=finish,
     )
 
 
@@ -190,16 +222,26 @@ def wake_for_pr(session_id: str, *, cwd: str, pr: int, events,
     """Wake a finished child with :func:`pr_nudge`. ``None``, or why not.
 
     Same guards as :func:`wake` — a full id only, a copy reported, never
-    raised — because it is the same channel.
+    raised — because it is the same channel. A Grok child is told the
+    Grok ending of the nudge.
     """
+    child = grok_verbs.by_session_id(session_id)
     try:
-        text = pr_nudge(pr, events)
+        text = pr_nudge(pr, events, agent=agent_cli.GROK if child else agent_cli.CLAUDE)
     except (TypeError, ValueError) as exc:
         return str(exc)
-    return _resume(session_id, text, cwd=cwd, timeout=timeout)
+    return _resume(session_id, text, cwd=cwd, timeout=timeout, child=child)
 
 
-def _resume(session_id: str, text: str, *, cwd: str, timeout: float) -> Optional[str]:
+def _resume(session_id: str, text: str, *, cwd: str, timeout: float,
+            child: Any = _LOOK_UP) -> Optional[str]:
+    if child is _LOOK_UP:
+        child = grok_verbs.by_session_id(session_id)
+    if child is not None:
+        # A Grok child: a user turn through the leader of the home it was
+        # spawned in. No copy trap there — the leader addresses a session by
+        # its id and has no fork-on-resume — so none of the guards below apply.
+        return grok_verbs.wake(child, text, cwd=cwd, timeout=timeout)
     if not is_full_session_id(session_id):
         return (
             f"{session_id!r} is not a full session id; `claude --bg --resume` "

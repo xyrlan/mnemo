@@ -290,10 +290,10 @@ def _stop_finished(tree: Path, *, label: str) -> None:
         if why is None:
             print(f"{label}: stopped {session.short_id}")
         else:
-            print(f"{label}: `claude stop {session.short_id}` failed: {why}")
+            print(f"{label}: `{delivery.stop_command(session.short_id)}` failed: {why}")
 
 
-def _stop_done(*, repo_root: Path) -> int:
+def _stop_done(*, repo_root: Path, agent: str | None = None) -> int:
     """Stop every finished child in every dispatch worktree of this repo.
 
     The wider net around :func:`_stop_finished`, which only ever runs after a
@@ -307,17 +307,23 @@ def _stop_done(*, repo_root: Path) -> int:
     nothing was stopped — a sweep that found nothing is a successful report,
     the same way ``--review`` finding nothing ready is, and a stop that failed
     has already said so on its own line.
+
+    Each child is stopped on the CLI it was spawned on — a Grok child's
+    session is closed in its leader — and *agent* (``--agent``) keeps only
+    the children of that CLI.
     """
     from mnemo.core.sessions import delivery
 
     found = 0
     for tree in delivery.dispatch_worktrees(repo_root=repo_root):
-        for short_id, why in delivery.stop_done_in(tree):
+        stops = (delivery.stop_done_in(tree) if agent is None
+                 else delivery.stop_done_in(tree, agent=agent))
+        for short_id, why in stops:
             found += 1
             if why is None:
                 print(f"{tree.name}: stopped {short_id}")
             else:
-                print(f"{tree.name}: `claude stop {short_id}` failed: {why}")
+                print(f"{tree.name}: `{delivery.stop_command(short_id)}` failed: {why}")
     if not found:
         # Counted on finding one, not on stopping it. A sweep where every stop
         # failed has already printed why, and following that with "nothing
@@ -348,7 +354,13 @@ def cmd_deliver(args: argparse.Namespace) -> int:
             print("--stop-done stops finished children and delivers nothing — "
                   "run it on its own")
             return 1
-        return _stop_done(repo_root=root)
+        return _stop_done(repo_root=root, agent=getattr(args, "agent", None))
+
+    if getattr(args, "agent", None):
+        # --agent narrows the --stop-done sweep and nothing else: delivering a
+        # named id already reaches that child on its own CLI.
+        print("--agent narrows --stop-done — run it with --stop-done")
+        return 1
 
     if review and ids:
         # --review is read-only and delivering is not. Running both would make

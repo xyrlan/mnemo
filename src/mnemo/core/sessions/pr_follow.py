@@ -81,6 +81,13 @@ every hand-back, a line in the repo's day log, and the ledger
 (:data:`LEDGER_NAME`). The woken child's own stop then posts its report card,
 as any child's does.
 
+**A child dispatched on Grok** is followed the same way. Its key in the
+ledger is ``grok.paths.short_id`` (the last eight digits of its id; the
+first eight are a timestamp two children share), its wake is a user turn
+through its own leader (:mod:`.grok_verbs`), and the nudge tells it to end
+its last turn with its report rather than to stop itself. A leader that
+cannot be reached leaves the follow as it was, to be tried on the next poll.
+
 **The merge (#638).** A child ends with a green PR, and the PR then waited
 for a person to type "merge": over the 100 PRs merged here up to 2026-10-11,
 83 came from a child's branch and the median wait from the last check
@@ -138,6 +145,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from mnemo.core import locks
 from mnemo.core.sessions import check_runs, report_card
 from mnemo.core.sessions import wake as wake_mod
+from mnemo.core.sessions.grok_verbs import NotReached
 
 #: ``dispatch.followPR`` defaults. See the module docstring for each.
 DEFAULT_ATTEMPTS = 2
@@ -194,6 +202,11 @@ _REASONS = {
     "tree-gone": "the child's worktree is gone",
     "session-gone": "the child's session is no longer in the roster",
     "wake-failed": "`claude --bg --resume` failed: {why}",
+}
+
+#: The reasons whose words name a Claude command, as said of a Grok child.
+_GROK_REASONS = {
+    "wake-failed": "the turn sent through Grok's leader failed: {why}",
 }
 
 #: How the watcher merges: what ``mnemo land`` defaults to
@@ -980,10 +993,12 @@ def render_merge_held(short_id: str, entry: Dict[str, Any], hold: str,
 
 
 def render_stopped(short_id: str, entry: Dict[str, Any], reason: str,
-                   found: Sequence[str], *, s: Dict[str, Any], why: str = "") -> str:
+                   found: Sequence[str], *, s: Dict[str, Any], why: str = "",
+                   agent: str = "claude") -> str:
     from mnemo.core.sessions.inbox import NOTICE_PREFIX
 
-    said = _REASONS.get(reason, reason).format(
+    words = _GROK_REASONS.get(reason) if agent == "grok" else None
+    said = (words or _REASONS.get(reason, reason)).format(
         attempts=len(entry.get("attempts") or []), hours=s["hours"], why=why or "?",
     )
     what = "; ".join(_EVENT_WORDS[e] for e in found if e in _EVENT_WORDS)
@@ -1217,6 +1232,12 @@ def _one(cfg, vault_root: Path, short_id: str, entry: Dict[str, Any], session: A
                       pr=number, events=decision.events)
     except Exception as exc:  # noqa: BLE001
         why = str(exc) or type(exc).__name__
+    if isinstance(why, NotReached):
+        # A Grok child whose leader could not be reached never saw the
+        # nudge: the follow stays open, as it was, and the next poll tries
+        # again — until the window closes it, which tells the parent.
+        report.failed.append(f"{short_id} — {why}")
+        return False
     if why:
         report.failed.append(f"{short_id} — {why}")
         _close(vault_root, short_id, entry, "wake-failed", decision.events,
@@ -1336,8 +1357,12 @@ def _close(vault_root: Path, short_id: str, entry: Dict[str, Any], reason: str,
             _announce(cfg, entry, f"🔀 mnemo merged {_pr_label(entry)} for {short_id} "
                                   f"({MERGE_METHOD}, head {_head(entry)})")
     if reason in LOUD and found:
+        from mnemo.core.sessions import grok_verbs
+
+        grok = grok_verbs.by_short_id(short_id, vault_root=vault_root) is not None
         tell(vault_root, entry.get("parent"),
-             render_stopped(short_id, entry, reason, found, s=s, why=why))
+             render_stopped(short_id, entry, reason, found, s=s, why=why,
+                            agent="grok" if grok else "claude"))
 
 
 # ---------------------------------------------------------------------------
@@ -1420,9 +1445,11 @@ def on_session_end(cfg: Optional[Dict[str, Any]], *, vault_root: Path,
     """
     if not enabled(cfg):
         return "off"
-    from mnemo.core.sessions import grants, parents
+    from mnemo.core.sessions import grants, grok_verbs, parents
 
-    short_id = (session_id or "")[:8]
+    # A Grok child is keyed by its id's last eight digits (its first eight
+    # are a timestamp two children share); the dispatch ledger says which.
+    short_id = grok_verbs.short_id_for(session_id or "", vault_root=vault_root)
     if not short_id or not wake_mod.is_full_session_id(session_id):
         return "not-a-child"
     parent = parents.read(vault_root).get(short_id)

@@ -723,7 +723,17 @@ def stop_session(short_id: str) -> str | None:
     ``daemon-spare-pool``), so the queue row does not move — and only a
     stopped child fires ``SessionEnd`` (#247, ``stop-fires-session-end``),
     which is where its briefing is written.
+
+    A child dispatched on Grok — the dispatch ledger says so, keyed by
+    ``grok.paths.short_id`` — has no process of its own to stop: its session
+    is closed in the leader of the home it was spawned in
+    (:func:`mnemo.core.sessions.grok_verbs.close`).
     """
+    from mnemo.core.sessions import grok_verbs
+
+    child = grok_verbs.by_short_id(short_id)
+    if child is not None:
+        return grok_verbs.close(child)
     try:
         result = subprocess.run(
             ["claude", "stop", short_id],
@@ -737,7 +747,19 @@ def stop_session(short_id: str) -> str | None:
     return None
 
 
-def stop_done_in(worktree: Path | str) -> list[tuple[str, str | None]]:
+def stop_command(short_id: str) -> str:
+    """The command a person would type to do what :func:`stop_session` does."""
+    from mnemo.core.sessions import grok_verbs
+
+    child = grok_verbs.by_short_id(short_id)
+    if child is not None:
+        return grok_verbs.close_command(child)
+    return f"claude stop {short_id}"
+
+
+def stop_done_in(
+    worktree: Path | str, *, agent: str | None = None,
+) -> list[tuple[str, str | None]]:
     """Stop every ``done`` session in *worktree*. Returns ``(short_id, why)``.
 
     ``why`` is ``None`` when the stop succeeded. Separate from delivering on
@@ -749,9 +771,14 @@ def stop_done_in(worktree: Path | str) -> list[tuple[str, str | None]]:
     child is waiting for an answer and is not finished; a ``stopped`` one
     already fired ``SessionEnd``; a ``done`` one the roster proves is gone
     (``live is False``) has no process left to end.
+
+    *agent* keeps only the sessions of that agent CLI (``deliver --stop-done
+    --agent``); ``None`` stops every one, each on the CLI it runs on.
     """
     out: list[tuple[str, str | None]] = []
     for session in sessions_in(worktree):
+        if agent is not None and getattr(session, "agent", "claude") != agent:
+            continue
         if session.state != "done":
             continue
         if session.live is False:

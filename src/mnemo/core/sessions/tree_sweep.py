@@ -31,7 +31,8 @@ worktree is never looked at. Removal needs every one of these:
   more than :data:`GRACE_SECONDS` ago. The last condition gives the
   SessionEnd workers the stop started time to finish reading the tree (#247).
   A ``working``, ``done`` or blocked child keeps its tree. A tree with no job
-  on disk (``claude rm``) counts as gone.
+  on disk (``claude rm``) counts as gone. A Grok child has no ``stopped``:
+  it counts as gone once finished and no longer resident in its leader.
 - **Nothing else is in it.** No process has its cwd inside the tree. The
   check reads ``lsof -d cwd``, which took 0.17 s over 348 processes. On
   2026-09-25 a ``mnemo resume --watch`` was running from a merged repo-b tree.
@@ -222,14 +223,26 @@ def _parse_when(value: Optional[str]) -> Optional[float]:
 
 
 def child_gone(tree: Path, sessions: Sequence[Any], *, now: float) -> bool:
-    """True when no session that ran in *tree* can still need it."""
+    """True when no session that ran in *tree* can still need it.
+
+    A Grok child is never ``stopped`` the way a Claude job is: it finishes
+    by ending its turn, and its leader unloads it (``dormant``) once no client
+    is attached. It is gone when it is finished and the leader's roster
+    proves it is not resident (``live is False``); a leader that could not be
+    asked (``live is None``) keeps the tree.
+    """
     from mnemo.core.sessions.jobs import normalize_cwd
 
     wanted = normalize_cwd(str(tree))
     for s in sessions:
         if normalize_cwd(getattr(s, "cwd", None)) != wanted:
             continue
-        if getattr(s, "state", None) != "stopped":
+        if getattr(s, "agent", "claude") == "grok":
+            if getattr(s, "state", None) not in ("done", "stopped"):
+                return False
+            if getattr(s, "live", None) is not False:
+                return False
+        elif getattr(s, "state", None) != "stopped":
             return False
         if getattr(s, "is_blocked", False) or getattr(s, "live", None) is True:
             return False

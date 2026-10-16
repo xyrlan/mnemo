@@ -96,6 +96,16 @@ def _matches(session, wanted: set) -> bool:
     return False
 
 
+def _attach(session) -> str:
+    """The command that opens *session* where an answer can be typed."""
+    from mnemo.core.sessions import grok_verbs
+
+    child = grok_verbs.by_short_id(getattr(session, "short_id", None))
+    if child is not None:
+        return grok_verbs.attach_command(child)
+    return f"claude attach {session.short_id}"
+
+
 def _describe(session, stall) -> str:
     """One line naming the child and what stopped it."""
     from mnemo.core.sessions.render import _stall_line
@@ -144,7 +154,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
     """Wake every stalled child whose reset has passed."""
     import os
 
+    agent = getattr(args, "agent", None)
     if getattr(args, "watch", False):
+        if agent:
+            # The watcher is one per vault and wakes every child it sees, each
+            # on its own CLI; a filtered one would leave the rest unwatched
+            # while holding the lock that keeps a second watcher out.
+            print("--watch wakes every stalled child on the CLI it runs on; "
+                  "--agent does not narrow it")
+            return 1
         return _watch(args)
 
     from mnemo.core.sessions import stalls as stalls_mod
@@ -157,6 +175,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     found = [s for s in read_sessions(cwd=scope) if s.is_abandoned]
     if named:
         found = [s for s in found if _matches(s, named)]
+    if agent:
+        # Recorded with the session at spawn, never re-derived (Session.agent).
+        found = [s for s in found if getattr(s, "agent", "claude") == agent]
 
     stalls = stalls_mod.stalls_for(found)
 
@@ -179,7 +200,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         # issue asked to keep separate. A nudge is the wrong answer for them.
         print(f"  needs you: {session.short_id}  {session.label}  —  "
               f"{session.needs or session.detail or 'blocked'}  "
-              f"(claude attach {session.short_id})")
+              f"({_attach(session)})")
 
     if not free:
         if not found:
