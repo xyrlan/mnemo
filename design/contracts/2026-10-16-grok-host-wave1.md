@@ -22,9 +22,16 @@ Rules for all five pieces:
 - **Measure, then claim.** A Grok behaviour your code relies on is checked
   against the real `grok` (live test, marked so the default suite skips it)
   or against the source at `github.com/xai-org/grok-build`, and the PR says
-  which. A free xAI account is enough; the maintainer is logged in. If you
-  need `grok` and it is missing, install it with xAI's installer into a
-  throwaway `HOME` and say so; never touch the maintainer's `~/.grok`.
+  which. `grok` 1.0.60 is on PATH and `~/.grok` is logged in to a free xAI
+  account; its only model is `grok-4.7`. Spend it on what needs measuring.
+- **A live probe never reaches the maintainer's vault.** Grok fires every
+  hook in `~/.claude/settings.json`, mnemo's included, so a probe session run
+  as-is writes extractions and briefings into the real vault. Run probes with
+  `HOME` set to a throwaway dir (your own `.claude/settings.json` in it if the
+  probe is about hooks) and `GROK_HOME=~/.grok` for the login, or with
+  `GROK_CLAUDE_HOOKS_ENABLED=0` when hooks are not the subject. Never write
+  to `~/.grok` beyond what `grok` itself writes there, never print or copy
+  `auth.json`, and stop any leader you started.
 - **No Grok binary in the default suite.** Unit tests use fixtures shaped
   like the real files (copy the shapes from the spec's Facts, or record a
   real one and redact it).
