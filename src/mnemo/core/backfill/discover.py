@@ -17,6 +17,12 @@ project directories carry one within the first eight lines of a transcript.
 The decode survives only as the fallback for a directory whose transcripts
 record none.
 
+Grok Build sessions are found the same way, in every Grok home
+(:func:`find_grok_transcripts`): ``<home>/sessions/<encoded cwd>/<id>/``
+holds the session's ``chat_history.jsonl``, and its cwd is the one
+``summary.json`` records, or the one the directory name encodes. Grok's
+encoding is URL-encoding, which inverts exactly.
+
 Pure filesystem. No LLM dependency.
 """
 from __future__ import annotations
@@ -170,13 +176,78 @@ def find_transcripts(
     *,
     project: str | None = None,
     limit: int | None = None,
+    grok: bool = False,
 ) -> list[Transcript]:
     """Return transcripts newest-first, optionally filtered and capped.
 
     ``project`` matches the resolved agent name exactly. ``limit`` is applied
     *after* sorting and filtering, so it always yields the most recent N of
     whatever the filter selected.
+
+    ``grok`` adds the Grok Build sessions of :func:`find_grok_transcripts`
+    beside Claude Code's, sorted and capped together. It is off by default:
+    a caller that keys a session by ``path.stem`` would file every Grok
+    session under ``chat_history``, so each caller opts in once it names
+    sessions by ``briefing.session_id_for``.
     """
+    out = _find_claude_transcripts(project=project)
+    if grok:
+        out += find_grok_transcripts(project=project)
+    out.sort(key=lambda t: t.mtime, reverse=True)
+    if limit is not None:
+        out = out[: max(0, int(limit))]
+    return out
+
+
+def find_grok_transcripts(*, project: str | None = None) -> list[Transcript]:
+    """Every Grok Build session's ``chat_history.jsonl``, newest first.
+
+    Read from each home of ``grok.paths.grok_homes()`` (one per account), so
+    a project's sessions are found whichever account ran them. ``project``
+    matches the resolved agent name exactly, the one :func:`agent_for_cwd`
+    gives the session's cwd, so a session run in a worktree or a dispatch
+    tree is filed with its repo's.
+    """
+    from mnemo.core.grok import paths as grok_paths
+    from mnemo.core.grok import transcript as grok_transcript
+
+    out: list[Transcript] = []
+    agents: dict[str, str] = {}
+    for home in grok_paths.grok_homes():
+        root = grok_paths.sessions_root(home)
+        try:
+            cwd_dirs = sorted(p for p in root.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for cwd_dir in cwd_dirs:
+            try:
+                session_dirs = sorted(p for p in cwd_dir.iterdir() if p.is_dir())
+            except OSError:
+                continue
+            for session_dir in session_dirs:
+                history = grok_paths.chat_history_path(session_dir)
+                try:
+                    mtime = history.stat().st_mtime
+                except OSError:
+                    continue
+                cwd = grok_transcript.session_cwd(session_dir)
+                if not cwd:
+                    continue
+                if cwd not in agents:
+                    try:
+                        agents[cwd] = agent_for_cwd(cwd)
+                    except Exception:
+                        agents[cwd] = _fallback_agent(_NOT_ALNUM.sub("-", cwd))
+                agent = agents[cwd]
+                if project is not None and agent != project:
+                    continue
+                out.append(Transcript(path=history, agent=agent, cwd=cwd, mtime=mtime))
+    out.sort(key=lambda t: t.mtime, reverse=True)
+    return out
+
+
+def _find_claude_transcripts(*, project: str | None = None) -> list[Transcript]:
+    """Claude Code's transcripts, unsorted: :func:`find_transcripts` sorts."""
     root = projects_root()
     if not root.is_dir():
         return []
@@ -240,8 +311,4 @@ def find_transcripts(
             except OSError:
                 continue
             out.append(Transcript(path=jsonl, agent=agent, cwd=cwd, mtime=mtime))
-
-    out.sort(key=lambda t: t.mtime, reverse=True)
-    if limit is not None:
-        out = out[: max(0, int(limit))]
     return out
