@@ -559,7 +559,9 @@ def _maybe_notify_parent(
     parent = parents.read(vault).get(short_id)
     if not parent:
         return
-    if not via and child_notices.told_by_backstop(vault, short_id, transcript):
+    # A Grok stop is told once by its claim (:func:`_claim_grok_finish`), and
+    # its history has no turn times for the backstop's anchor to read.
+    if not via and not short and child_notices.told_by_backstop(vault, short_id, transcript):
         return
     row = {"short_id": short_id, "parent": parent, "event": "finished"}
     if via:
@@ -639,6 +641,13 @@ def main() -> int:
 #: Names the payload file of a Grok SessionEnd for the worker it hands off to.
 GROK_PAYLOAD_ENV = "MNEMO_GROK_SESSION_END"
 
+#: Keys a finish handed off by ``child_notices`` adds to the payload: the stop
+#: it saw (its last turn's ``ts``) and the ``via`` its rows carry.
+GROK_FINISH_KEY = "mnemo_finish_stamp"
+GROK_VIA_KEY = "mnemo_via"
+#: ``reason`` of a session that finished without a SessionEnd of its own.
+GROK_FINISHED_REASON = "finished"
+
 
 def _grok_session(payload: object):
     """``True`` for a Grok session's first copy of this event, ``False`` for
@@ -662,22 +671,80 @@ def _grok_hand_off(payload: dict) -> int:
     the proposer, so none of it runs here: the payload goes to a file, a
     worker (:func:`_spawn_grok_worker`) picks it up, and this returns.
     """
-    import tempfile
-    from pathlib import Path
-
     try:
-        from mnemo.core.grok import hooks as grok
-
-        sid = grok.session_id(payload) or "unknown"
-        folder = Path(tempfile.gettempdir()) / "mnemo" / "grok-session-end"
-        folder.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(dir=str(folder), prefix=sid[-12:] + ".", suffix=".json")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle)
-        _spawn_grok_worker(name)
+        _write_grok_payload(payload)
     except Exception:  # noqa: BLE001 — hook must never propagate
         pass
     return 0
+
+
+def _write_grok_payload(payload: dict) -> None:
+    """Write *payload* where a worker finds it, and start that worker."""
+    import tempfile
+    from pathlib import Path
+
+    from mnemo.core.grok import hooks as grok
+
+    sid = grok.session_id(payload) or "unknown"
+    folder = Path(tempfile.gettempdir()) / "mnemo" / "grok-session-end"
+    folder.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=str(folder), prefix=sid[-12:] + ".", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    _spawn_grok_worker(name)
+
+
+def hand_off_grok_finish(*, session_id: str, cwd: str, history=None, stamp: str,
+                         via: str = "") -> None:
+    """Run the end of a Grok child that finished with no SessionEnd (#502's
+    second channel, for Grok: a dormant session fires none).
+
+    The same worker a Grok ``SessionEnd`` hands off to runs it, over the
+    payload that hook would have carried, plus the stop it is for: the worker
+    claims that stop first (:func:`_claim_grok_finish`), so it runs once
+    however many hands it reaches. Raises when the worker cannot start.
+    """
+    from pathlib import Path
+
+    from mnemo.core.grok import paths as grok_paths
+
+    payload = {
+        "hook_event_name": "SessionEnd",
+        "session_id": session_id,
+        "cwd": cwd,
+        "reason": GROK_FINISHED_REASON,
+        GROK_FINISH_KEY: stamp,
+    }
+    if history:
+        payload["transcript_path"] = str(Path(str(history)).with_name(grok_paths.UPDATES))
+    if via:
+        payload[GROK_VIA_KEY] = via
+    _write_grok_payload(payload)
+
+
+def _claim_grok_finish(vault, payload: dict, sid: str, short: str, history) -> bool:
+    """Whether this run is the one that ends this Grok stop. Once per stop.
+
+    The stop is the session's last turn event (``child_notices.grok_turn``),
+    named by its ``ts``; a finish ``child_notices`` handed off names the one
+    it saw. Two watchers, a restart, or a SessionEnd that fires when the
+    session is later closed find the stop claimed and stand down. A session
+    whose turns cannot be read has no stop to name, and runs, as before.
+    """
+    from pathlib import Path
+
+    from mnemo.core.sessions import child_notices
+
+    stamp = payload.get(GROK_FINISH_KEY)
+    if not isinstance(stamp, str) or not stamp:
+        turn = child_notices.grok_turn(Path(str(history)).parent if history else None)
+        stamp = turn.stamp if turn is not None else ""
+    if not stamp or not short:
+        return True
+    via = payload.get(GROK_VIA_KEY)
+    return child_notices.claim_finish(
+        vault, short, stamp, via=via if isinstance(via, str) and via else "session_end",
+    )
 
 
 def _spawn_grok_worker(payload_file: str) -> None:
@@ -765,6 +832,32 @@ def _run(payload: dict, grok: bool = False) -> int:
         # briefing below still runs.
         from mnemo.core.sync import roles as sync_roles
         satellite = sync_roles.is_satellite(vault, cfg)
+        # A Grok session's transcript is its chat_history.jsonl, never the
+        # updates.jsonl its payload names, and its key is its id's end.
+        grok_history = None
+        grok_short = ""
+        if grok:
+            try:
+                from mnemo.core.grok import hooks as grok_hooks
+                from mnemo.core.grok import paths as grok_paths
+                grok_hooks.drop(vault, sid)
+                grok_short = grok_paths.short_id(sid) if sid != "unknown" else ""
+                grok_history = _grok_history(payload)
+            except Exception as e:
+                errors.log_error(vault, "session_end.grok_transcript", e)
+        # A Grok child's end runs once per stop, from whichever of its
+        # SessionEnd and child_notices' watcher gets here first: everything
+        # below is that end — the day log's line, the parent's card, the PR
+        # follow, extraction, the briefing, the proposer — and the other one
+        # skips it.
+        ends = True
+        if grok:
+            try:
+                ends = _claim_grok_finish(vault, payload, sid, grok_short, grok_history)
+            except Exception as e:
+                errors.log_error(vault, "session_end.grok_finish", e)
+        if not ends:
+            return 0
         try:
             if not satellite:
                 mirror.mirror_all(cfg)
@@ -785,19 +878,6 @@ def _run(payload: dict, grok: bool = False) -> int:
             _ss.evict_session(vault, sid)
         except Exception as e:
             errors.log_error(vault, "session_end.evict_reflex_state", e)
-        # A Grok session's transcript is its chat_history.jsonl, never the
-        # updates.jsonl its payload names, and its key is its id's end.
-        grok_history = None
-        grok_short = ""
-        if grok:
-            try:
-                from mnemo.core.grok import hooks as grok_hooks
-                from mnemo.core.grok import paths as grok_paths
-                grok_hooks.drop(vault, sid)
-                grok_short = grok_paths.short_id(sid) if sid != "unknown" else ""
-                grok_history = _grok_history(payload)
-            except Exception as e:
-                errors.log_error(vault, "session_end.grok_transcript", e)
         # The parent's notice and the PR follow go first of the scheduled work
         # (#502): the hook runs under a 1.5 s bound on a lean child, and the
         # sweep and schedulers below read every session's state. What a hook
@@ -807,9 +887,10 @@ def _run(payload: dict, grok: bool = False) -> int:
             cwd = str(payload.get("cwd") or os.getcwd())
             if grok:
                 transcript = str(grok_history) if grok_history is not None else None
+                via = payload.get(GROK_VIA_KEY)
                 _maybe_notify_parent(
                     cfg, vault, session_id=sid, cwd=cwd, transcript=transcript,
-                    short=grok_short,
+                    short=grok_short, via=via if isinstance(via, str) else "",
                 )
             else:
                 transcript = (payload.get("transcript_path")

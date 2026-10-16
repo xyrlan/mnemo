@@ -43,6 +43,32 @@ Nor does it tell a parent about a child that finished its turn and never
 stopped (``done``): that session fires no ``SessionEnd`` either, but it may
 still be spoken to, and "finished" would be a claim about a session that is
 not over.
+
+**A Grok child (spec 2026-10-16-grok-host, wave 2).** A Grok child runs in
+Grok's leader and has no stop: it ends its last turn with its closing report
+and goes idle, then dormant, and a dormant session fires no ``SessionEnd``.
+So for a Grok child this module is the *only* channel, and it runs the whole
+end-of-session pipeline, not just the notice: the hook's own ``_run``, in the
+same detached worker a Grok ``SessionEnd`` hands off to
+(:func:`mnemo.hooks.session_end.hand_off_grok_finish`), so the parent's
+card, the PR follow, extraction and the briefing all come as they would from
+a hook. Which Grok children exist, and where each one's files are, is
+dispatch's ledger (``child_agents``), never re-derived from the roster.
+
+*Finished* is read from the session's ``events.jsonl`` (measured on grok
+1.0.60, 2026-10-16): every turn writes ``turn_started`` and, when it ends,
+``turn_ended`` with an ``outcome`` (``completed``, or ``error`` on a turn
+cut off). A child whose last turn event is ``turn_ended`` / ``completed``,
+left alone for :data:`GROK_GRACE_SECONDS`, finished; its ``ts`` is the
+stop's key (:class:`GrokTurn`). A turn that ended in error is a stall, the
+resume path's to wake, not a finish. No leader call is made: a tick must not
+start a daemon, and a child whose leader is down finished all the same.
+
+*Once* is :func:`claim_finish`: one row per stop in ``grok-finishes.jsonl``,
+written under a lock by whichever of the worker this module starts and a
+Grok ``SessionEnd`` gets there first. The other finds the row and stands
+down, so two watchers, a restarted one, or a ``SessionEnd`` that fires when
+the session is later closed never run the pipeline twice.
 """
 from __future__ import annotations
 
@@ -53,7 +79,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from mnemo.core import locks
 
@@ -87,6 +113,22 @@ WATCH_LOCK_STALE_SECONDS = 5 * 60.0
 
 #: The value this module writes in a report row's ``via``.
 VIA = "backstop"
+#: ``via`` on the rows of a Grok child's finish this module noticed.
+GROK_VIA = "grok-finish"
+
+#: How long a Grok child's last turn must stay ended before it counts as
+#: finished. Nothing races it the way a hook races the Claude sweep; this is
+#: the "nothing resumed it" margin, for a prompt queued behind the last turn,
+#: two ticks long.
+GROK_GRACE_SECONDS = 60.0
+#: ``events.jsonl``'s ``turn_ended`` outcome of a turn that ran to its end.
+GROK_COMPLETED = "completed"
+GROK_EVENTS = "events.jsonl"
+#: One row per Grok finish the pipeline ran for: ``short_id``, ``stamp``.
+FINISHES_NAME = "grok-finishes.jsonl"
+FINISHES_LOCK_NAME = "grok-finishes.lock"
+#: :func:`claim_finish` waits this long for the lock: a read and an append.
+FINISHES_LOCK_WAIT_SECONDS = 10.0
 
 #: Report rows that answer a stop. The reporter's later rows (a checks watch
 #: ending) are about a PR, not a stop.
@@ -125,17 +167,12 @@ def _assistant_turn(raw: bytes) -> Optional[float]:
     return _epoch(record.get("timestamp"))
 
 
-def last_turn(transcript: Optional[Path], *, chunk: int = 1 << 16) -> Optional[float]:
-    """When the model last spoke in *transcript*, or ``None``.
-
-    Read from the end, a chunk at a time: the answer is almost always in the
-    last few records, and a child's transcript runs to megabytes. The hook
-    calls this, so it has to stay cheap.
-    """
-    if not transcript:
+def _last_of(path: Optional[Path], pick: Callable[[bytes], Any], *, chunk: int) -> Any:
+    """The last line of *path*, read from the end, that *pick* answers for."""
+    if not path:
         return None
     try:
-        with open(transcript, "rb") as fh:
+        with open(path, "rb") as fh:
             fh.seek(0, os.SEEK_END)
             pos = fh.tell()
             rest = b""
@@ -148,12 +185,144 @@ def last_turn(transcript: Optional[Path], *, chunk: int = 1 << 16) -> Optional[f
                 # the chunk before; it is only whole once that chunk is read.
                 rest = lines[0]
                 for raw in reversed(lines[1:]):
-                    found = _assistant_turn(raw)
+                    found = pick(raw)
                     if found is not None:
                         return found
-            return _assistant_turn(rest)
+            return pick(rest)
     except OSError:
         return None
+
+
+def last_turn(transcript: Optional[Path], *, chunk: int = 1 << 16) -> Optional[float]:
+    """When the model last spoke in *transcript*, or ``None``.
+
+    Read from the end, a chunk at a time: the answer is almost always in the
+    last few records, and a child's transcript runs to megabytes. The hook
+    calls this, so it has to stay cheap.
+    """
+    return _last_of(transcript, _assistant_turn, chunk=chunk)
+
+
+# ---------------------------------------------------------------------------
+# a Grok child's turns
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GrokTurn:
+    """A Grok session's last turn, from its ``events.jsonl``.
+
+    ``stamp`` is the event's own ``ts``, kept as written: it names the stop in
+    :func:`claim_finish`, so the watcher and the hook must spell it alike.
+    """
+
+    ended: bool
+    outcome: str
+    stamp: str
+    at: Optional[float]
+
+    @property
+    def finished(self) -> bool:
+        return self.ended and self.outcome == GROK_COMPLETED
+
+
+def _grok_turn_event(raw: bytes) -> Optional[GrokTurn]:
+    if b'"turn_' not in raw:
+        return None
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(record, dict) or record.get("type") not in ("turn_started", "turn_ended"):
+        return None
+    stamp = record.get("ts")
+    stamp = stamp if isinstance(stamp, str) else ""
+    return GrokTurn(
+        ended=record.get("type") == "turn_ended",
+        outcome=str(record.get("outcome") or ""),
+        stamp=stamp,
+        at=_epoch(stamp),
+    )
+
+
+def grok_turn(session_dir: Optional[Path], *, chunk: int = 1 << 16) -> Optional[GrokTurn]:
+    """The last turn event of the Grok session in *session_dir*, or ``None``."""
+    if not session_dir:
+        return None
+    return _last_of(Path(session_dir) / GROK_EVENTS, _grok_turn_event, chunk=chunk)
+
+
+def grok_home_of(child: Any) -> Path:
+    """The Grok home dispatch recorded for *child*; ``~/.grok`` when it named none."""
+    home = getattr(child, "home", None)
+    return Path(home).expanduser() if home else Path.home() / ".grok"
+
+
+def grok_session_dir(child: Any) -> Optional[Path]:
+    """*child*'s session directory, from what dispatch recorded: its home, cwd and id."""
+    from mnemo.core.grok import paths as grok_paths
+
+    sid = getattr(child, "session_id", None) or ""
+    if not sid:
+        return None
+    home = grok_home_of(child)
+    cwd = getattr(child, "cwd", None) or ""
+    found = grok_paths.session_dir(cwd, sid, home) if cwd else None
+    return found or grok_paths.find_session_dir(sid, home)
+
+
+def _finishes_path(vault_root: Path) -> Path:
+    return Path(vault_root) / ".mnemo" / FINISHES_NAME
+
+
+def finished_stops(vault_root: Path) -> Set[Tuple[str, str]]:
+    """``(short_id, stamp)`` of every Grok finish the pipeline already ran for."""
+    out: Set[Tuple[str, str]] = set()
+    try:
+        text = _finishes_path(vault_root).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return out
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("short_id") and row.get("stamp"):
+            out.add((str(row["short_id"]), str(row["stamp"])))
+    return out
+
+
+def claim_finish(vault_root: Path, short_id: str, stamp: str, *, via: str = "",
+                 wait: float = FINISHES_LOCK_WAIT_SECONDS) -> bool:
+    """Take the end-of-session pipeline for one Grok stop. True: run it.
+
+    False when that stop was already claimed — by a watcher, a restarted
+    watcher or a ``SessionEnd`` — or when the lock stayed busy for *wait*
+    seconds. A holder does one read and one append, and a lock left older
+    than 30 s is taken over, so a busy lock means a live claimer: standing
+    down then is the side that cannot run the pipeline twice. The row is on
+    disk before True is returned. Raises what a failed append raises.
+    """
+    if not short_id or not stamp:
+        return False
+    path = _finishes_path(vault_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + wait
+    while True:
+        with locks.try_lock(path.parent / FINISHES_LOCK_NAME, stale_after=30.0) as held:
+            if held:
+                if (short_id, stamp) in finished_stops(vault_root):
+                    return False
+                row = {"short_id": short_id, "stamp": stamp,
+                       "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+                if via:
+                    row["via"] = via
+                with open(path, "a", encoding="utf-8", newline="\n") as fh:
+                    fh.write(json.dumps(row) + "\n")
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
 
 
 def transcript_for(session: Any) -> Optional[Path]:
@@ -237,6 +406,10 @@ class Due:
     cwd: str
     transcript: Optional[Path]
     stopped_at: float
+    #: The CLI the child was spawned on. A Grok child's stop is named by its
+    #: last turn's ``stamp`` (:class:`GrokTurn`).
+    agent: str = "claude"
+    stamp: str = ""
 
 
 @dataclass
@@ -262,6 +435,9 @@ def scan(
     *find* and *turn_of*, which the tests replace."""
     out = Scan()
     for s in sessions:
+        # A Grok child never reads ``stopped``; it is :func:`scan_grok`'s.
+        if getattr(s, "agent", None) == "grok":
+            continue
         short_id = getattr(s, "short_id", None)
         parent = links.get(short_id or "") or getattr(s, "parent_session", None)
         if not short_id or not parent:
@@ -288,6 +464,68 @@ def scan(
         ))
     out.due.sort(key=lambda d: d.stopped_at)
     return out
+
+
+def scan_grok(
+    children: Iterable[Any],
+    *,
+    links: Dict[str, str],
+    rows: Dict[str, List[Dict[str, Any]]],
+    now: float,
+    armed_at: float,
+    finished: Set[Tuple[str, str]] = frozenset(),
+    locate: Callable[[Any], Optional[Path]] = grok_session_dir,
+    turn_of: Callable[[Optional[Path]], Optional[GrokTurn]] = grok_turn,
+) -> Scan:
+    """Which dispatched Grok children finished and were never told.
+
+    *children* are dispatch's ``ChildAgent`` lines; only ``agent == "grok"``
+    ones are read. A child whose files are gone, or whose last turn is past
+    the lookback, is neither running nor due. *finished* is
+    :func:`finished_stops`: a stop whose pipeline already ran is not due.
+    """
+    from mnemo.core.grok import paths as grok_paths
+
+    out = Scan()
+    for child in children:
+        if getattr(child, "agent", None) != "grok":
+            continue
+        short_id = getattr(child, "short_id", None)
+        parent = links.get(short_id or "")
+        if not short_id or not parent:
+            continue
+        where = locate(child)
+        turn = turn_of(where)
+        if turn is None or turn.at is None or now - turn.at > LOOKBACK_SECONDS:
+            continue
+        if not turn.ended:
+            out.running += 1
+            continue
+        if not turn.finished or turn.at < armed_at:
+            continue
+        if now - turn.at < GROK_GRACE_SECONDS:
+            out.waiting += 1
+            continue
+        if (short_id, turn.stamp) in finished:
+            continue
+        mine = rows.get(short_id) or []
+        if mine and told(mine, turn.at):
+            continue
+        history = grok_paths.chat_history_path(where) if where is not None else None
+        out.due.append(Due(
+            short_id=short_id, session_id=getattr(child, "session_id", None) or "",
+            parent=parent, cwd=getattr(child, "cwd", None) or "",
+            transcript=history, stopped_at=turn.at, agent="grok", stamp=turn.stamp,
+        ))
+    out.due.sort(key=lambda d: d.stopped_at)
+    return out
+
+
+def _merge(a: Scan, b: Scan) -> Scan:
+    return Scan(
+        due=sorted(a.due + b.due, key=lambda d: d.stopped_at),
+        waiting=a.waiting + b.waiting, running=a.running + b.running,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -380,11 +618,43 @@ def _read_sessions() -> List[Any]:
     return list(read_sessions())
 
 
+def _children_reader(vault_root: Path) -> Callable[[], List[Any]]:
+    """Dispatch's ``ChildAgent`` lines for *vault_root*: the Grok children."""
+    def read() -> List[Any]:
+        from mnemo.core.sessions import child_agents
+
+        return list(child_agents.read(vault_root).values())
+
+    return read
+
+
+def _grok_scan(vault_root: Path, *, links, rows, now: float, armed: float,
+               children: Optional[Callable[[], List[Any]]],
+               locate: Callable[[Any], Optional[Path]],
+               turn_of: Callable[[Optional[Path]], Optional[GrokTurn]]) -> Scan:
+    try:
+        found = (children or _children_reader(vault_root))()
+    except Exception:  # noqa: BLE001 — no ledger, no Grok children
+        found = []
+    if not found:
+        return Scan()
+    return scan_grok(
+        found, links=links, rows=rows, now=now, armed_at=armed,
+        finished=finished_stops(vault_root), locate=locate, turn_of=turn_of,
+    )
+
+
 def _tell(cfg, vault_root: Path, due: Due) -> None:
     """What the hook would have done for this stop: the parent's notice and
-    the ``pr-follow`` registration, and a line in the day log saying so."""
+    the ``pr-follow`` registration, and a line in the day log saying so.
+
+    A Grok child's finish is handed whole to the hook's own end-of-session
+    run, in a detached worker (:func:`_tell_grok`)."""
     from mnemo.hooks import session_end
 
+    if due.agent == "grok":
+        _tell_grok(cfg, vault_root, due)
+        return
     session_end._maybe_notify_parent(
         cfg, vault_root, session_id=due.session_id, cwd=due.cwd,
         transcript=due.transcript, via=VIA,
@@ -408,6 +678,21 @@ def _tell(cfg, vault_root: Path, due: Due) -> None:
         pass
 
 
+def _tell_grok(cfg, vault_root: Path, due: Due) -> None:  # noqa: ARG001
+    """Run a Grok child's end of session for this finish, once, detached.
+
+    The worker claims the stop (:func:`claim_finish`) before it does
+    anything, so a watcher restarted before :func:`_mark_sent` landed, or a
+    ``SessionEnd`` that fires later, cannot run it a second time.
+    """
+    from mnemo.hooks import session_end
+
+    session_end.hand_off_grok_finish(
+        session_id=due.session_id, cwd=due.cwd, history=due.transcript,
+        stamp=due.stamp, via=GROK_VIA,
+    )
+
+
 def sweep(
     cfg: Optional[Dict[str, Any]],
     *,
@@ -417,9 +702,16 @@ def sweep(
     tell: Optional[Callable[[Any, Path, Due], None]] = None,
     find: Callable[[Any], Optional[Path]] = transcript_for,
     turn_of: Callable[[Optional[Path]], Optional[float]] = last_turn,
+    children: Optional[Callable[[], List[Any]]] = None,
+    locate: Callable[[Any], Optional[Path]] = grok_session_dir,
+    grok_turn_of: Callable[[Optional[Path]], Optional[GrokTurn]] = grok_turn,
 ) -> PassReport:
     """Tell the parent of every child that stopped untold. Never raises past
-    one child: one that cannot be told must not cost the rest their notice."""
+    one child: one that cannot be told must not cost the rest their notice.
+
+    *children* reads dispatch's ``ChildAgent`` lines (the Grok children);
+    *locate* and *grok_turn_of* find and read a Grok child's session, and
+    the tests replace all three."""
     report = PassReport()
     if not enabled(cfg):
         report.disabled = True
@@ -437,9 +729,13 @@ def sweep(
             sessions = (reader or _read_sessions)()
         except Exception:  # noqa: BLE001
             sessions = []
-        found = scan(
-            sessions, links=parents.read(vault_root), rows=report_rows(vault_root),
-            now=moment, armed_at=armed_at(vault_root, now=moment), find=find, turn_of=turn_of,
+        links, rows = parents.read(vault_root), report_rows(vault_root)
+        armed = armed_at(vault_root, now=moment)
+        found = _merge(
+            scan(sessions, links=links, rows=rows, now=moment, armed_at=armed,
+                 find=find, turn_of=turn_of),
+            _grok_scan(vault_root, links=links, rows=rows, now=moment, armed=armed,
+                       children=children, locate=locate, turn_of=grok_turn_of),
         )
         report.waiting, report.running = found.waiting, found.running
         state = _load_state(vault_root)
@@ -539,7 +835,11 @@ def ensure_watcher(cfg: Optional[Dict[str, Any]], *, vault_root: Path,
 
 def on_session_start(cfg: Optional[Dict[str, Any]], *, vault_root: Path,
                      spawn: Optional[Callable[[], None]] = None,
-                     reader: Optional[Callable[[], List[Any]]] = None) -> str:
+                     reader: Optional[Callable[[], List[Any]]] = None,
+                     children: Optional[Callable[[], List[Any]]] = None,
+                     locate: Callable[[Any], Optional[Path]] = grok_session_dir,
+                     grok_turn_of: Callable[[Optional[Path]], Optional[GrokTurn]] = grok_turn,
+                     ) -> str:
     """Make sure a watcher exists while a dispatched child could stop untold.
 
     ``off``, ``running``, ``nothing`` or ``spawned``. A roster read and the
@@ -562,11 +862,16 @@ def on_session_start(cfg: Optional[Dict[str, Any]], *, vault_root: Path,
     # can only make this say "nothing" where the watcher's sweep would find
     # a stop due — and every dispatched child's own start comes through here
     # while it is running, which is what keeps a watcher alive for it.
+    links, rows = parents.read(vault_root), report_rows(vault_root)
+    armed = armed_at(vault_root, now=moment)
     found = scan(
-        sessions, links=parents.read(vault_root), rows=report_rows(vault_root),
-        now=moment, armed_at=armed_at(vault_root, now=moment),
+        sessions, links=links, rows=rows, now=moment, armed_at=armed,
         find=lambda _s: None, turn_of=lambda _t: None,
     )
+    if not (found.running or found.waiting or found.due):
+        # A Grok child is read from its own events.jsonl: one tail read each.
+        found = _grok_scan(vault_root, links=links, rows=rows, now=moment, armed=armed,
+                           children=children, locate=locate, turn_of=grok_turn_of)
     if not (found.running or found.waiting or found.due):
         return "nothing"
     (spawn or _spawn_watcher)()

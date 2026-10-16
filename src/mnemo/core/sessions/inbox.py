@@ -66,6 +66,32 @@ written ``0600``, and every :func:`record` rewrites it without any legacy
 ``token`` field and without rows whose pid has exited — the upgrade scrubs
 itself at the first session start.
 
+**A Grok parent (spec 2026-10-16-grok-host, wave 2).** A Grok session has
+no inbox socket and writes no row here (its environment's Claude socket, if
+any, belongs to whatever started ``grok``). It is reached through Grok's
+leader instead, which is how every Grok verb reaches a session: the notice is
+sent as a user turn with ``session/prompt``, and a dormant session is loaded
+first, so the notice wakes it. The address is the session's id and the Grok
+home it lives in. The home comes from what dispatch recorded
+(``child_agents``: the parent's own line when it was itself dispatched, else
+the home its Grok children were spawned under, which is the dispatcher's),
+then every home on the machine (``paths.grok_homes``); the session counts as
+Grok when its directory is in one of them. A Grok parent is reachable for as
+long as its session is on disk: there is no pid to go stale, and its leader
+starts on demand. When the leader cannot take the turn, the notice is held
+(:mod:`.held_notices`) and the parent's next prompt picks it up.
+
+One Grok parent is never sent a turn: a session a Grok TUI has open outside
+the leader. Leader mode is off by default, and then the TUI runs the session
+in its own process; the leader does not have it, so ``Leader.prompt`` would
+``session/load`` it from disk into a second actor over the same files, whose
+conversation diverges from the one on screen (read from grok-build's source,
+``xai-grok-pager/src/app/mod.rs`` and ``agent/mvp_agent/session_setup.rs``,
+2026-10-16; no lock prevents it). Every open TUI session is listed, with its
+pid, in ``<home>/active_sessions.json``; one listed there with a live pid and
+not resident in the leader's roster gets its notice held instead
+(:func:`post_grok`).
+
 Everything here fails open. A notice that cannot be delivered costs the
 maintainer the convenience he had before this existed; it must never cost a
 session its ``SessionEnd``.
@@ -78,7 +104,7 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Mapping, Optional, Set
+from typing import List, Mapping, Optional, Set
 
 #: Claude Code's own names for the session's inbox, exported into its env.
 #: The token beside the socket (``CLAUDE_CODE_MESSAGING_TOKEN``) is
@@ -105,6 +131,14 @@ LOCK_WAIT_SECONDS = 2.0
 
 #: Read/written under a 5s timeout: a hung peer must not hold a hook open.
 TIMEOUT_SECONDS = 5.0
+
+#: ``agent`` of an address that names a Grok session (:func:`grok_address`).
+GROK = "grok"
+
+#: How long a notice to a Grok parent waits for the leader to take the turn:
+#: starting the leader, loading a dormant session, queueing behind a running
+#: turn. Every caller is a detached process or a hook's detached worker.
+GROK_TIMEOUT_SECONDS = 120.0
 
 #: Opens every notice this module sends. Two jobs, both load-bearing:
 #:
@@ -405,6 +439,63 @@ def is_live(address: dict | None) -> bool:
     return current == recorded if recorded else True
 
 
+def _grok_homes(vault_root: Path | str, session_id: str) -> List[Path]:
+    """Where *session_id* may live: dispatch's record first, then every home.
+
+    Dispatch writes a line per Grok child (``child_agents``) with the home it
+    ran in, which is the dispatching session's. So the parent's home is its
+    own line when it was itself dispatched, else the home of any Grok child
+    it dispatched. Neither is required: :func:`mnemo.core.grok.paths.
+    grok_homes` lists ``$GROK_HOME``, ``~/.grok`` and ``~/.grok-<slug>``.
+    """
+    from mnemo.core.grok import paths as grok_paths
+
+    named: List[str] = []
+    try:
+        from mnemo.core.sessions import child_agents, parents
+
+        children = child_agents.read(vault_root)
+        own = children.get(grok_paths.short_id(session_id))
+        if own is not None and getattr(own, "session_id", None) == session_id:
+            named.append(getattr(own, "home", None) or "")
+        links = parents.read(vault_root)
+        for child in children.values():
+            if getattr(child, "agent", None) == GROK and links.get(child.short_id) == session_id:
+                named.append(getattr(child, "home", None) or "")
+    except Exception:  # noqa: BLE001 — a hint, never a requirement
+        pass
+    homes = [Path(h).expanduser() for h in named if h] + grok_paths.grok_homes()
+    seen, out = set(), []
+    for home in homes:
+        key = os.path.normcase(os.path.realpath(str(home)))
+        if key not in seen:
+            seen.add(key)
+            out.append(home)
+    return out
+
+
+def grok_address(vault_root: Path | str, session_id: str) -> dict | None:
+    """*session_id*'s address as a Grok session, or ``None`` when it is not one.
+
+    ``{"session_id", "agent": "grok", "home", "cwd"}``: the leader of
+    ``home`` takes the turn, and ``cwd`` is what it needs to load the session
+    when it is dormant. Read from disk only; no leader is asked.
+    """
+    if not session_id:
+        return None
+    from mnemo.core.grok import acp
+    from mnemo.core.grok import paths as grok_paths
+
+    for home in _grok_homes(vault_root, session_id):
+        found = grok_paths.find_session_dir(session_id, home)
+        if found is not None:
+            return {
+                "session_id": session_id, "agent": GROK, "home": str(home),
+                "cwd": acp.session_cwd(found) or "",
+            }
+    return None
+
+
 def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
     """The newest address for *session_id* that is still live, or why none is.
 
@@ -417,6 +508,9 @@ def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
     found its parent "gone" and posted nothing, though 75451 was live the
     whole time. :func:`is_live` still guards each row, so an older row only
     wins when its own pid and start time still match.
+
+    A session with no row at all may be a Grok one: its address is then
+    :func:`grok_address`'s, and it counts as live.
     """
     if not session_id:
         return None, "no parent session id"
@@ -435,6 +529,12 @@ def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
     except OSError as exc:
         return None, f"cannot read {LOG_NAME}: {exc}"
     if not rows:
+        try:
+            grok = grok_address(vault_root, session_id)
+        except Exception:  # noqa: BLE001 — never raises
+            grok = None
+        if grok is not None:
+            return grok, ""
         return None, f"no address recorded for the parent in {LOG_NAME}"
     seen = set()
     for row in reversed(rows):
@@ -456,6 +556,8 @@ def post(address: dict, text: str) -> bool:
     ``stream-json`` user turn. No auth line: optional on every platform this
     reaches, and the token it would need is not ours (#553, module docstring).
     """
+    if (address or {}).get("agent") == GROK:
+        return post_grok(address, text) == ""
     sock_path = (address or {}).get("socket") or ""
     if not sock_path or not text:
         return False
@@ -473,22 +575,86 @@ def post(address: dict, text: str) -> bool:
     return True
 
 
+#: Grok's registry of sessions open in a TUI (``xai-grok-active-sessions``):
+#: a JSON list of ``{session_id, pid, cwd, opened_at}`` in the home.
+ACTIVE_SESSIONS = "active_sessions.json"
+
+
+def open_in_tui(home: Path, session_id: str) -> bool:
+    """Whether a live Grok TUI (or ``grok -p``) process has *session_id* open.
+
+    Grok registers every session its TUI opens and removes it on a clean
+    exit; a crash leaves the row, so the pid is checked. Never raises.
+    """
+    try:
+        rows = json.loads((Path(home) / ACTIVE_SESSIONS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(rows, list):
+        return False
+    from mnemo.core.sessions.liveness import pid_alive
+
+    for row in rows:
+        if not isinstance(row, dict) or row.get("session_id") != session_id:
+            continue
+        try:
+            if pid_alive(int(row.get("pid") or 0)):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def post_grok(address: dict, text: str) -> str:
+    """Send *text* to a Grok session as a user turn. ``""`` once the leader
+    took it, else why not. Never raises.
+
+    ``Leader.prompt`` without waiting: it returns once the turn is running
+    or queued behind a running one, and loads a dormant session first, which
+    is what wakes a parent that went idle while its child worked. A session a
+    TUI has open outside the leader is not loaded (module docstring): its
+    notice is held for its next prompt.
+    """
+    if not text:
+        return "nothing to send"
+    home = address.get("home") or ""
+    sid = str(address.get("session_id") or "")
+    try:
+        from mnemo.core.grok import acp
+
+        leader = acp.Leader(Path(home) if home else None)
+        if open_in_tui(leader.home, sid) and not any(
+                entry.session_id == sid and entry.resident for entry in leader.roster()):
+            return (f"Grok session {sid} is open in a TUI outside the leader "
+                    f"(pid in {leader.home / ACTIVE_SESSIONS}); a turn sent there "
+                    "would fork it, so the notice waits for its next prompt")
+        leader.prompt(sid, str(address.get("cwd") or ""), text,
+                      wait=False, timeout=GROK_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 — never raises, by contract
+        return f"Grok leader of {home or 'the default home'}: {type(exc).__name__}: {exc}"
+    return ""
+
+
 def notify(vault_root: Path | str, session_id: str, text: str) -> bool:
     """Deliver *text* to *session_id* if it is still live. Never raises.
 
-    Returns True only when the notice actually went onto a socket, so a caller
-    can log a delivery without claiming one that did not happen (#306).
+    Returns True only when the notice actually went onto a socket, or a Grok
+    leader took it as a turn, so a caller can log a delivery without claiming
+    one that did not happen (#306).
     """
     return deliver(vault_root, session_id, text) == ""
 
 
 def deliver(vault_root: Path | str, session_id: str, text: str) -> str:
     """:func:`notify`, answering why not: ``""`` when the notice went onto a
-    socket, else the reason it did not (#454). Never raises."""
+    socket, or to a Grok parent's leader, else the reason it did not (#454).
+    Never raises."""
     try:
         address, why = resolve(vault_root, session_id)
         if address is None:
             return why
+        if address.get("agent") == GROK:
+            return post_grok(address, text)
         if not post(address, text):
             return f"socket write failed: {address.get('socket')}"
         return ""
