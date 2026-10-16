@@ -1241,6 +1241,60 @@ def _maybe_refresh_procedures(cfg: dict, vault_root, cwd: str | None = None) -> 
             pass
 
 
+def _grok_session(payload: object):
+    """``True`` for a Grok session's first copy of this event, ``False`` for
+    any Claude payload, ``None`` for a Grok copy another hook process already
+    ran (:func:`mnemo.core.grok.hooks.claim_once`). Fail-open to ``False``."""
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        if not isinstance(payload, dict) or not grok.is_grok_payload(payload):
+            return False
+        if not grok.claim_once(payload):
+            return None
+        grok.sweep_claims()
+        return True
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return False
+
+
+def _grok_briefing(cfg: dict, vault, cwd: str, sid: str, source: str) -> None:
+    """Hand a Grok session's project block on through the rules file.
+
+    The block a Claude session would get here is written to
+    ``.grok/rules/mnemo-briefing.md`` in every worktree of the repository,
+    for the next Grok session there (:mod:`mnemo.core.grok.briefing_file`):
+    Grok read its instruction files before this hook ran. A session that
+    started without the file (a fresh worktree, a folder Grok does not
+    trust) gets the block with its first tool call instead. Never raises.
+    """
+    try:
+        from mnemo.core import agent
+        from mnemo.core.grok import briefing_file
+        from mnemo.core.grok import hooks as grok
+
+        project = agent.resolve_canonical_agent(cwd).name
+        text = briefing_file.render(vault, cfg, project)
+        briefing_file.refresh(vault, cfg, Path(cwd), project, text=text)
+        if not text or source not in _GROK_FRESH_SOURCES or sid == "unknown":
+            return
+        where = briefing_file.session_dir(sid, cwd)
+        if (briefing_file.loaded(where) if where is not None else None) is not True:
+            grok.stash(vault, sid, grok.BRIEFING, text)
+    except Exception as exc:  # noqa: BLE001 — hook must never propagate
+        try:
+            from mnemo.core import errors
+
+            errors.log_error(vault, "session_start.grok_briefing", exc)
+        except Exception:
+            pass
+
+
+#: Grok's SessionStart ``source`` for a session with nothing in context yet
+#: (measured: ``new``; read from the source: anything else is a resume).
+_GROK_FRESH_SOURCES = frozenset({"new", "startup"})
+
+
 def main() -> int:
     # Nothing at all inside a session mnemo launched for itself (#329): the
     # `claude --print` helpers that brief and extract run under the user's own
@@ -1256,6 +1310,11 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        return 0
+    # A Grok Build session fires this hook too (spec decision 7); one event
+    # that reaches it from two hook files runs once. See core.grok.hooks.
+    grok_session = _grok_session(payload)
+    if grok_session is None:
         return 0
     try:
         from mnemo.core import agent, config, errors, log_writer, paths, session
@@ -1330,7 +1389,10 @@ def main() -> int:
             # environment and nowhere else, and the transcript does not record
             # it, so a child that finishes later can only find its parent if
             # the parent wrote itself down here. Never the token (#553).
-            if bool((cfg.get("dispatch") or {}).get("notifyParent", False)):
+            # A Grok session has no Claude inbox socket of its own: the one in
+            # its environment is inherited from whatever started `grok`.
+            if (not grok_session
+                    and bool((cfg.get("dispatch") or {}).get("notifyParent", False))):
                 from mnemo.core.sessions import inbox
 
                 inbox.record(vault, inbox.address_from_env())
@@ -1435,8 +1497,11 @@ def main() -> int:
         phases.lap("duplicate_install")
 
         # v0.5 injection — opt-in, fail-silent. Must run last so the JSON
-        # envelope is the only thing on stdout.
-        if cfg.get("injection", {}).get("enabled", False):
+        # envelope is the only thing on stdout. Grok drops a SessionStart's
+        # envelope, so a Grok session's block goes through a file instead.
+        if grok_session:
+            _grok_briefing(cfg, vault, cwd, sid, source)
+        elif cfg.get("injection", {}).get("enabled", False):
             try:
                 canonical_name = agent.resolve_canonical_agent(cwd).name
                 reader_sid = sid if sid != "unknown" else None

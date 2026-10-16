@@ -31,6 +31,8 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
+    if _is_grok(payload):
+        return _grok(payload, throwaway_session)
 
     # Held child notices go out on this prompt whatever reflex decides, so
     # reflex's own output is caught and merged into the one JSON object a
@@ -59,7 +61,58 @@ def main() -> int:
     return 0
 
 
-def _dispatch_upkeep(payload: dict) -> str:
+def _is_grok(payload: dict) -> bool:
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        return grok.is_grok_payload(payload)
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return False
+
+
+def _grok(payload: dict, throwaway_session) -> int:
+    """The same hook for a Grok Build session (spec 2026-10-16-grok-host).
+
+    Grok never hands a UserPromptSubmit's ``additionalContext`` to the model
+    (measured on grok 1.0.60), so the held notices and the reflex block this
+    prompt earns are worked out exactly as for Claude, printed nowhere, and
+    held for the first PreToolUse of the turn, which does reach it
+    (:mod:`mnemo.core.grok.hooks`). A prompt with no reflex block clears the
+    one an earlier prompt left unsent, since that turn is over; held notices
+    were taken from their store and wait until a tool call carries them.
+    Never raises.
+    """
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        if not grok.claim_once(payload):
+            return 0
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            held = _dispatch_upkeep(payload, record_address=False)
+            _reflex(payload, throwaway_session)
+        sid = grok.session_id(payload)
+        if not sid:
+            return 0
+        from mnemo.core import config as cfg_mod
+        from mnemo.core import paths
+
+        vault = paths.vault_root(cfg_mod.load_config())
+        if throwaway_session(payload.get("cwd") or str(Path.cwd()), vault):
+            return 0
+        if held:
+            grok.stash(vault, sid, grok.HELD, held, append=True)
+        grok.stash(vault, sid, grok.PROMPT, grok.context_of(buf.getvalue()))
+    except Exception as exc:  # noqa: BLE001
+        try:
+            from mnemo.core import config as _cfg, errors as _err, paths as _paths
+            _err.log_error(_paths.vault_root(_cfg.load_config()), "user_prompt_submit.grok", exc)
+        except Exception:
+            pass
+    return 0
+
+
+def _dispatch_upkeep(payload: dict, record_address: bool = True) -> str:
     """Keep a dispatching parent reachable; return its held notices (#586).
 
     Two jobs, both cheap when there is nothing to do — one read each of two
@@ -87,10 +140,13 @@ def _dispatch_upkeep(payload: dict) -> str:
             return ""
         from mnemo.core.sessions import held_notices, inbox
 
-        try:
-            inbox.ensure_recorded(vault)
-        except Exception as exc:  # noqa: BLE001
-            errors.log_error(vault, "user_prompt_submit.inbox_address", exc)
+        # Not for a Grok session: the Claude socket in its environment is
+        # inherited from whatever started `grok`, not its own.
+        if record_address:
+            try:
+                inbox.ensure_recorded(vault)
+            except Exception as exc:  # noqa: BLE001
+                errors.log_error(vault, "user_prompt_submit.inbox_address", exc)
         sid = str(payload.get("session_id") or "")
         return held_notices.render(held_notices.claim(vault, sid))
     except Exception:  # noqa: BLE001 — hook must never propagate

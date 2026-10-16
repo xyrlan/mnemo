@@ -14,6 +14,8 @@ stdout. This hook MUST NEVER block Claude Code from running.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -44,6 +46,12 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
 
+    if _is_grok(payload):
+        return _grok(payload)
+    return _run(payload)
+
+
+def _run(payload: dict) -> int:
     # A memory write spelled through an account dir's linked `projects` goes
     # to its real path (#637). Before every gate below: it reads no vault and
     # no config, and a session in a temp dir or with enforcement and
@@ -55,6 +63,66 @@ def main() -> int:
     if not _rules(payload, rewrite) and rewrite is not None:
         _emit_rewrite(rewrite)
     return 0
+
+
+def _is_grok(payload: dict) -> bool:
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        return grok.is_grok_payload(payload)
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        return False
+
+
+def _grok(payload: dict) -> int:
+    """The same hook for a Grok Build session (spec 2026-10-16-grok-host).
+
+    Grok names its tools its own way (``run_terminal_command``, ``read_file``
+    with ``target_file``, ``write``, ``search_replace``, ``hashline_edit``), so
+    the payload is put in Claude's vocabulary first and every gate below runs
+    as written. Then this call carries what UserPromptSubmit and SessionStart
+    could not hand the model themselves (:mod:`mnemo.core.grok.hooks`): the
+    context waiting for this session goes out ahead of any enrichment, once.
+    A denied call takes none; the next call does. Fail-open throughout.
+    """
+    try:
+        from mnemo.core.grok import hooks as grok
+
+        if not grok.claim_once(payload):
+            return 0
+        payload = grok.normalize(payload)
+    except Exception:  # noqa: BLE001
+        return 0
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _run(payload)
+    out = buf.getvalue()
+    try:
+        if not grok.is_deny(out):
+            out = grok.with_context(out, _grok_pending(payload))
+    except Exception:  # noqa: BLE001
+        pass
+    if out:
+        try:
+            sys.stdout.write(out)
+            sys.stdout.flush()
+        except Exception:
+            pass
+    return 0
+
+
+def _grok_pending(payload: dict) -> str:
+    """This Grok session's waiting context, taken; ``""`` when there is none."""
+    try:
+        from mnemo.core import config, paths
+        from mnemo.core.grok import hooks as grok
+
+        sid = grok.session_id(payload)
+        if not sid:
+            return ""
+        return grok.take(paths.vault_root(config.load_config()), sid)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _memory_write(payload: dict) -> Tuple[Optional[dict], Optional[str]]:
