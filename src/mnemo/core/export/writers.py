@@ -48,8 +48,13 @@ _TARGETS = {
     ("claude", "claude-md"): ("block", Path("CLAUDE.md"), ""),
     ("cursor", "rules"): ("whole", Path(".cursor") / "rules" / "mnemo.mdc", _CURSOR_PRELUDE),
     ("codex", "agents-md"): ("block", Path("AGENTS.md"), ""),
+    # Grok loads every *.md under .grok/rules/ and AGENTS.md at the repo root
+    # (both need folder trust). The rules file is its own, so it is rewritten
+    # whole; AGENTS.md is the user's and only the block is ours.
+    ("grok", "rules"): ("whole", Path(".grok") / "rules" / "mnemo.md", ""),
+    ("grok", "agents-md"): ("block", Path("AGENTS.md"), ""),
 }
-_AUTO = {"claude": "rules", "cursor": "rules", "codex": "agents-md"}
+_AUTO = {"claude": "rules", "cursor": "rules", "codex": "agents-md", "grok": "rules"}
 
 
 def target_for(host: str, target: str, cwd: Path) -> Target:

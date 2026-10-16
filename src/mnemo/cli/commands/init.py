@@ -104,11 +104,91 @@ def _refresh_hooks(target_settings: Path, *, project: bool, say) -> int:
     return 0
 
 
-def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
-    """``mnemo init --host cursor|codex``: vault + MCP registration + rules file.
+def _same_path(a: str, b: Path) -> bool:
+    import os
+    return bool(a) and os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(str(b)))
 
-    No hooks, no status line, no memory mirror — those are Claude Code seams.
-    Learning still happens in Claude Code; this host reads what was learned.
+
+def _wire_grok_hooks(*, project: bool, cwd: Path, say) -> int:
+    """``mnemo init --host grok``: make Grok fire mnemo's hooks exactly once.
+
+    Grok reads ``~/.claude/settings.json`` itself, so where mnemo is wired for
+    Claude nothing is added (a second copy would run every hook twice) and a
+    hook file of ours from an earlier run is removed as the duplicate it has
+    become. Where Grok sees no mnemo hook, the same commands go in a Grok hook
+    file. ``grok inspect --json`` is the source of truth; without the binary the
+    Claude settings file is read directly.
+    """
+    import os
+    from mnemo.core.grok import paths as grok_paths
+    from mnemo.hosts import grok as grok_host
+    from mnemo.install import grok_hooks, settings as inj
+
+    home = grok_paths.grok_home()
+    file = grok_hooks.hook_file(home, project=project, cwd=cwd)
+    # A global install is asked about from the home directory, where Grok loads
+    # no project files: a hook one repo's `.claude/settings.json` carries is not
+    # one every other repo's session would get.
+    data = grok_host.inspect(home, cwd if project else Path.home())
+    if data is not None:
+        theirs = [h for h in grok_host.visible_hooks(data)
+                  if not _same_path(grok_host.source_path(h), file)
+                  and not _same_path(grok_host.source_path(h), file.parent)]
+        where = sorted({grok_host.source_path(h) for h in theirs if grok_host.source_path(h)})
+        source = ", ".join(where) or "another hook source"
+    else:
+        claude_settings = Path(os.path.expanduser("~/.claude/settings.json"))
+        theirs = [True] if _has_global_mnemo_install(claude_settings) else []
+        source = str(claude_settings)
+
+    try:
+        if theirs:
+            if grok_hooks.uninstall(file):
+                say(f"Removed {file}: Grok already loads mnemo's hooks from {source}.")
+            say(f"Grok already loads mnemo's hooks from {source}; nothing added, "
+                f"so each hook runs once.")
+            return 0
+        say(f"Writing mnemo's hooks to {file}…")
+        grok_hooks.install(file)
+    except (inj.SettingsError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if project:
+        _ensure_gitignore(cwd, (".grok/hooks/mnemo.json", ".mnemo/"))
+        say("Grok runs a project's hook file only in a folder it trusts: "
+            "start it once with `grok --trust`, or run /hooks-trust inside it.")
+    return 0
+
+
+def _refresh_grok_hooks(*, project: bool, say) -> int:
+    """``mnemo init --host grok --hooks-only``: rewrite mnemo's Grok hook file, and only that."""
+    from mnemo.core.grok import paths as grok_paths
+    from mnemo.install import grok_hooks, settings as inj
+
+    file = grok_hooks.hook_file(grok_paths.grok_home(), project=project, cwd=Path.cwd())
+    if not grok_hooks.is_installed(file):
+        flag = " --project" if project else ""
+        print(f"error: no mnemo hooks in {file} to refresh — run `mnemo init --host grok{flag}` "
+              f"to install (hooks Grok reads from Claude's settings are refreshed by "
+              f"`mnemo init --hooks-only`)", file=sys.stderr)
+        return 1
+    try:
+        grok_hooks.install(file)
+    except (inj.SettingsError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    say(f"Hooks refreshed in {file}.")
+    say("New Grok sessions pick them up; running ones keep the hooks they started with.")
+    return 0
+
+
+def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
+    """``mnemo init --host cursor|codex|grok``: vault + MCP registration + rules file.
+
+    No status line, no memory mirror — those are Claude Code seams. Cursor and
+    Codex get no hooks either: learning still happens in Claude Code and they
+    read what was learned. Grok also gets mnemo's hooks, once (see
+    ``_wire_grok_hooks``).
     """
     import os
     from mnemo.cli.commands.export import configured_universal_threshold, print_export_notes
@@ -163,12 +243,21 @@ def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
     except CodexScopeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    say(f"MCP server registered for {host_name} ({reg.method}) — {reg.path}")
+    if reg.method == "inherited":
+        say(f"Grok already reads mnemo's MCP server from {reg.path}; nothing added.")
+    else:
+        say(f"MCP server registered for {host_name} ({reg.method}) — {reg.path}")
     if reg.note:
         # A note is work the user must still do by hand (the TOML to paste when
         # `codex` is not on PATH). Swallowing it under --quiet leaves a dead
         # install reporting success, so it prints either way.
         print(reg.note)
+
+    # 4b. Grok runs mnemo's hooks too: wire them, unless it already reads them.
+    if host_name == "grok":
+        rc = _wire_grok_hooks(project=project, cwd=cwd, say=say)
+        if rc:
+            return rc
 
     # 5. Write the rules file, so the host has something to read right away.
     project_name = resolve_canonical_agent(str(cwd)).name
@@ -196,6 +285,11 @@ def _init_other_host(args: argparse.Namespace, host_name: str) -> int:
     served = ("MCP tools + the rules file above" if report.rules
               else "MCP tools (the rules file comes with your first export)")
     say("")
+    if host_name == "grok":
+        say("Grok sessions call mnemo's MCP tools and fire its hooks. Grok loads project "
+            "files (.grok/rules) only in a folder it trusts: start it once with "
+            "`grok --trust`. Re-run `mnemo export --host grok` after new rules.")
+        return 0
     say(f"mnemo learns from Claude Code sessions. In {host_name} it serves what it "
         f"learned: {served}. Re-run "
         f"`mnemo export --host {host_name}` after new rules.")
@@ -213,6 +307,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     project = bool(getattr(args, "project", False))
     host_name = getattr(args, "host", "claude") or "claude"
     hooks_only = bool(getattr(args, "hooks_only", False))
+    if hooks_only and host_name == "grok":
+        return _refresh_grok_hooks(project=project, say=say)
     if hooks_only and host_name != "claude":
         print("error: --hooks-only rewrites Claude Code hooks; other hosts have none", file=sys.stderr)
         return 2
