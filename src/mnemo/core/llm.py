@@ -516,16 +516,21 @@ def _grok_cli(
     """
     fd, path = tempfile.mkstemp(prefix="mnemo-grok-", suffix=".txt")
     helper_cwd = _grok_helper_cwd()
-    # mnemo names the session itself, so it can delete it whether the call
-    # answers, fails or times out (a failed run leaves one too).
-    session_id = str(uuid.uuid4())
+    # mnemo names each attempt's session itself, so it can delete it whether
+    # the attempt answers, fails or times out (a failed run leaves one too).
+    # One id per attempt: Grok refuses an id already in use (measured on
+    # 1.0.60: "Session ID … is already in use"), so a retry reusing the first
+    # attempt's id would fail exactly when it should recover.
+    created: list[str] = []
     try:
         with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="") as fh:
             fh.write(prompt)
-        argv = _grok_argv(path, model, system, session_id)
         attempts = 0
         while True:
             attempts += 1
+            session_id = str(uuid.uuid4())
+            created.append(session_id)
+            argv = _grok_argv(path, model, system, session_id)
             try:
                 result = _subprocess_run(
                     argv, capture_output=True, text=True, encoding="utf-8",
@@ -557,7 +562,8 @@ def _grok_cli(
             os.unlink(path)
         except OSError:
             pass
-        _forget_grok_session(helper_cwd, session_id)
+        for sid in created:
+            _forget_grok_session(helper_cwd, sid)
 
     try:
         parsed: Any = json.loads(result.stdout)

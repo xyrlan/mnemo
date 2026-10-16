@@ -231,3 +231,31 @@ def test_a_mistyped_mnemo_agent_is_an_unknown_provider_error(monkeypatch):
     assert "grk" in str(info.value) and "grok" in str(info.value)
     # a named provider never consults the environment
     assert llm.resolve({"extraction": {"provider": "claude-cli"}}) is llm.PROVIDERS["claude-cli"]
+
+
+def test_a_retry_uses_a_fresh_session_id_and_forgets_every_one(monkeypatch, tmp_path):
+    """Grok refuses an id already in use, so attempt 2 must not reuse attempt 1's."""
+    from mnemo.core.grok import paths
+
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    helper = llm._grok_helper_cwd()
+    root = paths.sessions_root(tmp_path) / paths.encode_cwd(helper)
+    used = []
+    queue = [subprocess.TimeoutExpired("grok", 5), _ok()]
+
+    def run(argv, **kw):
+        sid = argv[argv.index("--session-id") + 1]
+        if (root / sid).exists() or sid in used:
+            return SimpleNamespace(returncode=1, stdout="",
+                                   stderr="Session ID %s is already in use." % sid)
+        used.append(sid)
+        (root / sid).mkdir(parents=True)  # the first attempt created it, then hung
+        item = queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(llm, "_subprocess_run", run)
+    assert llm.PROVIDERS["grok-cli"]("p", system=None, model="m", timeout=5).text == "pong"
+    assert len(used) == 2 and used[0] != used[1]
+    assert not any((root / sid).exists() for sid in used)
