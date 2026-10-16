@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -57,8 +58,9 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from mnemo.core.grok import paths
 
@@ -679,7 +681,7 @@ class Leader:
 
 
 # --------------------------------------------------------------------------
-# Finding a session on disk (no leader needed)
+# Reading sessions on disk (no leader needed)
 
 
 def find_session(session_id: str, home: Path) -> Optional[Path]:
@@ -701,6 +703,70 @@ def find_session(session_id: str, home: Path) -> Optional[Path]:
     except OSError:
         return None
     return matches[0] if len(matches) == 1 else None
+
+
+def disk_roster(home: Path) -> List[RosterEntry]:
+    """The roster of ``home`` when its leader is down, read from its session files.
+
+    No file says a session is running (spec, "Sessions on disk"), and with no
+    leader none is resident in one, so every row is ``dormant`` and not
+    ``resident``: what the leader itself reports for a session it holds only
+    on disk. ``headless`` (``grok -p``) sessions are left out, as the leader
+    leaves them out. Newest first. Never raises; starts nothing.
+    """
+    rows: List[Tuple[float, RosterEntry]] = []
+    try:
+        parents = [p for p in paths.sessions_root(home).iterdir() if p.is_dir()]
+    except OSError:
+        return []
+    for parent in parents:
+        try:
+            children = [c for c in parent.iterdir() if c.is_dir()]
+        except OSError:
+            continue
+        for child in children:
+            try:
+                summary = json.loads((child / "summary.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(summary, dict) or summary.get("session_kind") == "headless":
+                continue
+            info = summary.get("info") if isinstance(summary.get("info"), dict) else {}
+            changed = _unix_ms(summary.get("updated_at") or summary.get("last_active_at"))
+            rows.append((changed or 0, RosterEntry(
+                session_id=str(info.get("id") or child.name),
+                cwd=str(info.get("cwd") or paths.decode_cwd_dir(parent) or ""),
+                activity="dormant",
+                resident=False,
+                model_id=_text(summary.get("current_model_id")),
+                effort=_text(summary.get("reasoning_effort")),
+                title=_text(summary.get("generated_title")),
+                last_change_ms=changed,
+                home=home,
+            )))
+    rows.sort(key=lambda pair: pair[0], reverse=True)
+    return [entry for _changed, entry in rows]
+
+
+def _text(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def _unix_ms(value: Any) -> Optional[int]:
+    """A Grok RFC 3339 time as Unix milliseconds, the roster's ``lastChangeUnixMs``."""
+    if not isinstance(value, str) or not value:
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$",
+                     value.strip())
+    if not match:
+        return None
+    zone = match.group(3) or "Z"
+    try:
+        stamp = datetime.fromisoformat(match.group(1) + ("+00:00" if zone == "Z" else zone))
+    except ValueError:
+        return None
+    millis = int((match.group(2) or "0")[:3].ljust(3, "0"))
+    return int(stamp.timestamp()) * 1000 + millis
 
 
 def session_cwd(session_dir: Path) -> Optional[str]:

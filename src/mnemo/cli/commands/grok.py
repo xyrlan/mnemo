@@ -6,7 +6,9 @@ verb is one :class:`mnemo.core.grok.acp.Leader` call
 (``design/specs/2026-10-16-grok-host.md``, decision 4).
 
 - ``roster [--home DIR] [--json]``: the live state of every session; without
-  ``--home``, of every home in ``paths.grok_homes()`` that is logged in.
+  ``--home``, of every home in ``paths.grok_homes()`` that is logged in. A
+  listing never starts a leader (#719): a home whose leader is not listening
+  answers from its session files, every row ``dormant`` and not resident.
 - ``send ID TEXT [--home DIR]``: a user turn; exits 0 once the turn started.
 - ``close ID [--home DIR]``: prints Grok's outcome.
 - ``billing [--home DIR] [--json]``: ``_x.ai/billing``, unchanged.
@@ -51,6 +53,24 @@ def _row(entry: Any) -> Dict[str, Any]:
     }
 
 
+def _entries(home: Path) -> List[Any]:
+    """``home``'s roster from its leader if one is listening, else from its disk.
+
+    ``Leader.roster`` goes through ``grok agent --leader stdio``, which spawns
+    a leader when none listens; the desktop asks every 3 s for every account,
+    and a listing must not leave a daemon behind. ``send`` and ``close`` are
+    actions and still start one.
+    """
+    from mnemo.core.grok import acp
+    from mnemo.core.sessions.grok_sessions import leader_listening
+
+    if not home.is_dir():
+        raise acp.GrokUnavailable(f"Grok home {home} does not exist")
+    if leader_listening(home) is True:
+        return acp.Leader(home).roster()
+    return acp.disk_roster(home)
+
+
 def _roster(args: argparse.Namespace) -> int:
     from mnemo.core.grok import acp, paths
 
@@ -63,7 +83,7 @@ def _roster(args: argparse.Namespace) -> int:
             continue  # an account folder nobody logged in to: nothing to list
         tried += 1
         try:
-            rows.extend(_row(e) for e in acp.Leader(home).roster())
+            rows.extend(_row(e) for e in _entries(home))
         except (acp.GrokUnavailable, TimeoutError) as exc:
             failed += 1
             print(f"mnemo grok roster: {home}: {exc}", file=sys.stderr)

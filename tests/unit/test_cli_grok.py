@@ -13,6 +13,7 @@ import pytest
 
 from mnemo import cli
 from mnemo.core.grok import acp, paths
+from mnemo.core.sessions import grok_sessions
 
 FAKE = Path(__file__).with_name("_fake_grok_leader.py")
 SID = "01a144cc-77f5-7ea3-9060-06013224200f"
@@ -30,6 +31,8 @@ def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     state_path.write_text(json.dumps({"sessions": {}}), encoding="utf-8")
     monkeypatch.setenv("FAKE_GROK_STATE", str(state_path))
     monkeypatch.setattr(acp, "_grok_argv", lambda: [sys.executable, str(FAKE)])
+    # The fake bridges stdio and binds no socket: say its leader is listening.
+    monkeypatch.setattr(grok_sessions, "leader_listening", lambda home: True)
 
     class Fake:
         @staticmethod
@@ -102,6 +105,53 @@ def test_roster_of_a_home_whose_leader_is_down_fails_with_the_reason(fake, tmp_p
     fake.write(s)
     assert cli.main(["grok", "roster", "--home", str(home), "--json"]) == 1
     assert "did not come up" in capsys.readouterr().err
+
+
+def _no_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    def spawn():
+        raise AssertionError("roster started grok's leader bridge")
+
+    monkeypatch.setattr(acp, "_grok_argv", spawn)
+    monkeypatch.setattr(grok_sessions, "leader_listening", lambda home: False)
+
+
+def test_roster_with_no_leader_listening_reads_the_disk_and_starts_nothing(tmp_path, monkeypatch, capsys):
+    _no_bridge(monkeypatch)
+    home = _home(tmp_path, "gh")
+    old, new = "01a144cc-0000-7ea3-9060-000000000001", SID
+    _on_disk(home, old)
+    _on_disk(home, new, cwd=str(Path("/work/other")))
+    summary = home / "sessions" / paths.encode_cwd(str(Path("/work/other"))) / new / "summary.json"
+    summary.write_text(json.dumps({
+        "info": {"id": new, "cwd": str(Path("/work/other"))}, "generated_title": "Fix it",
+        "current_model_id": "grok-4.7", "reasoning_effort": "high",
+        "updated_at": "2026-10-16T12:00:00.123456Z"}), encoding="utf-8")
+    headless = home / "sessions" / paths.encode_cwd(CWD) / "01a144cc-0000-7ea3-9060-0000000000ff"
+    headless.mkdir()
+    (headless / "summary.json").write_text(json.dumps({"session_kind": "headless"}), encoding="utf-8")
+
+    assert cli.main(["grok", "roster", "--home", str(home), "--json"]) == 0
+    first, second = json.loads(capsys.readouterr().out)
+    assert first == {
+        "session_id": new, "short_id": "3224200f", "cwd": str(Path("/work/other")),
+        "activity": "dormant", "resident": False, "model_id": "grok-4.7", "effort": "high",
+        "title": "Fix it", "last_change_ms": 1792152000123, "home": str(home),
+    }
+    assert (second["session_id"], second["activity"], second["resident"]) == (old, "dormant", False)
+    assert second["cwd"] == CWD and second["last_change_ms"] is None
+
+
+def test_roster_of_a_home_with_no_leader_and_no_sessions_is_empty(tmp_path, monkeypatch, capsys):
+    _no_bridge(monkeypatch)
+    home = _home(tmp_path, "gh")
+    assert cli.main(["grok", "roster", "--home", str(home), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_roster_of_a_missing_home_says_so(tmp_path, monkeypatch, capsys):
+    _no_bridge(monkeypatch)
+    assert cli.main(["grok", "roster", "--home", str(tmp_path / "nope"), "--json"]) == 1
+    assert "does not exist" in capsys.readouterr().err
 
 
 def test_roster_text(fake, tmp_path, capsys):
