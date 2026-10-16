@@ -27,6 +27,7 @@ from mnemo.cli.commands import dispatch as dispatch_cmd
 from mnemo.core import contracts, dispatch
 from mnemo.core.grok import acp
 from mnemo.core.grok import paths as grok_paths
+from mnemo.core.grok import read_only as grok_read_only
 from mnemo.core.sessions import child_agents, grants, parents
 
 FAKE = Path(__file__).with_name("_fake_grok_leader.py")
@@ -67,7 +68,7 @@ def repo(tmp_path: Path) -> Path:
 def vault(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "vault"
     root.mkdir()
-    for module in (parents, grants, child_agents):
+    for module in (parents, grants, child_agents, grok_read_only):
         monkeypatch.setattr(module, "_default_vault", lambda: root)
     return root
 
@@ -258,12 +259,11 @@ def test_a_prompt_rendered_with_another_grant_is_refused_not_given_two_closings(
 
 
 @pytest.mark.parametrize("kwargs, words", [
-    ({"read_only": True}, "--read-only: not supported on Grok yet"),
     ({"model": "haiku"}, "Grok has no model 'haiku'"),
     ({"effort": "max"}, "Grok's grok-4.7 takes no effort 'max'"),
     ({"effort": "huge"}, "Grok takes no effort 'huge'"),
     ({"model": "grok-4.7", "effort": "max"}, "takes xhigh, high, medium, low"),
-], ids=["read-only", "claude-model", "effort-the-model-lacks", "unknown-effort", "named-model"])
+], ids=["claude-model", "effort-the-model-lacks", "unknown-effort", "named-model"])
 def test_what_grok_cannot_take_is_refused_before_any_tree(
     repo: Path, fake, no_tree, kwargs: dict, words: str,
 ) -> None:
@@ -331,15 +331,6 @@ def test_a_dispatch_wide_model_every_piece_overrides_is_not_refused(home: Path, 
     assert dispatch.check_grok_contract(contract, model="sonnet") == home
     with pytest.raises(dispatch.DispatchError, match="a: --effort"):
         dispatch.check_grok_contract(contract, effort="max")
-
-
-def test_a_read_only_piece_refuses_its_contract_on_grok(repo: Path, fake, no_tree) -> None:
-    contract = contracts.Contract(feature="f", verdict="parallel", pieces=[
-        contracts.Piece(slug="look", files=["a"], exposes=["x"], read_only=True),
-    ])
-
-    with pytest.raises(dispatch.DispatchError, match="look: --read-only"):
-        dispatch.dispatch_contract(contract, repo_root=repo, agent="grok")
 
 
 # --- the vocabulary Grok recorded -------------------------------------------
@@ -437,6 +428,72 @@ def test_a_turn_not_seen_taken_keeps_its_tree_and_is_recorded_with_a_warning(
     assert result.error is None and result.worktree.exists()
     assert "had not taken the opening turn" in result.warning
     assert grok_paths.short_id(sid) in child_agents.read(vault)
+
+
+# --- --read-only (#718) ------------------------------------------------------
+
+
+def test_a_read_only_grok_child_is_marked_before_its_opening_turn(
+    repo: Path, fake, vault: Path, monkeypatch,
+) -> None:
+    """No call of its first turn may run unmarked, so the mark precedes the prompt."""
+    seen = []
+    real_prompt = acp.Leader.prompt
+
+    def prompt(self, session_id, cwd, text, **kw):
+        seen.append(grok_read_only.is_marked(session_id, vault_root=vault))
+        return real_prompt(self, session_id, cwd, text, **kw)
+
+    monkeypatch.setattr(acp.Leader, "prompt", prompt)
+
+    result = dispatch.dispatch_issue(702, repo_root=repo, fetch=_fetch, agent="grok",
+                                     read_only=True)
+
+    sid, session = fake.only_session()
+    assert result.error is None and result.read_only is True
+    assert seen == [True]
+    assert session["prompts"] == [dispatch.for_agent(
+        dispatch.build_prompt(702, title="grok spawn", body="Spawn on Grok.",
+                              repo_root=repo, read_only=True),
+        "grok", read_only=True, issue=702,
+    )]
+    assert grok_read_only.denies({"sessionId": sid, "toolName": "write"}, vault_root=vault)
+
+
+def test_a_grok_child_not_read_only_is_never_marked(repo: Path, fake, vault: Path) -> None:
+    dispatch.dispatch_issue(702, repo_root=repo, fetch=_fetch, agent="grok")
+
+    sid, _ = fake.only_session()
+    assert not grok_read_only.is_marked(sid, vault_root=vault)
+    assert not (vault / ".mnemo" / grok_read_only.MARK_DIR).exists()
+
+
+def test_a_mark_that_cannot_be_written_closes_the_session_and_leaves_no_tree(
+    repo: Path, fake, vault: Path, monkeypatch,
+) -> None:
+    def broken(*a, **k):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(grok_read_only, "mark", broken)
+
+    with pytest.raises(dispatch.DispatchError, match="read-only mark could not be written"):
+        dispatch.dispatch_issue(702, repo_root=repo, fetch=_fetch, agent="grok",
+                                read_only=True)
+
+    _, session = fake.only_session()
+    assert session["resident"] is False and "prompts" not in session
+    _no_tree_and_no_branch(repo, 702)
+
+
+def test_a_read_only_piece_runs_on_grok(repo: Path, fake, vault: Path) -> None:
+    contract = contracts.Contract(feature="f", verdict="parallel", pieces=[
+        contracts.Piece(slug="look", files=["a"], exposes=["x"], read_only=True),
+    ])
+
+    dispatch.dispatch_contract(contract, repo_root=repo, agent="grok")
+
+    sid, _ = fake.only_session()
+    assert grok_read_only.is_marked(sid, vault_root=vault)
 
 
 # --- Claude is what it was (decision 8) -------------------------------------
@@ -551,10 +608,10 @@ def test_the_account_mnemo_desktop_selected_is_the_one_dispatched_on(
     assert "fix/issue-702" in out and "[grok]" in out
 
 
-def test_a_grok_dry_run_refuses_what_the_spawn_would(in_repo: Path, fake, no_tree, capsys) -> None:
-    assert dispatch_cmd.cmd_dispatch(_args(dry_run=True, agent="grok", read_only=True)) == 1
+def test_a_grok_read_only_dry_run_is_a_plan(in_repo: Path, fake, no_tree, capsys) -> None:
+    assert dispatch_cmd.cmd_dispatch(_args(dry_run=True, agent="grok", read_only=True)) == 0
 
-    assert capsys.readouterr().out.strip() == dispatch.GROK_READ_ONLY_REFUSAL
+    assert "fix/issue-702" in capsys.readouterr().out
 
 
 def test_a_claude_dry_run_row_is_unchanged(in_repo: Path, vault: Path, monkeypatch, capsys) -> None:

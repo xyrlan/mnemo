@@ -93,6 +93,11 @@ def _grok(payload: dict) -> int:
         payload = grok.normalize(payload)
     except Exception:  # noqa: BLE001
         return 0
+    if _grok_read_only_denies(payload):
+        from mnemo.core.grok import read_only
+
+        _emit_deny(_Reason(read_only.REASON))
+        return 0
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         _run(payload)
@@ -109,6 +114,18 @@ def _grok(payload: dict) -> int:
         except Exception:
             pass
     return 0
+
+
+def _grok_read_only_denies(payload: dict) -> bool:
+    """True when this call is an edit by a child dispatched ``--read-only``
+    (#718). Grok has no per-session tool list, so this hook is what closes
+    the editing tools; see :mod:`mnemo.core.grok.read_only`. Fail-open."""
+    try:
+        from mnemo.core.grok import read_only
+
+        return read_only.denies(payload)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _grok_pending(payload: dict) -> str:
