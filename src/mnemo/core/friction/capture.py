@@ -64,15 +64,22 @@ def is_dispatched_child(turns: list[str], session_id: str, vault_root: Optional[
     (:func:`corrections.is_dispatch_brief`), or the dispatch log names this
     session's short id as a child (``core.sessions.parents``). The first
     survives the vault; the second catches a brief whose wording changed.
+
+    The log keys a Claude child by its id's first eight characters and a Grok
+    child by :func:`grok.paths.short_id` (its last eight hex digits: a Grok id
+    is a UUIDv7, whose first eight are a timestamp shared by its neighbours),
+    so both are asked.
     """
     if turns and corrections.is_dispatch_brief(turns[0]):
         return True
     if vault_root is None or not session_id:
         return False
     try:
+        from mnemo.core.grok import paths as grok_paths
         from mnemo.core.sessions import parents
 
-        return session_id[:8] in parents.read(vault_root)
+        children = parents.read(vault_root)
+        return session_id[:8] in children or grok_paths.short_id(session_id) in children
     except Exception:
         return False
 
@@ -250,7 +257,7 @@ def corrections_only(
     record_session(
         vault_root,
         events=events,
-        session_id=jsonl_path.stem,
+        session_id=briefing_mod.session_id_for(jsonl_path),
         project=agent,
         items=kept,
         capture=ledger.CAPTURE_CORRECTIONS_ONLY,

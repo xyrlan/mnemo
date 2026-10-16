@@ -1,7 +1,9 @@
 """Durable record of which transcripts have been harvested.
 
-Lives at ``<vault>/.mnemo/backfill-state.json``. Keyed by session id (the
-transcript filename stem) with the file's content hash, so:
+Lives at ``<vault>/.mnemo/backfill-state.json``. Keyed by session id
+(:func:`briefing.session_id_for`: a Claude transcript's filename stem, a Grok
+history's session directory — every Grok history is ``chat_history.jsonl``,
+so its stem names no session) with the file's content hash, so:
 
 - a rerun is a no-op,
 - an interrupted sweep resumes where it stopped,
@@ -182,8 +184,26 @@ def mark_notice_shown(vault_root: Path, project: str) -> None:
     save(vault_root, led)
 
 
+def session_key(path: Path) -> str:
+    """The key a transcript's entry is filed under: its session's id.
+
+    A Claude transcript's is its filename stem, as it always was, so existing
+    ledgers still match; a Grok history's is its session directory's name.
+    """
+    from mnemo.core.briefing import session_id_for
+
+    return session_id_for(Path(path))
+
+
 def transcript_hash(path: Path) -> str:
-    """Content hash of a transcript, or ``""`` when unreadable."""
+    """Content hash of a transcript, or ``""`` when unreadable.
+
+    A Grok ``updates.jsonl`` is hashed as the ``chat_history.jsonl`` beside
+    it, the file harvest reads.
+    """
+    from mnemo.core.grok import transcript as grok_transcript
+
+    path = grok_transcript.history_path(Path(path))
     h = hashlib.sha256()
     try:
         with open(path, "rb") as fh:
@@ -224,7 +244,7 @@ def save(vault_root: Path, led: dict[str, Any]) -> None:
 
 
 def _entry(led: dict[str, Any], path: Path) -> dict[str, Any] | None:
-    entry = led.get("sessions", {}).get(Path(path).stem)
+    entry = led.get("sessions", {}).get(session_key(path))
     return entry if isinstance(entry, dict) else None
 
 
@@ -285,7 +305,7 @@ def clear_failed(led: dict[str, Any]) -> int:
 
 def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
     """Record success, resetting the attempt count to 0."""
-    led.setdefault("sessions", {})[Path(path).stem] = {
+    led.setdefault("sessions", {})[session_key(path)] = {
         "status": "done",
         "hash": transcript_hash(path),
         "produced": int(produced),
@@ -295,7 +315,7 @@ def mark_done(led: dict[str, Any], path: Path, *, produced: int) -> None:
 
 def mark_failed(led: dict[str, Any], path: Path, reason: str) -> None:
     """Record failure, re-hashing the file while carrying the attempt count forward."""
-    key = Path(path).stem
+    key = session_key(path)
     sessions = led.setdefault("sessions", {})
     prior = sessions.get(key) if isinstance(sessions.get(key), dict) else {}
     attempts = int(prior.get("attempts") or 0) + 1

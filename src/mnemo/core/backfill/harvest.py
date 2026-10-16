@@ -21,6 +21,7 @@ from mnemo.core.briefing import (
     _atomic_write,
     _count_file_mutations,
     _load_jsonl_events,
+    session_id_for,
 )
 from mnemo.core.extract import prompts
 from mnemo.core.extract.scanner import _VALID_TYPES, _normalize_slug
@@ -61,9 +62,10 @@ def _render_memory_file(
     multi-line ``name`` looks untidy. They are written through unmodified.
 
     ``session_id`` also lands inside the block, but it is *not* LLM-authored:
-    it is ``jsonl_path.stem``, and Claude Code names transcripts with UUIDs. It
+    it is :func:`session_id_for` — the transcript's stem, or a Grok session's
+    directory name — and both CLIs name sessions with UUIDs. It
     gets the same whitespace collapse anyway, as defence in depth rather than
-    against a live threat — a stem containing a ``---`` line would bury the
+    against a live threat — an id containing a ``---`` line would bury the
     ``origin: backfill`` stamp exactly as a description could, and that stamp
     is the only thing keeping reconstructed pages out of ``shared/``. Reaching
     it would require planting a hand-named file in ``~/.claude/projects/``,
@@ -164,7 +166,7 @@ def harvest_session(jsonl_path: Path, agent: str, cfg: dict) -> list[Path]:
     if not isinstance(raw_pages, list):
         return []
 
-    session_id = jsonl_path.stem
+    session_id = session_id_for(jsonl_path)
     memory_dir = paths.memory_dir(cfg, agent)
     written: list[Path] = []
     seen_slugs: set[str] = set()

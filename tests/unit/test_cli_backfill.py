@@ -151,7 +151,7 @@ def test_install_run_respects_install_cap_and_scopes_to_this_repo(env, monkeypat
 
     assert cmd.cmd_backfill(_args(install_run=True)) == 0
     assert len(calls) == 2  # installCap
-    assert seen[-1] == {"project": "alpha", "limit": 2}
+    assert seen[-1] == {"project": "alpha", "limit": 2, "grok": True}
 
 
 def test_install_run_never_prompts(env, monkeypatch):
@@ -170,21 +170,21 @@ def test_default_scope_is_the_current_repo(env, monkeypatch):
     cfg, vault, _, seen = env
     _recorder(monkeypatch)
     cmd.cmd_backfill(_args())
-    assert seen[-1] == {"project": "alpha", "limit": None}
+    assert seen[-1] == {"project": "alpha", "limit": None, "grok": True}
 
 
 def test_all_flag_drops_the_project_filter(env, monkeypatch):
     cfg, vault, _, seen = env
     _recorder(monkeypatch)
     cmd.cmd_backfill(_args(all=True))
-    assert seen[-1] == {"project": None, "limit": None}
+    assert seen[-1] == {"project": None, "limit": None, "grok": True}
 
 
 def test_explicit_project_wins_over_the_cwd(env, monkeypatch):
     cfg, vault, _, seen = env
     calls = _recorder(monkeypatch)
     cmd.cmd_backfill(_args(project="beta"))
-    assert seen[-1] == {"project": "beta", "limit": None}
+    assert seen[-1] == {"project": "beta", "limit": None, "grok": True}
     assert calls == []  # no transcripts belong to beta
 
 
@@ -192,7 +192,7 @@ def test_limit_zero_means_zero_not_unlimited(env, monkeypatch, capsys):
     cfg, vault, _, seen = env
     calls = _recorder(monkeypatch)
     assert cmd.cmd_backfill(_args(all=True, limit=0)) == 0
-    assert seen[-1] == {"project": None, "limit": 0}
+    assert seen[-1] == {"project": None, "limit": 0, "grok": True}
     assert calls == []
     assert "no transcripts found" in capsys.readouterr().out
 
