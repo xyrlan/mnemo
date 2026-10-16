@@ -5,6 +5,170 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-10-16
+
+### Added
+
+- **`mnemo dispatch --read-only` runs on Grok.** Grok has no per-session tool
+  list, so dispatch marks the child's session read-only before its opening
+  turn and mnemo's own PreToolUse hook denies that session's `write`,
+  `search_replace` and `hashline_edit` — and those of its subagents working
+  in its worktree. The meaning is the one `--read-only` has on Claude: the
+  editing tools are closed, the shell can still write. No setting of yours is
+  touched and no folder is trusted; a mark that cannot be written refuses the
+  dispatch rather than spawn a child with its editing tools open. (#718)
+
+- **`mnemo grok roster | send | close | billing` drive Grok Build sessions through Grok's leader.** mnemo now has one client of the leader (`grok agent --leader stdio`, ACP): `roster --json` lists every session of every logged-in Grok home with its live activity, `send ID TEXT` starts a turn and returns as soon as it runs (a dormant session is loaded first), `close ID` prints Grok's outcome, and `billing --json` prints the account's `_x.ai/billing` unchanged. Sessions mnemo creates approve their own tools, so a turn runs to its end with no client attached; mnemo remembers which ones, because Grok forgets it when a session is reloaded. A home too deep for macOS's 103-byte socket limit gets a short, stable socket of its own. mnemo-desktop reads and acts on Grok sessions through these verbs. (grok-host-w1)
+
+- **mnemo's hooks work in a Grok Build session.** Grok fires the hooks in
+  `~/.claude/settings.json`, but it names its tools its own way and drops
+  what SessionStart and UserPromptSubmit return, so enforcement, enrichment
+  and the memory-path guard did nothing there, and neither the briefing nor
+  the reflex reached the model. Now the hooks map Grok's tools to Claude's
+  (`run_terminal_command`, `read_file`, `write`, `search_replace`,
+  `hashline_edit`). The reflex block and held child notices go out with the
+  turn's first tool call. A project's briefing is written to
+  `.grok/rules/mnemo-briefing.md` in each of its worktrees; Grok loads that
+  file when the next session starts, and `info/exclude` keeps it out of
+  every commit. Grok loads it only in folders it trusts; a session that
+  started without it gets the briefing on its first tool call. SessionEnd
+  hands its work to a detached worker inside Grok's 1.5 s limit, and briefs
+  from `chat_history.jsonl`. When mnemo's hooks are wired from two hook
+  files, an event runs once. Claude sessions are unchanged.
+  `tools/measure_grok_reach.py` reports how often each channel reached the
+  model, from the sessions' own histories. (grok-host-w1)
+
+- `extraction.provider` accepts `grok-cli`: mnemo's own model calls (extraction, briefings, judges) run through `grok --prompt-file … --output-format json` with Grok's hooks off, so a machine with only Grok Build needs no `claude` binary. `extraction.provider` now defaults to empty; left empty, it follows the CLI the process drives: `grok-cli` under `MNEMO_AGENT=grok` or inside a Grok session, `claude-cli` otherwise. A provider you name always wins.
+
+- **mnemo reads Grok Build sessions like Claude Code ones.** A Grok
+  `chat_history.jsonl` is converted to the events every reader already
+  understands, so the session briefing, its verified corrections and `mnemo
+  learn` work on a Grok session unchanged: the briefing is named after the
+  session's directory, Grok's `write`, `search_replace` and `hashline_edit`
+  count as file edits, and only the text inside `<user_query>` (prompts and
+  mid-turn interjections) counts as the person's words — system reminders,
+  project instructions and the `<user_info>` prefix Grok injects never do.
+  Discovery finds Grok sessions in every Grok home (`~/.grok`, `$GROK_HOME`,
+  `~/.grok-<account>`), filed under the same project as the repo's Claude
+  sessions. `mnemo learn` takes Grok's newest session when run from a Grok
+  session or with `MNEMO_AGENT=grok`, and `--session` accepts a Grok id or its
+  short id; from Claude Code it picks exactly what it picked before. `mnemo
+  backfill` stays Claude-only until its ledger keys sessions by id. (#696)
+
+- **`mnemo init --host grok` wires Grok Build, once.** Grok already reads
+  Claude's `~/.claude.json` and `~/.claude/settings.json`, so where mnemo is
+  installed for Claude, init says so and adds nothing (a second copy would run
+  every hook twice). Where Grok sees no mnemo hook or MCP server — no Claude, or
+  `[compat.claude]` switched off — it registers the server with `grok mcp add`
+  and writes mnemo's hooks to `$GROK_HOME/hooks/mnemo.json` (`<repo>/.grok/hooks/`
+  with `--project`); `grok inspect --json` decides which. `mnemo uninstall
+  --host grok` removes those two and never touches Claude's files, and
+  `mnemo export --host grok` writes `.grok/rules/mnemo.md` (`--target agents-md`
+  for a block in `AGENTS.md`). `mnemo doctor` reports, when `grok` is on PATH,
+  its version, each home and whether it is logged in (no secret read), whether
+  mnemo's hooks and MCP are visible to Grok, and whether each home's leader
+  socket path fits the platform's Unix-socket limit.
+
+- **`mnemo backfill` harvests Grok Build sessions beside Claude Code's.** The
+  sweep (and the install run) now asks discovery for every Grok home's
+  sessions, and the backfill ledger, harvest and friction capture file each
+  session under its real id rather than its file's stem — every Grok history
+  is `chat_history.jsonl`, so a stem key would have lumped them into one entry
+  and re-paid a model call for each on every sweep. A Claude session's key is
+  unchanged, so an existing `backfill-state.json` still matches and a second
+  sweep over the same sessions spends nothing. A Grok child's corrections are
+  marked as a dispatched child's by its Grok short id. (#708)
+
+- **A parent learns that its Grok child finished, and a Grok parent hears
+  about every child.** A Grok child ends its last turn with its closing
+  report and goes dormant, and a dormant session fires no SessionEnd. So
+  the `child-notices` watcher now reads each dispatched Grok child's
+  `events.jsonl`. When the last turn ended `completed` and has stayed
+  ended for a minute, the watcher runs the hook's whole end-of-session
+  pipeline for that child: the parent's report card, the PR follow,
+  extraction and the briefing. That pipeline runs once per stop, whether a
+  watcher, a restarted watcher or a later SessionEnd gets there first
+  (`.mnemo/grok-finishes.jsonl`). The card's closing report and PR come
+  from the child's `chat_history.jsonl`. A Grok parent is found from its
+  session on disk, starting with the home dispatch recorded. Its card
+  arrives as a user turn through Grok's leader, which wakes the parent if
+  it is dormant. A parent that a Grok TUI has open outside the leader
+  never gets a turn this way, because loading it would fork the open
+  session. Its notice is held, as is any notice the leader cannot take, and
+  the parent gets it with its next prompt. Claude children and parents
+  are unchanged. (grok-host-w2, #705)
+
+- **`mnemo sessions`, `mnemo session <id>`, the statusline count and
+  `deliver --review` show Grok children beside Claude ones.** A child
+  dispatched on Grok (read from the `child_agents` ledger) gets a row whose
+  `state`, `tempo`, `needs`, `live`, `model`, `effort` and `context_tokens`
+  mean what they mean for a Claude child, read from the leader's roster and
+  the session's own files; a field Grok has no equivalent for stays empty.
+  Listing never starts a Grok leader: a child whose leader is down or whose
+  home is gone is shown with what its files say. `mnemo sessions --json`
+  carries `agent` (`claude` or `grok`), and the `attach:` hint opens a Grok
+  child with `grok --resume`. (grok-host-w2)
+- **A Grok child stopped by its account's limit is filed under STALLED, and
+  `mnemo resume` and the automatic wake take it.** Grok writes the limit to
+  `updates.jsonl` (`stop_reason: "rate_limit"`) with no reset time; the stall
+  is dated by the rolling window the API's message names (24 hours on the free
+  tier), the latest moment the usage it counted has aged out. (grok-host-w2)
+
+- **`mnemo dispatch` spawns children on Grok Build when the selected account is
+  a Grok one.** The CLI comes from `--agent`, then `MNEMO_AGENT`, then a Grok
+  session's own `GROK_SESSION_ID`. A Grok child is a session in Grok's leader,
+  started in its own worktree under the dispatching `GROK_HOME`. It gets the
+  same branch, grant and parent link as a Claude child, and a prompt that is
+  the same except for how it finishes: it ends its last turn with its closing
+  report and is never told a `claude` command. Its full id, home and tree go
+  into `.mnemo/child-agents.jsonl`, and every ledger keys it by the last eight
+  hex digits of its id. Before any worktree exists, dispatch refuses what Grok
+  cannot take:
+  - no `grok` on PATH, or no login;
+  - a `--model` that is not in the account's model list (a Claude name like
+    `haiku` is not);
+  - an `--effort` that the model does not take (`max` on `grok-4.7`);
+  - `--read-only` and `--twins`, which are not supported on Grok yet.
+
+  A spawn the leader refuses removes its tree and branch, and the error says
+  what to run. The report's `attach:` line is `grok --resume <id>`. A Grok
+  session that runs `mnemo dispatch` is recorded as the children's parent, with
+  its home. With no Grok in the environment, nothing changes. (#702)
+
+- **Waking, stopping and following a child work on a child spawned on
+  Grok.** `mnemo resume`, the automatic rewake after a rate limit and
+  pr-follow's nudge send their turn through the child's own Grok leader, and
+  `mnemo deliver` closes a finished Grok child's session there instead of
+  running `claude stop`. Each verb reads which CLI and which Grok account a
+  child was spawned on from the dispatch ledger, never from the account
+  selected now, and a Claude child's verbs are unchanged. A Grok child is
+  keyed in pr-follow by the last eight digits of its id, so two children
+  dispatched together no longer share one follow. A leader that cannot be
+  reached is reported and leaves the follow open to try again. `mnemo
+  deliver --stop-done --agent CLI` and `mnemo resume --agent CLI` narrow to
+  one CLI's children, `mnemo resume` names `grok --cwd … -r …` for a Grok
+  child that needs a person, and `tree-sweep` removes a merged Grok child's
+  tree once its leader has unloaded it. (#704)
+
+### Fixed
+
+- **`mnemo grok roster` no longer starts a Grok leader.** It went through
+  `grok agent --leader stdio`, which spawns a leader daemon when none is
+  listening, so mnemo-desktop asking every logged-in account every 3 s left a
+  daemon running on each one. It now probes the leader's socket first and,
+  when nothing listens, answers from the home's session files: every
+  non-headless session, `dormant` and not resident, newest first. `send` and
+  `close` still start a leader, since they act on a session. (#719)
+
+### Internal
+
+- **Seams for driving Grok Build beside Claude Code.** `mnemo.core.agent_cli`
+  decides which agent CLI a process drives (`--agent`, `MNEMO_AGENT`, a Grok
+  session's `GROK_SESSION_ID`, else Claude); `mnemo.core.grok.paths` says where
+  Grok keeps homes, sessions and its leader socket; `Session.agent`, the
+  `--agent` flags and a `mnemo grok` stub exist for the round's pieces to fill.
+  Nothing changes for Claude. Spec: `design/specs/2026-10-16-grok-host.md`.
+
 ## [1.9.0] — 2026-10-16
 
 ### Added
