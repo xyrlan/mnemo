@@ -36,6 +36,9 @@ from mnemo.core.backfill import discover
 NO_TRANSCRIPT = (
     "no transcript for this directory yet — start a Claude Code session here first"
 )
+NO_GROK_TRANSCRIPT = (
+    "no Grok session for this directory yet — start a Grok session here first"
+)
 LOCK_HELD = "another extraction is in progress"
 #: What the user sees when the lock is held. The condition is benign — the
 #: running extraction sweeps every dirty file, this session's briefing
@@ -91,26 +94,48 @@ class LearnReport:
 def newest_transcript(cwd: str, *, session_id: Optional[str] = None) -> Optional[Path]:
     """The transcript to learn from for ``cwd``, newest first.
 
-    With ``session_id``, the transcript whose filename stem matches it —
-    regardless of age, so a user can re-learn an earlier session by id.
-    ``None`` when this directory's project has no transcripts, or when no
-    stem matches the requested id.
+    With ``session_id``, the transcript of that session — regardless of age,
+    so a user can re-learn an earlier session by id. ``None`` when this
+    directory's project has no transcripts, or when none is that session.
 
     ``cwd`` is named with :func:`discover.agent_for_cwd`, the resolution
     ``find_transcripts`` applies to every project directory: a lookup only
     matches when both sides name the project the same way, and the cwd an
     unblock marker recorded is usually a dispatch tree that is gone (#301).
+
+    Which CLI's sessions are newest-first candidates follows
+    ``agent_cli.current_cli()``: run from a Grok session (or with
+    ``MNEMO_AGENT=grok``) it is Grok's, otherwise Claude Code's alone, as
+    before. An explicit ``session_id`` is looked up among both: a Claude id is
+    a transcript's stem, a Grok id its directory's name or its short id.
     """
+    from mnemo.core import agent_cli
+
     project = discover.agent_for_cwd(cwd)
-    found = discover.find_transcripts(project=project)
-    if not found:
-        return None
     if session_id is not None:
-        for t in found:
+        for t in discover.find_transcripts(project=project):
             if t.path.stem == session_id:
                 return t.path
+        for t in discover.find_grok_transcripts(project=project):
+            if _is_grok_session(t.path, session_id):
+                return t.path
+        return None
+    if agent_cli.current_cli() == agent_cli.GROK:
+        found = discover.find_grok_transcripts(project=project)
+    else:
+        found = discover.find_transcripts(project=project)
+    if not found:
         return None
     return found[0].path
+
+
+def _is_grok_session(path: Path, session_id: str) -> bool:
+    """Whether Grok history ``path`` is session ``session_id``, by id or short id."""
+    from mnemo.core.grok import paths as grok_paths
+    from mnemo.core.grok import transcript as grok_transcript
+
+    grok_id = grok_transcript.grok_session_id(path)
+    return grok_id is not None and session_id in (grok_id, grok_paths.short_id(grok_id))
 
 
 def _relevant(entry: dict, project: str, universal_threshold: int) -> bool:
@@ -129,14 +154,21 @@ def learn(
     """Brief and extract this directory's newest session. Never raises."""
     report = LearnReport()
 
+    from mnemo.core import agent_cli
+
     project = discover.agent_for_cwd(cwd)
-    path = newest_transcript(cwd, session_id=session_id)
+    try:
+        path = newest_transcript(cwd, session_id=session_id)
+    except agent_cli.UnknownAgentError as exc:
+        report.error = str(exc)
+        return report
     if path is None:
-        report.error = (
-            f"no transcript with session id {session_id} for this directory"
-            if session_id is not None
-            else NO_TRANSCRIPT
-        )
+        if session_id is not None:
+            report.error = f"no transcript with session id {session_id} for this directory"
+        elif agent_cli.current_cli() == agent_cli.GROK:
+            report.error = NO_GROK_TRANSCRIPT
+        else:
+            report.error = NO_TRANSCRIPT
         return report
     report.transcript = path
 
@@ -176,7 +208,7 @@ def learn(
     from mnemo.core.extract import run_extraction
     from mnemo.core.extract import scanner as scanner_mod
 
-    only = f"feedback/{scanner_mod._normalize_slug('briefing-' + path.stem)}"
+    only = f"feedback/{scanner_mod._normalize_slug('briefing-' + briefing_mod.session_id_for(path))}"
 
     try:
         summary = run_extraction(cfg, only=only)

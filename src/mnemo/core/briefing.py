@@ -20,6 +20,7 @@ from mnemo.core import errors as errors_mod
 from mnemo.core import llm, paths
 from mnemo.core.extract import prompts
 from mnemo.core.extract.scanner import parse_frontmatter as _parse_fm
+from mnemo.core.grok import transcript as grok_transcript
 from mnemo.core.redact import redact_secrets
 from mnemo.core.transcript import flatten_transcript_events, user_turns
 # Re-exported: the injector records a read through the briefing API it picks
@@ -27,7 +28,11 @@ from mnemo.core.transcript import flatten_transcript_events, user_turns
 from mnemo.core.mcp.access_log import record_briefing_read  # noqa: F401
 
 
-MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+#: Tools that change a file: Claude Code's, and Grok Build's own names for
+#: them (a Grok history keeps them, ``core/grok/transcript.py``).
+MUTATION_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"}) | (
+    grok_transcript.MUTATION_TOOL_NAMES
+)
 
 
 def _count_file_mutations(events: list[dict]) -> int:
@@ -50,6 +55,10 @@ def _count_file_mutations(events: list[dict]) -> int:
 
 
 def _load_jsonl_events(path: Path) -> list[dict]:
+    """A session's events: a Claude transcript as written, a Grok history
+    converted to the same shape (:func:`grok_transcript.load_events`)."""
+    if grok_transcript.is_grok_history(path):
+        return grok_transcript.load_events(path)
     events: list[dict] = []
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -100,6 +109,15 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def session_id_for(jsonl_path: Path) -> str:
+    """The id of the session a transcript holds.
+
+    Claude Code names the file after the session; every Grok history is
+    ``chat_history.jsonl`` in a directory named after it.
+    """
+    return grok_transcript.grok_session_id(jsonl_path) or Path(jsonl_path).stem
+
+
 def transcript_sha256(jsonl_path: Path) -> str:
     """Content hash of a transcript file, or ``""`` when it cannot be read.
 
@@ -107,6 +125,8 @@ def transcript_sha256(jsonl_path: Path) -> str:
     unchanged session can reuse the briefing it already wrote instead of
     paying for an identical LLM call.
     """
+    if grok_transcript.is_grok_history(jsonl_path):
+        jsonl_path = grok_transcript.history_path(jsonl_path)
     try:
         return hashlib.sha256(jsonl_path.read_bytes()).hexdigest()
     except OSError:
@@ -154,7 +174,11 @@ def generate_session_briefing(
     reuse_unchanged: bool = False,
     record_corrections: bool = False,
 ) -> Path | None:
-    """Produce a briefing markdown file for one Claude Code session.
+    """Produce a briefing markdown file for one Claude Code or Grok session.
+
+    ``jsonl_path`` is a Claude Code transcript or a Grok ``chat_history.jsonl``
+    (its ``updates.jsonl`` will do); the briefing is named after the session's
+    id either way (:func:`session_id_for`).
 
     Returns the filesystem path of the written briefing, or ``None`` when
     the session produced fewer than ``min_mutations`` file mutations and was
@@ -176,7 +200,7 @@ def generate_session_briefing(
     if _count_file_mutations(events) < min_mutations:
         return None
 
-    session_id = jsonl_path.stem
+    session_id = session_id_for(jsonl_path)
     vault_root = paths.vault_root(cfg)
     out_path = (
         vault_root / "bots" / agent / "briefings" / "sessions" / f"{session_id}.md"
