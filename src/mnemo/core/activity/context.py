@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import struct
 import sys
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -245,3 +246,36 @@ def context_for(
 ) -> Optional[int]:
     """Context size of the transcript at *path*; see :func:`measure`. Never raises."""
     return measure(path, cache)[0]
+
+
+def grok_context(path: Optional[str]) -> Optional[int]:
+    """How full a Grok session's context is, or ``None``. Never raises.
+
+    *path* is the session's ``chat_history.jsonl`` (``Session.link_scan_path``).
+    A Grok history records no usage per model call, and ``usage.json`` sums a
+    turn's calls (a turn of two calls at ~16k reads 32,712), so the
+    transcript cannot give what :func:`measure` reads off a Claude one. Grok
+    keeps its own figure: ``contextTokensUsed`` in ``signals.json`` beside the
+    history, set before every model call from "the exact prior count plus a
+    byte-estimate of items since the last response" (``xai-grok-shell``
+    ``session/compaction.rs``, ``check_auto_compact_needed``) — the number
+    behind its context-window percentage. It is Grok's, not mnemo's, and it
+    is an estimate: on a session's first call it can sit far below that
+    call's input (1,294 against 14,815 on one session of 2026-10-16; 15,263
+    against 15,271 on another).
+
+    There is no Grok equivalent of the per-tool breakdown, so the caller
+    leaves ``context_breakdown`` ``None``.
+    """
+    if not path:
+        return None
+    signals = os.path.join(os.path.dirname(path), "signals.json")
+    try:
+        with open(signals, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    value = data.get("contextTokensUsed") if isinstance(data, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value

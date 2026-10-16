@@ -31,7 +31,7 @@ def _find(sessions, short_id: str):
     the wrong session's actions is worse than asking for another character.
     """
     for s in sessions:
-        if s.short_id == short_id:
+        if s.short_id == short_id or (short_id and s.session_id == short_id):
             return s
     matches = [s for s in sessions if s.short_id.startswith(short_id)]
     return matches[0] if len(matches) == 1 else None
@@ -94,6 +94,43 @@ def _follow(session, limit: int, interval: float) -> int:
         return 0
 
 
+def _grok_events(session):
+    """A Grok child's history as the events ``recent_actions`` reads."""
+    from mnemo.core.sessions.grok_sessions import claude_shaped_events
+
+    return claude_shaped_events(session.link_scan_path)
+
+
+def _follow_grok(session, limit: int, interval: float) -> int:
+    """``--follow`` for a Grok child: its history is re-read whole each tick.
+
+    No byte bookmark: :func:`grok_sessions.claude_shaped_events` converts the
+    whole file, so the position kept is the count of actions already shown.
+    """
+    import time
+
+    from mnemo.core.activity import recent_actions
+
+    shown = recent_actions(_grok_events(session), limit=0)
+    actions = shown[-limit:] if limit else shown
+    if not actions:
+        print(NO_ACTIONS)
+    count = len(shown)
+    seen = set()  # type: set
+    try:
+        while True:
+            for act in actions:
+                key = (act.tool, act.target)
+                print(_line(act, act.repeated or key in seen), flush=True)
+                seen.add(key)
+            time.sleep(interval)
+            every = recent_actions(_grok_events(session), limit=0)
+            actions = every[count:] if len(every) >= count else every
+            count = len(every)
+    except KeyboardInterrupt:
+        return 0
+
+
 def _exploration_line(session) -> str:
     """What this session spent before its first edit, as one line (#269).
 
@@ -104,6 +141,8 @@ def _exploration_line(session) -> str:
     from mnemo.core.activity import exploration_for
     from mnemo.core.sessions.render import _thousands, plural
 
+    if session.agent == "grok":
+        return ""  # counted from a Claude transcript's head; a Grok history has another shape
     try:
         found = exploration_for(session.link_scan_path, session.cwd)
     except Exception:
@@ -165,9 +204,15 @@ def cmd_session(args: argparse.Namespace) -> int:
         print("")
 
     if bool(getattr(args, "follow", False)):
-        return _follow(session, limit, float(getattr(args, "interval", 2.0) or 2.0))
+        interval = float(getattr(args, "interval", 2.0) or 2.0)
+        if session.agent == "grok":
+            return _follow_grok(session, limit, interval)
+        return _follow(session, limit, interval)
 
-    events, _ = read_tail(session.link_scan_path, 0)
+    if session.agent == "grok":
+        events = _grok_events(session)
+    else:
+        events, _ = read_tail(session.link_scan_path, 0)
     actions = recent_actions(events, limit=limit)
 
     if not actions:
@@ -187,6 +232,8 @@ def cmd_session(args: argparse.Namespace) -> int:
         seen.add(key)
         print(_line(act, looped))
 
+    from mnemo.core.sessions.render import attach_command
+
     print("")
-    print(f"  attach: claude attach {session.short_id}")
+    print(f"  attach: {attach_command(session)}")
     return 0

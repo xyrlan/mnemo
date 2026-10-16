@@ -1,4 +1,4 @@
-"""``mnemo sessions`` — the live queue of Claude Code background sessions.
+"""``mnemo sessions`` — the live queue of background sessions: Claude Code's, and Grok children.
 
 Six sessions in parallel cost six streams of attention unless something says
 which ones are actually waiting. This prints that, blocked first.
@@ -101,6 +101,25 @@ def _append_watch(read, activities, interval: float) -> None:
         time.sleep(interval)
 
 
+def _is_grok(session) -> bool:
+    """A Grok child (grok-host wave 2). Its history is not a Claude transcript,
+    so the readers that parse one are given only the Claude rows."""
+    return getattr(session, "agent", "claude") == "grok"
+
+
+def _grok_activities(found) -> dict:
+    """Activity per ``short_id`` for the Grok rows of *found*. Never raises."""
+    grok = [s for s in found if _is_grok(s)]
+    if not grok:
+        return {}
+    try:
+        from mnemo.core.sessions import grok_sessions
+
+        return grok_sessions.activities(grok)
+    except Exception:
+        return {}
+
+
 def _explorations(found, cache: dict, *, only_done: bool = True) -> dict:
     """What each session spent before its first edit, by ``short_id`` (#269).
 
@@ -116,7 +135,7 @@ def _explorations(found, cache: dict, *, only_done: bool = True) -> dict:
     out = {}
     for session in found:
         short_id = getattr(session, "short_id", None)
-        if not short_id or not getattr(session, "link_scan_path", None):
+        if not short_id or not getattr(session, "link_scan_path", None) or _is_grok(session):
             continue
         done = bool(getattr(session, "is_done", False))
         if only_done and not done:
@@ -161,9 +180,11 @@ def _activities_once(found) -> dict:
     ``activity``, and the row falls back to ``detail``, never the whole dump.
     """
     try:
-        return activities_for(found, {})
+        out = activities_for([s for s in found if not _is_grok(s)], {})
     except Exception:
-        return {}
+        out = {}
+    out.update(_grok_activities(found))
+    return out
 
 
 def _clock(at) -> str:
@@ -288,14 +309,17 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         try:
             from dataclasses import replace
 
-            from mnemo.core.activity.context import measure
+            from mnemo.core.activity.context import grok_context, measure
 
             # How full each session is (#307) and what filled it (#308), from
             # one read of the transcript: state.json's `tokens` is not the
             # size, and `/context`'s per-tool figures are not the breakdown.
-            measured = [measure(s.link_scan_path, contexts) for s in found]
+            # A Grok child's size is Grok's own figure, and it has no
+            # breakdown to give.
+            measured = [(grok_context(s.link_scan_path), None) if _is_grok(s)
+                        else measure(s.link_scan_path, contexts) for s in found]
             found = [replace(s, context_tokens=size,
-                             context_breakdown=None if size is None else tools)
+                             context_breakdown=None if size is None or tools is None else tools)
                      for s, (size, tools) in zip(found, measured)]
         except Exception:
             pass
@@ -374,9 +398,11 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     def _activities(found):
         """Never let a transcript read cost us the queue itself."""
         try:
-            previous[0] = activities_for(found, offsets, previous=previous[0])
+            previous[0] = activities_for([s for s in found if not _is_grok(s)], offsets,
+                                         previous=previous[0])
         except Exception:
             previous[0] = {}
+        previous[0].update(_grok_activities(found))
         return previous[0]
 
     explored_cache = {}

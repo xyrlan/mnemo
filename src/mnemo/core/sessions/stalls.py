@@ -38,6 +38,20 @@ clock frees it: :data:`Kind.RATE_LIMIT` requires the epoch, and a rate limit
 without one is classified as needing a person, because the thing it needs is
 a decision about credits.
 
+**A Grok child (grok-host wave 2) stops on its limit differently, and says
+so in another file.** Measured on grok 1.0.60 (2026-10-16), free account:
+every one of six turns that ended ``error`` in ``events.jsonl`` was a rate
+limit, and only ``updates.jsonl`` says so — a ``retry_state`` of type
+``exhausted`` (``is_rate_limited: true``) whose ``reason`` is the API's
+sentence, then ``turn_completed`` with ``stop_reason: "rate_limit"``. No
+record carries a reset time: the sentence says "Usage resets over a rolling
+24-hour window". A rolling window has no boundary, but it has a bound — every
+token counted when the limit hit has aged out of it a window later — so
+:func:`grok_stall` dates the stall then (``limit`` ``rolling_24h``). Other
+sessions on the same account may have spent it again by then, exactly as a
+Claude window can be spent again the minute it reopens. A rate limit whose
+sentence names no window gets no epoch, like :func:`from_needs`'s.
+
 **What this module refuses to decide.** Whether to spend the budget again.
 It classifies and it says when; :mod:`mnemo.cli.commands.resume` is what acts.
 """
@@ -45,6 +59,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -329,6 +344,9 @@ def read_stall(session: Session, *, window: int = TAIL_WINDOW) -> Optional[Stall
     """
     if not session.is_blocked:
         return None
+    if getattr(session, "agent", "claude") == "grok":
+        found = grok_stall(session.link_scan_path, window=window)
+        return found if found is not None else from_needs(session.needs)
     path = session.link_scan_path
     if path:
         for record in reversed(_tail_records(path, window=window)):
@@ -336,6 +354,87 @@ def read_stall(session: Session, *, window: int = TAIL_WINDOW) -> Optional[Stall
             if found is not None:
                 return found
     return from_needs(session.needs)
+
+
+#: Grok's ACP stream beside its ``chat_history.jsonl``: where a turn's
+#: ``stop_reason`` and the API's sentence for a rate limit are written.
+GROK_UPDATES = "updates.jsonl"
+
+_ROLLING_WINDOW = re.compile(r"rolling\s+(\d+)-hour\s+window", re.I)
+
+
+def _grok_update(record: Dict[str, Any]) -> Dict[str, Any]:
+    params = record.get("params")
+    update = params.get("update") if isinstance(params, dict) else None
+    return update if isinstance(update, dict) else {}
+
+
+def _grok_epoch(record: Dict[str, Any]) -> Optional[float]:
+    """When an ``updates.jsonl`` record was written: ``_meta.agentTimestampMs``, else ``timestamp``."""
+    params = record.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    ms = meta.get("agentTimestampMs") if isinstance(meta, dict) else None
+    if _int_or_none(ms) is not None:
+        return float(ms) / 1000.0
+    seconds = _int_or_none(record.get("timestamp"))
+    return float(seconds) if seconds is not None else None
+
+
+def _grok_last_turn(records) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """The last ``turn_completed`` record and the ``exhausted`` retry inside that turn."""
+    end = None
+    exhausted = None
+    for record in reversed(records):
+        update = _grok_update(record)
+        kind = update.get("sessionUpdate")
+        if kind == "turn_completed":
+            if end is not None:
+                break  # the turn before this one: its retries are not this stop's
+            end = record
+        elif end is not None and kind == "retry_state" and update.get("type") == "exhausted":
+            exhausted = record
+            break
+    return end, exhausted
+
+
+def _grok_updates_path(path: Optional[str]) -> Optional[str]:
+    """``updates.jsonl`` beside a Grok history (or the path itself when it is one)."""
+    if not path:
+        return None
+    base = os.path.basename(path)
+    if base == GROK_UPDATES:
+        return path
+    return os.path.join(os.path.dirname(path), GROK_UPDATES)
+
+
+def grok_stop_reason(directory, *, window: int = TAIL_WINDOW) -> Optional[str]:
+    """The ``stop_reason`` of the last turn in a Grok session directory, or ``None``."""
+    records = _tail_records(os.path.join(str(directory), GROK_UPDATES), window=window)
+    end, _ = _grok_last_turn(records)
+    return _str_or_none(_grok_update(end).get("stop_reason")) if end is not None else None
+
+
+def grok_stall(path: Optional[str], *, window: int = TAIL_WINDOW) -> Optional[Stall]:
+    """Why a Grok session's last turn stopped, from its ``updates.jsonl``; ``None`` when not a limit.
+
+    *path* is the session's ``chat_history.jsonl`` (``Session.link_scan_path``)
+    or its ``updates.jsonl``. See the module docstring for the evidence and
+    for why the reset is the rate limit's time plus the window the API names.
+    """
+    updates = _grok_updates_path(path)
+    if not updates:
+        return None
+    end, exhausted = _grok_last_turn(_tail_records(updates, window=window))
+    if end is None or _grok_update(end).get("stop_reason") != "rate_limit":
+        return None
+    text = _str_or_none(_grok_update(exhausted).get("reason")) if exhausted is not None else None
+    match = _ROLLING_WINDOW.search(text or "")
+    at = _grok_epoch(end)
+    if match is None or at is None:
+        return Stall(kind=Kind.RATE_LIMIT, error="rate_limit", text=text)
+    hours = int(match.group(1))
+    return Stall(kind=Kind.RATE_LIMIT, error="rate_limit",
+                 resets_at=int(at + hours * 3600), limit=f"rolling_{hours}h", text=text)
 
 
 def stalls_for(sessions, *, window: int = TAIL_WINDOW) -> Dict[str, Stall]:
