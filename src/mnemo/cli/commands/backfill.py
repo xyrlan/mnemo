@@ -58,6 +58,7 @@ def _select(args: argparse.Namespace, cfg: dict) -> list[discover.Transcript]:
         return discover.find_transcripts(
             project=_current_project(),
             limit=int(backfill_cfg.get("installCap", 20)),
+            grok=True,
         )
 
     project = args.project
@@ -66,7 +67,7 @@ def _select(args: argparse.Namespace, cfg: dict) -> list[discover.Transcript]:
     # `is not None`, not truthiness: `--limit 0` is an explicit "no sessions",
     # and reading it as "unlimited" would be the worst possible misreading.
     limit = int(args.limit) if args.limit is not None else None
-    return discover.find_transcripts(project=project, limit=limit)
+    return discover.find_transcripts(project=project, limit=limit, grok=True)
 
 
 def _environmental(exc: BaseException) -> bool:
