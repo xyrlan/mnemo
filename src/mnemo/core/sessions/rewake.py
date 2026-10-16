@@ -98,6 +98,13 @@ next window, like a wake, makes it eligible again. Every failed or skipped
 attempt also writes one line to ``.errors.log`` under ``rewake.*``, which the
 hook breaker does not count: it is a report, not a hook failing.
 
+**A child dispatched on Grok** is woken by the same pass: :func:`wake.wake`
+reads the dispatch ledger and sends the nudge as a user turn through the
+child's own leader. A leader it cannot reach (``NotReached``: no login, a
+leader that will not come up, the account still limited) is a failure that
+may clear, never a permanent one, and only a turn the leader took is
+recorded under ``wakes``.
+
 **How the maintainer knows it happened.** The ledger, a line in the day log
 of the repo the child was working in, and a footer under ``mnemo sessions``.
 Not only a line in the child's transcript.
@@ -115,6 +122,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from mnemo.core import locks
 from mnemo.core.sessions import stalls as stalls_mod
 from mnemo.core.sessions import wake as wake_mod
+from mnemo.core.sessions.grok_verbs import NotReached
 
 #: Children one pass wakes. Beyond this the rest wait for the next tick, which
 #: is a minute away. Sized like :data:`unblocks.MAX_PER_PASS` and for a
@@ -608,7 +616,9 @@ def _wake_one(cfg, vault_root: Path, session, stall, report: WakeReport, *,
         why = str(exc) or type(exc).__name__
     if why:
         report.failed.append(f"{label} — {why}")
-        _trace(vault_root, session, stall, why, permanent=is_permanent(why),
+        # An unreachable Grok leader may come back; it is never a copy.
+        permanent = is_permanent(why) and not isinstance(why, NotReached)
+        _trace(vault_root, session, stall, why, permanent=permanent,
                now=now, where="rewake.wake_failed")
         return
     report.woken.append(label)
