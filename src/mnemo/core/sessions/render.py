@@ -420,6 +420,20 @@ def _stall_line(stall) -> str:
     return f"{window} spent — frees at {at}" if at else f"{window} spent"
 
 
+def attach_command(s: Session) -> str:
+    """The command that opens *s* in a terminal, on the CLI it runs on.
+
+    ``claude attach <id>`` for a Claude session; for a Grok child,
+    :func:`mnemo.core.sessions.grok_sessions.attach_command` (``grok
+    --resume <id>`` from its tree).
+    """
+    if s.agent == "grok":
+        from mnemo.core.sessions.grok_sessions import attach_command as grok_attach
+
+        return grok_attach(s)
+    return f"claude attach {s.short_id}"
+
+
 def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
                  explorations=None, stalls=None) -> str:
     """Render the whole queue, blocked first.
@@ -540,7 +554,7 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
     if spent_total:
         lines.append(spent_total)
     if waiting:
-        lines.append(f"  attach: claude attach {waiting[0].short_id}")
+        lines.append(f"  attach: {attach_command(waiting[0])}")
     if stalled:
         # No id: the whole point is that it takes one command for all of them,
         # and `mnemo resume` wakes only the ones whose reset has passed. A
@@ -549,7 +563,10 @@ def render_queue(sessions: list[Session], activities=None, pr_lookup=None,
         # put it here — so the lookup cannot miss.
         ready = sum(1 for s in stalled if stalled_by_id[s.short_id].is_free())
         lines.append(f"  resume: mnemo resume  ({ready} of {len(stalled)} free now)")
-    if abandoned:
-        lines.append(f"  remove: claude rm {abandoned[0].short_id}")
+    # `claude rm` names a Claude job record; a Grok child has none, and
+    # nothing Grok offers removes one, so the hint names the oldest Claude row.
+    removable = [s for s in abandoned if s.agent != "grok"]
+    if removable:
+        lines.append(f"  remove: claude rm {removable[0].short_id}")
 
     return "\n".join(lines).rstrip() + "\n"

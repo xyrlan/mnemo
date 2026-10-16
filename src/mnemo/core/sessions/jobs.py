@@ -359,8 +359,9 @@ def in_scope(session_cwd: str | None, scope: str | None) -> bool:
 
 
 def read_sessions(root: Path | None = None, *, cwd: str | None = None,
-                  claude_home: Path | None = None) -> list[Session]:
-    """Every readable background session, on every Claude account (#640).
+                  claude_home: Path | None = None, grok: bool | None = None,
+                  vault_root: Path | str | None = None) -> list[Session]:
+    """Every readable background session, on every Claude account (#640), and every Grok child.
 
     With no *root* and no *claude_home* this reads each config dir
     :func:`mnemo.core.sessions.accounts.roots` names — the current account,
@@ -385,6 +386,14 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None,
     pane between accounts, and the old record stays behind). The copy whose
     process is running wins, then the one updated last, then the account
     listed first.
+
+    Grok children — the sessions grok-spawn recorded in *vault_root*'s
+    ``child_agents`` ledger (the configured vault by default) — are read by
+    :mod:`mnemo.core.sessions.grok_sessions` and carry ``agent="grok"``. They
+    are included whenever every Claude account is read, and left out when
+    *root* or *claude_home* names one place; *grok* overrides either way. A
+    machine with no Grok child pays one read of a missing ledger, and the
+    list it gets is the one it got before Grok existed.
     """
     from mnemo.core.sessions import liveness as _liveness
 
@@ -434,4 +443,20 @@ def read_sessions(root: Path | None = None, *, cwd: str | None = None,
             held = best.get(session.short_id)
             if held is None or rank > held[0]:
                 best[session.short_id] = (rank, session)
-    return [best[short_id][1] for short_id in sorted(best)]
+    found = [best[short_id][1] for short_id in sorted(best)]
+
+    if grok is None:
+        grok = root is None and claude_home is None
+    if not grok:
+        return found
+    try:
+        from mnemo.core.sessions import grok_sessions
+
+        children = grok_sessions.read(vault_root, scope=scope if cwd is not None else None)
+    except Exception:  # noqa: BLE001 — the Grok rows must never cost the Claude ones
+        children = []
+    if not children:
+        return found
+    # Sorted with the Claude rows by short id, as one queue; a Grok id equal
+    # to a Claude one (a 1 in 4 billion draw) is kept, not merged.
+    return sorted(found + children, key=lambda s: (s.short_id, s.agent != "claude"))
