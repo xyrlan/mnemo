@@ -98,6 +98,10 @@ class Session:
     #: :func:`mnemo.core.activity.context.measure`; ``None`` whenever
     #: ``context_tokens`` is, ``{}`` when no tool result has reached the model.
     context_breakdown: dict[str, int] | None = None
+    #: Which agent CLI hosts this session: ``"claude"`` or ``"grok"``
+    #: (:data:`mnemo.core.agent_cli.AGENT_CLIS`). Every reader before the Grok
+    #: round produced Claude sessions, hence the default; a Grok reader sets it.
+    agent: str = "claude"
     #: What this child may publish without asking — ``("push", "pr")`` — as
     #: granted at dispatch (#317). ``()`` for a child granted nothing, and for
     #: every session nobody dispatched. Not in ``state.json``:

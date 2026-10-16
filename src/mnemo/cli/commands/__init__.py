@@ -21,6 +21,7 @@ from mnemo.cli.commands import (  # noqa: F401  — trigger @command registratio
     doctor,
     export,
     extract,
+    grok,
     hook,
     import_rules,
     inbox,

@@ -29,6 +29,7 @@ TAGLINE = (
 # Commands that are real but advanced/maintenance — hidden from
 # ``mnemo help`` by default; surfaced via ``mnemo help --all``.
 ADVANCED_COMMANDS: frozenset[str] = frozenset({
+    "grok",
     "telemetry",
     "recall",
     "recall-sessions",
@@ -130,6 +131,7 @@ class _CuratedHelpAction(argparse.Action):
 
 def _build_parser() -> argparse.ArgumentParser:
     from mnemo._version import resolve_version
+    from mnemo.core.agent_cli import AGENT_CLIS
     from mnemo.core.claude_cli import EFFORT_LEVELS
     from mnemo.core.mcp.rerank import PROVIDERS as _RERANK_PROVIDERS
     from mnemo.core.dedup_judge import (
@@ -173,8 +175,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="leave Claude Code's cleanupPeriodDays alone (remembered in mnemo's config; doctor stops warning)",
     )
     init.add_argument(
-        "--host", choices=["claude", "cursor", "codex"], default="claude",
-        help="which tool to wire: claude (default: hooks + MCP), cursor or codex (MCP + rules file only)",
+        "--host", choices=["claude", "cursor", "codex", "grok"], default="claude",
+        help="which tool to wire: claude (default: hooks + MCP), cursor or codex (MCP + rules file only), grok",
     )
 
     status = sub.add_parser("status", help="vault state + hook health + recent activity")
@@ -280,6 +282,13 @@ def _build_parser() -> argparse.ArgumentParser:
     dispatch_p.add_argument("--full-profile", dest="full_profile", action="store_true",
                             help="give children the full user profile (plugins, all MCP "
                                  "servers, all skills) instead of the lean default")
+    # The Grok round (design/specs/2026-10-16-grok-host.md): which CLI the
+    # children are spawned on. No default here — omitted, the command asks
+    # agent_cli.current_cli(), which reads the account mnemo-desktop exported.
+    dispatch_p.add_argument("--agent", metavar="CLI", choices=AGENT_CLIS,
+                            help="agent CLI the children run on: "
+                                 f"{', '.join(AGENT_CLIS)}; omitted, MNEMO_AGENT, "
+                                 "then grok inside a Grok session, else claude")
     # #449: #439's pilot. Two children, one prompt, one base commit, neither
     # told of the other and neither publishing; `mnemo twins` reads them blind.
     dispatch_p.add_argument("--twins", action="store_true",
@@ -314,6 +323,8 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="stop every finished child in this repo's dispatch "
                                 "worktrees, delivered or not — a stopped child is "
                                 "the one that writes its briefing")
+    deliver_p.add_argument("--agent", metavar="CLI", choices=AGENT_CLIS,
+                           help="with --stop-done, only children of this agent CLI")
     resume_p = sub.add_parser(
         "resume",
         help="wake the dispatched children the account's limit stopped, once it has reset")
@@ -335,6 +346,25 @@ def _build_parser() -> argparse.ArgumentParser:
     resume_p.add_argument("--watch", action="store_true",
                           help="stay running and wake each child as its own reset "
                                "comes round; exits when nothing is left to watch")
+    resume_p.add_argument("--agent", metavar="CLI", choices=AGENT_CLIS,
+                          help="only children of this agent CLI; omitted, every "
+                               "child, each woken on the CLI it was spawned on")
+    # The Grok round: one verb per thing mnemo does to a Grok session through
+    # the leader (ACP). mnemo-desktop reads and acts on Grok sessions through
+    # these, the way it runs `claude agents` for Claude ones.
+    grok_p = sub.add_parser(
+        "grok",
+        help="Grok Build sessions through its leader: roster, send a turn, "
+             "close, billing")
+    grok_p.add_argument("grok_action", choices=("roster", "send", "close", "billing"),
+                        help="roster: live sessions; send ID TEXT: a user turn; "
+                             "close ID; billing: the account's credit usage")
+    grok_p.add_argument("grok_args", nargs="*", metavar="ARG",
+                        help="send: session id then text; close: session id")
+    grok_p.add_argument("--home", metavar="DIR",
+                        help="GROK_HOME of the account; omitted, $GROK_HOME or ~/.grok")
+    grok_p.add_argument("--json", action="store_true",
+                        help="machine-readable output")
     land_p = sub.add_parser(
         "land",
         help="a delivered contract's pieces in landing order with their PRs and "
@@ -518,7 +548,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="remove only the project-local install (<cwd>/.claude/settings.json + <cwd>/.mcp.json)",
     )
     uninstall.add_argument(
-        "--host", choices=["claude", "cursor", "codex"], default="claude",
+        "--host", choices=["claude", "cursor", "codex", "grok"], default="claude",
         help="which tool's MCP registration to remove (default: claude)",
     )
     why = sub.add_parser("why", help="explain the last few reflex decisions (what fired, what nearly did, why not)")
@@ -805,7 +835,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "export",
         help="write this project's rules to a file Claude Code / Cursor / Codex loads",
     )
-    export.add_argument("--host", choices=["claude", "cursor", "codex"], default="claude",
+    export.add_argument("--host", choices=["claude", "cursor", "codex", "grok"], default="claude",
                         help="which tool will read the file (default: claude)")
     export.add_argument("--target", choices=["auto", "rules", "claude-md", "agents-md"], default="auto",
                         help="rules file (default per host), or a managed block in CLAUDE.md / AGENTS.md")
