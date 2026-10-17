@@ -98,6 +98,7 @@ def test_no_model_spawns_the_command_it_spawned_before(repo: Path, monkeypatch) 
     does not exist.
     """
     seen = _capture(monkeypatch)
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
     tree = dispatch.ensure_worktree(268, repo_root=repo)
 
     # `lean=False` isolates the model question from the profile question

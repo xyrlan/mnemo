@@ -125,7 +125,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
-from mnemo.core import agent_cli, child_profile, claude_cli, contracts, redact
+from mnemo.core import (
+    agent_cli, child_priority, child_profile, claude_cli, contracts, redact,
+)
 from mnemo.core.sessions import child_agents, grants, parents
 
 WORKTREE_SUFFIX = "-wt-"
@@ -1162,6 +1164,12 @@ def spawn_child(
     child they join mnemo's hooks in the one file the lean profile already
     passes; on the full profile they are the file's only content. ``None``
     (every caller but twins) leaves the argv byte-identical.
+
+    **Below-normal CPU (#723).** On Windows the settings also carry
+    ``env: {MNEMO_CHILD_PRIORITY: below_normal}``, merged with any keys given,
+    and mnemo's ``SessionStart`` hook lowers the child's own session from
+    inside it (:mod:`mnemo.core.child_priority` says why not here).
+    ``dispatch.childPriority: normal`` in the config writes no marker.
     """
     if agent == agent_cli.GROK:
         return _spawn_grok(prompt, cwd=cwd, model=model, effort=effort,
@@ -1186,6 +1194,9 @@ def spawn_child(
         args += ["--model", model]
     if effort:
         args += ["--effort", effort]
+    from mnemo.core import config
+
+    settings = child_priority.with_marker(settings, config.load_config())
     if child_profile.is_lean(lean):
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.

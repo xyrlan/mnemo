@@ -707,6 +707,7 @@ def test_a_lean_twin_gets_one_settings_file_holding_the_hooks_and_the_memory_swi
     monkeypatch.setattr(child_profile, "mnemo_mcp_servers", lambda: {})
     monkeypatch.delenv("MNEMO_DISPATCH_FULL_PROFILE", raising=False)
     run = _Run()
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
     monkeypatch.setattr(dispatch.subprocess, "run", run)
 
     dispatch.spawn_child("P", cwd=tmp_path, settings=twins.SETTINGS)
@@ -729,6 +730,7 @@ def test_without_settings_the_argv_and_the_file_are_what_they_were(
     monkeypatch.setattr(child_profile, "mnemo_mcp_servers", lambda: {})
     monkeypatch.delenv("MNEMO_DISPATCH_FULL_PROFILE", raising=False)
     run = _Run()
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
     monkeypatch.setattr(dispatch.subprocess, "run", run)
 
     dispatch.spawn_child("P", cwd=tmp_path)

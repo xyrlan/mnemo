@@ -242,6 +242,7 @@ def test_spawn_is_lean_by_default(installed, tmp_path, monkeypatch) -> None:
 def test_spawn_full_profile_adds_no_flags(installed, tmp_path, monkeypatch) -> None:
     seen: dict = {}
     _spy(monkeypatch, seen)
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
 
     dispatch.spawn_child("x", cwd=tmp_path, lean=False)
 
@@ -255,6 +256,7 @@ def test_the_environment_opt_out_reaches_the_spawn(installed, tmp_path, monkeypa
     seen: dict = {}
     _spy(monkeypatch, seen)
     monkeypatch.setenv("MNEMO_DISPATCH_FULL_PROFILE", "1")
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
 
     dispatch.spawn_child("x", cwd=tmp_path)
 

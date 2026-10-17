@@ -64,6 +64,10 @@ def _breaker_relevant(entry: dict, cutoff: datetime) -> bool:
     # record of a child, bounded per window, not a hook failing.
     if where.startswith("rewake."):
         return False
+    # A child that could not be lowered below normal CPU (#723) still runs,
+    # just at the user's priority; that must not pause the hooks too.
+    if where.startswith("child_priority."):
+        return False
     return datetime.fromisoformat(entry["timestamp"]) >= cutoff
 
 

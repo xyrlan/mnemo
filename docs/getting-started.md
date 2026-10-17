@@ -1071,6 +1071,31 @@ It publishes nothing and approves nothing, so it is not an `--all` in
 disguise; naming ids or `--review` alongside it is refused, because each of
 those is a different command.
 
+### A child runs below your CPU priority
+
+On Windows a dispatched child lowers its own session to below-normal CPU
+priority as it starts, and again when it is woken. Every process it starts
+afterwards inherits that priority: its test suites, builds and dev servers.
+A suite that runs one worker per core then takes the CPU only when you leave
+it idle, and the desktop you dispatch and message from stays responsive. The
+`claude` daemon and its pty host are left at normal priority, because your
+own `claude --bg` sessions share them.
+
+The session is found by its id in Claude Code's own registry
+(`~/.claude/sessions/`), and only a background session is lowered.
+Interactive sessions are never touched, and that includes one where you
+`claude --resume` a child yourself.
+
+To run children at your own priority, set `dispatch.childPriority` to
+`"normal"` in `mnemo.config.json`. The hook reads it each time, so the
+setting also holds for children dispatched before you changed it, the next
+time they are woken. A failure to lower is logged to the vault's
+`.errors.log` as `child_priority.lower` and does not pause the hooks.
+`tools/measure_child_priority.py` checks the whole path on one throwaway
+background session.
+macOS, Linux and Grok children are not lowered yet. Priority does not cover
+disk I/O, so a disk-heavy build can still slow the machine.
+
 ### What a child already knows about your repo
 
 A child is handed the issue, a worktree and its scope limits — never an

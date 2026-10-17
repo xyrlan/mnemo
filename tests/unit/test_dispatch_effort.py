@@ -93,6 +93,7 @@ def test_no_effort_spawns_the_command_it_spawned_before(
 ) -> None:
     """Byte-identical, not merely equivalent: no ``--effort`` in any spelling."""
     seen = _capture(monkeypatch)
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
 
     dispatch.spawn_child("do the thing", cwd=tmp_path, lean=False, effort=effort)
 
