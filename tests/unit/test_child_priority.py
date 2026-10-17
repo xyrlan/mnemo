@@ -17,19 +17,6 @@ from mnemo.hooks import session_start
 
 MARKER = {child_priority.ENV: child_priority.BELOW_NORMAL}
 
-#: The ancestry measured on 2026-10-17: the hook (python) under two bashes
-#: under the session, under the pty host, under the daemon, under WMI.
-MEASURED: child_priority.Table = {
-    100: (101, "python.exe"),
-    101: (102, "bash.exe"),
-    102: (103, "bash.exe"),
-    103: (104, "claude.exe"),   # --session-id <id>: the session
-    104: (105, "claude.exe"),   # --bg-pty-host
-    105: (106, "claude.exe"),   # daemon run
-    106: (4, "WmiPrvSE.exe"),
-}
-
-
 # --- the marker ------------------------------------------------------------
 
 @pytest.fixture
@@ -125,113 +112,119 @@ def test_the_config_opt_out_reaches_the_spawn(windows, run, tmp_path: Path) -> N
     assert _settings_files(run.args) == [{"hooks": {"Stop": []}}]
 
 
-# --- finding the session ---------------------------------------------------
-
-def test_the_first_claude_above_the_hook_is_the_session() -> None:
-    assert child_priority.find_session(MEASURED, 100) == 103
-
-
-def test_the_name_match_ignores_case() -> None:
-    table = {**MEASURED, 103: (104, "Claude.EXE")}
-    assert child_priority.find_session(table, 100) == 103
-
-
-def test_the_hook_itself_is_never_the_answer() -> None:
-    table = {1: (2, "claude.exe"), 2: (3, "explorer.exe")}
-    assert child_priority.find_session(table, 1) is None
-
-
-def test_no_claude_above_is_none() -> None:
-    table = {1: (2, "python.exe"), 2: (3, "bash.exe"), 3: (0, "explorer.exe")}
-    assert child_priority.find_session(table, 1) is None
-
-
-def test_a_parent_that_exited_ends_the_walk() -> None:
-    assert child_priority.find_session({1: (2, "python.exe")}, 1) is None
-
-
-def test_a_reused_pid_cycle_ends_the_walk() -> None:
-    table = {1: (2, "python.exe"), 2: (3, "bash.exe"), 3: (1, "bash.exe")}
-    assert child_priority.find_session(table, 1) is None
-
-
-def test_the_walk_is_bounded() -> None:
-    table = {i: (i + 1, "bash.exe") for i in range(20)}
-    table[20] = (0, "claude.exe")
-    assert child_priority.find_session(table, 0) is None
-    assert child_priority.find_session(table, 0, depth=20) == 20
-
-
 # --- lowering --------------------------------------------------------------
 
-def test_without_the_marker_nothing_is_looked_at(windows, monkeypatch) -> None:
-    monkeypatch.setattr(child_priority, "_process_table",
-                        lambda: pytest.fail("the process table was read"))
-    assert child_priority.lower_session({}) is None
-    assert child_priority.lower_session({child_priority.ENV: "normal"}) is None
+SID = "a7e6d951-f8f9-4fe5-a04c-58d0e38fa59e"
 
 
-def test_the_marked_session_is_the_one_lowered(windows, monkeypatch) -> None:
-    lowered: List[int] = []
-    monkeypatch.setattr(child_priority, "_process_table", lambda: MEASURED)
-    monkeypatch.setattr(child_priority.os, "getpid", lambda: 100)
+@pytest.fixture
+def entry(windows, monkeypatch) -> Dict:
+    """The registry names a live bg session; the setter records what it gets."""
+    found = {"pid": 71084, "sessionId": SID, "kind": "bg", "procStart": "1343"}
+    monkeypatch.setattr("mnemo.core.sessions.registry.live_entry",
+                        lambda sid, directory=None: found if sid == SID else None)
+    found["lowered"] = []
     monkeypatch.setattr(child_priority, "_set_below_normal",
-                        lambda pid: lowered.append(pid))
-    assert child_priority.lower_session(MARKER) is None
-    assert lowered == [103]
+                        lambda pid, start: found["lowered"].append((pid, start)))
+    return found
 
 
-def test_a_failure_is_returned_not_raised(windows, monkeypatch) -> None:
-    def denied():
+def test_without_the_marker_nothing_is_looked_at(windows, monkeypatch) -> None:
+    monkeypatch.setattr("mnemo.core.sessions.registry.live_entry",
+                        lambda *a, **k: pytest.fail("the registry was read"))
+    assert child_priority.lower_session(SID, None, environ={}) is None
+    assert child_priority.lower_session(
+        SID, None, environ={child_priority.ENV: "normal"}) is None
+
+
+def test_the_registry_named_session_is_the_one_lowered(entry) -> None:
+    assert child_priority.lower_session(SID, None, environ=MARKER) is None
+    assert entry["lowered"] == [(71084, 1343)]
+
+
+def test_an_interactive_session_is_left_alone_even_when_marked(entry) -> None:
+    """An interactive `claude --resume` of a child could carry its settings."""
+    entry["kind"] = "interactive"
+    assert child_priority.lower_session(SID, None, environ=MARKER) is None
+    assert entry["lowered"] == []
+
+
+def test_normal_in_the_current_config_holds_for_a_child_marked_before(entry) -> None:
+    """A wake restores the marker the child was dispatched with; the config wins."""
+    cfg = {"dispatch": {"childPriority": "normal"}}
+    assert child_priority.lower_session(SID, cfg, environ=MARKER) is None
+    assert entry["lowered"] == []
+
+
+def test_no_live_entry_is_a_reason(entry) -> None:
+    assert "no live entry" in child_priority.lower_session("other", None, environ=MARKER)
+    assert "no session id" in child_priority.lower_session("", None, environ=MARKER)
+    assert entry["lowered"] == []
+
+
+def test_a_failure_is_returned_not_raised(entry, monkeypatch) -> None:
+    def denied(pid, start):
         raise PermissionError("access denied")
 
-    monkeypatch.setattr(child_priority, "_process_table", denied)
-    assert "access denied" in child_priority.lower_session(MARKER)
-
-
-def test_no_session_found_is_a_reason(windows, monkeypatch) -> None:
-    monkeypatch.setattr(child_priority, "_process_table", lambda: {})
-    assert "claude.exe" in child_priority.lower_session(MARKER)
+    monkeypatch.setattr(child_priority, "_set_below_normal", denied)
+    assert "access denied" in child_priority.lower_session(SID, None, environ=MARKER)
 
 
 def test_posix_does_nothing_even_when_marked(monkeypatch) -> None:
     monkeypatch.setattr(child_priority, "supported", lambda: False)
-    monkeypatch.setattr(child_priority, "_process_table",
-                        lambda: pytest.fail("the process table was read"))
-    assert child_priority.lower_session(MARKER) is None
+    monkeypatch.setattr("mnemo.core.sessions.registry.live_entry",
+                        lambda *a, **k: pytest.fail("the registry was read"))
+    assert child_priority.lower_session(SID, None, environ=MARKER) is None
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp is Windows")
-def test_the_real_snapshot_knows_this_process_and_its_parent() -> None:
-    table = child_priority._process_table()
-    assert table[os.getpid()][0] == os.getppid()
-    assert table[os.getpid()][1].lower().endswith(".exe")
+@pytest.mark.parametrize("cfg", [{"dispatch": "x"}, {"dispatch": ["a"]}, "junk", None,
+                                 {"dispatch": {"childPriority": 3}}])
+def test_a_malformed_config_keeps_the_default_and_never_raises(cfg) -> None:
+    assert child_priority.wanted(cfg)
+
+
+@pytest.mark.real_spawn
+def test_a_malformed_config_does_not_abort_the_dispatch(windows, run, tmp_path) -> None:
+    config_path = Path(os.environ["MNEMO_CONFIG_PATH"])
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"dispatch": "x"}), encoding="utf-8")
+    assert dispatch.spawn_child("P", cwd=tmp_path, lean=False) == "0000000b"
+    assert _settings_files(run.args) == [{"env": MARKER}]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="priority classes are Windows")
-def test_a_real_process_is_lowered_and_stays_lowered() -> None:
-    import ctypes
+def test_a_real_process_is_lowered_and_a_wrong_start_time_is_refused() -> None:
+    from mnemo.core.sessions import registry
 
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        assert child_priority._set_below_normal(proc.pid) is None
-        assert child_priority._set_below_normal(proc.pid) is None  # idempotent
-        kernel32 = child_priority._kernel32()
-        handle = kernel32.OpenProcess(0x1000, False, proc.pid)
-        assert handle, ctypes.get_last_error()
-        try:
-            assert kernel32.GetPriorityClass(handle) == 0x4000
-        finally:
-            kernel32.CloseHandle(handle)
+        start = registry.windows_creation_time(proc.pid)
+        assert start
+        assert "no longer the session" in child_priority._set_below_normal(proc.pid, start + 1)
+        assert _class_of(proc.pid) == 0x0020
+        assert child_priority._set_below_normal(proc.pid, start) is None
+        assert child_priority._set_below_normal(proc.pid, start) is None  # idempotent
+        assert _class_of(proc.pid) == 0x4000
     finally:
         proc.kill()
         proc.wait()
 
 
+def _class_of(pid: int) -> int:
+    from mnemo.core.sessions import registry
+
+    kernel32 = registry._kernel32()
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    assert handle
+    try:
+        return kernel32.GetPriorityClass(handle)
+    finally:
+        kernel32.CloseHandle(handle)
+
 # --- the hook --------------------------------------------------------------
 
 def _run_hook(monkeypatch, cwd: Path, vault: Path) -> str:
-    payload = {"session_id": "s1", "cwd": str(cwd), "source": "startup"}
+    payload = {"session_id": SID, "cwd": str(cwd), "source": "startup"}
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr("mnemo.core.paths.vault_root", lambda _cfg=None: vault)
     monkeypatch.setattr("mnemo.core.hook_guard.throwaway_session", lambda *_a: False)
@@ -241,15 +234,27 @@ def _run_hook(monkeypatch, cwd: Path, vault: Path) -> str:
     return out.getvalue()
 
 
-def test_the_hook_lowers_before_it_reads_anything(monkeypatch, tmp_path: Path) -> None:
+def test_the_hook_lowers_with_its_session_id_before_it_does_its_work(
+    monkeypatch, tmp_path: Path,
+) -> None:
     order: List[str] = []
+    monkeypatch.setenv(child_priority.ENV, child_priority.BELOW_NORMAL)
     monkeypatch.setattr(child_priority, "lower_session",
-                        lambda *a: order.append("lower"))
-    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    monkeypatch.setattr("mnemo.core.config.load_config",
-                        lambda *a, **k: order.append("config") or {})
-    session_start.main()
-    assert order[:1] == ["lower"]
+                        lambda sid, cfg: order.append(f"lower {sid}"))
+    monkeypatch.setattr("mnemo.core.sync.roles.is_satellite",
+                        lambda *a, **k: order.append("work") or False)
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    _run_hook(monkeypatch, cwd, tmp_path / "v")
+    assert order[:2] == [f"lower {SID}", "work"]
+
+
+def test_an_unmarked_session_never_reaches_the_lowering(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(child_priority, "lower_session",
+                        lambda *a: pytest.fail("an interactive session was considered"))
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    _run_hook(monkeypatch, cwd, tmp_path / "v")
 
 
 def test_a_failure_to_lower_is_logged_and_changes_no_output(
@@ -257,6 +262,7 @@ def test_a_failure_to_lower_is_logged_and_changes_no_output(
 ) -> None:
     cwd = tmp_path / "proj"
     cwd.mkdir()
+    monkeypatch.setenv(child_priority.ENV, child_priority.BELOW_NORMAL)
     monkeypatch.setattr(child_priority, "lower_session", lambda *a: None)
     clean = _run_hook(monkeypatch, cwd, tmp_path / "v1")
 
@@ -268,6 +274,19 @@ def test_a_failure_to_lower_is_logged_and_changes_no_output(
             (tmp_path / "v2" / errors.ERROR_LOG_NAME).read_text(encoding="utf-8").splitlines()]
     assert [r["message"] for r in rows if r["where"] == "child_priority.lower"] == ["access denied"]
 
+
+def test_a_failure_is_logged_even_when_the_hook_then_returns_early(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """The breaker being open is one of the hook's early returns."""
+    monkeypatch.setenv(child_priority.ENV, child_priority.BELOW_NORMAL)
+    monkeypatch.setattr(child_priority, "lower_session", lambda *a: "access denied")
+    monkeypatch.setattr(errors, "should_run", lambda _v: False)
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    _run_hook(monkeypatch, cwd, tmp_path / "v")
+    log = tmp_path / "v" / errors.ERROR_LOG_NAME
+    assert "child_priority.lower" in log.read_text(encoding="utf-8")
 
 def test_a_child_that_cannot_be_lowered_never_trips_the_breaker(tmp_path: Path) -> None:
     for _ in range(errors.THRESHOLD_PER_HOUR + 5):

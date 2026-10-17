@@ -1295,6 +1295,34 @@ def _grok_briefing(cfg: dict, vault, cwd: str, sid: str, source: str) -> None:
 _GROK_FRESH_SOURCES = frozenset({"new", "startup"})
 
 
+def _lower_child_priority(payload: object) -> None:
+    """Lower a dispatched child's session below normal CPU (#723). Never raises.
+
+    Nothing is read without the dispatcher's marker, so an interactive
+    session pays one environment lookup. A failure is logged here, where it is
+    known, and changes nothing the hook prints.
+    """
+    try:
+        from mnemo.core import child_priority
+
+        if not child_priority.marked():
+            return
+        from mnemo.core import config, errors, paths
+        from mnemo.core.hook_guard import throwaway_session
+        from mnemo.core.sessions import registry
+
+        data = payload if isinstance(payload, dict) else {}
+        sid = str(data.get("session_id") or "").strip() or registry.env_session_id()
+        cfg = config.load_config()
+        failed = child_priority.lower_session(sid, cfg)
+        if failed:
+            vault = paths.vault_root(cfg)
+            if not throwaway_session(data.get("cwd") or os.getcwd(), vault):
+                errors.log_error(vault, "child_priority.lower", OSError(failed))
+    except Exception:  # noqa: BLE001 — hook must never propagate
+        pass
+
+
 def main() -> int:
     # Nothing at all inside a session mnemo launched for itself (#329): the
     # `claude --print` helpers that brief and extract run under the user's own
@@ -1305,19 +1333,15 @@ def main() -> int:
     if hooks_off():
         return 0
 
-    # #723: first, before this hook starts anything — what is already running
-    # when a dispatched child's session is lowered keeps Normal. A no-op
-    # without the dispatcher's marker; a failure is logged below, never shown.
-    from mnemo.core import child_priority
-
-    priority_failed = child_priority.lower_session()
-
     phases = _Phases()
 
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
+    # #723: before this hook starts anything — what is already running when a
+    # dispatched child's session is lowered keeps Normal.
+    _lower_child_priority(payload)
     # A Grok Build session fires this hook too (spec decision 7); one event
     # that reaches it from two hook files runs once. See core.grok.hooks.
     grok_session = _grok_session(payload)
@@ -1360,8 +1384,6 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.scaffold", e)
         phases.lap("scaffold")
-        if priority_failed:
-            errors.log_error(vault, "child_priority.lower", OSError(priority_failed))
 
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()

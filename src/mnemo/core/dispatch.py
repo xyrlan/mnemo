@@ -1194,7 +1194,9 @@ def spawn_child(
         args += ["--model", model]
     if effort:
         args += ["--effort", effort]
-    settings = child_priority.with_marker(settings, _config_or_none())
+    from mnemo.core import config
+
+    settings = child_priority.with_marker(settings, config.load_config())
     if child_profile.is_lean(lean):
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.
@@ -1620,16 +1622,6 @@ def _spawn_grok_into(
     _ensure_notice_watcher()
     grants.record(short_id, may)
     return Dispatched(short_id=short_id, warning=warning, session_id=session_id, **common)
-
-
-def _config_or_none() -> Optional[Dict[str, Any]]:
-    """The loaded config, or ``None`` (so the defaults) when it cannot be read."""
-    try:
-        from mnemo.core import config
-
-        return config.load_config()
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _ensure_notice_watcher() -> None:

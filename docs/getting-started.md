@@ -1079,12 +1079,20 @@ afterwards inherits that priority: its test suites, builds and dev servers.
 A suite that runs one worker per core then takes the CPU only when you leave
 it idle, and the desktop you dispatch and message from stays responsive. The
 `claude` daemon and its pty host are left at normal priority, because your
-own `claude --bg` sessions share them. Interactive sessions are never
-touched.
+own `claude --bg` sessions share them.
+
+The session is found by its id in Claude Code's own registry
+(`~/.claude/sessions/`), and only a background session is lowered.
+Interactive sessions are never touched, and that includes one where you
+`claude --resume` a child yourself.
 
 To run children at your own priority, set `dispatch.childPriority` to
-`"normal"` in `mnemo.config.json`. A failure to lower is logged to the
-vault's `.errors.log` as `child_priority.lower` and does not pause the hooks.
+`"normal"` in `mnemo.config.json`. The hook reads it each time, so the
+setting also holds for children dispatched before you changed it, the next
+time they are woken. A failure to lower is logged to the vault's
+`.errors.log` as `child_priority.lower` and does not pause the hooks.
+`tools/measure_child_priority.py` checks the whole path on one throwaway
+background session.
 macOS, Linux and Grok children are not lowered yet. Priority does not cover
 disk I/O, so a disk-heavy build can still slow the machine.
 
