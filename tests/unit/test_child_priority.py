@@ -196,7 +196,13 @@ def test_a_malformed_config_does_not_abort_the_dispatch(windows, run, tmp_path) 
 def test_a_real_process_is_lowered_and_a_wrong_start_time_is_refused() -> None:
     from mnemo.core.sessions import registry
 
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # Normal explicitly: a child inherits a below-normal parent's class, and
+    # the GitHub Windows runner's test process is BelowNormal (measured on
+    # run 39040072415), which would make the refusal below look like a lowering.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=subprocess.NORMAL_PRIORITY_CLASS,
+    )
     try:
         start = registry.windows_creation_time(proc.pid)
         assert start
