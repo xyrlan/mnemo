@@ -55,7 +55,8 @@ token is not needed and not ours to present:
   verified live 2026-09-15.
 - On Windows, where it is required, Claude Code's inbox is a named pipe
   (``\\\\.\\pipe\\…``), not an ``AF_UNIX`` path named after a pid: mnemo
-  never had a working row there to present it with.
+  never had a working row there to present it with. It reaches Windows
+  another way now (below), with a key read at send time and never kept.
 - The env value is the session's *child* token — Claude Code publishes a
   separate *peer* key under ``~/.claude/sessions/`` — and presenting it tells
   the inbox the writer descends from that session. A sibling's ``SessionEnd``
@@ -65,6 +66,29 @@ So a row holds the address and nothing that authenticates, the file is
 written ``0600``, and every :func:`record` rewrites it without any legacy
 ``token`` field and without rows whose pid has exited — the upgrade scrubs
 itself at the first session start.
+
+**Windows: the registry and the peer key (#725).** On Windows no row is ever
+written — the pipe's name is not a pid, and there is no ``ps`` — so until
+#725 every child's finish waited for its parent's next prompt (#586). There
+the address comes from Claude Code's own registry instead,
+``<config dir>/sessions/<pid>.json``, which names *every* session, the
+interactive parent included (unlike the daemon roster), with its
+``messagingSocketPath``. :func:`registry_address` accepts only an entry whose
+process is running now with the start time the entry recorded
+(:func:`mnemo.core.sessions.registry.live_entry`), so an exited parent or a
+reused pid is never written to.
+
+Beside each entry Claude Code publishes the session's *peer* key,
+``<pid>.<sha256(pipe path, lowercased)>.key``, JSON ``{peerToken,
+procStartFt, pidDomain}`` (the name rule held for 22 of 22 entries on the
+maintainer's machine, 2026-10-17). It is the token Claude Code's own local
+peer messaging presents, and its pipe server accepts it as "peer"; without
+an auth line first, the turn is dropped and the connection closed.
+:func:`post_pipe` reads the key when the notice is sent, writes
+``{"type": "auth", "token": …}`` and then the turn, and keeps nothing: the
+key is never in a row, a log, an error or a return value (#553 stands).
+``tools/measure_windows_inbox.py`` measures the protocol against a
+throwaway session.
 
 **A Grok parent (spec 2026-10-16-grok-host, wave 2).** A Grok session has
 no inbox socket and writes no row here (its environment's Claude socket, if
@@ -98,10 +122,13 @@ session its ``SessionEnd``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
 import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import List, Mapping, Optional, Set
@@ -134,6 +161,13 @@ TIMEOUT_SECONDS = 5.0
 
 #: ``agent`` of an address that names a Grok session (:func:`grok_address`).
 GROK = "grok"
+
+#: ``agent`` of an address read from Claude Code's registry: a Windows named
+#: pipe, written to with the session's peer key (:func:`registry_address`).
+PIPE = "pipe"
+
+#: The auth frame's ``type``, the first line a Windows pipe accepts (#725).
+AUTH_TYPE = "auth"
 
 #: How long a notice to a Grok parent waits for the leader to take the turn:
 #: starting the leader, loading a dormant session, queueing behind a running
@@ -187,7 +221,8 @@ def address_from_env(env: Mapping[str, str] | None = None) -> dict | None:
     if not sid or not sock:
         return None
     # The socket is named after the pid that owns it; trust the name, not
-    # getpid(), because a hook runs in a child of the session's process.
+    # getpid(), because a hook runs in a child of the session's process. A
+    # Windows pipe is not named after one; it is found in the registry (#725).
     try:
         pid = int(Path(sock).stem)
     except (ValueError, TypeError):
@@ -509,8 +544,10 @@ def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
     whole time. :func:`is_live` still guards each row, so an older row only
     wins when its own pid and start time still match.
 
-    A session with no row at all may be a Grok one: its address is then
-    :func:`grok_address`'s, and it counts as live.
+    With no live row, Claude Code's registry is read, on Windows, where no
+    row is ever written (:func:`registry_address`, #725). A session with no
+    row at all may be a Grok one: its address is then :func:`grok_address`'s,
+    and it counts as live.
     """
     if not session_id:
         return None, "no parent session id"
@@ -528,14 +565,6 @@ def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
                         rows.append(row)
     except OSError as exc:
         return None, f"cannot read {LOG_NAME}: {exc}"
-    if not rows:
-        try:
-            grok = grok_address(vault_root, session_id)
-        except Exception:  # noqa: BLE001 — never raises
-            grok = None
-        if grok is not None:
-            return grok, ""
-        return None, f"no address recorded for the parent in {LOG_NAME}"
     seen = set()
     for row in reversed(rows):
         key = (row.get("socket"), row.get("pid"), row.get("pid_start"))
@@ -544,8 +573,184 @@ def resolve(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
         seen.add(key)
         if is_live(row):
             return row, ""
+    pipe, pipe_why = _from_registry(vault_root, session_id)
+    if pipe is not None:
+        return pipe, ""
+    also = f"; {pipe_why}" if pipe_why else ""
+    if not rows:
+        try:
+            grok = grok_address(vault_root, session_id)
+        except Exception:  # noqa: BLE001 — never raises
+            grok = None
+        if grok is not None:
+            return grok, ""
+        return None, f"no address recorded for the parent in {LOG_NAME}{also}"
     pids = ", ".join(str(pid) for _, pid, _ in seen)
-    return None, f"parent not live: none of its {len(seen)} recorded address(es) is (pid {pids})"
+    return None, (f"parent not live: none of its {len(seen)} recorded address(es) "
+                  f"is (pid {pids}){also}")
+
+
+def registry_reachable() -> bool:
+    """Whether :func:`resolve` reads Claude Code's registry: Windows only.
+
+    Elsewhere the row log works, auth is optional, and what ``procStart``
+    holds is not measured (:mod:`.registry`), so nothing there changes.
+    """
+    return sys.platform == "win32"
+
+
+def _from_registry(vault_root: Path | str, session_id: str) -> tuple[dict | None, str]:
+    """:func:`registry_address` over every account's registry, when reachable.
+
+    Every config dir is read, the current account first
+    (:func:`mnemo.core.sessions.accounts.roots`): a child's hook runs in the
+    child's environment, and its parent may be on another account.
+    """
+    if not registry_reachable():
+        return None, ""
+    try:
+        from mnemo.core.sessions import accounts
+
+        folders = [root.home / "sessions" for root in accounts.roots(vault_root=vault_root)]
+        for folder in folders:
+            address = registry_address(session_id, directory=folder)
+            if address is not None:
+                return address, ""
+        named = ", ".join(str(f) for f in folders)
+        return None, f"no live entry for the parent in Claude Code's registry ({named})"
+    except Exception as exc:  # noqa: BLE001 — never raises
+        return None, f"Claude Code's registry: {type(exc).__name__}: {exc}"
+
+
+def registry_address(
+    session_id: str, *, directory: Path | str,
+    domain: Optional[str] = None, creation_time=None,
+) -> dict | None:
+    """*session_id*'s pipe address from the registry in *directory*, or ``None``.
+
+    ``{"session_id", "agent": "pipe", "socket", "pid", "proc_start",
+    "pid_domain", "sessions_dir"}`` for the entry whose process runs now with
+    the start time it recorded (:func:`mnemo.core.sessions.registry.
+    live_entry`); ``None`` for a dead or reused pid, another host's entry, or
+    one with no pipe. No key: :func:`post_pipe` reads that at send time.
+    *domain* and *creation_time* default to this host's.
+    """
+    from mnemo.core.sessions import registry
+
+    entry = registry.live_entry(session_id, directory=Path(directory),
+                                domain=domain, creation_time=creation_time)
+    if entry is None:
+        return None
+    pipe = entry.get("messagingSocketPath")
+    if not isinstance(pipe, str) or not pipe.strip():
+        return None
+    return {
+        "session_id": session_id, "agent": PIPE, "socket": pipe,
+        "pid": entry["pid"], "proc_start": str(entry.get("procStart") or ""),
+        "pid_domain": str(entry.get("pidDomain") or ""),
+        "sessions_dir": str(directory),
+    }
+
+
+def key_name(pid: int, pipe: str) -> str:
+    """The peer key's file name Claude Code writes beside a registry entry."""
+    digest = hashlib.sha256(pipe.lower().encode("utf-8")).hexdigest()
+    return f"{int(pid)}.{digest}.key"
+
+
+def peer_token(address: dict) -> str:
+    """The peer token for *address*'s session, or ``""``. Never raises.
+
+    The key named after the pipe first (:func:`key_name`), then any
+    ``<pid>.*.key``; either counts only when its ``procStartFt`` and
+    ``pidDomain`` are the entry's, since key files outlive their session like
+    the entries do. The value is the caller's to use once and drop: it must
+    never be logged, returned in a reason, or written down (#553).
+    """
+    try:
+        folder = Path(address.get("sessions_dir") or "")
+        pid = int(address.get("pid") or 0)
+        pipe = str(address.get("socket") or "")
+        if not pid or not pipe or not str(folder):
+            return ""
+        exact = folder / key_name(pid, pipe)
+        others = sorted(p for p in folder.glob(f"{pid}.*.key") if p != exact)
+        for path in [exact] + others:
+            try:
+                key = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(key, dict):
+                continue
+            start = str(address.get("proc_start") or "")
+            if not start or str(key.get("procStartFt") or "") != start:
+                continue
+            if key.get("pidDomain") != address.get("pid_domain"):
+                continue
+            token = key.get("peerToken")
+            if isinstance(token, str) and token:
+                return token
+    except Exception:  # noqa: BLE001 — never raises
+        return ""
+    return ""
+
+
+def user_turn(text: str) -> bytes:
+    """The newline-terminated ``stream-json`` user turn every inbox takes."""
+    msg = {"type": "user", "message": {"role": "user", "content": text}}
+    return (json.dumps(msg) + "\n").encode("utf-8")
+
+
+def write_pipe(pipe: str, lines: List[bytes], timeout: float = TIMEOUT_SECONDS) -> str:
+    """Write *lines* to *pipe* in order, on one connection. ``""`` once all
+    were written, else why not. Never raises.
+
+    A plain ``open(pipe, "r+b", buffering=0)`` is enough for a named pipe
+    (measured, #725); the server sends nothing back. The write runs on a
+    daemon thread so a peer that never reads costs :data:`TIMEOUT_SECONDS`,
+    not the hook. A reason names the pipe and the error, never the bytes.
+    """
+    outcome: List[str] = []
+
+    def run() -> None:
+        try:
+            with open(pipe, "r+b", buffering=0) as fh:
+                for line in lines:
+                    view = memoryview(line)
+                    while view:
+                        n = fh.write(view)
+                        if not n:
+                            raise OSError("pipe accepted no bytes")
+                        view = view[n:]
+            outcome.append("")
+        except (OSError, ValueError) as exc:
+            outcome.append(f"pipe write failed: {pipe}: {type(exc).__name__}"
+                           + (f" (errno {exc.errno})" if getattr(exc, "errno", None) else ""))
+
+    worker = threading.Thread(target=run, name="mnemo-inbox-pipe", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if not outcome:
+        return f"pipe write timed out after {timeout:g}s: {pipe}"
+    return outcome[0]
+
+
+def post_pipe(address: dict, text: str) -> str:
+    """Write *text* as a user turn into a Windows session's pipe, with its
+    peer key. ``""`` once the auth line and the turn were both written, else
+    why not. Never raises, and never puts the key in what it returns.
+    """
+    if not text:
+        return "nothing to send"
+    pipe = str((address or {}).get("socket") or "")
+    if not pipe:
+        return "no pipe in the address"
+    token = peer_token(address)
+    if not token:
+        return (f"no peer key for pid {address.get('pid')} with its start time in "
+                f"{address.get('sessions_dir')}")
+    auth = (json.dumps({"type": AUTH_TYPE, "token": token}) + "\n").encode("utf-8")
+    return write_pipe(pipe, [auth, user_turn(text)])
 
 
 def post(address: dict, text: str) -> bool:
@@ -553,11 +758,14 @@ def post(address: dict, text: str) -> bool:
 
     The wire format is Claude Code's own, as ``mnemo-desktop`` already speaks
     it (``src-tauri/src/mission.rs`` ``post_message``): a newline-terminated
-    ``stream-json`` user turn. No auth line: optional on every platform this
-    reaches, and the token it would need is not ours (#553, module docstring).
+    ``stream-json`` user turn. No auth line on a socket: optional on every
+    platform one reaches, and the env token is not ours (#553, module
+    docstring). A Windows pipe takes its peer key first (:func:`post_pipe`).
     """
     if (address or {}).get("agent") == GROK:
         return post_grok(address, text) == ""
+    if (address or {}).get("agent") == PIPE:
+        return post_pipe(address, text) == ""
     sock_path = (address or {}).get("socket") or ""
     if not sock_path or not text:
         return False
@@ -565,11 +773,7 @@ def post(address: dict, text: str) -> bool:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(TIMEOUT_SECONDS)
             s.connect(sock_path)
-            msg = {
-                "type": "user",
-                "message": {"role": "user", "content": text},
-            }
-            s.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+            s.sendall(user_turn(text))
     except (OSError, AttributeError, ValueError, TypeError):
         return False
     return True
@@ -655,6 +859,8 @@ def deliver(vault_root: Path | str, session_id: str, text: str) -> str:
             return why
         if address.get("agent") == GROK:
             return post_grok(address, text)
+        if address.get("agent") == PIPE:
+            return post_pipe(address, text)
         if not post(address, text):
             return f"socket write failed: {address.get('socket')}"
         return ""

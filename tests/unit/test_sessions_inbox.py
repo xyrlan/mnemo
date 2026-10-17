@@ -13,6 +13,13 @@ import pytest
 from mnemo.core.sessions import detector, inbox
 
 
+@pytest.fixture(autouse=True)
+def _rows_only(monkeypatch):
+    """These tests are about the row log; Claude Code's registry, read on
+    Windows only (#725), has its own in ``test_sessions_inbox_pipe.py``."""
+    monkeypatch.setattr(inbox, "registry_reachable", lambda: False)
+
+
 def _addr(tmp_path, sock_path, *, pid=4242, pid_start="Wed Sep 17 03:00:00 2026"):
     return {
         "session_id": "parent-uuid",
