@@ -19,6 +19,12 @@ import pytest
 from mnemo.core.grok import briefing_file
 
 
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.com",

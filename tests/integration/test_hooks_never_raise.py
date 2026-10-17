@@ -73,7 +73,9 @@ MALFORMED_PAYLOADS = [
 
 
 @pytest.mark.parametrize("hook", ALL_HOOKS)
-@pytest.mark.parametrize("payload", MALFORMED_PAYLOADS)
+# Short ids: pytest puts the node id in PYTEST_CURRENT_TEST, and the 50,000-char
+# prompt as an id is past the 32,767 chars a Windows environment variable holds.
+@pytest.mark.parametrize("payload", MALFORMED_PAYLOADS, ids=lambda p: p[:40])
 def test_hook_never_raises(
     hook,
     payload: str,

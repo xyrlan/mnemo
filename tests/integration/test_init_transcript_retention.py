@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -129,7 +130,10 @@ def test_ensure_floor_changes_that_key_and_no_other_byte(tmp_path: Path) -> None
     outcome = tr.ensure_floor(path, 365)
 
     assert outcome == tr.Outcome("raised", None, 365)
-    assert path.read_bytes() == json.dumps({**OTHER_KEYS, tr.SETTING: 365}, indent=2).encode("utf-8")
+    # Both sides in the platform's line ending: the file was seeded with
+    # write_text, as every settings writer in mnemo writes it.
+    expected = json.dumps({**OTHER_KEYS, tr.SETTING: 365}, indent=2).replace("\n", os.linesep)
+    assert path.read_bytes() == expected.encode("utf-8")
     assert len(list(tmp_path.glob("settings.json.bak.*"))) == 1
 
 

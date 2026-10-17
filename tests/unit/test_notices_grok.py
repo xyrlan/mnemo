@@ -28,6 +28,12 @@ from mnemo.core.sessions import held_notices, inbox, parents
 from mnemo.core.sessions import report_card as rc
 from mnemo.hooks import session_end
 
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
+
 CHILD = "01a15e00-1111-7222-8333-0000c41d0001"
 CHILD_SHORT = grok_paths.short_id(CHILD)  # "c41d0001": the end, not the start
 PARENT = "01a15e00-1111-7222-8333-00000fa7e500"

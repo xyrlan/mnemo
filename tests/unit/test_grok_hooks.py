@@ -28,6 +28,12 @@ from mnemo.core.grok import briefing_file
 from mnemo.core.grok import hooks as grok
 from mnemo.core.rule_activation import build_index, write_index
 
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
+
 SID = "01a144cd-aa48-7271-b671-114727e068a2"
 
 

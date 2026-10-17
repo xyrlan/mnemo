@@ -3,7 +3,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from mnemo.core.grok import paths
+
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
 
 
 def test_home_is_grok_home_env_when_set(tmp_path):

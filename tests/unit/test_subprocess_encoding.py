@@ -31,15 +31,19 @@ _PROBE = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xc3\\xa
 @pytest.fixture
 def locale_codec_is_cp1252(monkeypatch: pytest.MonkeyPatch) -> None:
     """``text=True`` without ``encoding=`` decodes as cp1252, as on Windows."""
-    if sys.platform != "win32":
-        if not hasattr(subprocess, "_text_encoding"):
-            pytest.skip("no hook into subprocess's default codec before Python 3.11")
+    # Patched on Windows too: a dev box with PYTHONUTF8=1 makes the native
+    # codec UTF-8 (#729), and the code under test decodes in this process.
+    if hasattr(subprocess, "_text_encoding"):
         monkeypatch.setattr(subprocess, "_text_encoding", lambda: "cp1252")
+    elif sys.platform != "win32":
+        pytest.skip("no hook into subprocess's default codec before Python 3.11")
+    elif sys.flags.utf8_mode:
+        pytest.skip("PYTHONUTF8 makes the codec UTF-8, and Python < 3.11 has no hook to undo it")
     # The probe writes UTF-8 "é". Under the codec this test is about it does
     # not read back as "é"; if it does, nothing below would bite.
     seen = subprocess.run(_PROBE, capture_output=True, text=True).stdout  # encoding: platform default
     if seen == "é":
-        message = "the locale codec is UTF-8 here (PYTHONUTF8 set?): this test would prove nothing"
+        message = "the locale codec is UTF-8 here: this test would prove nothing"
         if sys.platform == "win32":
             pytest.fail(message)
         pytest.skip(message)

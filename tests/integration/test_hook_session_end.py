@@ -236,6 +236,10 @@ def _report_rows(vault: Path):
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the inbox log's liveness check reads `ps -o lstart`, which Windows lacks, so no row is live there",
+)
 def test_session_end_reports_to_a_live_parent_behind_a_newer_dead_row(
     hook_env: Path, monkeypatch: pytest.MonkeyPatch,
 ):

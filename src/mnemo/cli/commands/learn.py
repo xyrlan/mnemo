@@ -23,7 +23,7 @@ from mnemo.cli.parser import command
 def _tilde(path: Path) -> str:
     """Transcript paths live under $HOME and are long; show them as ``~/…``."""
     try:
-        return "~/" + str(Path(path).relative_to(Path.home()))
+        return "~/" + Path(path).relative_to(Path.home()).as_posix()
     except (ValueError, RuntimeError, OSError):
         return str(path)
 
@@ -31,7 +31,7 @@ def _tilde(path: Path) -> str:
 def _under_vault(path: Path, vault: Path) -> str:
     """Vault-relative when it is in the vault, absolute otherwise."""
     try:
-        return str(Path(path).relative_to(vault))
+        return Path(path).relative_to(vault).as_posix()
     except ValueError:
         return str(path)
 

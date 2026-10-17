@@ -27,6 +27,12 @@ from mnemo.core.grok import acp, paths
 from mnemo.core.sessions import grok_sessions, jobs, stalls
 from mnemo.core.sessions.jobs import Session, read_sessions
 
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
+
 SID = "01a144cc-77f5-7ea3-9060-06013224200f"
 SID2 = "01a144cc-77f5-7ea3-9060-0601abcd0001"
 

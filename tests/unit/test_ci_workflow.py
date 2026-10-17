@@ -45,7 +45,8 @@ def _expand(event: str) -> List[Dict[str, str]]:
         {"os": o, "python-version": v}
         for o, v in itertools.product(matrix["os"], matrix["python-version"])
     ]
-    return [r for r in rows if r not in exclude]
+    # ``include`` adds its rows after the exclusions, whatever the event.
+    return [r for r in rows if r not in exclude] + list(matrix.get("include", []))
 
 
 def _versions(event: str, os_name: str) -> List[str]:
@@ -60,9 +61,10 @@ def test_a_push_to_master_keeps_the_full_macos_matrix():
     assert _versions("push", "macos-latest") == ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
 
-def test_ubuntu_keeps_all_five_versions_on_both_events():
+def test_ubuntu_keeps_all_five_versions_and_adds_3_13_on_both_events():
+    """3.13 moved pathlib's classes and broke a test only a dev box ran (#729)."""
     for event in ("pull_request", "push"):
-        assert _versions(event, "ubuntu-latest") == ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        assert _versions(event, "ubuntu-latest") == ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
 
 
 def test_the_ends_of_the_matrix_are_the_supported_range():
@@ -84,3 +86,10 @@ def test_each_job_runs_the_suite_once_and_gates_coverage():
     # Without it a child process that starts its own coverage outside the
     # repo falls back to statement-only data and aborts the combine.
     assert "COVERAGE_RCFILE" in step.get("env", {})
+
+
+def test_the_windows_job_runs_all_of_tests():
+    """tests/cli, core, integration and autopilot never ran on Windows (#729)."""
+    steps = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["windows"]["steps"]
+    runs = [s["run"].strip() for s in steps if s.get("run", "").lstrip().startswith("pytest")]
+    assert runs == ["pytest tests/ -v"]
