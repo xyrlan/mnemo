@@ -204,7 +204,7 @@ def test_red_counts_only_once_the_checks_settle() -> None:
 
 
 def test_a_review_counts_only_from_a_trusted_author_after_the_child_stopped() -> None:
-    before, after = _iso(T0 - 60), _iso(T0 + 60)
+    before, after = _iso(T0 - 60), _iso(T0 + 600)
     data = {"comments": [
         {"authorAssociation": "NONE", "createdAt": after},
         {"authorAssociation": "OWNER", "createdAt": before},
@@ -215,6 +215,39 @@ def test_a_review_counts_only_from_a_trusted_author_after_the_child_stopped() ->
     data["reviews"].append(
         {"authorAssociation": "COLLABORATOR", "state": "CHANGES_REQUESTED", "submittedAt": after})
     assert pr_follow.events(_card(["pass"]), data, after=T0) == ["review"]
+
+
+def test_the_childs_own_closing_comment_does_not_wake_it_again(vault, tree) -> None:
+    """PR #724 (#726): a review wakes the child; it pushes, stops, and its own
+    "Addressed in …" comment lands 5 s after that stop, as ``OWNER`` — the
+    same ``gh`` login as the maintainer. That comment must not spend the
+    PR's last wake; a maintainer's word after it still does."""
+    review = {"authorAssociation": "OWNER", "createdAt": _iso(T0 + 300)}
+    _follow(vault, tree)
+    waker = Waker()
+    _sweep(vault, _world(comments=[review]), now=T0 + 400, waker=waker)
+    assert [c["events"] for c in waker.calls] == [["review"]]
+
+    stop = T0 + 2100
+    _follow(vault, tree, at=stop)  # its SessionEnd, after the fix
+    own = {"authorAssociation": "OWNER", "createdAt": _iso(stop + 5)}
+    _sweep(vault, _world(comments=[review, own]), now=stop + 20, waker=waker)
+    assert len(waker.calls) == 1, "its own comment woke it"
+    assert not _entry(vault)["closed"] and len(_entry(vault)["attempts"]) == 1
+
+    maintainer = {"authorAssociation": "OWNER", "createdAt": _iso(stop + 900)}
+    _sweep(vault, _world(comments=[review, own, maintainer]), now=stop + 1000,
+           waker=waker)
+    assert [c["events"] for c in waker.calls] == [["review"], ["review"]]
+
+
+def test_a_remark_counts_only_past_the_grace_after_the_stop() -> None:
+    def at(offset: float) -> dict:
+        return {"comments": [{"authorAssociation": "OWNER", "createdAt": _iso(T0 + offset)}]}
+
+    grace = pr_follow.SELF_GRACE_SECONDS
+    assert pr_follow.trusted_remarks(at(grace), after=T0) == 0
+    assert pr_follow.trusted_remarks(at(grace + 1), after=T0) == 1
 
 
 def test_conflict_is_github_s_own_mergeable_answer() -> None:

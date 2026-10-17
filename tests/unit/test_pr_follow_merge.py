@@ -320,7 +320,7 @@ def test_a_gone_tree_is_never_merged() -> None:
 
 
 def test_an_unanswered_trusted_comment_wakes_the_child_and_merges_nothing() -> None:
-    comment = {"authorAssociation": "OWNER", "createdAt": _iso(T0 + 60)}
+    comment = {"authorAssociation": "OWNER", "createdAt": _iso(T0 + 600)}
     decision = _decide(data=_data(comments=[comment]))
     assert (decision.action, decision.events) == ("wake", ["review"])
 
@@ -328,14 +328,14 @@ def test_an_unanswered_trusted_comment_wakes_the_child_and_merges_nothing() -> N
 def test_an_unanswered_trusted_review_holds_the_merge_on_its_own() -> None:
     """The hold does not lean on the wake coming first."""
     review = {"authorAssociation": "MEMBER", "state": "CHANGES_REQUESTED",
-              "submittedAt": _iso(T0 + 60)}
+              "submittedAt": _iso(T0 + 600)}
     entry = {"since": T0, "ended_at": T0, "attempts": []}
     assert pr_follow.merge_hold(entry, _card(), _data(reviews=[review]), Row(),
                                 _facts()) == "review"
 
 
 def test_a_strangers_comment_does_not_hold_the_merge() -> None:
-    comment = {"authorAssociation": "NONE", "createdAt": _iso(T0 + 60)}
+    comment = {"authorAssociation": "NONE", "createdAt": _iso(T0 + 600)}
     assert _decide(data=_data(comments=[comment])).action == "merge"
 
 
@@ -670,7 +670,7 @@ def test_a_conflict_still_wakes_the_child_with_the_switch_on(vault, tree) -> Non
 
 def test_a_trusted_comment_still_wakes_the_child_with_the_switch_on(vault, tree) -> None:
     _follow(vault, tree)
-    comment = {"authorAssociation": "OWNER", "createdAt": _iso(T0 + 60)}
+    comment = {"authorAssociation": "OWNER", "createdAt": _iso(T0 + 600)}
     world, waker = World(comments=[comment]), Waker()
     report = _sweep(vault, world, waker=waker)
     assert report.woken == [SHORT] and world.merges() == []
