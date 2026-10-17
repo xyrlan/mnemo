@@ -5,6 +5,67 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-17
+
+### Changed
+
+- **On Windows, a dispatched child now runs below your CPU priority.** It used
+  to run at normal priority, the same as you. One child running a test suite
+  with a worker per core took a 16-thread workstation to 100% and made the
+  desktop sluggish. The dispatcher now marks the child in its settings file.
+  mnemo's `SessionStart` hook looks the session up by its id in Claude Code's
+  own registry and lowers that process to below-normal before its other
+  work. Everything the session starts afterwards inherits that priority. The
+  hook runs again when the child is woken, and a woken child is lowered too.
+  The shared daemon and pty host stay at normal, and so does every
+  interactive session, including an interactive `claude --resume` of a child.
+  Set `dispatch.childPriority` to `"normal"` to opt out. That also holds for
+  children dispatched before the change, on their next wake. A failure to
+  lower is logged and changes nothing else. `tools/measure_child_priority.py`
+  measures the path on a throwaway session. macOS, Linux and Grok children
+  are unchanged for now. (#723)
+
+### Fixed
+
+- **On Windows, a dispatched child's finish now reaches its open parent at
+  once.** No address was ever recorded there: the inbox is a named pipe, not a
+  socket named after a pid, and Windows requires an auth line on it. A child
+  now finds its parent in Claude Code's own session registry (live pid,
+  matching start time, this host, on every account mnemo has seen), reads the
+  parent's peer key at send time, and writes the auth line and then the
+  notice to the pipe. The key is used for that one connection and never
+  written anywhere. A parent that has exited, or whose pid was reused, is not
+  written to: its notice is held for its next prompt, as before. macOS and
+  Linux are unchanged. `tools/measure_windows_inbox.py` measures the protocol
+  against a throwaway session. (#725)
+
+- **A followed child is no longer woken by its own comment on its PR.** A
+  child comments with the maintainer's `gh` login, so its words read as
+  `OWNER`, and on PR #724 its closing comment landed 5 s after its recorded
+  stop and spent the PR's last wake on the child reading itself. A trusted
+  comment or review now wakes the child, or holds the auto-merge, only when
+  it lands more than 60 s after the child's stop; a maintainer remark inside
+  that minute wakes nobody, and the next one after it does. A wake that ends
+  without a commit still counts against `dispatch.followPR.attempts`: red CI
+  and a conflict are still there after such a wake, so without the count the
+  child would be woken again on every poll. (#726)
+
+- **`mnemo autopilot self-fix doctor` refills an empty `sources:` block on a
+  CRLF page.**
+  The repair matched only `sources:\n`, so on a rule page saved with Windows
+  line endings it gave up with "no empty sources block found" and left the rule
+  orphaned. It now matches either ending and writes the restored lines in the
+  page's own. (#729)
+- **`mnemo learn` prints its paths with forward slashes on Windows.** The
+  `read:` line came out as `~/.claude\projects\…` and the briefing line with
+  backslashes, unlike every other vault path mnemo prints. (#729)
+- **The whole suite passes on a stock Windows dev box, and CI runs all of it
+  there.** The Windows job ran only `tests/unit/`, so 42 failures and 7 errors
+  in the rest went unseen; the tests no longer trip over `PYTHONUTF8=1`,
+  MAX_PATH with long paths off, Python 3.13's `pathlib`, a venv's launcher
+  process, a loaded machine or a 32,767-character environment limit. Ubuntu
+  also runs Python 3.13 now. (#729)
+
 ## [1.10.0] — 2026-10-16
 
 ### Added
