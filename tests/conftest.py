@@ -161,6 +161,9 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # that may hold the developer's real API key gets the explicit override
     # rather than an inference about `expanduser`.
     monkeypatch.setenv("MNEMO_SECRETS_PATH", str(home / ".mnemo" / "secrets.json"))
+    # #723: a dispatched child running this suite carries the marker; without
+    # this a SessionStart test would lower the child's own session for real.
+    monkeypatch.delenv("MNEMO_CHILD_PRIORITY", raising=False)
     return home
 
 

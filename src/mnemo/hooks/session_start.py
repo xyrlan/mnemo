@@ -1305,6 +1305,13 @@ def main() -> int:
     if hooks_off():
         return 0
 
+    # #723: first, before this hook starts anything — what is already running
+    # when a dispatched child's session is lowered keeps Normal. A no-op
+    # without the dispatcher's marker; a failure is logged below, never shown.
+    from mnemo.core import child_priority
+
+    priority_failed = child_priority.lower_session()
+
     phases = _Phases()
 
     try:
@@ -1353,6 +1360,8 @@ def main() -> int:
         except Exception as e:
             errors.log_error(vault, "session_start.scaffold", e)
         phases.lap("scaffold")
+        if priority_failed:
+            errors.log_error(vault, "child_priority.lower", OSError(priority_failed))
 
         sid = str(payload.get("session_id", "")) or "unknown"
         cwd = payload.get("cwd") or os.getcwd()

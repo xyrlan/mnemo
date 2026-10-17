@@ -99,6 +99,12 @@ DEFAULTS: dict[str, Any] = {
         # that is dirty, has unpushed commits or commits the merged PR lacks
         # is kept, and the day log says why. Turn off to remove trees by hand.
         "removeMergedTrees": True,
+        # #723: on Windows a dispatched child lowers its own session to
+        # below-normal CPU from mnemo's SessionStart hook, so its builds and
+        # test suites, which inherit the class, stop competing with you.
+        # "normal" leaves children at your priority. Never "idle": a starved
+        # suite times out.
+        "childPriority": "below_normal",
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads
