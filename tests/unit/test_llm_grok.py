@@ -11,6 +11,12 @@ import pytest
 from mnemo.core import llm
 
 
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a percent-encoded cwd under it (#729)."""
+    return short_tmp_path
+
+
 @pytest.fixture(autouse=True)
 def _clean_agent_env(monkeypatch):
     for name in ("MNEMO_AGENT", "GROK_SESSION_ID"):

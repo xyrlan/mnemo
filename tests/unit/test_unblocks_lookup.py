@@ -21,6 +21,13 @@ import pytest
 
 from mnemo.core.sessions import detector, unblocks
 
+
+@pytest.fixture
+def tmp_path(short_tmp_path: Path) -> Path:
+    """Short on Windows: these tests nest a dashed cwd under it (#729)."""
+    return short_tmp_path
+
+
 SID = "9293fe7b-a31b-4819-8a8d-d6c660a959c8"
 
 

@@ -23,4 +23,4 @@ def test_entry_stores_rule_path(tmp_path: Path):
     assert rules, "expected at least one rule in the index"
     any_entry = next(iter(rules.values()))
     assert "path" in any_entry
-    assert any_entry["path"].endswith("shared/feedback/example.md")
+    assert Path(any_entry["path"]) == rule

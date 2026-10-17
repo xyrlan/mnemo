@@ -172,6 +172,12 @@ def cp1252_default(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(io, "open", cp1252_open)
     monkeypatch.setattr(builtins, "open", cp1252_open)
+    # 3.10+ ``Path.read_text`` resolves a missing encoding through
+    # ``io.text_encoding`` first, which answers "utf-8" under PYTHONUTF8=1
+    # (a Windows dev box, #729); keep it "locale" so the open above sees it.
+    if hasattr(io, "text_encoding"):
+        monkeypatch.setattr(io, "text_encoding",
+                            lambda encoding, stacklevel=2: "locale" if encoding is None else encoding)
     # Python 3.10 alone routes ``Path.open`` through ``_NormalAccessor.open``,
     # a class attribute bound to ``io.open`` at import time, so patching
     # ``io.open`` afterwards never reaches ``Path.read_text`` there. 3.8/3.9
