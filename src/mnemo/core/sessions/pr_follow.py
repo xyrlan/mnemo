@@ -51,7 +51,9 @@ the same reading ``tools/measure_dispatch_outcomes.py`` gives — and a PR red
 only by checks that never ran is told to the parent once per head commit, so
 a person can fix the billing; the follow stays open, so a rerun that then
 fails for real still wakes the child. Review: a PR comment, or a review that comments
-or requests changes, written after the child last stopped, by an ``OWNER``,
+or requests changes, written more than :data:`SELF_GRACE_SECONDS` after the
+child last stopped — so the child's own closing comment is not one (#726) —
+by an ``OWNER``,
 ``MEMBER`` or ``COLLABORATOR`` — a stranger's comment on a public repository
 must not be able to spend the maintainer's account. Conflict: GitHub's
 ``mergeable`` says ``CONFLICTING``.
@@ -184,6 +186,16 @@ SCHEMA_VERSION = 1
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: Review states that ask something of the author. An approval does not.
 REVIEW_STATES = frozenset({"COMMENTED", "CHANGES_REQUESTED"})
+#: A trusted remark must land this long after the child's recorded stop to
+#: count (#726). A child posts with the maintainer's own ``gh`` login, so its
+#: comments are ``OWNER`` too, and on PR #724 its closing comment was stamped
+#: 5 s *after* its ``ended_at`` — a race between its last ``gh pr comment``
+#: and its stop, or skew between the local clock and GitHub's — which spent
+#: the PR's last wake on the child reading its own words. Everything a child
+#: writes it writes before it stops, so only that race and skew can put its
+#: words past ``ended_at``; the cost is a maintainer remark inside the margin,
+#: which wakes nobody.
+SELF_GRACE_SECONDS = 60
 
 #: Why a follow ended. The first group hands the PR back to the parent when
 #: something was still outstanding; the second never has anything to hand.
@@ -496,7 +508,9 @@ def activity(url: str, *, run: report_card.Runner = report_card._run,
 
 
 def trusted_remarks(data: Optional[Dict[str, Any]], *, after: float) -> int:
-    """Comments and asking reviews written after *after* by :data:`TRUSTED`."""
+    """Comments and asking reviews by :data:`TRUSTED` written more than
+    :data:`SELF_GRACE_SECONDS` after *after*, the child's stop."""
+    after += SELF_GRACE_SECONDS
     if not data:
         return 0
     count = 0
