@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -233,6 +235,28 @@ def _real_vault_guard(request: pytest.FixtureRequest, tmp_path_factory: pytest.T
             "build a tmp vault and set MNEMO_CONFIG_PATH instead "
             "(see tests/unit/test_hook_session_start_backfill.py::_run_hook)"
         )
+
+
+# Read at import, before ``tmp_tempdir`` can point tempfile elsewhere.
+_SYSTEM_TEMP = tempfile.gettempdir()
+
+
+@pytest.fixture
+def short_tmp_path(tmp_path_factory: pytest.TempPathFactory):
+    """A temp dir with a short path on Windows; pytest's own elsewhere.
+
+    Grok keeps a session at ``<home>/sessions/<percent-encoded cwd>/<id>``,
+    and encoding a cwd under pytest's ``tmp_path`` (about 100 characters on
+    Windows) nearly triples it: past MAX_PATH's 260 when long paths are off,
+    which is Windows' default (#729). A module whose tests build those trees
+    overrides ``tmp_path`` with this one.
+    """
+    if sys.platform != "win32":
+        yield tmp_path_factory.mktemp("t")
+        return
+    path = Path(tempfile.mkdtemp(prefix="m", dir=_SYSTEM_TEMP))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture

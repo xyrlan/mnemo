@@ -274,8 +274,13 @@ def _fix_sources_empty(rule_path: Path, sources: list[str], session: EditSession
     if not sources:
         raise ValueError(f"no recoverable sources for {rule_path.name}")
     text = _read(rule_path)
-    block = "sources:\n" + "".join(f"  - {s}\n" for s in sources)
-    new_text, count = re.subn(r"^sources:[ \t]*\n", block, text, count=1, flags=re.MULTILINE)
+    # The block is written in the page's own line ending: a CRLF page whose
+    # ``sources:`` line ends in ``\r\n`` is matched, and stays CRLF.
+    def block(m: re.Match) -> str:
+        nl = m.group(1)
+        return "sources:" + nl + "".join(f"  - {s}{nl}" for s in sources)
+
+    new_text, count = re.subn(r"^sources:[ \t]*(\r?\n)", block, text, count=1, flags=re.MULTILINE)
     if count != 1:
         raise ValueError(f"no empty sources block found in {rule_path.name}")
     session.write(rule_path, new_text)

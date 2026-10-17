@@ -28,7 +28,7 @@ import mnemo.core.extract as ex
 mode = sys.argv[2]
 
 def body(*_a, **_kw):
-    print("held", flush=True)
+    print("held", os.getpid(), flush=True)
     if mode == "die":
         os._exit(0)
     sys.stdin.readline()
@@ -55,7 +55,10 @@ def _start_holder(vault: Path, mode: str) -> subprocess.Popen:
         env=env, text=True, encoding="utf-8",
     )
     line = proc.stdout.readline().strip()
-    assert line == "held", (line, proc.stderr.read() if proc.poll() is not None else "")
+    assert line.startswith("held "), (line, proc.stderr.read() if proc.poll() is not None else "")
+    # The pid the lock records, which is not always ``proc.pid``: a Windows
+    # venv's python.exe is a launcher that runs the interpreter as its child.
+    proc.holder_pid = int(line.split()[1])  # type: ignore[attr-defined]
     if mode == "die":
         proc.wait(timeout=30)
     return proc
@@ -200,7 +203,7 @@ def test_status_reports_a_live_holder_as_running(vault, live_holder, monkeypatch
     _backdate(_lock(vault), 900)
     out = _status(vault, monkeypatch, capsys)
     assert "running now" in out
-    assert f"pid {live_holder.pid}" in out
+    assert f"pid {live_holder.holder_pid}" in out
 
 
 def test_status_does_not_report_a_dead_holder_as_running(vault, dead_holder, monkeypatch, capsys):

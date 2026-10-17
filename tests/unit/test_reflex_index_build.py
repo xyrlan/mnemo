@@ -236,21 +236,33 @@ def test_each_doc_points_at_its_page_so_the_hook_can_read_its_body(tmp_vault):
     assert (tmp_vault / idx["docs"]["yarn-rule"]["path"]) == page
 
 
-def test_build_index_is_linear_in_the_number_of_pages_sharing_a_term(tmp_vault):
+def test_build_index_is_linear_in_the_number_of_pages_sharing_a_term(tmp_path):
     """#610: the postings merge scanned a term's whole list for the current
     slug, once per term per page, so a vault of N pages that share common
     words cost O(N^2): 24 s of SessionStart's 35 s on a 3,400-rule vault.
-    3,000 pages that share 60 words take seconds before and milliseconds of
-    merge after; the bound leaves an order of magnitude for a loaded box."""
+
+    The bound is a ratio, not seconds: an absolute 4 s failed at 10.8 s on a
+    dev box running other sessions (#729). Eight times the pages cost about
+    eight times as long when linear and far more when quadratic; each size
+    takes its fastest of a few builds, so a burst of load lands on neither."""
     import time
 
     words = " ".join("common%02d" % i for i in range(60))
-    for i in range(3000):
-        _write_rule(tmp_vault, "feedback", "r%04d.md" % i, name="rule %d" % i,
-                    body=words + " unique%04d" % i)
-    started = time.perf_counter()
-    index = build_index(tmp_vault)
-    elapsed = time.perf_counter() - started
-    assert index["doc_count"] == 3000
-    assert len(index["postings"]["common00"]) == 3000
-    assert elapsed < 4.0, "build_index took %.1f s for 3,000 pages" % elapsed
+
+    def fastest_build(n: int) -> float:
+        vault = tmp_path / ("v%d" % n)
+        for i in range(n):
+            _write_rule(vault, "feedback", "r%04d.md" % i, name="rule %d" % i,
+                        body=words + " unique%04d" % i)
+        best = float("inf")
+        for _ in range(3):
+            started = time.perf_counter()
+            index = build_index(vault)
+            best = min(best, time.perf_counter() - started)
+        assert index["doc_count"] == n
+        assert len(index["postings"]["common00"]) == n
+        return best
+
+    small, large = fastest_build(250), fastest_build(2000)
+    assert large < 20 * small, (
+        "8x the pages took %.1fx as long (%.2f s vs %.2f s)" % (large / small, large, small))

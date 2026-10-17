@@ -165,7 +165,9 @@ def test_562s_crash_is_found_through_a_stub_that_ignores_its_argument(tree):
     assert got["historical_yield"]["kind"] == "injected"
     assert got["historical_yield"]["problems"] == ["path: got str, the real function takes Path"]
     assert got["fixed_yield"]["verdict"] == tool.AGREES
-    assert got["fixed_yield"]["args"] == ["pathlib.%s" % type(Path("x")).__name__]
+    # The class's own module: 3.13 moved the concrete paths to pathlib._local.
+    path_type = type(Path("x"))
+    assert got["fixed_yield"]["args"] == ["%s.%s" % (path_type.__module__, path_type.__qualname__)]
 
 
 @MONITORING
