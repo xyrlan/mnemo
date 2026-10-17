@@ -455,7 +455,9 @@ def test_a_grok_parent_is_found_by_its_session_on_disk(tmp_vault, tmp_path, monk
                        "cwd": "/w/parent"}
 
 
-def test_a_parent_found_nowhere_reads_as_it_always_did(tmp_vault):
+def test_a_parent_found_nowhere_reads_as_it_always_did(tmp_vault, monkeypatch):
+    # Windows also names Claude Code's registry (#725), in test_sessions_inbox_pipe.
+    monkeypatch.setattr(inbox, "registry_reachable", lambda: False)
     assert inbox.resolve(tmp_vault, CLAUDE_PARENT) == (
         None, f"no address recorded for the parent in {inbox.LOG_NAME}")
 
