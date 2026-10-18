@@ -103,7 +103,14 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         cfg, vault_root=vault_root, short_id=args.short_id, cwd=args.cwd,
         url=card.pr.url, config_path=cfg_mod.default_config_path())
     text = report_card.render(card, watch_minutes=minutes, auto_merge=auto_merge)
-    why = inbox.deliver(vault_root, args.parent, text)
+    from mnemo.core.sessions import inbound_policy
+
+    # Written is not delivered (#732): Claude Code's inbound policy may hold
+    # the turn for the parent's approval. The child's own mode is what its
+    # transcript last recorded; it is attested only where that helps.
+    child_mode = inbound_policy.last_mode(transcript)
+    look = inbox.outlook(vault_root, args.parent, text, child_mode=child_mode)
+    why = inbox.deliver(vault_root, args.parent, text, attest=look.attest)
     pr = card.pr.number if card.pr else None
     row = {**base, "event": "finished", "state": name, "pr": pr}
     if why:
@@ -111,8 +118,8 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         # there is no watch, so the card as rendered now is the whole notice.
         report_card.undelivered(vault_root, row, why, text=text)
         return 0
-    report_card.record(vault_root, {**row, "delivered": True})
-    if name != "ci-running" or minutes <= 0:
+    report_card.sent(vault_root, row, look, text=text)
+    if name != "ci-running" or minutes <= 0 or look.cause == inbound_policy.REFUSE:
         return 0
 
     def alive() -> bool:
@@ -120,10 +127,13 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
 
     sent = []
     failed = []
+    looks = []
 
     def post(text: str) -> bool:
-        ok = inbox.notify(vault_root, args.parent, text)
+        seen = inbox.outlook(vault_root, args.parent, text, child_mode=child_mode)
+        ok = inbox.deliver(vault_root, args.parent, text, attest=seen.attest) == ""
         sent.append(ok)
+        looks.append((seen, text))
         if not ok:
             failed.append(text)
         return ok
@@ -144,7 +154,8 @@ def _report(args, cfg, vault_root, base, inbox, report_card) -> int:
         })
         return 0
     if sent and sent[-1]:
-        report_card.record(vault_root, {**row, "delivered": True})
+        seen, last = looks[-1]
+        report_card.sent(vault_root, row, seen, text=last)
     else:
         report_card.undelivered(
             vault_root, row,

@@ -849,16 +849,25 @@ def notify(vault_root: Path | str, session_id: str, text: str) -> bool:
     return deliver(vault_root, session_id, text) == ""
 
 
-def deliver(vault_root: Path | str, session_id: str, text: str) -> str:
+def deliver(vault_root: Path | str, session_id: str, text: str, *,
+            attest: Optional[str] = None) -> str:
     """:func:`notify`, answering why not: ``""`` when the notice went onto a
     socket, or to a Grok parent's leader, else the reason it did not (#454).
-    Never raises."""
+    Never raises.
+
+    Written is not delivered: Claude Code may hold the turn for approval
+    (:func:`outlook`, #732). *attest* is the ``from-mode`` :func:`outlook`
+    chose, put on a turn to a Claude session only."""
     try:
         address, why = resolve(vault_root, session_id)
         if address is None:
             return why
         if address.get("agent") == GROK:
             return post_grok(address, text)
+        if attest:
+            from mnemo.core.sessions import inbound_policy
+
+            text = inbound_policy.envelope(text, attest) or text
         if address.get("agent") == PIPE:
             return post_pipe(address, text)
         if not post(address, text):
@@ -866,3 +875,32 @@ def deliver(vault_root: Path | str, session_id: str, text: str) -> str:
         return ""
     except Exception as exc:  # noqa: BLE001 — never raises, by contract
         return f"{type(exc).__name__}: {exc}"
+
+
+def outlook(vault_root: Path | str, session_id: str, text: str, *,
+            child_mode: Optional[str] = None):
+    """What Claude Code will do with *text* once written to *session_id*
+    (:mod:`.inbound_policy`, #732): an ``Outlook``. Never raises.
+
+    A Grok parent has no such policy: its leader takes the turn or says why
+    not. A Claude parent is read from its transcript and settings, under
+    every account's config dir. An attestation the envelope cannot carry
+    (:func:`.inbound_policy.envelope`) is dropped, and the verdict with it.
+    """
+    from mnemo.core.sessions import inbound_policy
+
+    try:
+        from mnemo.core.sessions import accounts
+
+        homes = [root.home for root in accounts.roots(vault_root=vault_root)]
+        if inbound_policy.find_transcript(session_id, homes) is None                 and grok_address(vault_root, session_id) is not None:
+            return inbound_policy.ACCEPTED
+        look = inbound_policy.outlook(session_id, child_mode=child_mode, homes=homes)
+        if look.attest and inbound_policy.envelope(text, look.attest) is None:
+            return inbound_policy.decide(setting=look.setting or None,
+                                         parent_mode=look.parent_mode,
+                                         child_mode=look.child_mode, can_attest=False)
+        return look
+    except Exception as exc:  # noqa: BLE001 — never raises
+        return inbound_policy.Outlook(
+            None, f"written; delivery not confirmed: {type(exc).__name__}: {exc}")
