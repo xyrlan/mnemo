@@ -78,6 +78,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("background_processes",  background_processes._doctor_check_background_processes),
     ("helper_processes",      helper_processes._doctor_check_helper_processes),
     ("child_reports",         child_reports._doctor_check_child_reports),
+    ("child_notice_policy",   child_reports._doctor_check_child_notice_policy),
     ("native_memory_cut",     native_memory._doctor_check_native_memory_cut),
     ("transcript_retention",  transcript_retention._doctor_check_transcript_retention),
     ("sync",                  doctor_sync._doctor_check_sync),

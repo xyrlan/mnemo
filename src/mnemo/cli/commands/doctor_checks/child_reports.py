@@ -37,3 +37,36 @@ def _doctor_check_child_reports(vault: Path) -> bool:
         "listed here was SIGKILLed or died before it started"
     )
     return False
+
+
+def _doctor_check_child_notice_policy(vault: Path) -> bool:
+    """Child notices held by Claude Code's inbound policy (#732).
+
+    A bypass parent holds a notice from a child in another permission class
+    for the user's approval, every time. What it takes to stop that is the
+    user's own ``crossSessionInbound`` setting, which mnemo never writes; this
+    names it, with its trade-off, from the rows that were actually held in the
+    last :data:`report_card.LOST_WINDOW_DAYS` days. True when silent.
+    """
+    import json
+
+    from mnemo.core.sessions import inbound_policy, liveness, report_card
+
+    try:
+        text = (vault / ".mnemo" / report_card.LOG_NAME).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return True
+    since = time.time() - report_card.LOST_WINDOW_DAYS * 86400
+    rows = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("held") and (report_card._stamp(row) or 0) >= since:
+            rows.append(row)
+    setting = inbound_policy.effective_setting(home=liveness.claude_home(), cwd=None)
+    lines = inbound_policy.advice(rows, setting=setting)
+    for line in lines:
+        print(line)
+    return not lines

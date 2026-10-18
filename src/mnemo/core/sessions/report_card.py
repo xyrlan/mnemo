@@ -796,6 +796,39 @@ def undelivered(vault_root: Path, row: Dict[str, object], reason: str,
         pass
 
 
+def sent(vault_root: Path, row: Dict[str, object], look, text: Optional[str] = None) -> bool:
+    """Record a notice the parent's inbox took, as what it became (#732).
+
+    *look* is :func:`mnemo.core.sessions.inbox.outlook`'s verdict. Accepted:
+    ``delivered: true``. Held or refused by Claude Code's inbound policy:
+    ``delivered: false`` with the cause, ``held``, and both sessions' modes, so
+    ``mnemo doctor`` can name the setting. Not known: ``delivered: null`` and
+    "delivery not confirmed". In both of those the notice is also held for the
+    parent's next prompt (#586), so a declined approval loses nothing. A
+    policy outcome is not an error, so nothing goes to ``errors.log``.
+    Returns whether it was delivered. Never raises.
+    """
+    if look is None or look.accepted:
+        record(vault_root, {**row, "delivered": True})
+        return True
+    extra: Dict[str, object] = {"reason": look.reason}
+    for key in ("parent_mode", "child_mode"):
+        if getattr(look, key, ""):
+            extra[key] = getattr(look, key)
+    if look.cause:
+        extra["held"] = look.cause
+    record(vault_root, {**row, "delivered": look.accepted, **extra})
+    if text:
+        try:
+            from mnemo.core.sessions import held_notices
+
+            held_notices.hold(vault_root, str(row.get("parent") or ""), text,
+                              short_id=str(row.get("short_id") or ""))
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
 #: How long a ``spawned`` row may go unanswered before it counts as lost. The
 #: reporter writes ``finished`` once :func:`gather` returns: a few ``git`` and
 #: ``gh`` calls, each bounded by :func:`_run`'s 60 s timeout.

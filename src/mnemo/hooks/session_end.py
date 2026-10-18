@@ -589,12 +589,22 @@ def _maybe_notify_parent(
 
         errors.log_error(vault, "session_end.child_report_spawn", exc)
         reason = f"reporter did not start ({type(exc).__name__}: {exc}); sent the one-line notice"
+    from dataclasses import replace
+    from pathlib import Path
+
+    from mnemo.core.sessions import inbound_policy
+
     text = _notice_text(short_id)
-    why = inbox.deliver(vault, parent, text)
+    child_mode = inbound_policy.last_mode(Path(transcript) if transcript else None)
+    look = inbox.outlook(vault, parent, text, child_mode=child_mode)
+    why = inbox.deliver(vault, parent, text, attest=look.attest)
     if why:
         report_card.undelivered(vault, row, f"{reason}; that failed too: {why}", text=text)
-    else:
+    elif look.accepted:
         report_card.record(vault, {**row, "state": "thin", "delivered": True, "reason": reason})
+    else:
+        report_card.sent(vault, {**row, "state": "thin"},
+                         replace(look, reason=f"{reason}; {look.reason}"), text=text)
 
 
 def _maybe_follow_pr(cfg, vault, *, session_id: str, cwd: str) -> None:

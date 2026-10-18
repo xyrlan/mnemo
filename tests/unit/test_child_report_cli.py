@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from mnemo.cli.runtime import main as cli_main
-from mnemo.core.sessions import inbox, report_card as rc
+from mnemo.core.sessions import inbound_policy, inbox, report_card as rc
 
 
 def _setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, watch=None) -> Path:
@@ -35,11 +35,12 @@ def _card(state_checks) -> rc.Card:
     )
 
 
-def _run(monkeypatch, card, *, delivered=True):
+def _run(monkeypatch, card, *, delivered=True, look=inbound_policy.ACCEPTED):
     sent, watched = [], []
     monkeypatch.setattr(rc, "gather", lambda *a, **k: card)
     why = "" if delivered else "parent not live: none of its 1 recorded address(es) is (pid 9)"
-    monkeypatch.setattr(inbox, "deliver", lambda v, p, text: sent.append((p, text)) or why)
+    monkeypatch.setattr(inbox, "deliver", lambda v, p, text, **kw: sent.append((p, text)) or why)
+    monkeypatch.setattr(inbox, "outlook", lambda v, p, text, **kw: look)
     monkeypatch.setattr(
         rc, "watch_checks",
         lambda c, **kw: watched.append(kw["minutes"]) or "settled",
@@ -135,7 +136,8 @@ def test_a_watch_that_ends_without_a_post_is_recorded_as_undelivered(
 ) -> None:
     vault = _setup(tmp_path, monkeypatch, watch=5)
     monkeypatch.setattr(rc, "gather", lambda *a, **k: _card({"pending": 1}))
-    monkeypatch.setattr(inbox, "deliver", lambda *a: "")
+    monkeypatch.setattr(inbox, "deliver", lambda *a, **kw: "")
+    monkeypatch.setattr(inbox, "outlook", lambda *a, **kw: inbound_policy.ACCEPTED)
     monkeypatch.setattr(rc, "watch_checks", lambda c, **kw: "parent-gone")
 
     cli_main(["child-report", "c0da0f55", "--parent", "P1"])
@@ -195,7 +197,8 @@ def test_a_watch_that_stood_down_for_pr_follow_is_not_undelivered(tmp_path, monk
 
     vault = _setup(tmp_path, monkeypatch, watch=5)
     monkeypatch.setattr(rc, "gather", lambda *a, **k: _card({"pending": 1}))
-    monkeypatch.setattr(inbox, "deliver", lambda *a: "")
+    monkeypatch.setattr(inbox, "deliver", lambda *a, **kw: "")
+    monkeypatch.setattr(inbox, "outlook", lambda *a, **kw: inbound_policy.ACCEPTED)
     seen = []
 
     def watch(card, **kw):
@@ -229,3 +232,51 @@ def test_a_wake_for_another_pr_or_before_the_watch_does_not_stand_it_down(tmp_pa
     assert not pr_follow.woken_since(vault, "c0da0f55", pr=12, since=150.0)
     assert not pr_follow.woken_since(vault, "c0da0f55", pr=13, since=50.0)
     assert not pr_follow.woken_since(vault, "other", pr=12, since=50.0)
+
+
+HELD = inbound_policy.decide(setting=None, parent_mode="bypassPermissions", child_mode="auto")
+
+
+def test_a_notice_the_parents_policy_holds_is_not_recorded_delivered(tmp_path, monkeypatch) -> None:
+    """#732: a bypass parent holds an auto child's notice for approval. The
+    row says so, nothing goes to errors.log, and the held copy is kept for
+    the parent's next prompt in case the approval is declined."""
+    from mnemo.core.sessions import held_notices
+
+    vault = _setup(tmp_path, monkeypatch)
+
+    _, sent, _ = _run(monkeypatch, _card({"pass": 3}), look=HELD)
+
+    assert [p for p, _ in sent] == ["P1"]  # still written: the operator can approve it
+    [row] = _rows(vault)
+    assert row["delivered"] is False
+    assert row["held"] == "no-mode-asserted"
+    assert (row["parent_mode"], row["child_mode"]) == ("bypassPermissions", "auto")
+    assert "held for approval by the parent's crossSessionInbound policy" in row["reason"]
+    assert held_notices.log_path(vault).exists()
+    assert not (vault / ".errors.log").exists()
+
+
+def test_a_notice_whose_outcome_cannot_be_read_is_not_confirmed(tmp_path, monkeypatch) -> None:
+    vault = _setup(tmp_path, monkeypatch)
+    unknown = inbound_policy.decide(setting=None, parent_mode=None, child_mode="auto")
+
+    _run(monkeypatch, _card({"pass": 3}), look=unknown)
+
+    [row] = _rows(vault)
+    assert row["delivered"] is None
+    assert row["reason"].startswith("written; delivery not confirmed")
+
+
+def test_the_attestation_outlook_chose_goes_to_deliver(tmp_path, monkeypatch) -> None:
+    _setup(tmp_path, monkeypatch)
+    attested = inbound_policy.decide(setting=None, parent_mode="bypassPermissions",
+                                     child_mode="bypassPermissions")
+    seen = []
+    monkeypatch.setattr(rc, "gather", lambda *a, **k: _card({"pass": 3}))
+    monkeypatch.setattr(inbox, "outlook", lambda *a, **kw: attested)
+    monkeypatch.setattr(inbox, "deliver", lambda v, p, text, **kw: seen.append(kw) or "")
+
+    cli_main(["child-report", "c0da0f55", "--parent", "P1"])
+
+    assert seen == [{"attest": "bypass"}]
