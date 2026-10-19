@@ -100,6 +100,30 @@ def _row_conflicts(s: Summary, reach: Reach) -> bool:
     return True
 
 
+def _row_state(s: Summary, reach: Reach) -> bool:
+    trouble = s.get("stateProblem")
+    if not trouble:
+        return True
+    print(f"  ⚠ Sync state: {trouble}; sync carries on from what .git/ records")
+    print("       → the next `mnemo sync pull` or push writes it afresh; the counts and the "
+          "last pull and push it held start over")
+    return False
+
+
+def _row_locks(s: Summary, reach: Reach) -> bool:
+    from mnemo.core.sync.health import ago_text
+
+    held = [item for item in s.get("gitLocks") or [] if isinstance(item, dict)]
+    if not held:
+        return True
+    for item in held:
+        print(f"  ⚠ Sync git lock: {item.get('path')} left {ago_text(item.get('ageSeconds'))} "
+              "ago by a git that died; every pull and push stops on it")
+    print("       → the next `mnemo sync pull` removes it; if it says it could not, a git "
+          "process still has it open: end that process")
+    return False
+
+
 def _row_format(s: Summary, reach: Reach) -> bool:
     if s.get("formatSupported", True):
         return True
@@ -120,6 +144,8 @@ ROWS: List[Tuple[str, Callable[[Summary, Reach], bool]]] = [
     ("refused", _row_refused),
     ("conflicts", _row_conflicts),
     ("format", _row_format),
+    ("state", _row_state),
+    ("locks", _row_locks),
 ]
 
 
@@ -138,7 +164,14 @@ def _doctor_check_sync(vault: Path) -> bool:
 
     try:
         if not sync_state.enabled(vault):
-            return True
+            trouble = sync_state.problem(vault)
+            if not trouble:
+                return True
+            print(f"  ⚠ Sync state: {trouble}, and nothing in .git/ says this vault synced; "
+                  "sync reads as off here")
+            print("       → if this machine synced, `mnemo sync join <remote>` again; "
+                  "if it never did, delete that file")
+            return False
         machine = sync_state.machine_id(cfg_mod.load_config())
         summary = health.summary(vault, machine, max_age=0)
         if summary is None:

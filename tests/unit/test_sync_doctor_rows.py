@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -139,10 +140,32 @@ def test_format_row_warns_of_a_hub_this_mnemo_does_not_know(tmp_vault):
     _off(tmp_vault)
 
 
+def test_state_row_warns_only_when_the_state_file_cannot_be_read(tmp_vault):
+    assert _printed(rows._row_state, _summary(), REACH_OK) == ""
+    trouble = ".mnemo/sync-state.json holds 361 NUL bytes and nothing else"
+    out = _printed(rows._row_state, _summary(stateProblem=trouble), REACH_OK)
+    assert f"⚠ Sync state: {trouble}; sync carries on" in out and "→" in out
+    assert rows._row_state(_summary(stateProblem=trouble), REACH_OK) is False
+    _off(tmp_vault)
+
+
+def test_locks_row_names_each_lock_a_dead_git_left(tmp_vault):
+    assert _printed(rows._row_locks, _summary(gitLocks=[]), REACH_OK) == ""
+    held = [{"path": ".git/index.lock", "ageSeconds": 21 * 3600},
+            {"path": ".git/refs/heads/main.lock", "ageSeconds": 900}]
+    out = _printed(rows._row_locks, _summary(gitLocks=held), REACH_OK)
+    assert "⚠ Sync git lock: .git/index.lock left 21 h ago" in out
+    assert "⚠ Sync git lock: .git/refs/heads/main.lock left 15 min ago" in out
+    assert "→ the next `mnemo sync pull` removes it" in out
+    assert rows._row_locks(_summary(gitLocks=held), REACH_OK) is False
+    _off(tmp_vault)
+
+
 def test_the_rows_are_registered_once_in_doctor():
     assert [name for name, _ in doctor_cmd.DOCTOR_CHECKS].count("sync") == 1
     assert [name for name, _ in rows.ROWS] == [
-        "hub", "role", "commits", "last", "error", "refused", "conflicts", "format"]
+        "hub", "role", "commits", "last", "error", "refused", "conflicts", "format",
+        "state", "locks"]
 
 
 # --- the adapter on a real vault ----------------------------------------------
@@ -265,3 +288,37 @@ def test_a_satellite_with_files_waiting_past_the_threshold_is_still_warned(tmp_p
     state_file.write_text(json.dumps(state), encoding="utf-8")
     out = _printed(rows._doctor_check_sync, vault)
     assert "last push: 2026-01-01T00:00:00Z (" in out and "no successful push in 1 d" in out
+
+
+def _aged(path: Path, seconds: float) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    then = time.time() - seconds
+    os.utime(str(path), (then, then))
+    return path
+
+
+@needs_git
+def test_a_zeroed_state_and_a_dead_index_lock_show_on_a_real_vault(tmp_path, monkeypatch, git_env):
+    """#735: a BSOD zeroed the state and left ``index.lock``; doctor said nothing."""
+    vault = primary(tmp_path, monkeypatch)
+    (vault / ".mnemo" / "sync-state.json").write_bytes(b"\0" * 361)
+    _aged(vault / ".git" / "index.lock", 21 * 3600)
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "⚠ Sync state: .mnemo/sync-state.json holds 361 NUL bytes and nothing else" in out
+    assert "⚠ Sync git lock: .git/index.lock left 21 h ago" in out
+    assert rows._doctor_check_sync(vault) is False
+
+    assert sync.pull(vault, machine="mac").outcome == "ok"
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "Sync state" not in out and "Sync git lock" not in out
+
+
+def test_an_unreadable_state_where_sync_never_ran_is_a_warning_not_silence(tmp_vault):
+    (tmp_vault / ".git").mkdir()
+    (tmp_vault / ".mnemo").mkdir(exist_ok=True)
+    (tmp_vault / ".mnemo" / "sync-state.json").write_bytes(b"\0" * 12)
+    out = _printed(rows._doctor_check_sync, tmp_vault)
+    assert "⚠ Sync state: .mnemo/sync-state.json holds 12 NUL bytes and nothing else" in out
+    assert "sync reads as off here" in out
+    assert rows._doctor_check_sync(tmp_vault) is False

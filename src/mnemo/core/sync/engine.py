@@ -22,6 +22,7 @@ import shutil
 import stat
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +47,17 @@ PUSH_ATTEMPTS = 4
 # any real run: the first push of a whole vault is the slow one.
 _LOCK_STALE_SECONDS = 900.0
 
+#: A git lock file, or a copy of the index a count staged into, older than
+#: this was left by a process that died (#735): twice the longest mnemo lets
+#: a local git call run. A pull or push removes such a lock while it holds
+#: sync's own lock, so no other mnemo sync can be the git that took it.
+DEAD_AFTER_SECONDS = 2 * gitmod._LOCAL_TIMEOUT
+
+# Where `_pending` stages its throwaway copies of the index, and what it
+# named them before #735: one per pid, straight in `.git/`.
+_SCRATCH_DIR = "mnemo-sync-scratch"
+_LEGACY_SCRATCH = "mnemo-sync-status-index-"
+
 _MACHINE_TRAILER = "Sync-Machine: "
 _OVERRODE_TRAILER = "Sync-Overrode: "
 _SYMLINK, _GITLINK = "120000", "160000"
@@ -54,7 +66,7 @@ _SYMLINK, _GITLINK = "120000", "160000"
 # vault by hand. The tracked set itself is `tracked.is_tracked`, not this.
 _ATTRIBUTES = "* -text -filter -ident\n"
 # In `.git/`: says this repository is sync's own and not one the user made.
-_MARKER = "mnemo-sync"
+_MARKER = st.REPO_MARKER
 _EXCLUDE = """\
 # Written by `mnemo sync`. A convenience for `git status`: what sync commits
 # is decided by mnemo, not by this file.
@@ -665,6 +677,89 @@ def _push(git: Git, machine: str, state: Dict[str, Any], config_path: Optional[P
             {"files": 0, "conflicts": conflicts})
 
 
+# --- what a git that died leaves behind (#735) -----------------------------
+
+
+def _git_locks(git_dir: Path) -> List[Path]:
+    """The lock files git holds while it writes the index, a ref or the config."""
+    found = [p for p in git_dir.glob("*.lock") if not p.name.startswith(_LEGACY_SCRATCH)]
+    refs = git_dir / "refs"
+    if refs.is_dir():
+        found += sorted(refs.rglob("*.lock"))
+    return found
+
+
+def _age(path: Path, now: float) -> Optional[int]:
+    try:
+        return max(0, int(now - path.stat().st_mtime))
+    except OSError:
+        return None
+
+
+def stale_git_locks(vault: Path, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Git's lock files in the vault's repository older than
+    :data:`DEAD_AFTER_SECONDS`: ``{"path": ".git/index.lock", "ageSeconds": N}``.
+
+    Every pull and push stops on one until it is gone, with git's words alone
+    to say why. A crash during a sync leaves one (a BSOD on 2026-10-18 left
+    ``index.lock``, and the vault stopped syncing for 21 hours).
+    """
+    vault = Path(vault)
+    now = time.time() if now is None else now
+    out = []
+    for path in _git_locks(vault / ".git"):
+        age = _age(path, now)
+        if age is not None and age > DEAD_AFTER_SECONDS:
+            out.append({"path": path.relative_to(vault).as_posix(), "ageSeconds": age})
+    return out
+
+
+def _clear_dead_locks(git: Git) -> List[Dict[str, Any]]:
+    """Remove the stale git locks; return the ones that went. Called only
+    while sync holds its own lock. Never raises: a lock that will not go is
+    left for git to fail on, and :func:`_held_note` names it."""
+    gone: List[Dict[str, Any]] = []
+    try:
+        for item in stale_git_locks(git.work_tree):
+            try:
+                git.work_tree.joinpath(*item["path"].split("/")).unlink()
+            except OSError:
+                continue
+            gone.append(item)
+    except OSError:  # a directory under refs/ that cannot be listed
+        pass
+    return gone
+
+
+def _removed_note(gone: List[Dict[str, Any]]) -> str:
+    return "".join(f"; removed {item['path']}, which a git that died left "
+                   f"{health.ago_text(item['ageSeconds'])} ago" for item in gone)
+
+
+def _held_note(vault: Path) -> str:
+    """What to add to a failed run's message when a git lock is still there:
+    git's own words name no file and no way out."""
+    now = time.time()
+    notes = []
+    try:
+        held = _git_locks(Path(vault) / ".git")
+    except OSError:
+        held = []
+    for path in held:
+        age = _age(path, now)
+        if age is None:
+            continue
+        rel = path.relative_to(vault).as_posix()
+        if age > DEAD_AFTER_SECONDS:
+            notes.append(f"{rel} is {health.ago_text(age)} old and could not be removed: a git "
+                         "process still has it open; end it, then run this again")
+        else:
+            notes.append(f"{rel} is {health.ago_text(age)} old: a git running in the vault "
+                         "holds it, or one that died; sync removes it on its own once it is "
+                         f"{health.ago_text(int(DEAD_AFTER_SECONDS))} old")
+    return "".join("; " + note for note in notes)
+
+
 # --- the commands ----------------------------------------------------------
 
 
@@ -715,8 +810,28 @@ def _guarded(vault: Path, machine: str, op: str, timer: st.Timer, state: Dict[st
                        f"could not reach the hub ({exc.stderr}); the vault is as it was", **extra)
     except (GitError, OSError) as exc:
         text = exc.stderr if isinstance(exc, GitError) else str(exc)
-        return _finish(vault, machine, op, timer, state, "error", f"{op} failed: {text}", **extra)
+        return _finish(vault, machine, op, timer, state, "error",
+                       f"{op} failed: {text}{_held_note(vault)}", **extra)
     return _finish(vault, machine, op, timer, state, outcome, message, **extra, **detail)
+
+
+def _load_on(vault: Path) -> Dict[str, Any]:
+    """The state a pull or push starts from, on a vault :func:`st.enabled`
+    passed. One whose file could not be read comes back empty (#735), and
+    saved like that it would turn sync off for good."""
+    state = st.load(vault)
+    state["enabled"] = True
+    return state
+
+
+def _extra(trigger: Optional[str], gone: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """What a pull's or push's log row carries whatever its outcome."""
+    extra: Dict[str, Any] = {}
+    if trigger:
+        extra["trigger"] = trigger
+    if gone:
+        extra["locksRemoved"] = [item["path"] for item in gone]
+    return extra or None
 
 
 def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
@@ -734,8 +849,9 @@ def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
         if not held:
             return _finish(vault, machine, "pull", timer, None, "busy",
                            "busy: another `mnemo sync` is running on this vault")
-        state = st.load(vault)
+        state = _load_on(vault)
         git = Git(vault)
+        gone = _clear_dead_locks(git)
 
         def body():
             _refresh_info(git)
@@ -761,10 +877,9 @@ def pull(vault: Path, *, machine: str, timeout: Optional[float] = None,
             detail = {"files": done.files, "conflicts": done.conflicts,
                       "briefings": done.briefings, "refused": done.refused,
                       "restored": done.restored, "sharedChanged": done.shared_changed}
-            return "ok", message, detail
+            return "ok", message + _removed_note(gone), detail
 
-        return _guarded(vault, machine, "pull", timer, state, body,
-                        {"trigger": trigger} if trigger else None)
+        return _guarded(vault, machine, "pull", timer, state, body, _extra(trigger, gone))
 
 
 def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
@@ -783,8 +898,9 @@ def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
         if not held:
             return _finish(vault, machine, "push", timer, None, "busy",
                            "busy: another `mnemo sync` is running on this vault")
-        state = st.load(vault)
+        state = _load_on(vault)
         git = Git(vault)
+        gone = _clear_dead_locks(git)
 
         def body():
             _refresh_info(git)
@@ -794,10 +910,9 @@ def push(vault: Path, *, machine: str, config_path: Optional[Path] = None,
                 brought = int(state.pop("_briefings", 0) or 0)
             # `trigger` reaches the row through `_guarded`'s extra, on every outcome.
             detail = dict(detail, withheld=int(state.get("withheld") or 0), briefings=brought)
-            return outcome, message, detail
+            return outcome, message + _removed_note(gone), detail
 
-        return _guarded(vault, machine, "push", timer, state, body,
-                        {"trigger": trigger} if trigger else None)
+        return _guarded(vault, machine, "push", timer, state, body, _extra(trigger, gone))
 
 
 def _pin_machine_id(config_path: Optional[Path], machine: str) -> None:
@@ -985,10 +1100,41 @@ def join(vault: Path, remote: str, *, machine: str, config_path: Optional[Path] 
                        movedAside=str(aside) if aside is not None else None)
 
 
+def _sweep_scratch(git: Git, now: Optional[float] = None) -> None:
+    """Remove the index copies, and git's locks beside them, that counts
+    killed mid-way left, once older than :data:`DEAD_AFTER_SECONDS`."""
+    now = time.time() if now is None else now
+    try:
+        found = list(git.git_dir.glob(_LEGACY_SCRATCH + "*"))
+        scratch_dir = git.git_dir / _SCRATCH_DIR
+        if scratch_dir.is_dir():
+            found += list(scratch_dir.iterdir())
+    except OSError:
+        return
+    for path in found:
+        age = _age(path, now)
+        if age is not None and age > DEAD_AFTER_SECONDS:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 def _pending(git: Git, head_tree: Optional[str]) -> int:
     """How many tracked files differ from the branch, without touching the
-    index a push will use."""
-    scratch = git.git_dir / f"mnemo-sync-status-index-{os.getpid()}"
+    index a push will use.
+
+    It stages into a copy of the index under ``.git/mnemo-sync-scratch/``,
+    under a name no other run has used (#735). A run killed mid-count — a
+    statusline render cut off, or on Windows a git that outlives the
+    launcher it was started through — leaves its copy and git's ``.lock``
+    behind; named by pid alone, the next run to reuse that pid found the
+    lock and failed. What such runs left is swept here once it is old.
+    """
+    _sweep_scratch(git)
+    scratch_dir = git.git_dir / _SCRATCH_DIR
+    scratch_dir.mkdir(exist_ok=True)
+    scratch = scratch_dir / f"index-{os.getpid()}-{uuid.uuid4().hex[:12]}"
     try:
         try:
             shutil.copyfile(str(git.git_dir / "index"), str(scratch))
@@ -1009,7 +1155,7 @@ def status(vault: Path, *, machine: str) -> Dict[str, Any]:
     never talks to it."""
     vault = Path(vault)
     if not st.enabled(vault):
-        return {"enabled": False, "machineId": machine}
+        return {"enabled": False, "machineId": machine, "stateProblem": st.problem(vault)}
     state = st.load(vault)
     git = Git(vault)
     tips = _tips(git)
@@ -1042,5 +1188,7 @@ def status(vault: Path, *, machine: str) -> Dict[str, Any]:
         "formatVersion": st.FORMAT_VERSION,
         "hubFormatVersion": hub_format,
         "formatSupported": hub_format is None or hub_format == st.FORMAT_VERSION,
+        "stateProblem": st.problem(vault),
+        "gitLocks": stale_git_locks(vault),
     }
 

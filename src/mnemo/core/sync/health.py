@@ -159,7 +159,11 @@ def summary(vault: Path, machine: str, *, max_age: float = CACHE_SECONDS,
         "formatSupported": hub_format is None or hub_format == st.FORMAT_VERSION,
         "lastError": last_error,
         "staleAfterSeconds": STALE_AFTER_SECONDS,
+        "stateProblem": st.problem(vault),
     }
+    from mnemo.core.sync import engine
+
+    out["gitLocks"] = engine.stale_git_locks(vault, now=now.timestamp())
     out.update(counts(vault, max_age=max_age, now=now))
     # A push is late only when there is something to push: a satellite that
     # joined and has written nothing yet has never needed one (#655).
