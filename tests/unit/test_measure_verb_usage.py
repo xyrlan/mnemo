@@ -9,6 +9,7 @@ match.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
@@ -134,7 +135,10 @@ def test_a_git_commit_mentioning_a_verb_is_excluded_entirely(tmp_path) -> None:
 def test_calls_outside_the_window_are_not_counted(tmp_path) -> None:
     _transcript(tmp_path, uuid="old", cwd="/r/app", at="2026-01-01T10:00:00Z",
                bash=["mnemo dispatch 1"])
-    _transcript(tmp_path, uuid="new", cwd="/r/app", at="2026-09-20T10:00:00Z",
+    # Relative to now: a fixed date drops out of the window as the calendar moves.
+    recent = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _transcript(tmp_path, uuid="new", cwd="/r/app", at=recent,
                bash=["mnemo sessions"])
 
     report = _measure(tmp_path, since_days=30.0)
