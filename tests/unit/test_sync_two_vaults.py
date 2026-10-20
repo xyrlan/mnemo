@@ -709,7 +709,8 @@ def test_an_index_lock_a_crash_left_is_removed_and_the_run_says_so(pair, op: str
     mac.write("shared/feedback/later.md", b"---\nname: later\n---\nlater\n")
     assert mac.push().outcome == "ok"
     win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
-    lock = _aged(win.vault / ".git" / "index.lock", 21 * 3600)
+    # Off the hour, so a clock a hair behind the mtime still reads "21 h".
+    lock = _aged(win.vault / ".git" / "index.lock", 21 * 3600 + 600)
     out = getattr(win, op)()
     assert out.outcome == "ok", out.message
     assert not lock.exists()
@@ -731,7 +732,7 @@ def test_a_dead_ref_lock_is_removed_too(pair):
 def test_a_young_index_lock_is_left_alone_and_the_error_names_it(pair):
     _mac, win = pair
     win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
-    lock = _aged(win.vault / ".git" / "index.lock", 60)
+    lock = _aged(win.vault / ".git" / "index.lock", 90)
     out = win.push()
     assert out.outcome == "error"
     assert lock.exists()
