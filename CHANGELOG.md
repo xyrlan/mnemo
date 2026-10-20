@@ -5,6 +5,45 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.1] — 2026-10-20
+
+### Fixed
+
+- **A child's notice is no longer recorded `delivered: true` when Claude Code
+  holds it for your approval.** Claude Code checks every cross-session turn
+  against its `crossSessionInbound` policy. With that setting unset, a session
+  running `bypassPermissions` holds a notice from a child in another
+  permission class (an `auto` child, for example) until you approve it. mnemo
+  now reads the parent's setting and permission mode, and the child's mode,
+  before it writes. A notice that will be held is still written, so you can
+  approve it, but `child-reports.jsonl` records `delivered: false` with the
+  cause, and the held copy still reaches the parent at its next prompt. When
+  the outcome cannot be read, the row says "written; delivery not confirmed"
+  (`delivered: null`). A `bypassPermissions` child writing to a
+  `bypassPermissions` parent now attests its real class, so that notice
+  arrives without asking. `mnemo doctor` warns when notices were held this
+  way. It names your `"crossSessionInbound": "accept"` setting and its
+  trade-off: any process running as you that can read `~/.claude/sessions`
+  could then prompt your bypass sessions without approval. mnemo never writes
+  that setting and never claims a mode the child is not in. (#732)
+
+- **A crash or a killed run no longer stops sync without a word.** Counting
+  the files waiting to push staged into `.git/mnemo-sync-status-index-<pid>`,
+  and a run killed mid-count left that copy and git's `.lock` beside it: 27
+  of them on one Windows satellite in five days, and the next run to reuse
+  the pid failed on the lock. The copies now go under
+  `.git/mnemo-sync-scratch/` with names no other run has used, and leftovers
+  older than ten minutes, old-style ones included, are swept. A pull or push
+  removes a git lock (`index.lock`, a ref's `.lock`) older than ten minutes,
+  which only a git that died leaves while sync holds its own lock, and says
+  so; a younger one makes the error name the file and its age instead of
+  git's bare "Another git process seems to be running". `mnemo doctor` warns
+  of both. A `.mnemo/sync-state.json` that a crash zeroed no longer reads as
+  `sync: off`, which stopped every pull and push and the satellite guards
+  with them: `status` and `doctor` name the problem, sync carries on when
+  `.git/` shows it committed there, and the next run writes the file afresh,
+  now flushed to disk before the rename. (#735)
+
 ## [1.11.0] — 2026-10-17
 
 ### Changed
