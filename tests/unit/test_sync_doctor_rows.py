@@ -303,7 +303,9 @@ def test_a_zeroed_state_and_a_dead_index_lock_show_on_a_real_vault(tmp_path, mon
     """#735: a BSOD zeroed the state and left ``index.lock``; doctor said nothing."""
     vault = primary(tmp_path, monkeypatch)
     (vault / ".mnemo" / "sync-state.json").write_bytes(b"\0" * 361)
-    _aged(vault / ".git" / "index.lock", 21 * 3600)
+    # Off the hour: an mtime set to exactly 21 h ago can read back a hair
+    # younger on Windows, and the age floors to "20 h".
+    _aged(vault / ".git" / "index.lock", 21 * 3600 + 600)
     out = _printed(rows._doctor_check_sync, vault)
     assert "⚠ Sync state: .mnemo/sync-state.json holds 361 NUL bytes and nothing else" in out
     assert "⚠ Sync git lock: .git/index.lock left 21 h ago" in out
