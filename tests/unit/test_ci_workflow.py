@@ -92,4 +92,15 @@ def test_the_windows_job_runs_all_of_tests():
     """tests/cli, core, integration and autopilot never ran on Windows (#729)."""
     steps = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["windows"]["steps"]
     runs = [s["run"].strip() for s in steps if s.get("run", "").lstrip().startswith("pytest")]
-    assert runs == ["pytest tests/ -v"]
+    assert runs == ["pytest tests/ -v -n auto"]
+
+
+def test_both_suite_jobs_spread_the_suite_over_the_runner_s_cpus():
+    """Serial, the Windows job was every run's wall time (#739)."""
+    jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
+    for name in ("test", "windows"):
+        runs = [s["run"] for s in jobs[name]["steps"] if "pytest " in s.get("run", "")]
+        assert runs and all(re.search(r"\s-n auto(\s|$)", r) for r in runs), name
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    dev = pyproject.split("[project.optional-dependencies]", 1)[1].split("build = [", 1)[0]
+    assert '"pytest-xdist' in dev, "-n needs pytest-xdist in the dev extra CI installs"

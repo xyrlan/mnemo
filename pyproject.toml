@@ -16,6 +16,8 @@ dependencies = []  # stdlib only — this is intentional
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    # CI runs the suite with `-n auto` (#739); a bare `pytest` stays serial.
+    "pytest-xdist>=3.0",
     # Only to let the tests read .github/workflows/*.yml. Without it the
     # release-ordering tests would importorskip themselves into never running.
     "PyYAML>=6.0",

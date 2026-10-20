@@ -63,11 +63,15 @@ jobs:
         # different cwd silently falls back to statement-only. COVERAGE_RCFILE
         # travels through the environment instead, which every child inherits
         # regardless of where it runs.
+        #
+        # `-n auto` spreads the suite over one pytest-xdist worker per CPU.
+        # It ran in one process, on runners with four (#739); pytest-cov
+        # combines the workers' data as it combines any child's.
         env:
           COVERAGE_RCFILE: ${{ github.workspace }}/pyproject.toml
         run: |
           coverage erase || true
-          pytest -v --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
+          pytest -v -n auto --cov=mnemo --cov-report=term-missing --cov-fail-under=85 tests/
 
   npm-wrapper:
     name: npm wrapper (node 20)
@@ -165,8 +169,8 @@ jobs:
     # median: wide enough that a slow runner or a few more process-starting
     # tests never trip it, short enough that a hang still reads as a failure
     # within the half hour. Measure again before changing it:
-    # `gh run list --workflow CI`, then each run's jobs, this job's
-    # `started_at` to `completed_at`.
+    # `python3 tools/measure_ci_jobs.py`, which reads each run's jobs through
+    # `gh` and reports this one's run time beside every other job's.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -178,7 +182,9 @@ jobs:
           pip install -e ".[dev]"
       # All of tests/, not tests/unit/: the rest never ran on Windows, and a
       # dev box found 42 failures and 7 errors there that CI could not (#729).
-      - run: pytest tests/ -v
+      # Serial, this was the slowest job of every run and so its wall time;
+      # `-n auto` runs it on all of the runner's CPUs (#739).
+      - run: pytest tests/ -v -n auto
 
       # Unit tests alone kept passing here through four releases in which
       # `mnemo doctor` was dead on Windows: they never run a command end to
