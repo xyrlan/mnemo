@@ -25,6 +25,13 @@ def test_queue_runs_from_creation_and_run_time_from_start():
         {"job": "windows", "conclusion": "success", "queue": 4.0, "run": 800.0}]
 
 
+def test_a_rerun_s_queue_counts_from_its_own_attempt_not_the_first():
+    run = _run(1, "2026-10-20T10:00:00Z",
+               _job("windows", "2026-10-20T11:00:03Z", "2026-10-20T11:05:03Z"))
+    run["startedAt"] = "2026-10-20T11:00:00Z"
+    assert tool.job_times(run)[0]["queue"] == 3.0
+
+
 def test_a_failed_or_unfinished_job_is_left_out_unless_asked_for():
     run = _run(1, "2026-10-20T10:00:00Z",
                _job("ok", "2026-10-20T10:00:01Z", "2026-10-20T10:01:01Z"),

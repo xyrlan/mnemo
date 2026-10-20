@@ -15,8 +15,10 @@ cancelled one at the timeout, and either would skew the median.
 ``--save`` writes the fetched runs as JSON and ``--from`` reads them back,
 so a before/after comparison can be reported again from the same data.
 
-Measured at #739, Windows job, 6 successful PR and master runs before
-(2026-10-17..19): 760–846 s serial.
+Measured at #739, Windows job: median 803 s (721–846) over 7 serial PR runs
+before, 306 s (287–377) over the PR's 3 attempts under ``-n auto``; the run's
+wall time went from a median of 806 s to 377 s (the one attempt that had
+every job; GitHub cancelled an unacquired macOS job in the other two).
 """
 from __future__ import annotations
 
@@ -50,7 +52,8 @@ def fetch(workflow: str, *, limit: int, branch: Optional[str] = None,
           event: Optional[str] = None, gh: Gh = _gh) -> List[Dict[str, Any]]:
     """Completed runs of ``workflow``, newest first, each with its ``jobs``."""
     args = ["run", "list", "--workflow", workflow, "--status", "completed",
-            "--limit", str(limit), "--json", "databaseId,createdAt,event,headBranch,conclusion"]
+            "--limit", str(limit),
+            "--json", "databaseId,attempt,createdAt,startedAt,event,headBranch,conclusion"]
     if branch:
         args += ["--branch", branch]
     if event:
@@ -63,8 +66,12 @@ def fetch(workflow: str, *, limit: int, branch: Optional[str] = None,
 
 
 def job_times(run: Dict[str, Any], *, include_failed: bool = False) -> List[Dict[str, Any]]:
-    """``[{"job", "queue", "run", "conclusion"}]`` in seconds, for the jobs that finished."""
-    created = _ts(run["createdAt"])
+    """``[{"job", "queue", "run", "conclusion"}]`` in seconds, for the jobs that finished.
+
+    A re-run keeps the run's ``createdAt`` and shows only its latest attempt's
+    jobs, so the queue counts from ``startedAt``, the attempt's own start.
+    """
+    created = _ts(run.get("startedAt") or run["createdAt"])
     out = []
     for job in run.get("jobs", []):
         if not job.get("startedAt") or not job.get("completedAt"):
