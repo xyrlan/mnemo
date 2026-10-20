@@ -42,13 +42,28 @@ def _when(stamp: Optional[str], seconds: Optional[int]) -> str:
 
 
 def _print_status(s: Dict[str, Any]) -> None:
+    trouble = s.get("stateProblem")
     if not s.get("enabled"):
+        if trouble:
+            # Not "off": a crash can zero the file of a vault that synced (#735).
+            print("sync: unknown")
+            print(f"  ! state:    {trouble}, and nothing in .git/ says this vault synced")
+            print(f"  machine id: {s.get('machineId')}")
+            print("  → if this machine synced, `mnemo sync join <remote>` again; "
+                  "if it never did, delete that file")
+            return
         print("sync: off")
         print(f"  machine id: {s.get('machineId')}")
         print("  → `mnemo sync init <remote>` on the machine that owns the vault, "
               "`mnemo sync join <remote>` on another")
         return
     print("sync: on")
+    if trouble:
+        print(f"  ! state:    {trouble}; sync carries on from what .git/ records, "
+              "and the next pull or push writes it afresh")
+    for item in s.get("gitLocks") or []:
+        print(f"  ! git lock: {item['path']} left {_ago(item['ageSeconds'])} by a git that died; "
+              "the next pull or push removes it")
     print(f"  remote:     {s['remote']}")
     print(f"  role:       {s['role']} (machine '{s['machineId']}', primary '{s['primary']}')")
     print(f"  waiting:    {s['pendingFiles']} file{'s' if s['pendingFiles'] != 1 else ''} to push, "

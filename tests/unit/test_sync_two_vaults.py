@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -643,3 +644,139 @@ def test_status_counts_what_the_hub_has_that_this_machine_does_not(pair):
     assert win.status()["behind"] == 0          # status never reaches the hub itself
     _git(win.vault, "fetch", "-q", "origin")
     assert win.status()["behind"] == 1
+
+
+# --- what a crash or a killed run leaves behind (#735) -----------------------
+
+
+def _aged(path: Path, seconds: float) -> Path:
+    """``path``, created empty if missing, with its mtime ``seconds`` ago."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_bytes(b"")
+    then = time.time() - seconds
+    os.utime(str(path), (then, then))
+    return path
+
+
+def _scratch_leftovers(vault: Path) -> List[Path]:
+    git_dir = vault / ".git"
+    found = sorted(git_dir.glob("mnemo-sync-status-index-*"))
+    scratch = git_dir / "mnemo-sync-scratch"
+    if scratch.is_dir():
+        found += sorted(scratch.iterdir())
+    return found
+
+
+def test_counting_pending_files_leaves_nothing_behind(pair):
+    _mac, win = pair
+    win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
+    assert win.status()["pendingFiles"] == 1
+    assert _scratch_leftovers(win.vault) == []
+
+
+def test_a_lock_a_killed_count_left_under_this_pid_does_not_break_the_next_count(pair):
+    """Before #735 the copy was named by pid alone, so a run that reused the
+    pid of one killed mid-count found that run's ``.lock`` and failed."""
+    _mac, win = pair
+    git_dir = win.vault / ".git"
+    mine = git_dir / f"mnemo-sync-status-index-{os.getpid()}.lock"
+    mine.write_bytes(b"")
+    win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
+    assert win.status()["pendingFiles"] == 1
+
+
+def test_scratch_a_killed_count_left_is_swept_once_old_and_a_live_one_is_not(pair):
+    _mac, win = pair
+    git_dir = win.vault / ".git"
+    old = [_aged(git_dir / "mnemo-sync-status-index-4242", 3600),
+           _aged(git_dir / "mnemo-sync-status-index-4242.lock", 3600),
+           _aged(git_dir / "mnemo-sync-scratch" / "index-4243-deadbeef.lock", 3600)]
+    live = _aged(git_dir / "mnemo-sync-scratch" / "index-4244-cafef00d.lock", 5)
+    assert win.status()["pendingFiles"] == 0
+    assert [p for p in old if p.exists()] == []
+    assert _scratch_leftovers(win.vault) == [live]
+
+
+def _log_rows(box: Box) -> List[dict]:
+    path = box.vault / ".mnemo" / "sync-log.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.mark.parametrize("op", ["pull", "push"])
+def test_an_index_lock_a_crash_left_is_removed_and_the_run_says_so(pair, op: str):
+    mac, win = pair
+    mac.write("shared/feedback/later.md", b"---\nname: later\n---\nlater\n")
+    assert mac.push().outcome == "ok"
+    win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
+    lock = _aged(win.vault / ".git" / "index.lock", 21 * 3600)
+    out = getattr(win, op)()
+    assert out.outcome == "ok", out.message
+    assert not lock.exists()
+    assert "index.lock" in out.message and "21 h" in out.message
+    assert win.read("shared/feedback/later.md") == b"---\nname: later\n---\nlater\n"
+    row = _log_rows(win)[-1]
+    assert [Path(p) for p in row["locksRemoved"]] == [Path(".git") / "index.lock"]
+
+
+def test_a_dead_ref_lock_is_removed_too(pair):
+    _mac, win = pair
+    win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
+    lock = _aged(win.vault / ".git" / "refs" / "heads" / "main.lock", 3 * 3600)
+    out = win.push()
+    assert out.outcome == "ok", out.message
+    assert not lock.exists()
+
+
+def test_a_young_index_lock_is_left_alone_and_the_error_names_it(pair):
+    _mac, win = pair
+    win.write("bots/app/briefings/sessions/s7.md", b"# seven\n")
+    lock = _aged(win.vault / ".git" / "index.lock", 60)
+    out = win.push()
+    assert out.outcome == "error"
+    assert lock.exists()
+    assert "index.lock" in out.message and "1 min" in out.message
+    assert "10 min" in out.message
+    assert "index.lock" in win.status()["lastError"]["message"]
+
+
+# --- a state file a crash zeroed (#735) --------------------------------------
+
+
+def _zero_state(box: Box) -> Path:
+    path = box.vault / ".mnemo" / "sync-state.json"
+    path.write_bytes(b"\0" * 361)
+    return path
+
+
+def test_a_zeroed_state_file_is_said_and_sync_carries_on(pair):
+    from mnemo.core.sync import roles
+
+    mac, win = pair
+    mac.write("shared/feedback/later.md", b"---\nname: later\n---\nlater\n")
+    assert mac.push().outcome == "ok"
+    path = _zero_state(win)
+    status = win.status()
+    assert status["enabled"] is True
+    assert status["role"] == "satellite"
+    assert "361 NUL bytes" in status["stateProblem"]
+    # Read as off, the satellite's writers would stop refusing what only the
+    # primary may write.
+    assert roles.is_satellite(win.vault, {"sync": {"machineId": "win"}}) is True
+
+    assert win.pull().outcome == "ok"
+    assert json.loads(path.read_text(encoding="utf-8"))["enabled"] is True
+    assert win.status()["stateProblem"] is None
+    assert win.read("shared/feedback/later.md") == b"---\nname: later\n---\nlater\n"
+
+
+def test_an_unreadable_state_on_a_repository_sync_never_committed_in_is_not_off(win: Box):
+    """Nothing says this vault ever synced, so sync stays stopped, but the
+    status says why instead of reading as a vault that was never set up."""
+    (win.vault / ".git").mkdir(parents=True)
+    (win.vault / ".mnemo").mkdir(parents=True)
+    (win.vault / ".mnemo" / "sync-state.json").write_bytes(b"{not json")
+    status = win.status()
+    assert status["enabled"] is False
+    assert "not JSON" in status["stateProblem"]
+    assert win.pull().outcome == "off"

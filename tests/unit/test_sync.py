@@ -151,6 +151,34 @@ def test_status_on_a_vault_that_never_synced_says_off(cli_vault: Path, capsys):
     assert not (cli_vault / ".mnemo").exists()
 
 
+def test_status_on_an_unreadable_state_file_says_so_instead_of_off(cli_vault: Path, capsys):
+    """#735: a crash zeroed the file and status said ``sync: off``."""
+    (cli_vault / ".git").mkdir()
+    (cli_vault / ".mnemo").mkdir(exist_ok=True)
+    (cli_vault / ".mnemo" / "sync-state.json").write_bytes(b"\0" * 361)
+    assert _main("sync", "status") == 0
+    out = capsys.readouterr().out
+    assert "sync: off" not in out
+    assert "sync: unknown" in out and "361 NUL bytes" in out
+    assert _main("sync", "status", "--json") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["enabled"] is False and "361 NUL bytes" in report["stateProblem"]
+
+
+def test_the_state_is_flushed_to_disk_before_it_replaces_the_old_one(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch):
+    """#735: NTFS kept a rename whose bytes a crash lost, and the state came
+    back 361 NUL bytes."""
+    from mnemo.core.sync import state as st
+
+    flushed = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (flushed.append(fd), real_fsync(fd)))
+    st.save(tmp_path, {"enabled": True})
+    assert len(flushed) == 1
+    assert st.load(tmp_path) == {"enabled": True}
+
+
 def test_pull_and_push_on_a_vault_that_never_synced_change_nothing(cli_vault: Path, capsys):
     assert _main("sync", "pull") == 1
     assert _main("sync", "push") == 1

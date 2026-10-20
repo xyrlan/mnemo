@@ -22,9 +22,14 @@ from pathlib import Path
 _ATTEMPTS = 5
 
 
-def atomic_write_bytes(path: Path, data: bytes) -> None:
+def atomic_write_bytes(path: Path, data: bytes, *, durable: bool = False) -> None:
     """Write ``data`` to ``path`` atomically; each call stages through its own
     mkstemp tmp file so concurrent writers to the same target never collide.
+
+    ``durable`` flushes the bytes to disk before the rename. Without it a
+    power loss on NTFS can keep the rename and lose the bytes: the target
+    comes back the new size and all NUL (#735). It costs a disk flush, so it
+    is for a file a crash must not zero, not for every hook's cache.
 
     Retries transient races (dir vanishing mid-write, Windows sharing
     violations). If every attempt loses but a peer has meanwhile populated the
@@ -41,6 +46,9 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
+                if durable:
+                    fh.flush()
+                    os.fsync(fh.fileno())
             os.replace(tmp_name, path)
             return
         except (FileNotFoundError, PermissionError) as exc:
