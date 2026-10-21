@@ -5,6 +5,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-21
+
+### Added
+
+- **`mnemo doctor` says when publishing is not checked for private names.**
+  Without `<vault>/.mnemo/private-names.tsv` the deny hook lets every `git
+  push` and `gh` write through, which is right for someone with nothing
+  private and silently wrong on a machine the list never reached. Doctor now
+  prints an `ℹ Private names` row naming the path it looked at; it stays
+  informational, never a warning, and goes silent once the file exists — a
+  file holding only `#` comments is the explicit "nothing private". The hook
+  itself is unchanged and still fails open with no list. (#746)
+
+### Internal
+
+- **Measure-tool provenance redacts a Windows home under every spelling.**
+  `tools/_provenance.redact` replaced only the exact string
+  `os.path.expanduser("~")` returns, so `C:/Users/<name>/…` (from MSYS argv
+  or `Path.as_posix()`) and `c:\users\<name>\…` reached reports pasted into
+  public PRs with the real username. A Windows home now matches with either
+  separator and in any case, and every home match stops at a path boundary, so
+  `/home/you2` is no longer rewritten as `~2`. (#745)
+
 ## [1.12.0] — 2026-10-21
 
 ### Changed
