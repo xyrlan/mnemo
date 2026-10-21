@@ -1096,6 +1096,24 @@ background session.
 macOS, Linux and Grok children are not lowered yet. Priority does not cover
 disk I/O, so a disk-heavy build can still slow the machine.
 
+### A child runs in your session's permission class
+
+If you dispatch from a session running `bypassPermissions`, its children are
+started with `--permission-mode bypassPermissions` too. Claude Code then
+accepts a child's finish notice as a turn in your session without asking
+first, and you no longer need `"crossSessionInbound": "accept"` for that.
+If you dispatch from any other mode, or from a plain terminal, the child runs
+`auto`, which is `claude --bg`'s default. An unattended child in `default`
+would stop at its first permission prompt with nobody there to answer it.
+
+The class, not the mode, is what passes to the child: `--may` still decides
+what a child may publish, and a `--read-only` child still has no Edit, Write
+or NotebookEdit. A woken child keeps the mode it was dispatched with. If a
+settings file mnemo can read sets
+`permissions.disableBypassPermissionsMode: "disable"`, the child runs `auto`
+and the dispatch report's `mode:` line says why. Set `dispatch.childMode` to
+`"auto"` in `mnemo.config.json` to start every child in `auto`, as before.
+
 ### What a child already knows about your repo
 
 A child is handed the issue, a worktree and its scope limits — never an

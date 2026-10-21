@@ -43,10 +43,12 @@ def _doctor_check_child_notice_policy(vault: Path) -> bool:
     """Child notices held by Claude Code's inbound policy (#732).
 
     A bypass parent holds a notice from a child in another permission class
-    for the user's approval, every time. What it takes to stop that is the
-    user's own ``crossSessionInbound`` setting, which mnemo never writes; this
-    names it, with its trade-off, from the rows that were actually held in the
-    last :data:`report_card.LOST_WINDOW_DAYS` days. True when silent.
+    for the user's approval, every time. Since #741 a child of a bypass parent
+    runs bypass itself, so such rows mean an older child, ``dispatch.childMode:
+    auto`` or bypass disabled by a setting; the other lever is the user's own
+    ``crossSessionInbound`` setting, which mnemo never writes. This names
+    both, from the rows that were actually held in the last
+    :data:`report_card.LOST_WINDOW_DAYS` days. True when silent.
     """
     import json
 

@@ -47,7 +47,9 @@ mnemo never writes ``crossSessionInbound`` and never asserts a mode the child
 is not in. The setting is the operator's: with ``accept``, any process running
 as the user that can read ``~/.claude/sessions`` can prompt a bypass session
 without approval. ``mnemo doctor`` names it (:func:`advice`); nothing here
-sets it.
+sets it. Since #741 it is rarely needed: a child of a bypass parent is started
+in ``bypassPermissions`` (:mod:`mnemo.core.child_mode`), so the bypass→bypass
+attestation applies.
 """
 from __future__ import annotations
 
@@ -298,9 +300,13 @@ def advice(rows: Iterable[dict], *, setting: Optional[str]) -> List[str]:
         f"  ⚠ child notices: {len(held)} were held for your approval: your sessions run "
         f"{', '.join(parents) or '?'} and their children ran {', '.join(children) or '?'}, "
         "so Claude Code asks before a child's notice reaches the parent",
-        '    → every child notice will ask for approval until you set '
-        '"crossSessionInbound": "accept" in ~/.claude/settings.json. The trade-off: any '
-        "process running as you that can read ~/.claude/sessions can then prompt your "
-        "bypass sessions without approval. mnemo never sets it; the held copy still "
-        "reaches each parent at its next prompt",
+        "    → a child dispatched from a bypassPermissions session now runs "
+        "bypassPermissions too, and its notice is accepted with no setting (#741). If "
+        "these children were dispatched since, check that dispatch.childMode is not "
+        '"auto" in mnemo.config.json and that no settings file sets '
+        "permissions.disableBypassPermissionsMode. The other lever is "
+        '"crossSessionInbound": "accept" in ~/.claude/settings.json, with a trade-off: '
+        "any process running as you that can read ~/.claude/sessions can then prompt "
+        "your bypass sessions without approval. mnemo never sets it; the held copy "
+        "still reaches each parent at its next prompt",
     ]

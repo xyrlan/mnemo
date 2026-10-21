@@ -105,6 +105,12 @@ DEFAULTS: dict[str, Any] = {
         # "normal" leaves children at your priority. Never "idle": a starved
         # suite times out.
         "childPriority": "below_normal",
+        # #741: a child of a bypassPermissions session is started in
+        # bypassPermissions too, so its finish notice reaches the parent
+        # without approval and without "crossSessionInbound": "accept". A
+        # child of any other session keeps `claude --bg`'s auto. "auto" always
+        # starts children in auto, as before.
+        "childMode": "match-parent",
     },
     "recall": {
         # #401: an opt-in rerank of `list_rules_by_topic` by a judge that reads
