@@ -570,15 +570,17 @@ def test_rewind_keeps_the_pages_that_went_live_first_and_refuses_a_ledger_that_d
         day.rewind(src, tmp_path / "bad" / "vault", ["feedback/one", "feedback/gone"])
 
 
-def _stub_jev(sent, *, sleep=0.0):
-    """A TypeSafe stand-in: the first rule of each request clears the bar, the rest do not."""
-    import threading
+def _stub_jev(sent, *, hold=None):
+    """A TypeSafe stand-in: the first rule of each request clears the bar, the rest do not.
+
+    With ``hold``, each request blocks until the test sets it: slower than any
+    timeout however late the waiting thread is scheduled. A fixed sleep was not
+    — a thread starved past it found the answer already there (#750)."""
 
     def client(state, questions):
         sent.append((state, questions))
-        if sleep:
-            # conftest makes time.sleep a no-op; a wait on an event still waits.
-            threading.Event().wait(sleep)
+        if hold is not None:
+            hold.wait(30)
         return {"answers": {k: {"noul": 0.9 if k == "r0" else 0.1} for k in questions}}
 
     return client
@@ -664,16 +666,22 @@ def test_judge_replays_each_arm_as_the_hook_would_and_a_rerun_sends_nothing(judg
 
 
 def test_a_slow_judge_falls_back_to_the_gates_and_is_counted(judged, monkeypatch):
+    import threading
+
     from mnemo.core.mcp import rerank
 
     shipped = day.shipped_judge()
+    hold = threading.Event()
     monkeypatch.setattr(day, "shipped_judge", lambda: dict(shipped, timeoutSeconds=0.05))
     monkeypatch.setattr(rerank, "typesafe_client",
-                        lambda key, **kw: _stub_jev(judged["sent"], sleep=0.3))
+                        lambda key, **kw: _stub_jev(judged["sent"], hold=hold))
 
     # Arm (b): the fixture's arm (a) reaches no live rule since #477, so
     # nothing there would be asked.
-    assert day.main(judged["args"] + ["--send", "--arm", "b"]) == 0
+    try:
+        assert day.main(judged["args"] + ["--send", "--arm", "b"]) == 0
+    finally:
+        hold.set()
 
     b = json.loads((judged["work"] / day.JUDGE_NAME).read_text(encoding="utf-8"))["arms"]["b"]
     units = [u for r in b["rows"] for u in r["units"]]

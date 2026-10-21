@@ -236,33 +236,83 @@ def test_each_doc_points_at_its_page_so_the_hook_can_read_its_body(tmp_vault):
     assert (tmp_vault / idx["docs"]["yarn-rule"]["path"]) == page
 
 
+def _lines_run(build, vault: Path) -> int:
+    """Run ``build(vault)`` and count the lines of mnemo's own code it ran.
+
+    A count of work, not of seconds: the same vault costs the same count on an
+    idle box and under every pytest-xdist worker at once (#750), where wall
+    time measured the neighbours. The tracer that was installed — coverage's,
+    under CI — is put back, and loses only this one call."""
+    import sys
+
+    import mnemo
+
+    package = str(Path(mnemo.__file__).parent)
+    lines = [0]
+
+    def count(frame, event, arg):
+        if event == "line":
+            lines[0] += 1
+        return count
+
+    def enter(frame, event, arg):
+        return count if frame.f_code.co_filename.startswith(package) else None
+
+    previous = sys.gettrace()
+    sys.settrace(enter)
+    try:
+        index = build(vault)
+    finally:
+        sys.settrace(previous)
+    assert len(index["postings"]["common00"]) == index["doc_count"]
+    return lines[0]
+
+
+def _shared_term_vault(root: Path, n: int) -> Path:
+    """``n`` pages of one shape, all sharing 60 terms: only ``n`` varies."""
+    words = " ".join("common%02d" % i for i in range(60))
+    vault = root / ("v%d" % n)
+    for i in range(n):
+        _write_rule(vault, "feedback", "r%04d.md" % i, name="rule %04d" % i,
+                    body=words + " unique%04d" % i)
+    return vault
+
+
+def _growth(build, root: Path) -> float:
+    """How many times the work grows when the vault grows eightfold."""
+    small = _lines_run(build, _shared_term_vault(root, 25))
+    large = _lines_run(build, _shared_term_vault(root, 200))
+    return large / small
+
+
 def test_build_index_is_linear_in_the_number_of_pages_sharing_a_term(tmp_path):
     """#610: the postings merge scanned a term's whole list for the current
     slug, once per term per page, so a vault of N pages that share common
     words cost O(N^2): 24 s of SessionStart's 35 s on a 3,400-rule vault.
 
-    The bound is a ratio, not seconds: an absolute 4 s failed at 10.8 s on a
-    dev box running other sessions (#729). Eight times the pages cost about
-    eight times as long when linear and far more when quadratic; each size
-    takes its fastest of a few builds, so a burst of load lands on neither."""
-    import time
+    The bound counts lines run, not seconds. An absolute 4 s failed at 10.8 s
+    on a dev box running other sessions (#729); the ratio of two timings that
+    replaced it failed at 21.5x on a Windows CI runner under pytest-xdist
+    (#750). Every page here has the same shape, so a linear build runs the
+    same lines per page plus a fixed few: eight times the pages cost at most
+    eight times the lines, exactly, on any load. The #610 merge runs 29x.
+    A scan in C — ``x in list`` — runs no lines and would not be counted."""
+    growth = _growth(build_index, tmp_path)
+    assert growth <= 8, "8x the pages ran %.1fx the lines" % growth
 
-    words = " ".join("common%02d" % i for i in range(60))
 
-    def fastest_build(n: int) -> float:
-        vault = tmp_path / ("v%d" % n)
-        for i in range(n):
-            _write_rule(vault, "feedback", "r%04d.md" % i, name="rule %d" % i,
-                        body=words + " unique%04d" % i)
-        best = float("inf")
-        for _ in range(3):
-            started = time.perf_counter()
-            index = build_index(vault)
-            best = min(best, time.perf_counter() - started)
-        assert index["doc_count"] == n
-        assert len(index["postings"]["common00"]) == n
-        return best
+def test_the_linear_bound_fails_the_quadratic_merge_of_610(tmp_path):
+    """The bound above catches the regression it guards: the #610 merge,
+    put back into this build_index, fails it."""
+    from mnemo.core.reflex import index as index_mod
 
-    small, large = fastest_build(250), fastest_build(2000)
-    assert large < 20 * small, (
-        "8x the pages took %.1fx as long (%.2f s vs %.2f s)" % (large / small, large, small))
+    source = Path(index_mod.__file__).read_text(encoding="utf-8")
+    fixed = "bucket = buckets.get(tok)"
+    assert source.count(fixed) == 1, "build_index changed; update this injection"
+    scan = ('bucket = next((e for e in postings.get(tok, ()) '
+            'if e["slug"] == slug), None)')
+    namespace = {"__name__": index_mod.__name__}
+    exec(compile(source.replace(fixed, scan), index_mod.__file__, "exec"), namespace)
+
+    growth = _growth(namespace["build_index"], tmp_path)
+    assert growth > 8, "the quadratic merge ran only %.1fx the lines" % growth
