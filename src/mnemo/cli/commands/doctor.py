@@ -25,6 +25,7 @@ from mnemo.cli.commands.doctor_checks import (
     misc as doctor_misc,
     native_memory,
     orphan_worktree_briefings,
+    private_names as doctor_private_names,
     procedures as doctor_procedures,
     reflex,
     rerank,
@@ -82,6 +83,7 @@ DOCTOR_CHECKS: list[tuple[str, Callable[[Path], bool]]] = [
     ("native_memory_cut",     native_memory._doctor_check_native_memory_cut),
     ("transcript_retention",  transcript_retention._doctor_check_transcript_retention),
     ("sync",                  doctor_sync._doctor_check_sync),
+    ("private_names",         doctor_private_names._doctor_check_private_names),
 ]
 
 
