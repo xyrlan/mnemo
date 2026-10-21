@@ -13,7 +13,7 @@
         "url": "https://github.com/xyrlan/mnemo.git"
       },
       "description": "mnemo keeps what your Claude Code sessions learned, puts the relevant piece in front of the next prompt, and fans out sessions that start out knowing it.",
-      "version": "1.11.2",
+      "version": "1.12.0",
       "author": {
         "name": "xyrlan",
         "url": "https://github.com/xyrlan"
