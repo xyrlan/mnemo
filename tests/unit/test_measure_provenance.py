@@ -112,6 +112,33 @@ def test_provenance_fields_redact_home_and_private_names(tmp_path: Path, repo: P
     assert str(home) not in json.dumps(p)
 
 
+@pytest.mark.parametrize("text, want", [
+    ("C:\\Users\\you\\x", "~\\x"),
+    ("C:/Users/you/x", "~/x"),
+    ("c:\\users\\YOU\\x", "~\\x"),
+    ("--save=C:/Users/you/AppData/r.json", "--save=~/AppData/r.json"),
+    ("C:\\Users\\you", "~"),
+    ("C:\\Users\\you2\\x", "C:\\Users\\you2\\x"),
+    ("C:\\Users\\you.bak", "C:\\Users\\you.bak"),
+])
+def test_redact_windows_home_under_every_spelling(monkeypatch: pytest.MonkeyPatch,
+                                                  text: str, want: str) -> None:
+    monkeypatch.setattr(prov.os.path, "expanduser", lambda p: "C:\\Users\\you")
+    assert prov.redact(text) == want
+
+
+@pytest.mark.parametrize("text, want", [
+    ("/home/you/x", "~/x"),
+    ("/home/you", "~"),
+    ("/home/you2", "/home/you2"),
+    ("/HOME/YOU/x", "/HOME/YOU/x"),
+])
+@pytest.mark.skipif(os.name == "nt", reason="a POSIX home only exists off Windows")
+def test_redact_posix_home_as_spelled(monkeypatch: pytest.MonkeyPatch, text: str, want: str) -> None:
+    monkeypatch.setattr(prov.os.path, "expanduser", lambda p: "/home/you")
+    assert prov.redact(text) == want
+
+
 def test_provenance_argv_none_reads_sys_argv(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     monkeypatch.setattr(sys, "argv", ["tools/measure_x.py", "--list"])
     assert prov.provenance("measure_x", root=repo)["argv"] == ["--list"]

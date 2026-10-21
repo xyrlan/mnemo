@@ -83,11 +83,28 @@ def load_aliases(vault: Optional[PathLike]) -> List[Tuple[str, str]]:
     return sorted(out, key=lambda na: -len(na[0]))
 
 
+def _home_pattern(home: str) -> "re.Pattern[str]":
+    r"""``home`` under every spelling of the same directory, ending at a path boundary.
+
+    A Windows home (``os.name == "nt"`` or a drive-letter path) matches with
+    either separator and in any case: MSYS hands native programs
+    ``C:/Users/you``, ``Path.as_posix()`` does the same, and ``c:\users\YOU``
+    is the same directory (#745). A POSIX home matches as spelled. Either way
+    the match stops before a name character, so ``/home/you2`` is someone else.
+    """
+    if os.name == "nt" or re.match(r"[A-Za-z]:[\\/]", home):
+        body = r"[\\/]+".join(re.escape(p) for p in re.split(r"[\\/]+", home))
+        flags = re.IGNORECASE
+    else:
+        body, flags = re.escape(home), 0
+    return re.compile(r"(?<![\w.\-])%s(?![\w.\-])" % body, flags)
+
+
 def redact(text: str, aliases: Sequence[Tuple[str, str]] = ()) -> str:
     """The home directory to ``~`` and each private name to its alias."""
-    home = os.path.expanduser("~")
-    if home and home not in ("~", os.sep):
-        text = text.replace(home, "~")
+    home = os.path.expanduser("~").rstrip("\\/")
+    if home and home != "~" and not re.fullmatch(r"[A-Za-z]:", home):
+        text = _home_pattern(home).sub("~", text)
     for name, alias in aliases:
         text = re.sub(r"(?i)(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(name), alias, text)
     return text
