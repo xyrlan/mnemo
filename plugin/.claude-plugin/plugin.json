@@ -1,7 +1,7 @@
 {
   "name": "mnemo",
   "displayName": "mnemo",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "mnemo keeps what your Claude Code sessions learned, puts the relevant piece in front of the next prompt, and fans out sessions that start out knowing it.",
   "author": {
     "name": "xyrlan",
