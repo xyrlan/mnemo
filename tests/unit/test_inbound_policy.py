@@ -246,6 +246,9 @@ def test_doctor_names_the_users_lever_when_notices_were_held(tmp_path, capsys) -
     assert "1 were held for your approval" in out
     assert '"crossSessionInbound": "accept"' in out
     assert "mnemo never sets it" in out
+    # #741: accept is no longer the only lever, so the advice names the others.
+    assert "dispatch.childMode" in out
+    assert "disableBypassPermissionsMode" in out
 
 
 def test_doctor_is_silent_once_the_user_accepts(tmp_path, capsys) -> None:

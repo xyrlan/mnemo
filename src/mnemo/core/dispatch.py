@@ -219,6 +219,11 @@ class Dispatched:
     #: for a Claude child, whose job directory is named by its short id.
     session_id: str | None = None
     home: str | None = None
+    #: The ``--permission-mode`` the child was started with, ``None`` for
+    #: ``--bg``'s ``auto`` (#741), and the words the report prints about it:
+    #: why it inherited the parent's class, or why it could not.
+    permission_mode: str | None = None
+    mode_note: str = ""
 
 
 # --- naming: the mapping, as a convention ----------------------------------
@@ -1043,6 +1048,7 @@ def spawn_child(
     effort: str | None = None, read_only: bool = False,
     settings: Mapping[str, Any] | None = None,
     agent: str = agent_cli.CLAUDE, home: Path | str | None = None,
+    permission_mode: str | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -1170,6 +1176,13 @@ def spawn_child(
     and mnemo's ``SessionStart`` hook lowers the child's own session from
     inside it (:mod:`mnemo.core.child_priority` says why not here).
     ``dispatch.childPriority: normal`` in the config writes no marker.
+
+    **The permission mode (#741).** *permission_mode* is passed as
+    ``--permission-mode <mode>`` and omitted when ``None``, so the child runs
+    ``--bg``'s own ``auto`` exactly as before. The caller chooses it
+    (:func:`mnemo.core.child_mode.choose`): ``bypassPermissions`` for a child
+    of a bypass parent, nothing otherwise. Grok has no such mode and never
+    gets it.
     """
     if agent == agent_cli.GROK:
         return _spawn_grok(prompt, cwd=cwd, model=model, effort=effort,
@@ -1180,6 +1193,8 @@ def spawn_child(
             f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}"
         )
     args = ["claude", "--bg"]
+    if permission_mode:
+        args += ["--permission-mode", permission_mode]
     if read_only:
         # Early, so the flags below are between the variadic tool list and the
         # prompt. The `--` that closes the list goes immediately before the
@@ -1548,7 +1563,12 @@ def _spawn_into(
         )
     # Only when given, so every other caller hands the chokepoint exactly
     # the call it always did (#453: nothing changes for non-twin children).
-    extra = {"settings": settings} if settings else {}
+    extra: Dict[str, Any] = {"settings": settings} if settings else {}
+    from mnemo.core import child_mode, config
+
+    mode = child_mode.choose(config.load_config(), cwd=tree)
+    if mode.mode:
+        extra["permission_mode"] = mode.mode
     try:
         short_id = spawn_child(
             prompt, cwd=tree, model=model, lean=lean, effort=effort,
@@ -1558,6 +1578,7 @@ def _spawn_into(
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc),
             model=model, effort=effort, may=may, read_only=read_only,
+            permission_mode=mode.mode, mode_note=mode.note,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -1577,6 +1598,7 @@ def _spawn_into(
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
         model=model, effort=effort, may=may, read_only=read_only,
+        permission_mode=mode.mode, mode_note=mode.note,
     )
 
 

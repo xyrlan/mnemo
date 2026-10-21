@@ -490,6 +490,12 @@ def _report(results: list, *, lean: bool = True) -> int:
             why = ("MNEMO_DISPATCH_FULL_PROFILE" if child_profile.env_opts_out()
                    else "--full-profile")
             print(f"  profile: full user profile ({why})")
+        # Once per dispatch: every child of this session gets the same answer.
+        # Said when it inherited bypass, and when it could not, since then
+        # its notices will ask for approval (#741).
+        note = next((r.mode_note for r in started if getattr(r, "mode_note", "")), "")
+        if note:
+            print(f"  mode:   {note}")
         print("  queue:  mnemo sessions")
         # Only a child whose id was actually read back can be attached. When
         # none was, the hint is omitted rather than printed with an empty
