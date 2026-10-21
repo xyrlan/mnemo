@@ -15,7 +15,6 @@ import socket
 import sys
 import tempfile
 import threading
-import time
 import types
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -391,15 +390,23 @@ def test_a_slow_roster_costs_its_rows_live_not_the_read(monkeypatch, ledger, lea
     ledger.append(_child(SID, tree, home))
     monkeypatch.setattr(grok_sessions, "ROSTER_TIMEOUT", 0.05)
     release = threading.Event()  # time.sleep is a no-op in this suite
-    monkeypatch.setattr(grok_sessions, "_fetch_roster", lambda h: release.wait(5) and [])
+    fetched = threading.Event()
 
-    started = time.monotonic()
+    def fetch(h):
+        release.wait(30)
+        fetched.set()
+        return []
+
+    monkeypatch.setattr(grok_sessions, "_fetch_roster", fetch)
+
     try:
         (s,) = _grok_only()
+        # Deterministic under any load (#750): the read returned while the
+        # roster fetch was still blocked, so it did not wait for it.
+        assert not fetched.is_set()
     finally:
         release.set()
 
-    assert time.monotonic() - started < 2
     assert s.live is None
 
 

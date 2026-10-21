@@ -636,10 +636,10 @@ def test_pull_waits_at_most_the_budget_and_lets_a_slow_pull_finish_on_its_own(pa
     mac, win, _hub = pair
     worker = _Worker(finish=60.0)
     monkeypatch.setattr(sync_hooks, "_start_pull_worker", lambda vault, cwd: worker)
-    started = time.monotonic()
     assert sync_hooks.pull_at_session_start(win.cfg(), win.vault, cwd=str(win.root)) == sync_hooks.DETACHED
+    # One wait, bounded by the budget: proven by what the worker was asked,
+    # not by a wall clock that read 0.62 s of a 1.0 s bound under load (#750).
     assert worker.waited == [sync_hooks.PULL_BUDGET_SECONDS] == [3.0]
-    assert time.monotonic() - started < 1.0
     quick = _Worker(finish=0.1)
     monkeypatch.setattr(sync_hooks, "_start_pull_worker", lambda vault, cwd: quick)
     (win.vault / sync_hooks.PULL_STAMP).unlink()
@@ -838,10 +838,15 @@ def test_a_failing_pull_is_logged_under_the_hook_name_and_the_hook_still_injects
         raise OSError("git went away")
 
     monkeypatch.setattr(sync_hooks, "_start_pull_worker", boom)
-    started = time.monotonic()
+    pull = sync_hooks.pull_at_session_start
+    outcomes = []
+    monkeypatch.setattr(sync_hooks, "pull_at_session_start",
+                        lambda *a, **kw: outcomes.append(pull(*a, **kw)) or outcomes[-1])
     out = _run(session_start, {"session_id": "s-fail", "cwd": str(project), "source": "startup"},
                monkeypatch)
-    assert time.monotonic() - started < sync_hooks.PULL_BUDGET_SECONDS + 2
+    # The failed pull took the ERROR return, which waits on nothing. Timing the
+    # whole hook instead failed at 7.2 s under pytest-xdist load (#750).
+    assert outcomes == [sync_hooks.ERROR]
     assert "mnemo://v1" in out
     assert [e["where"] for e in _errors(win.vault)] == ["session_start.sync_pull"]
     # The breaker treats it as any other session_start error: counted, not excluded.
