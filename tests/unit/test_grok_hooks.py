@@ -515,16 +515,13 @@ def test_a_grok_childs_parent_is_told_under_its_grok_short_id(
     assert told == ["27e068a2"]  # the last eight hex digits, not the first
 
 
-def test_the_memory_path_guard_reads_grok_write_and_edit(tmp_path: Path, monkeypatch) -> None:
+def test_the_memory_path_guard_reads_grok_write_and_edit(tmp_path: Path, monkeypatch, requires_symlinks) -> None:
     """#637 on Grok's ``write`` (rewritten) and ``search_replace`` (redirected)."""
     real_projects = tmp_path / "home" / ".claude" / "projects"
     (real_projects / "-proj" / "memory").mkdir(parents=True)
     account = tmp_path / "home" / ".claude-account"
     account.mkdir()
-    try:
-        os.symlink(str(real_projects), str(account / "projects"), target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip("creating a symlink needs a privilege this platform withholds: %r" % exc)
+    os.symlink(str(real_projects), str(account / "projects"), target_is_directory=True)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(account))
     real = Path(os.path.realpath(str(real_projects))) / "-proj" / "memory"
     asked = account / "projects" / "-proj" / "memory" / "new-rule.md"

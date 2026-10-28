@@ -13,8 +13,6 @@ import io
 import json
 from pathlib import Path
 
-import pytest
-
 from mnemo.core.rule_activation import build_index, write_index
 
 
@@ -672,13 +670,10 @@ def test_path_is_relative_to_the_worktree_root(tmp_vault: Path, monkeypatch, tmp
     assert "agent-resolvers" in out
 
 
-def test_symlinked_prefix_still_matches(tmp_vault: Path, monkeypatch, tmp_path: Path):
+def test_symlinked_prefix_still_matches(tmp_vault: Path, monkeypatch, tmp_path: Path, requires_symlinks):
     project_dir = _file_note(tmp_vault)
     link = tmp_path / "linked-checkout"
-    try:
-        link.symlink_to(project_dir, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
+    link.symlink_to(project_dir, target_is_directory=True)
     target = str(link / "src" / "core" / "agent.py")
 
     rc, out = _run_hook(monkeypatch, _payload("Read", target, project_dir), _cfg(tmp_vault, enr=True))

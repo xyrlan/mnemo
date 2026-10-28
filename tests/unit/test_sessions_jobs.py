@@ -126,7 +126,7 @@ def test_cwd_match_ignores_a_trailing_slash(tmp_path: Path) -> None:
     assert ids == ["here"]
 
 
-def test_cwd_match_survives_a_symlinked_path(tmp_path: Path) -> None:
+def test_cwd_match_survives_a_symlinked_path(tmp_path: Path, requires_symlinks) -> None:
     # A git worktree — or /tmp on macOS — reaches the same directory through a
     # symlink. The stored cwd and the live one are then different strings for
     # one directory, and the queue silently empties.
@@ -142,7 +142,7 @@ def test_cwd_match_survives_a_symlinked_path(tmp_path: Path) -> None:
     assert ids == ["here"]
 
 
-def test_stored_symlinked_cwd_matches_a_canonical_query(tmp_path: Path) -> None:
+def test_stored_symlinked_cwd_matches_a_canonical_query(tmp_path: Path, requires_symlinks) -> None:
     # The mirror image: Claude Code recorded the symlinked form and the live
     # process reports the resolved one. Normalizing only the query still misses.
     real = tmp_path / "real-repo"

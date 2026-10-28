@@ -265,14 +265,11 @@ def test_a_home_too_deep_gets_a_short_socket_stable_per_home(tmp_path):
     assert other != first
 
 
-def test_a_symlinked_home_shares_its_target_s_fallback_socket(tmp_path):
+def test_a_symlinked_home_shares_its_target_s_fallback_socket(tmp_path, requires_symlinks):
     real = tmp_path / ("r" * 120)
     real.mkdir()
     link = tmp_path / ("l" * 120)
-    try:
-        link.symlink_to(real, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("no symlinks here")
+    link.symlink_to(real, target_is_directory=True)
     assert acp.leader_socket_for(link, env={}, platform="darwin") == \
         acp.leader_socket_for(real, env={}, platform="darwin")
 
