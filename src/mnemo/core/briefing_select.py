@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+from mnemo.core import briefing as briefing_mod
 from mnemo.core.briefing import BriefingRecord
 from mnemo.core.extract.scanner import parse_frontmatter
 from mnemo.core.reflex import bm25, gates
@@ -174,20 +176,62 @@ def choose(
     return Choice(record=rec, reason=reason, query_tokens=q, scores=named)
 
 
+#: A ``date`` names a UTC day, so a session's start is somewhere in the 24 h after it.
+_DAY = 86400.0
+
+
+def _epoch(value: object) -> float | None:
+    """``value`` (ISO 8601, ``Z`` or an offset; naive is UTC) as epoch seconds."""
+    ts = briefing_mod._parse_timestamp(value)
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.timestamp()
+
+
+def session_end(frontmatter: dict, mtime: float) -> float:
+    """When the briefed session ended, in epoch seconds, as near as the file says.
+
+    ``ended_at`` when the briefing carries it (written since #759). Before
+    that the frontmatter has the UTC day the session *started* (``date``) and
+    how long it ran (``duration_minutes``), so its end lies in the 24 h after
+    ``date`` + duration. The file's mtime is the best guess inside that
+    window, since SessionEnd writes the file as the session ends; outside it
+    the mtime is not the write — a sync pull sets every file it brings to the
+    time of the pull, and ``mnemo regen-graph-edges`` rewrites old briefings —
+    so it is clamped to the window. An undated file has only its mtime.
+    """
+    ended = _epoch(frontmatter.get("ended_at"))
+    if ended is not None:
+        return ended
+    try:
+        day = datetime.strptime(str(frontmatter.get("date") or ""), "%Y-%m-%d")
+    except ValueError:
+        return mtime
+    try:
+        minutes = max(0, int(str(frontmatter.get("duration_minutes") or 0)))
+    except ValueError:
+        minutes = 0
+    earliest = day.replace(tzinfo=timezone.utc).timestamp() + 60.0 * minutes
+    return min(max(mtime, earliest), earliest + _DAY)
+
+
 def recent_briefings(
     vault_root: Path, agent_name: str, limit: int = POOL_SIZE
 ) -> list[BriefingRecord]:
-    """The newest ``limit`` briefings for ``agent_name``, newest first by mtime.
+    """The newest ``limit`` briefings for ``agent_name``, newest first by when
+    each session ended (:func:`session_end`).
 
-    The file's mtime is when SessionEnd wrote it, which is the order #534 and
-    #548 measured the pool in. Until #551 this sorted by frontmatter ``date``
-    and then by session id, and ``date`` has no time of day: within one day the
-    "newest" was whichever session id sorted last, a coin toss among that
-    day's sessions. Ties on mtime fall back to that old key, so the order is
-    still total.
-
-    A rewrite moves a file up: ``mnemo regen-graph-edges`` rewrites the graph
-    section of the briefings whose back-links changed.
+    #551 sorted by mtime alone, the time SessionEnd wrote the file, which is
+    the order #534 and #548 measured the pool in. That holds only on the
+    machine that wrote it: a sync pull stamps every file it brings with the
+    time of the pull (182 of one vault's 200 briefings shared one mtime), and
+    the index then listed a day's pull in session-id order (#759). Before
+    #551 the sort was ``date`` and then session id, and ``date`` is the day a
+    session *started*: a session that ran for two days sorted below every
+    session started the day after. Ties fall back to the mtime and then to
+    that old key, so the order is still total.
     """
     sessions_dir = Path(vault_root) / "bots" / agent_name / "briefings" / "sessions"
     if not sessions_dir.is_dir():
@@ -201,7 +245,9 @@ def recent_briefings(
             continue
         fm, body = parse_frontmatter(text)
         rec = BriefingRecord(path=md, frontmatter=fm, body=body.lstrip("\n"))
-        keyed.append(((mtime, str(fm.get("date") or ""), str(fm.get("session_id") or md.stem)), rec))
+        key = (session_end(fm, mtime), mtime, str(fm.get("date") or ""),
+               str(fm.get("session_id") or md.stem))
+        keyed.append((key, rec))
     keyed.sort(key=lambda kv: kv[0], reverse=True)
     return [rec for _, rec in keyed[:limit]]
 

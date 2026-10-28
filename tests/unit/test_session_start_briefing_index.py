@@ -3,8 +3,8 @@
 #548 (``tools/measure_briefing_index.py``) measured the index; #551 ships it.
 The hook and the tool build it with one module, ``core/briefing_index.py``,
 so these tests pin that the hook's block is the tool's block for the same
-briefings, and what the hook adds around it: the pool by mtime, the cap, the
-log rows.
+briefings, and what the hook adds around it: the pool newest by
+session end (#759), the cap, the log rows.
 """
 from __future__ import annotations
 
@@ -102,6 +102,26 @@ def test_the_pool_is_newest_by_mtime_not_by_session_id(tmp_path):
     out = _build_injection_payload(tmp_path, current_project="p", inject_briefing=True,
                                    briefing_mode="index")
     assert out.index("written last") < out.index("written second") < out.index("written first")
+
+
+def test_the_pool_is_newest_by_session_not_by_mtime(tmp_path):
+    # #759: a sync pull rewrote the mtimes, the oldest session last.
+    _write(tmp_path, "p", "s1", at=3, date="2026-09-01", tldr="oldest session")
+    _write(tmp_path, "p", "s2", at=2, date="2026-09-02", tldr="middle session")
+    _write(tmp_path, "p", "s3", at=1, date="2026-09-03", tldr="newest session")
+    out = _build_injection_payload(tmp_path, current_project="p", inject_briefing=True,
+                                   briefing_mode="index")
+    assert out.index("newest session") < out.index("middle session") < out.index("oldest session")
+    heads = [ln for ln in out.splitlines() if ln.startswith("### ")]
+    assert heads == ["### 2026-09-03", "### 2026-09-02", "### 2026-09-01"]
+
+
+def test_a_session_that_ran_past_its_start_day_heads_with_both_days():
+    head = briefing_index.entry_head
+    assert head({"date": "2026-10-20", "ended_at": "2026-10-22T00:32:54Z"}) == "### 2026-10-20 → 2026-10-22"
+    assert head({"date": "2026-10-20", "ended_at": "2026-10-20T23:00:00Z"}) == "### 2026-10-20"
+    assert head({"date": "2026-10-20"}) == "### 2026-10-20"
+    assert head({"ended_at": "2026-10-22T00:32:54Z"}) == "### undated"
 
 
 def test_a_briefing_without_a_tldr_lists_its_first_paragraph(tmp_path):
