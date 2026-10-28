@@ -136,7 +136,74 @@ def _render_user_turn(index: int, turn: str) -> str:
     )
 
 
-def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = None) -> str:
+#: Ceiling on a briefing prompt, in characters (#757). A long session's
+#: flattened transcript was sent whole: 2.3-2.7M characters, ~750K tokens
+#: against Haiku's 200K, and ``claude -p`` refused it with "Prompt is too
+#: long" every time that session ended. The densest of them, cut to 395K
+#: characters, was answered at 148,649 input tokens (2.66 characters a
+#: token); 360K keeps a denser transcript and the reply clear of the limit.
+BRIEFING_PROMPT_MAX_CHARS = 360_000
+
+#: The share of that ceiling the numbered user turns may take.
+_TURNS_SHARE = 4
+
+#: The share of the transcript's budget kept from its start; the rest is its
+#: end, where the handoff state is.
+_HEAD_SHARE = 4
+
+
+def _fit_turns(lines: list[str], budget: int) -> list[str]:
+    """The newest turn lines that fit ``budget``, behind a note of what is cut.
+
+    Each line keeps its own number, so a quote still names the turn it came
+    from; the note is a line of its own, never part of a quotable turn.
+    """
+    if sum(len(line) + 1 for line in lines) <= budget:
+        return lines
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    kept.reverse()
+    omitted = len(lines) - len(kept)
+    return [f"(the first {omitted} turns are omitted — the session is too long to show them all)"] + kept
+
+
+def _fit_transcript(transcript: str, budget: int) -> str:
+    """``transcript`` cut to ``budget`` characters: its start and its end.
+
+    The start says what the session set out to do and the end where it
+    stopped, which is what a handoff needs; the middle goes. Both cuts land
+    on an event boundary when one is near.
+    """
+    if len(transcript) <= budget:
+        return transcript
+    marker = (
+        "\n\n[… {n} characters of the session omitted here — "
+        "it is too long for one prompt …]\n\n"
+    )
+    room = max(budget - len(marker) - 16, 0)  # 16: room for the count itself
+    head = transcript[: room // _HEAD_SHARE]
+    tail = transcript[len(transcript) - (room - len(head)):] if room > len(head) else ""
+    cut = head.rfind("\n\n")
+    if cut > len(head) // 2:
+        head = head[:cut]
+    cut = tail.find("\n\n")
+    if 0 <= cut < len(tail) // 2:
+        tail = tail[cut + 2:]
+    omitted = len(transcript) - len(head) - len(tail)
+    return head + marker.format(n=omitted) + tail
+
+
+def build_briefing_prompt(
+    transcript: str,
+    *,
+    user_turns: list[str] | None = None,
+    max_chars: int = BRIEFING_PROMPT_MAX_CHARS,
+) -> str:
     """Render a briefing prompt from a pre-flattened transcript string.
 
     ``user_turns`` are the person's own messages, numbered, so the model can
@@ -149,25 +216,30 @@ def build_briefing_prompt(transcript: str, *, user_turns: list[str] | None = Non
 
         transcript = flatten_transcript_events(events)
         prompt = build_briefing_prompt(transcript, user_turns=user_turns(events))
+
+    The whole prompt stays within ``max_chars`` (#757): the turns keep their
+    newest, the transcript its start and end.
     """
     turns_block = ""
     if user_turns:
         lines = [_render_user_turn(i, turn) for i, turn in enumerate(user_turns, 1)]
+        lines = _fit_turns(lines, max_chars // _TURNS_SHARE)
         turns_block = (
             "=== USER TURNS (verbatim, numbered — quote these for Corrections) ===\n"
             + "\n".join(lines)
             + "\n=== END USER TURNS ===\n\n"
         )
-    return (
+    head = (
         "Task: write the shift handoff briefing markdown body for the "
         "following Claude Code session transcript. Follow the section "
         "structure from the system prompt exactly. Output markdown only, "
         "no frontmatter, no code fences.\n\n"
         f"{turns_block}"
         "=== TRANSCRIPT ===\n"
-        f"{transcript}\n"
-        "=== END TRANSCRIPT ===\n"
     )
+    tail = "\n=== END TRANSCRIPT ===\n"
+    transcript = _fit_transcript(transcript, max_chars - len(head) - len(tail))
+    return f"{head}{transcript}{tail}"
 
 
 #: How much of the assistant's reply before a turn the corrections-only pass
