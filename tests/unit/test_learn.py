@@ -204,7 +204,8 @@ def test_learn_promotes_a_verified_rule_from_a_zero_mutation_session(
     # next prompt. Its doc key is the page's ``slug`` — the same identifier
     # ``report.learned`` carries, now that rendered pages write ``slug:``
     # explicitly (#114) — and the evidence quote is indexed as its own field.
-    index = json.loads((vault / ".mnemo" / "reflex-index.json").read_text(encoding="utf-8"))
+    from mnemo.core.reflex.index import load_index
+    index = load_index(vault)
     assert "retry-5xx-only" in index["docs"]
     assert index["docs"]["retry-5xx-only"]["projects"] == ["proj"]
     assert any(

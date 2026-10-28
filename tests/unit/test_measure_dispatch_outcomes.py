@@ -81,11 +81,13 @@ class Gh:
                  logs: Optional[Dict[str, str]] = None,
                  merged: Sequence[Dict[str, Any]] = (),
                  base_commits: Sequence[Dict[str, Any]] = (),
-                 suites: Optional[Dict[str, str]] = None) -> None:
+                 suites: Optional[Dict[str, str]] = None,
+                 pr_runs: Optional[int] = None) -> None:
         self.prs, self.checks, self.branches, self.remote = prs, checks, branches or {}, remote
         self.details, self.notes, self.logs = details or {}, notes or {}, logs or {}
         self.merged, self.base_commits = list(merged), list(base_commits)
         self.suites = suites or {}
+        self.pr_runs = pr_runs  # pull_request workflow runs; None: the call fails
         self.calls: List[Tuple[str, ...]] = []
 
     def _detail(self, oid: str) -> List[Dict[str, Any]]:
@@ -106,6 +108,8 @@ class Gh:
             if "/annotations" in path:
                 rid = path.split("/check-runs/")[1].split("/")[0]
                 return 0, json.dumps(self.notes.get(rid, [])), ""
+            if "/actions/runs?" in path:
+                return (0, f"{self.pr_runs}\n", "") if self.pr_runs is not None else (1, "", "no")
             if "/commits?" in path:
                 return 0, json.dumps(self.base_commits), ""
             oid = path.split("/commits/")[1].split("/")[0]
@@ -127,11 +131,14 @@ class Gh:
 
 
 def _pr(commits: Sequence[Tuple[float, str]], *, merged: Optional[float] = T0 + 7200,
-        files: Sequence[str] = ("src/app.py", "tests/test_app.py")) -> Dict[str, Any]:
+        files: Sequence[str] = ("src/app.py", "tests/test_app.py"),
+        headlines: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     return {"state": "MERGED" if merged else "OPEN", "createdAt": _iso(T0 + 300),
             "mergedAt": _iso(merged) if merged else None, "baseRefName": "master",
             "files": [{"path": f} for f in files],
-            "commits": [{"oid": oid, "authoredDate": _iso(at)} for at, oid in commits]}
+            "commits": [{"oid": oid, "authoredDate": _iso(at),
+                         "messageHeadline": (headlines or {}).get(oid, "work")}
+                        for at, oid in commits]}
 
 
 GREEN = [["completed", "success"], ["completed", "skipped"]]
@@ -195,6 +202,85 @@ def test_a_transcript_without_a_user_record_is_nothing(tmp_path) -> None:
     path = tmp_path / "x.jsonl"
     path.write_text(json.dumps(_assistant(T0, [])) + "\n", encoding="utf-8")
     assert tool.read_transcript(str(path)) is None
+
+
+def _write(directory: Path, sid: str, records: Sequence[Dict[str, Any]]) -> str:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{sid}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return str(path)
+
+
+def _prompt(at: float = T0) -> Dict[str, Any]:
+    return _user(at, "You are building one piece of the feature", sessionKind="bg", cwd=TREE,
+                 sessionId="aaaaaaaa-1", origin={"kind": "human"})
+
+
+def _said(at: float, text: str = "report", **extra: Any) -> Dict[str, Any]:
+    record = _assistant(at, [{"type": "text", "text": text}])
+    record["message"].update(extra)
+    return record
+
+
+def test_the_first_stop_is_the_last_assistant_turn_before_the_wake(tmp_path) -> None:
+    """#770: on resume Claude Code writes records stamped at the wake — the
+    interrupted tool call, a synthetic reply, the resume hook. Measured from
+    them, the stop was the wake, and the stop's own notice read as late."""
+    records = [
+        _prompt(),
+        _said(T0 + 590, "PR opened", model="claude-x"),
+        _assistant(T0 + 600, [{"type": "tool_use", "id": "s", "name": "Bash",
+                               "input": {"command": "claude stop aaaaaaaa"}}]),
+        _user(T0 + 3600, [{"type": "tool_result", "tool_use_id": "s",
+                           "content": "[Tool call interrupted: the session ended …]"}]),
+        _said(T0 + 3600, "No response requested.", model="<synthetic>"),
+        {"type": "attachment", "timestamp": _iso(T0 + 3604),
+         "attachment": {"hookEvent": "SessionStart", "hookName": "SessionStart:resume"}},
+        _user(T0 + 3606, '<mnemo-pr-follow pr="12" events="review">\n…'),
+        _said(T0 + 4000, "fixed"),
+    ]
+    row = tool.read_transcript(_write(tmp_path, "aaaaaaaa-1", records))
+    assert row is not None
+    assert row["first_stop"] == tool._epoch(_iso(T0 + 600))
+    assert row["last_turn"] == tool._epoch(_iso(T0 + 4000)) and row["wakes"] == 1
+
+
+def test_a_stop_nothing_woke_is_the_last_assistant_turn_too(tmp_path) -> None:
+    records = [_prompt(), _said(T0 + 600),
+               _user(T0 + 640, [{"type": "tool_result", "tool_use_id": "s", "content": "ok"}])]
+    row = tool.read_transcript(_write(tmp_path, "aaaaaaaa-1", records))
+    assert row is not None and row["first_stop"] == tool._epoch(_iso(T0 + 600))
+
+
+def test_the_opening_prompt_is_never_a_human_turn_even_written_after_a_reply(tmp_path) -> None:
+    """#770: Claude Code can write the first reply's records before the
+    prompt's, so "after the first reply" counted the prompt."""
+    records = [_said(T0 + 8, "looking"), _prompt(), _said(T0 + 20)]
+    row = tool.read_transcript(_write(tmp_path, "aaaaaaaa-1", records))
+    assert row is not None
+    assert row["bg"] and row["human_turns"] == 0
+
+
+def _peer(at: float, body: str, **origin: Any) -> Dict[str, Any]:
+    text = f"Another Claude session sent a message:\n{body}\n\nThis came from another Claude session"
+    return _user(at, text, origin={"kind": "peer", **origin}, isMeta=True)
+
+
+def test_turns_another_session_sent_are_not_a_person(tmp_path) -> None:
+    """#770: a subagent's hand-back and mnemo's finished notice are nobody;
+    a message a session chose to send is a peer turn, counted apart."""
+    handback = _peer(T0 + 200, '<agent-message from="a1">\n[Subagent hand-back] The text below…',
+                     handback=True)
+    finished = _peer(T0 + 300, '<mnemo-child-finished short_id="bbbbbbbb">…')
+    relayed = _peer(T0 + 400, '<cross-session-message from-mode="bypass">\nuse the other table\n'
+                              '</cross-session-message>')
+    typed = _user(T0 + 500, "use the other table", origin={"kind": "human"})
+    assert [tool.turn_source(r) for r in (handback, finished, relayed, typed)] == \
+        ["automated", "automated", "peer", "human"]
+    records = [_prompt(), _said(T0 + 100), handback, finished, relayed, typed, _said(T0 + 600)]
+    row = tool.read_transcript(_write(tmp_path, "aaaaaaaa-1", records))
+    assert row is not None
+    assert row["human_turns"] == 1 and row["peer_turns"] == 1
 
 
 # --- the arms ---------------------------------------------------------------
@@ -293,6 +379,66 @@ def test_green_at_hand_off_reads_one_commit_and_fixes_nothing() -> None:
 
 def test_an_unreadable_pr_has_no_outcome() -> None:
     assert tool.outcome(_outcome_row(), run=Gh({}, {})) is None
+
+
+def test_merging_the_base_branch_in_is_nobody_s_work() -> None:
+    """#770: a landing that brings the branch up to date is not a fix."""
+    assert tool.base_merge("Merge branch 'master'", "master")
+    assert tool.base_merge("Merge branch 'master' into fix/issue-7", "master")
+    assert tool.base_merge("Merge branch 'master' of https://github.com/o/r into fix/x", "master")
+    assert tool.base_merge("Merge remote-tracking branch 'origin/master'", "master")
+    assert not tool.base_merge("Merge branch 'main'", "master")
+    assert not tool.base_merge("Merge branch 'fix/issue-8' into fix/issue-7", "master")
+    assert not tool.base_merge("Merge branch 'master' and fix the matrix", "master")
+    assert not tool.base_merge("Merge branch 'master'", "")
+    gh = Gh({URL: _pr([(T0 + 200, "a"), (T0 + 9000, "m")],
+                      headlines={"m": "Merge branch 'master' into fix/issue-7"})},
+            {"a": GREEN, "m": GREEN})
+    out = tool.outcome(_outcome_row(), run=gh)
+    assert out["commits"]["after_child"] == 0 and out["base_merges"] == 1
+    assert out["ci_end"] == "green"  # the merge's own checks still decide the end
+    assert tool.hands_off(_handed(gh=out))
+
+
+def test_a_base_merge_beside_real_work_still_counts_the_work() -> None:
+    gh = Gh({URL: _pr([(T0 + 200, "a"), (T0 + 9000, "m"), (T0 + 9100, "f")],
+                      headlines={"m": "Merge branch 'master'"})},
+            {"a": GREEN, "f": GREEN})
+    out = tool.outcome(_outcome_row(), run=gh)
+    assert out["commits"]["after_child"] == 1 and out["base_merges"] == 1
+    assert not tool.hands_off(_handed(gh=out))
+
+
+def test_a_repo_that_never_checked_a_pr_is_no_ci_not_a_failure() -> None:
+    """#770: a repository with no CI on PRs cannot pass or fail a job."""
+    gh = Gh({URL: _pr([(T0 + 200, "a")])}, {"a": []}, pr_runs=0)
+    out = tool.outcome(_outcome_row(), run=gh)
+    assert out["ci_handoff"] == out["ci_end"] == "no-ci"
+    assert tool.hands_off(_handed(gh=out))
+    # Asked as of the PR's last commit, so a PR that adds the CI is not judged
+    # by the CI it added.
+    asked = [c[2] for c in gh.calls if "/actions/runs?" in c[2]]
+    assert asked == ["repos/o/r/actions/runs?event=pull_request&created=<="
+                     + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(T0 + 200)) + "&per_page=1"]
+    summary = tool.summarize([{**_handed(gh=out), "arm": "dispatch", "kind": "piece",
+                               "wakes": 0, "resumes": 0, "tokens": 1, "mnemo_hooks": 0,
+                               "mnemo_mcp_calls": 0, "first_stop": T0, "started": T0}])
+    assert summary["hands_off"] == summary["hands_off_no_ci"] == 1
+    assert summary["ci"]["ci_end"] == {"no-ci": 1}
+
+
+def test_no_check_run_in_a_repo_that_checks_prs_is_still_none() -> None:
+    for runs in (3, None):  # it does, or GitHub would not say
+        gh = Gh({URL: _pr([(T0 + 200, "a")])}, {"a": []}, pr_runs=runs)
+        out = tool.outcome(_outcome_row(), run=gh)
+        assert out["ci_handoff"] == out["ci_end"] == "none"
+        assert not tool.hands_off(_handed(gh=out))
+
+
+def test_a_green_pr_never_asks_whether_the_repo_has_ci() -> None:
+    gh = Gh({URL: _pr([(T0 + 200, "a")])}, {"a": GREEN}, pr_runs=0)
+    assert tool.outcome(_outcome_row(), run=gh)["ci_end"] == "green"
+    assert not [c for c in gh.calls if "/actions/runs?" in c[2]]
 
 
 def test_the_cache_answers_a_second_run_without_gh(tmp_path) -> None:

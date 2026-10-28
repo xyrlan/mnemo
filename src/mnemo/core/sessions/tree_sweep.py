@@ -21,7 +21,10 @@ dispatch paths, as ``git worktree list`` reports them for the repo. A hand-made
 worktree is never looked at. Removal needs every one of these:
 
 - **The branch's PR has merged.** ``gh pr list --head <branch> --state all``
-  returns a ``MERGED`` PR and no ``OPEN`` one. A tree with no PR at all is
+  returns a ``MERGED`` PR and no ``OPEN`` one. ``<branch>`` is the name the
+  tree's upstream has on its remote, the local name only when there is no
+  upstream (#796): a second dispatch on an issue pushes ``fix/issue-N`` to
+  ``fix/issue-N-<suffix>``, and the local name would find the first PR. A tree with no PR at all is
   left alone without comment. That covers a twin that lost: ``dispatch
   --twins`` gives it no PR and no push, so its commits exist only in its
   tree, and removing it would lose them. A twin whose PR merged is removed
@@ -49,6 +52,19 @@ the branch with its upstream. On repo-b, all ten merged trees still had
 ``origin/<branch>`` at the tip, so ``-d`` succeeds. If the tracking ref has
 been pruned, ``-d`` refuses. The branch is kept and the refusal is reported.
 
+**What git leaves behind (#761).** ``git worktree remove`` deletes the
+tree's admin entry even when it fails to delete the directory, and it stops at
+the first entry it cannot delete. On Windows that is routine: a file a dev
+server still holds open, a path past 260 characters in ``node_modules``. On
+2026-10-27 a Windows box held 25 such directories, unregistered and full of
+ignored build output, each logged as "`git worktree remove` refused". So when
+git fails, the sweep asks it whether the tree is still registered. If it is
+not, the directory is what is left of a tree the checks above already passed,
+and the sweep deletes it, read-only files and long paths included. A
+directory it cannot delete is logged with the reason (:data:`LEFTOVER`), and
+every later sweep tries it again until it goes. The branch is deleted either
+way: git has let go of the tree.
+
 **How the maintainer hears it.** A tree that would have been removed but
 holds work (dirty, unpushed, not in the PR, or ``-d`` refused) is reported
 once per reason. The report is a line in the repo's day log, plus a notice to
@@ -62,7 +78,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -100,11 +119,15 @@ IN_USE = "in-use"
 OPEN_PR = "open-pr"
 NOT_MERGED = "not-merged"
 DETACHED = "detached"
+#: git unregistered the tree but its directory could not be deleted (#761).
+LEFTOVER = "leftover"
+#: A :data:`LEFTOVER` directory a later sweep deleted.
+LEFTOVER_CLEARED = "leftover-cleared"
 
 #: Outcomes the maintainer hears about.
 TOLD = frozenset({
     REMOVED, BRANCH_KEPT, HOLDS_DIRTY, HOLDS_UNPUSHED, HOLDS_NOT_IN_PR,
-    UNVERIFIABLE, REMOVE_FAILED,
+    UNVERIFIABLE, REMOVE_FAILED, LEFTOVER, LEFTOVER_CLEARED,
 })
 
 _WHY = {
@@ -114,6 +137,11 @@ _WHY = {
     UNVERIFIABLE: "git could not say whether the merged PR contains its branch",
     REMOVE_FAILED: "`git worktree remove` refused",
 }
+
+#: Ledger outcomes whose directory a sweep may find unregistered and delete.
+#: ``REMOVE_FAILED`` is there for trees recorded before #761, when a leftover
+#: was reported as a refusal.
+_RETRY = frozenset({LEFTOVER, REMOVE_FAILED})
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -144,7 +172,7 @@ class Verdict:
 
     @property
     def removed(self) -> bool:
-        return self.outcome in (REMOVED, BRANCH_KEPT)
+        return self.outcome in (REMOVED, BRANCH_KEPT, LEFTOVER_CLEARED)
 
 
 @dataclass
@@ -211,6 +239,28 @@ def merged_pr(branch: str, *, repo_root: Path | str, run: Runner = _run
         if row.get("state") == "MERGED" and row.get("headRefOid"):
             merged.append((f"#{row.get('number')}", str(row["headRefOid"])))
     return ("merged" if merged else "none"), merged
+
+
+def pr_branch(tree: Tree, *, run: Runner = _run) -> Optional[str]:
+    """The branch name *tree*'s PR was opened from (#796).
+
+    That is the upstream's branch on its remote, not the local name. A second
+    dispatch on an issue whose ``fix/issue-N`` already belongs to a merged PR
+    pushes ``fix/issue-N`` to ``origin/fix/issue-N-<suffix>``, and asking
+    ``gh`` about the local name finds the older PR. A tree with no upstream,
+    or one tracking a local branch, falls back to the local name.
+    """
+    if not tree.branch:
+        return None
+
+    def config(key: str) -> Optional[str]:
+        return _git_ok(["config", "--get", f"branch.{tree.branch}.{key}"],
+                       cwd=tree.path, run=run)
+
+    remote, merge = config("remote"), config("merge")
+    if remote and remote != "." and merge and merge.startswith("refs/heads/"):
+        return merge[len("refs/heads/"):]
+    return tree.branch
 
 
 def _parse_when(value: Optional[str]) -> Optional[float]:
@@ -300,17 +350,144 @@ def holds_work(tree: Tree, merged: Sequence[tuple], *, run: Runner = _run
     return UNVERIFIABLE if unknown else HOLDS_NOT_IN_PR
 
 
+def _same(a: Path | str, b: Path | str) -> bool:
+    return (os.path.normcase(os.path.realpath(str(a)))
+            == os.path.normcase(os.path.realpath(str(b))))
+
+
+def registered(path: Path, *, repo_root: Path | str, run: Runner = _run
+               ) -> Optional[bool]:
+    """Whether git still lists *path* as a worktree, or ``None`` if it cannot say."""
+    result = run(["git", "worktree", "list", "--porcelain"], cwd=repo_root)
+    if result.returncode != 0:
+        return None
+    return any(_same(line[len("worktree "):], path)
+               for line in (result.stdout or "").splitlines()
+               if line.startswith("worktree "))
+
+
+def orphaned(path: Path) -> bool:
+    """True when *path* is a directory no git repository owns any more.
+
+    A worktree's ``.git`` is a file naming its admin entry, and ``git worktree
+    remove`` deletes that entry even when it fails to delete the tree. What is
+    left has no ``.git``, or one naming an entry that is gone. A ``.git``
+    directory is a repository, never a leftover.
+    """
+    if not path.is_dir():
+        return False
+    dot_git = path / ".git"
+    if dot_git.is_dir():
+        return False
+    if not dot_git.exists():
+        return True
+    try:
+        line = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return False
+    if not line.startswith("gitdir:"):
+        return False
+    admin = Path(line[len("gitdir:"):].strip())
+    if not admin.is_absolute():
+        admin = path / admin
+    return not admin.exists()
+
+
+def _long(path: Path) -> str:
+    """*path* spelled so Windows accepts it past 260 characters."""
+    full = os.path.abspath(str(path))
+    if os.name != "nt" or full.startswith("\\\\?\\"):
+        return full
+    if full.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + full[2:]
+    return "\\\\?\\" + full
+
+
+def clear(path: Path) -> Optional[str]:
+    """Delete the directory *path*: ``None`` once it is gone, else why not.
+
+    A read-only file, or a file in a read-only directory, is made writable
+    and tried again. A junction is unlinked, never followed.
+    """
+    root = _long(path)
+    errors: List[str] = []
+
+    def retry(func, target, _exc):
+        try:
+            for spot in (os.path.dirname(target), target):
+                mode = os.lstat(spot).st_mode
+                os.chmod(spot, mode | stat.S_IWRITE | stat.S_IREAD
+                         | (stat.S_IEXEC if stat.S_ISDIR(mode) else 0))
+            func(target)
+        except OSError as again:
+            if not errors:
+                rel = os.path.relpath(target, root) if target != root else "."
+                errors.append(f"{rel}: {again.strerror or again}")
+
+    if not os.path.lexists(root):
+        return None
+    # `onerror` became `onexc` in 3.12; the package still supports 3.8.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root, onexc=retry)
+    else:
+        shutil.rmtree(root, onerror=retry)
+    if not os.path.lexists(root):
+        return None
+    return errors[0] if errors else "the directory is still there"
+
+
 def remove(tree: Tree, *, repo_root: Path | str, run: Runner = _run) -> tuple:
-    """Remove *tree*, then its branch with ``-d``. ``(outcome, detail)``."""
+    """Remove *tree*, then its branch with ``-d``. ``(outcome, detail)``.
+
+    When git unregisters the tree but leaves its directory (#761), the
+    directory is deleted here, and :data:`LEFTOVER` says why when it cannot be.
+    """
     gone = run(["git", "worktree", "remove", str(tree.path)], cwd=repo_root)
+    left: Optional[str] = None
     if gone.returncode != 0:
-        return REMOVE_FAILED, (gone.stderr or gone.stdout or "").strip()
+        refusal = (gone.stderr or gone.stdout or "").strip()
+        if registered(tree.path, repo_root=repo_root, run=run) is not False:
+            return REMOVE_FAILED, refusal
+        if orphaned(tree.path):
+            left = clear(tree.path)
     if not tree.branch:
-        return REMOVED, ""
+        return (LEFTOVER, left) if left else (REMOVED, "")
     deleted = run(["git", "branch", "-d", tree.branch], cwd=repo_root)
-    if deleted.returncode != 0:
-        return BRANCH_KEPT, (deleted.stderr or deleted.stdout or "").strip()
+    kept = None if deleted.returncode == 0 else (
+        deleted.stderr or deleted.stdout or "").strip()
+    if left:
+        tail = f"; kept branch {tree.branch}: {kept}" if kept is not None else ""
+        return LEFTOVER, left + tail
+    if kept is not None:
+        return BRANCH_KEPT, kept
     return REMOVED, ""
+
+
+def retry_leftovers(vault_root: Path, *,
+                    cwds: Callable[[], Optional[Sequence[str]]],
+                    skip: Optional[str] = None) -> List[Verdict]:
+    """Try again every leftover directory the ledger remembers (#761).
+
+    Only a dispatch path :func:`orphaned` clears is touched: a path a new
+    dispatch has made a worktree again is owned, and left alone. *cwds* is
+    called only when there is a directory to try.
+    """
+    from mnemo.core.dispatch import issue_for_cwd
+
+    said = load_ledger(vault_root).get("said") or {}
+    out: List[Verdict] = []
+    if not isinstance(said, dict):
+        return out
+    for key, outcome in sorted(said.items()):
+        path = Path(key)
+        if outcome not in _RETRY or issue_for_cwd(key) is None:
+            continue
+        if not orphaned(path) or (skip and in_use(path, [skip])) or in_use(path, cwds()):
+            continue
+        why = clear(path)
+        out.append(Verdict(path, None, LEFTOVER if why else LEFTOVER_CLEARED,
+                           detail=why or ""))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +506,8 @@ def judge(tree: Tree, *, repo_root: Path | str, sessions: Sequence[Any],
         return verdict(DETACHED)
     if skip and in_use(tree.path, [skip]):
         return verdict(IN_USE)
-    state, merged = merged_pr(tree.branch, repo_root=repo_root, run=run)
+    state, merged = merged_pr(pr_branch(tree, run=run) or tree.branch,
+                              repo_root=repo_root, run=run)
     if state == "open":
         return verdict(OPEN_PR)
     if state != "merged":
@@ -377,15 +555,28 @@ def sweep(
             report.locked = True
             return report
         trees = dispatch_trees(repo_root, run=run)
+        table_cache: List[Optional[List[str]]] = []
+
+        def table() -> Optional[List[str]]:
+            if not table_cache:
+                table_cache.append((cwds or (lambda: process_cwds(run=run)))())
+            return table_cache[0]
+
+        sessions: List[Any] = []
+        say = tell or (lambda v: _tell(cfg, vault_root, v, sessions))
+        # What earlier passes left behind first, so a tree this pass leaves is
+        # not tried twice in a row.
+        for v in retry_leftovers(vault_root, cwds=table, skip=skip):
+            report.verdicts.append(v)
+            if _first_time(vault_root, v):
+                say(v)
         if not trees:
             return report
-        sessions = (reader or _read_sessions)()
-        table = (cwds or (lambda: process_cwds(run=run)))()
-        say = tell or (lambda v: _tell(cfg, vault_root, v, sessions))
+        sessions.extend((reader or _read_sessions)())
         for tree in trees:
             try:
                 v = judge(tree, repo_root=repo_root, sessions=sessions,
-                          cwds=table, now=moment, run=run, skip=skip)
+                          cwds=table(), now=moment, run=run, skip=skip)
             except Exception as exc:  # noqa: BLE001 — one tree must not cost the rest
                 v = Verdict(tree.path, tree.branch, UNVERIFIABLE, detail=str(exc))
             report.verdicts.append(v)
@@ -404,6 +595,11 @@ def render(v: Verdict) -> str:
     pr = f" (PR {v.pr} merged)" if v.pr else ""
     if v.outcome == REMOVED:
         return f"🧹 removed {name} and its branch {v.branch}{pr}"
+    if v.outcome == LEFTOVER:
+        return (f"🧹 git let go of {name}{pr}, but its directory is still "
+                f"there; the next sweep tries again: {v.detail}")
+    if v.outcome == LEFTOVER_CLEARED:
+        return f"🧹 removed {name}, the directory git had left behind"
     if v.outcome == BRANCH_KEPT:
         return (f"🧹 removed {name}{pr}; kept branch {v.branch}: "
                 f"`git branch -d` refused ({v.detail or 'not fully merged'})")

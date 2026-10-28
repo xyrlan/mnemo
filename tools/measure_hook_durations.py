@@ -1,7 +1,7 @@
 """How long mnemo's hooks and the reflex judge really take (#593).
 
 Usage:
-    PYTHONPATH=src python3 tools/measure_hook_durations.py [--vault ~/mnemo] [--projects ~/.claude/projects] [--days N] [--wall-ms 2500] [--json]
+    PYTHONPATH=src python3 tools/measure_hook_durations.py [--vault ~/mnemo] [--projects ~/.claude/projects] [--days N] [--wall-ms 2500] [--first-after FILE] [--json]
     PYTHONPATH=src python3 tools/measure_hook_durations.py --timed RUNS --scratch DIR --cwd PROJECT [--transcript PATH]
 
 The first form is read-only: no LLM calls, no network, no writes.
@@ -42,6 +42,19 @@ the real ``settings.json``, and ``MNEMO_HOOK_PHASES`` is set, so each
 the phases of the run at the p50 and at the p95, and each phase's own spread.
 ``--cwd`` is the project the session pretends to be in; a project path rather
 than a temp dir, because a hook in a temp dir returns before any work (#420).
+
+**What the slow starts follow.** ``--first-after FILE`` reads one UTC
+timestamp per line and splits the completed ``SessionStart`` runs after the
+first of them into the first run after each timestamp and the rest (#763).
+The timestamps that split the tail on Windows were Defender's signature
+updates, after which every file is scanned again on its next open::
+
+    Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; Id=2000} |
+      % { $_.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') }
+
+A timed clone is a fresh copy, so its files are never-scanned files too; the
+rule-activation index key (#763) is carried over when the real vault's is
+current, so a timed start skips the rebuild exactly where the real one would.
 
 A hook is mnemo's when its command runs ``mnemo.hooks.<name>`` (``mnemo
 init``'s settings entries) or ``hook <name>`` through mnemo's launcher (the
@@ -198,6 +211,56 @@ def hook_durations(rows: Iterable[Dict[str, Any]], *,
     return out
 
 
+def start_runs(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The completed ``session_start`` runs, ``{"at", "ms"}``, oldest first.
+
+    A row Claude Code wrote twice (the same session, stamp and duration) is
+    one run."""
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        attachment = row.get("attachment")
+        if not isinstance(attachment, dict) or attachment.get("type") != "hook_success":
+            continue
+        ms = _number(attachment.get("durationMs"))
+        if ms is None or mnemo_hook(attachment.get("command")) != "session_start":
+            continue
+        at = str(row.get("timestamp") or "")
+        key = (at, row.get("sessionId"), ms)
+        if not at or key in seen:
+            continue
+        seen.add(key)
+        out.append({"at": at, "ms": ms})
+    out.sort(key=lambda r: r["at"])
+    return out
+
+
+def first_after(runs: List[Dict[str, Any]], stamps: Iterable[str], *,
+                slow_ms: float = 8000) -> Dict[str, Any]:
+    """Split *runs* into the first one after each of *stamps* and the rest (#763).
+
+    Runs before the earliest stamp are left out: nothing says what preceded
+    them. Stamps and run times compare as UTC ``YYYY-MM-DDTHH:MM:SS``."""
+    import bisect
+
+    marks = sorted(str(s).strip()[:19] for s in stamps if str(s).strip())
+    first: List[float] = []
+    rest: List[float] = []
+    taken = set()
+    for run in runs:
+        i = bisect.bisect_right(marks, run["at"][:19]) - 1
+        if i < 0:
+            continue
+        if i in taken:
+            rest.append(run["ms"])
+        else:
+            taken.add(i)
+            first.append(run["ms"])
+    return {"stamps": len(marks), "slow_ms": slow_ms,
+            "first": _spread(first), "first_slow": sum(1 for v in first if v >= slow_ms),
+            "rest": _spread(rest), "rest_slow": sum(1 for v in rest if v >= slow_ms)}
+
+
 def _when(stamp: Any) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -276,7 +339,8 @@ def prompt_holds(gaps: Iterable[Dict[str, float]], *, slow_ms: float = 10000,
 
 
 def measure(vault_root: str, projects_root: str, *, days: Optional[int] = None,
-            wall_ms: float = DEFAULT_WALL_MS) -> Dict[str, Any]:
+            wall_ms: float = DEFAULT_WALL_MS,
+            stamps: Optional[List[str]] = None) -> Dict[str, Any]:
     since = _cutoff(days)
     log = os.path.join(vault_root, ".mnemo", "reflex-log.jsonl")
     transcripts = (glob.glob(os.path.join(projects_root, "*", "*.jsonl"))
@@ -294,13 +358,17 @@ def measure(vault_root: str, projects_root: str, *, days: Optional[int] = None,
             if gap is not None:
                 yield gap
 
-    return {
+    out = {
         "days": days,
         "transcripts": len(transcripts),
         "judge": judge_rows(iter_rotated_rows(Path(log)), wall_ms=wall_ms, since=since),
         "hooks": hook_durations(_all(), since=since),
         "first_prompt": prompt_holds(_gaps()),
     }
+    if stamps is not None:
+        runs = [r for r in start_runs(_all()) if not since or r["at"] >= since]
+        out["first_after"] = first_after(runs, stamps)
+    return out
 
 
 #: Run inside each timed hook process: the spawns are what a hook leaves
@@ -365,12 +433,44 @@ def prepare_scratch(vault_root: str, scratch: str) -> Dict[str, str]:
     cfg.setdefault("install", {})["autoRepairHooks"] = False
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(cfg, handle, indent=2)
+    carry_index_key(vault_root, clone)
     tmp = os.path.join(scratch, "tmp")
     os.makedirs(tmp, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k != "MNEMO_HOOKS_OFF"}
     env.update({"MNEMO_CONFIG_PATH": config_path, "TMPDIR": tmp, PHASES_ENV: "1",
                 "PYTHONPATH": mnemo_src()})
     return env
+
+
+def carry_index_key(vault_root: str, clone: str) -> bool:
+    """Give *clone* the rule-activation index key the real vault has (#763).
+
+    ``SessionStart`` rebuilds that index only when its key no longer matches
+    the pages. The key names the vault's path, so without this a clone would
+    rebuild on its first timed start — opening every page — where a start in
+    the real vault, the one being measured, would not. Carried only when the
+    real vault's key is current, with the clone's index paths moved to the
+    clone. Opens no page. True when the key was carried."""
+    from pathlib import Path
+
+    from mnemo.core import rule_activation as ra
+
+    copy = Path(clone)
+    try:
+        saved = json.loads((Path(vault_root) / ".mnemo" / ra.INDEX_KEY_FILENAME)
+                           .read_text(encoding="utf-8"))
+        threshold = int(saved["universal_threshold"])
+        built_for = Path(saved["vault_root"])
+        if ra.index_key(built_for, universal_threshold=threshold) != saved:
+            return False
+        index_path = copy / ".mnemo" / ra.INDEX_FILENAME
+        text = index_path.read_text(encoding="utf-8")
+        text = text.replace(json.dumps(str(built_for))[1:-1], json.dumps(str(copy))[1:-1])
+        index_path.write_text(text, encoding="utf-8")
+        ra.write_index_key(copy, ra.index_key(copy, universal_threshold=threshold))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return True
 
 
 def mnemo_src() -> str:
@@ -506,6 +606,16 @@ def render(report: Dict[str, Any]) -> str:
         lines.append("  %-20s %6d %8s %8s %8s %8s  %s" % (
             entry["event"], done["n"], _ms(done["p50"]), _ms(done["p95"]),
             _ms(done["p99"]), _ms(done["max"]), cancelled))
+    split = report.get("first_after")
+    if split:
+        first, rest = split["first"], split["rest"]
+        lines += ["", "SessionStart after %d --first-after stamps: the first run after each "
+                  "n %d p50 %s p95 %s max %s (%d >= %s ms); every other run n %d p50 %s "
+                  "p95 %s max %s (%d >= %s ms)" % (
+                      split["stamps"], first["n"], _ms(first["p50"]), _ms(first["p95"]),
+                      _ms(first["max"]), split["first_slow"], _ms(split["slow_ms"]),
+                      rest["n"], _ms(rest["p50"]), _ms(rest["p95"]), _ms(rest["max"]),
+                      split["rest_slow"], _ms(split["slow_ms"]))]
     held = report.get("first_prompt")
     if held:
         lines += ["", "first prompt vs SessionStart:startup (%d sessions): %d prompts timestamped "
@@ -550,6 +660,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="the project directory a timed session runs in")
     parser.add_argument("--transcript", default=None,
                         help="a transcript a timed session_end is handed")
+    parser.add_argument("--first-after", default=None, metavar="FILE",
+                        help="one UTC timestamp per line: split SessionStart runs into the "
+                             "first after each and the rest")
     parser.add_argument("--pull-every-run", action="store_true",
                         help="with sync on in the vault, every timed session_start pulls "
                              "(the hook itself pulls at most once per five minutes)")
@@ -572,8 +685,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         _ms(spread["p99"]), _ms(spread["max"])))
             print(render_phases(timed.get("session_start_phases") or {}))
         return 0
+    stamps = None
+    if args.first_after:
+        with open(os.path.expanduser(args.first_after), encoding="utf-8-sig") as handle:
+            stamps = [line.strip() for line in handle if line.strip()]
     report = measure(os.path.expanduser(args.vault), os.path.expanduser(args.projects),
-                     days=args.days, wall_ms=args.wall_ms)
+                     days=args.days, wall_ms=args.wall_ms, stamps=stamps)
     projects = os.path.expanduser(args.projects)
     prov = _provenance.provenance(__file__, argv, vault=os.path.expanduser(args.vault),
                                   blind_spots=[_provenance.transcripts_blind_spot(projects)])

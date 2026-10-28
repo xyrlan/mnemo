@@ -135,7 +135,7 @@ def test_build_index_schema_shape(tmp_vault):
     _write_rule(tmp_vault, "feedback", "a.md", name="a")
     idx = build_index(tmp_vault, universal_threshold=2)
 
-    assert idx["schema_version"] == 1
+    assert idx["schema_version"] == 2
     assert "generated_at" in idx
     # No scope / project top-level fields (C3 fix).
     assert "scope" not in idx

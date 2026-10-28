@@ -68,6 +68,64 @@ def test_a_stamped_reporter_pairs_by_pid_even_when_it_lands_first(tmp_path) -> N
     assert _lost(tmp_path) == [("c0da0f55", 8)]
 
 
+def _finished(sid, reporter, **kw):
+    return {"short_id": sid, "parent": "P1", "event": "finished", "reporter": reporter, **kw}
+
+
+def test_a_windows_reporter_whose_pid_is_not_the_hooks_is_not_lost(tmp_path) -> None:
+    """#755, 917b2535 on 2026-10-20: the hook got the venv launcher's pid."""
+    _log(
+        tmp_path,
+        (0, _spawned("917b2535", 36728)),
+        (0, _finished("917b2535", 37740, state="ready", pr=509, delivered=True)),
+        # Its reporter can land first, too.
+        (2, _finished("a1b2c3d4", 41000)),
+        (2, _spawned("a1b2c3d4", 40996)),
+    )
+
+    assert _lost(tmp_path) == []
+
+
+def test_a_windows_reporter_that_wrote_nothing_is_still_lost(tmp_path) -> None:
+    _log(
+        tmp_path,
+        (0, _spawned("917b2535", 36728)),
+        (0, _finished("917b2535", 37740)),
+        (5, _spawned("917b2535", 36900)),
+        # Another child's reporter answers nothing for this one.
+        (6, _finished("0badc0de", 37744)),
+        (6, _spawned("0badc0de", 37700)),
+    )
+
+    assert _lost(tmp_path) == [("917b2535", 36900)]
+
+
+def test_a_reused_pid_does_not_pair_another_childs_spawn(tmp_path) -> None:
+    """Windows hands pids out again within days, to any child's reporter."""
+    _log(
+        tmp_path,
+        (0, _spawned("b0094cb2", 69184)),
+        (0, _finished("b0094cb2", 59744)),
+        (9, _spawned("c503765d", 59744)),
+    )
+
+    assert _lost(tmp_path) == [("c503765d", 59744)]
+
+
+def test_a_spawn_and_its_reporter_pair_by_run(tmp_path) -> None:
+    _log(
+        tmp_path,
+        (0, _finished("c0da0f55", 7, run="r1")),
+        (0, {**_spawned("c0da0f55", 3), "run": "r1"}),
+        # A second reporter of the same child, running for r1's PR watch: it
+        # answers no other run.
+        (5, {**_spawned("c0da0f55", 4), "run": "r2"}),
+        (6, _finished("c0da0f55", 8, run="r9")),
+    )
+
+    assert _lost(tmp_path) == [("c0da0f55", 4)]
+
+
 def test_too_young_or_too_old_is_not_flagged(tmp_path) -> None:
     _log(tmp_path, (55, _spawned("young000", 1)), (-60 * 24 * 8, _spawned("old00000", 2)))
 

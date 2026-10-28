@@ -9,7 +9,9 @@ Read-only: no LLM calls, no writes. One ``gh pr list`` per repository.
 A dispatched child ends with a PR, and the PR then waits for somebody to
 merge it. This reads, per repository, the last ``--limit`` merged PRs and
 keeps the ones whose branch a child's dispatch names (``--prefix``,
-``fix/issue-`` by default). For each:
+``fix/issue-`` by default). ``--repo`` takes several repositories, after one
+flag or repeated; with more than one, the report closes on a total over the
+ones ``gh`` could list. For each PR:
 
 - *checks*: ``green`` when at least one check is reported and every one of
   them succeeded, ``none`` when no check is reported, ``not-green`` otherwise.
@@ -186,7 +188,10 @@ def summarize(rows: Sequence[Dict[str, Any]], *, read: int,
 def measure(repos: Sequence[str], *, limit: int, vault: Path, run: Runner,
             prefix: str = PREFIX) -> Dict[str, Any]:
     by_mnemo = load_merged_by_mnemo(vault)
-    report: Dict[str, Any] = {"prefix": prefix, "limit": limit, "repos": {}, "rows": []}
+    report: Dict[str, Any] = {"prefix": prefix, "limit": limit, "repos": {}, "rows": [],
+                              "total": None}
+    read = 0
+    every: List[Dict[str, Any]] = []
     for repo in repos:
         prs = read_repo(repo, limit=limit, run=run)
         if prs is None:
@@ -195,6 +200,19 @@ def measure(repos: Sequence[str], *, limit: int, vault: Path, run: Runner,
         rows = [row_of(repo, pr, by_mnemo) for pr in prs]
         report["repos"][repo] = summarize(rows, read=len(prs), prefix=prefix)
         report["rows"].extend(r for r in rows if r["branch"].startswith(prefix))
+        read += len(prs)
+        every.extend(rows)
+    if len(report["repos"]) > 1:
+        total = summarize(every, read=read, prefix=prefix)
+        # PR numbers are per repository: a span across them names no PR,
+        # and an early merge is named with its repository.
+        total["numbers"] = None
+        total["merged_early"] = sorted(
+            f"{r['repo']}#{r['number']}" for r in report["rows"]
+            if r["checks"] == GREEN and r["wait_minutes"] is not None
+            and r["wait_minutes"] < 0)
+        total["repos_read"] = sum(1 for s in report["repos"].values() if s is not None)
+        report["total"] = total
     return report
 
 
@@ -209,30 +227,45 @@ def _wait_line(w: Dict[str, Any]) -> str:
             f"max {_n(w['max'])}, {w['sum_hours']:.0f} h summed over {w['n']}")
 
 
+def _block(name: str, s: Dict[str, Any], prefix: str, *, last: str) -> List[str]:
+    """One repository's lines, or the total's under *name*."""
+    span = ""
+    if s["numbers"] or s["merged_from"]:
+        parts = []
+        if s["numbers"]:
+            parts.append(f"#{s['numbers'][0]} to #{s['numbers'][1]}")
+        if s["merged_from"]:
+            parts.append(f"merged {str(s['merged_from'])[:10]} to {str(s['merged_to'])[:10]}")
+        span = f" ({', '.join(parts)})"
+    c = s["checks"]
+    lines = [f"{name}: {s['child_prs']} of {last} {s['merged_read']} merged PRs "
+             f"came from a `{prefix}*` branch{span}"]
+    lines.append(f"  checks at merge, as the rollup reads today: {c[GREEN]} all green, "
+                 f"{c[NOT_GREEN]} not, {c[NONE]} with none reported")
+    lines.append(f"  last check completing -> merge, green PRs: {_wait_line(s['wait_minutes'])}")
+    early = ", ".join(n if isinstance(n, str) else f"#{n}" for n in s["merged_early"]) or "none"
+    mins = s["merged_early_minutes"]
+    lines.append(f"  merged before the last check completed: {len(s['merged_early'])} ({early})"
+                 + (f", {mins[0]:.0f} to {mins[-1]:.0f} min before" if mins else ""))
+    for who, label in ((MNEMO, "the watcher"), (PERSON, "a person")):
+        m = s["merged_by"][who]
+        lines.append(f"  merged by {label}: {m['prs']}"
+                     + (f" — {_wait_line(m['wait_minutes'])}" if m["prs"] else ""))
+    return lines
+
+
 def format_report(report: Dict[str, Any], *, listing: bool = False) -> str:
     lines: List[str] = []
     for repo, s in report["repos"].items():
         if s is None:
             lines.append(f"{repo}: gh could not list its merged PRs")
             continue
-        span = ""
-        if s["numbers"]:
-            span = (f" (#{s['numbers'][0]} to #{s['numbers'][1]}, merged "
-                    f"{str(s['merged_from'])[:10]} to {str(s['merged_to'])[:10]})")
-        c = s["checks"]
-        lines.append(f"{repo}: {s['child_prs']} of the last {s['merged_read']} merged PRs "
-                     f"came from a `{report['prefix']}*` branch{span}")
-        lines.append(f"  checks at merge, as the rollup reads today: {c[GREEN]} all green, "
-                     f"{c[NOT_GREEN]} not, {c[NONE]} with none reported")
-        lines.append(f"  last check completing -> merge, green PRs: {_wait_line(s['wait_minutes'])}")
-        early = ", ".join(f"#{n}" for n in s["merged_early"]) or "none"
-        mins = s["merged_early_minutes"]
-        lines.append(f"  merged before the last check completed: {len(s['merged_early'])} ({early})"
-                     + (f", {mins[0]:.0f} to {mins[-1]:.0f} min before" if mins else ""))
-        for who, label in ((MNEMO, "the watcher"), (PERSON, "a person")):
-            m = s["merged_by"][who]
-            lines.append(f"  merged by {label}: {m['prs']}"
-                         + (f" — {_wait_line(m['wait_minutes'])}" if m["prs"] else ""))
+        lines.extend(_block(repo, s, report["prefix"], last="the last"))
+    total = report.get("total")
+    if total is not None:
+        lines.append("")
+        lines.extend(_block(f"total over {total['repos_read']} of {len(report['repos'])} "
+                            "repositories", total, report["prefix"], last="the"))
     if listing:
         lines.append("")
         for r in report["rows"]:
@@ -250,9 +283,9 @@ def default_repo(run: Runner) -> Optional[str]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--repo", action="append", metavar="OWNER/NAME",
-                        help="a repository to read; repeatable (default: the one gh "
-                             "resolves from the current directory)")
+    parser.add_argument("--repo", action="extend", nargs="+", metavar="OWNER/NAME",
+                        help="repositories to read, after one --repo or repeated "
+                             "(default: the one gh resolves from the current directory)")
     parser.add_argument("--limit", type=int, default=100,
                         help="merged PRs to read per repository (default 100)")
     parser.add_argument("--vault", default=os.path.expanduser("~/mnemo"),

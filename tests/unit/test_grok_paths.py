@@ -88,12 +88,9 @@ def test_leader_socket_env_wins(tmp_path):
     assert Path(paths.leader_socket(tmp_path, {})) == tmp_path / "leader.sock"
 
 
-def test_homes_dedupes_symlinked_home(monkeypatch, tmp_path):
+def test_homes_dedupes_symlinked_home(monkeypatch, tmp_path, requires_symlinks):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     (tmp_path / ".grok").mkdir()
     link = tmp_path / "alias"
-    try:
-        os.symlink(tmp_path / ".grok", link)
-    except (OSError, NotImplementedError):
-        return
+    os.symlink(tmp_path / ".grok", link)
     assert paths.grok_homes({"GROK_HOME": str(link)}) == [link]

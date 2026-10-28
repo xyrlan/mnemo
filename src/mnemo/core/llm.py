@@ -106,6 +106,47 @@ def _is_rate_limit(stderr: str) -> bool:
     return bool(re.search(r"rate.?limit", stderr or "", re.IGNORECASE))
 
 
+#: How much of what a failed ``claude`` printed an error message carries.
+_FAILURE_DETAIL_MAX_CHARS = 500
+
+
+def _envelope_error(stdout: str) -> str:
+    """The ``result`` text of an ``is_error`` envelope on stdout, or ``""``."""
+    try:
+        parsed: Any = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    events = parsed if isinstance(parsed, list) else [parsed]
+    for ev in reversed(events):
+        if isinstance(ev, dict) and ev.get("is_error") and ev.get("result"):
+            return str(ev["result"]).strip()
+    return ""
+
+
+def _failure_detail(stdout: str | None, stderr: str | None) -> str:
+    """What a ``claude`` that exited non-zero said about why, truncated.
+
+    With ``--output-format json`` the CLI reports an API failure in its
+    envelope on stdout and exits 1 with stderr empty: a prompt over the
+    model's context ("Prompt is too long · the request is ~747935 tokens
+    (limit 200000)"), an unknown model, a usage limit. Reading stderr alone
+    logged ``claude exited with code 1: `` sixteen times with nothing after
+    the colon (#757). The envelope's message comes first, any stderr after
+    it, and the raw stdout only when neither said anything.
+    """
+    out = (stdout or "").strip()
+    err = (stderr or "").strip()
+    envelope = _envelope_error(out)
+    if envelope:
+        detail = f"{envelope} (stderr: {err})" if err else envelope
+    else:
+        detail = err or out
+    detail = " ".join(detail.split())
+    if len(detail) > _FAILURE_DETAIL_MAX_CHARS:
+        detail = detail[: _FAILURE_DETAIL_MAX_CHARS - 1] + "…"
+    return detail
+
+
 def _resolve_claude() -> str:
     """Absolute path to the ``claude`` executable, or the bare name.
 
@@ -231,11 +272,12 @@ def call(
             raise LLMTimeoutError(f"subprocess timed out twice after {timeout}s") from exc
 
         if result.returncode != 0:
-            if _is_rate_limit(result.stderr) and attempts == 1:
+            detail = _failure_detail(result.stdout, result.stderr)
+            if _is_rate_limit(detail) and attempts == 1:
                 time.sleep(5.0)
                 continue
             raise LLMSubprocessError(
-                f"claude exited with code {result.returncode}: {result.stderr.strip()}"
+                f"claude exited with code {result.returncode}: {detail}"
             )
         break
 

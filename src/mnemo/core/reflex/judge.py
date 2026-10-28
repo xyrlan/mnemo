@@ -81,6 +81,16 @@ DEFAULT_CANDIDATES = 3
 #: chosen over 0.6 for reach (``tools/measure_reflex_reach.py``, #461).
 DEFAULT_INJECT_AT = 0.4
 
+#: The bar on a machine notice nobody typed (:mod:`mnemo.core.reflex.notice`).
+#: #764's blind labels, re-read under #789's pre-registered bar
+#: (``tools/measure_notice_bar.py``): a notice's 0.40-0.49 injections were
+#: on-point 20% of the time against 57% at 0.5 and over (+37 pp, 95% CI
+#: [+19, +55]), while a typed prompt's were 46% against 66%. On that vault,
+#: 2026-10-13 to 10-28, this bar cuts 13% of the injected bytes and about
+#: 26 of some 420 on-point injections (6%); skipping notices outright would
+#: have cut 34% and lost 34%.
+DEFAULT_NOTICE_INJECT_AT = 0.5
+
 #: How much of the prompt is sent. The measurement truncated here, and a
 #: paste of a whole file is not a better question for having been sent whole.
 PROMPT_CHARS = 1200
@@ -94,6 +104,12 @@ STATUSES = ("ok", "no_key", "error", "timeout")
 #: bar. Distinct from every gate reason: this one means retrieval found
 #: candidates and the judge turned them down.
 SILENCE_REASON = "judge_none_relevant"
+
+#: The silence when the prompt was a machine notice and every rule the judge
+#: passed at ``injectAt`` fell short of ``noticeInjectAt`` (#789). Its own
+#: reason so the notices the bar silenced can be counted apart from the
+#: prompts the judge turned down.
+NOTICE_SILENCE_REASON = "notice_below_bar"
 
 
 class Timeout(Exception):
@@ -183,6 +199,7 @@ def settings(cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         "timeoutSeconds": _number(block.get("timeoutSeconds"), DEFAULT_TIMEOUT_S),
         "candidates": _count(block.get("candidates"), DEFAULT_CANDIDATES),
         "injectAt": _number(block.get("injectAt"), DEFAULT_INJECT_AT),
+        "noticeInjectAt": _number(block.get("noticeInjectAt"), DEFAULT_NOTICE_INJECT_AT),
     }
 
 
@@ -245,6 +262,25 @@ def chosen(judged: Mapping[str, float], at: float) -> List[str]:
     """
     return [slug for slug in sorted(judged, key=lambda s: (-float(judged[s]), s))
             if float(judged[slug]) >= at]
+
+
+def notice_picks(picks: Sequence[str], info: Dict[str, Any], kind: str,
+                 chosen_settings: Mapping[str, Any]) -> List[str]:
+    """``picks`` held to ``noticeInjectAt``, for a prompt that is a machine
+    notice of ``kind`` (#789); the rest keep their order.
+
+    Writes ``info["notice"]`` — the kind, the bar and what it dropped — and
+    corrects ``info["injected"]``, so the ``judge`` object of the log row says
+    what was sent. The judge's own picks, for the pick ledger, are the
+    caller's to keep: the bar is a policy on notices, not the judge's verdict.
+    """
+    at = float(chosen_settings.get("noticeInjectAt", DEFAULT_NOTICE_INJECT_AT))
+    judged = {slug: score for slug, score in info.get("scores") or []}
+    kept = [slug for slug in picks if float(judged.get(slug, 0.0)) >= at]
+    info["notice"] = {"kind": kind, "at": at,
+                      "dropped": [slug for slug in picks if slug not in kept]}
+    info["injected"] = len(kept)
+    return kept
 
 
 def _elapsed_ms(started: float) -> int:

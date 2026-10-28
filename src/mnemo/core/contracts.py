@@ -15,6 +15,7 @@ second one drifts.
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -532,3 +533,63 @@ def parse_contract(path: Path | str) -> Contract:
     contract = Contract(feature=feature, verdict=verdict, pieces=pieces, path=target)
     _validate(contract)
     return contract
+
+
+# --- files more than one piece lists ------------------------------------------
+
+
+def _entry(path: str) -> str:
+    """A ``files`` entry as it is compared: no leading ``./``, no trailing ``/``."""
+    while path.startswith("./"):
+        path = path[2:]
+    return path.rstrip("/")
+
+
+def _overlap(a: str, b: str) -> bool:
+    """Whether two ``files`` entries can name the same file.
+
+    Equal, one a directory holding the other, or a glob matching the other's
+    literal path. Two different globs are not compared: whether ``src/*.py``
+    and ``src/a*`` meet depends on the tree, and this reads only the file.
+    """
+    x, y = _entry(a), _entry(b)
+    if x == y or y.startswith(x + "/") or x.startswith(y + "/"):
+        return True
+    globs = [any(ch in e for ch in "*?[") for e in (x, y)]
+    if globs[0] and not globs[1]:
+        return fnmatch.fnmatchcase(y, x)
+    if globs[1] and not globs[0]:
+        return fnmatch.fnmatchcase(x, y)
+    return False
+
+
+def shared_files(contract: Contract) -> list[tuple[str, str, list[str]]]:
+    """``(slug, other slug, entries)`` for each pair of pieces whose ``files`` meet.
+
+    Read from the contract alone, before any tree exists, so it can say only
+    *file*, not *lines*: two pieces listing one file will edit it in parallel,
+    and whether they touch the same lines is known only once they have. Of
+    the 17 pieces since 2026-09-29 that were not hands-off (#768), 6 came
+    from code two pieces shared — a permission matrix one sibling owned, and
+    registration lines three pieces edited in one ``lib.rs`` that conflicted
+    at merge. Code more than one piece edits belongs in the seam, landed
+    before the pieces (#771). A warning, never a refusal: a shared test
+    fixture is sometimes the right cut, and the maintainer reviewed it.
+
+    An entry is shown as written when both pieces spelled it the same, and as
+    ``a ~ b`` when they meet through a directory or a glob.
+    """
+    out: list[tuple[str, str, list[str]]] = []
+    pieces = contract.pieces
+    for i, piece in enumerate(pieces):
+        for other in pieces[i + 1:]:
+            met: list[str] = []
+            for a in piece.files:
+                for b in other.files:
+                    if _overlap(a, b):
+                        label = a if _entry(a) == _entry(b) else f"{a} ~ {b}"
+                        if label not in met:
+                            met.append(label)
+            if met:
+                out.append((piece.slug, other.slug, met))
+    return out

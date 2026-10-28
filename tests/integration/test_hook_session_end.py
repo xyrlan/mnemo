@@ -169,9 +169,15 @@ def test_session_end_hands_the_report_card_to_a_detached_reporter(
 
     assert session_end.main() == 0
 
+    run = spawned[0][1].pop("run")
     assert spawned == [(child[:8], {
         "parent": parent, "cwd": "/x/app-wt-7", "transcript": "/t/c0da0f55.jsonl",
     })]
+    # #755: the reporter echoes ``run``, so doctor pairs it with this row.
+    from mnemo.core.sessions import report_card
+
+    log = (hook_env / ".mnemo" / report_card.LOG_NAME).read_text(encoding="utf-8")
+    assert [json.loads(line).get("run") for line in log.splitlines()] == [run]
 
 
 def test_session_end_falls_back_to_the_one_line_notice_when_the_reporter_cannot_start(

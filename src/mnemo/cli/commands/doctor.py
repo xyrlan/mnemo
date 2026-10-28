@@ -102,7 +102,7 @@ def _detect_install_scope() -> str:
 
 
 @command("doctor")
-def cmd_doctor(_args: argparse.Namespace) -> int:
+def cmd_doctor(args: argparse.Namespace) -> int:
     from mnemo import cli  # late binding for monkeypatched _resolve_vault
     from mnemo.install import preflight
 
@@ -122,13 +122,19 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         print(f"  [{issue.severity}] {issue.kind}: {issue.message}")
         print(f"       → {issue.remediation}")
 
+    from mnemo.cli.commands.doctor_checks import _lists
+
     all_ok = True
-    for _name, check_fn in DOCTOR_CHECKS:
-        ok = check_fn(vault)
-        # universal_promotion is advisory and effectively always-True today;
-        # treat None (or any non-False return) as "not a warning".
-        if ok is False:
-            all_ok = False
+    _lists.show_all(bool(getattr(args, "all", False)))
+    try:
+        for _name, check_fn in DOCTOR_CHECKS:
+            ok = check_fn(vault)
+            # universal_promotion is advisory and effectively always-True today;
+            # treat None (or any non-False return) as "not a warning".
+            if ok is False:
+                all_ok = False
+    finally:
+        _lists.show_all(False)
 
     _doctor_report_recall(vault)
 

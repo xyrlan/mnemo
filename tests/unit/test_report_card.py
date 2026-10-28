@@ -200,6 +200,95 @@ def test_a_removed_tree_falls_back_to_the_url_gh_pr_create_printed(tmp_path: Pat
     assert rc.state(card) == "ready"
 
 
+def _calls(tool_use_id: str, command: str, output: str, branch: str = "") -> List[dict]:
+    """One Bash call and its result, as a Claude transcript records them."""
+    extra = {"gitBranch": branch} if branch else {}
+    return [
+        {"type": "assistant", **extra, "message": {"content": [
+            {"type": "tool_use", "id": tool_use_id, "name": "Bash",
+             "input": {"command": command}}]}},
+        {"type": "user", **extra, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tool_use_id, "content": output}]}},
+    ]
+
+
+def _write(tmp_path: Path, records: List[dict]) -> Path:
+    records = records + [{"type": "assistant", "message": {"content": [
+        {"type": "text", "text": REPORT}]}}]
+    path = tmp_path / "child.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return path
+
+
+OTHER = "https://github.com/someone/elsewhere/pull/179"
+
+
+def test_a_pr_another_command_printed_is_not_the_childs(tmp_path: Path) -> None:
+    # #769: a read-only child looked at other repositories' PRs; the last URL
+    # one of those commands printed was reported as its own merged PR.
+    transcript = _write(tmp_path, [
+        *_calls("v1", f"gh pr view {OTHER} --json state", f'{{"url": "{OTHER}"}}'),
+        *_calls("v2", "gh pr list --repo someone/elsewhere", OTHER + "\n"),
+        *_calls("v3", "gh api repos/someone/elsewhere/pulls/179", OTHER),
+    ])
+    run = Fake({("gh", "pr", "view"): (0, _pr_json(url=OTHER, number=179, state="MERGED"), "")})
+
+    card = rc.gather("d739dbe1", cwd=str(tmp_path / "gone-wt-768"), transcript=transcript, run=run)
+
+    assert rc.pr_urls_in(transcript) == []
+    assert card.pr is None
+    assert not any(argv[:3] == ("gh", "pr", "view") for argv, _ in run.calls)
+
+
+def test_a_tree_whose_branch_has_no_pr_does_not_read_the_transcript(tmp_path: Path) -> None:
+    # A tree that is there was asked by its branch; "no PR" is the answer,
+    # even beside a `gh pr create` the child ran somewhere else.
+    transcript = _write(tmp_path, _calls(
+        "p1", "gh pr create --fill", "https://github.com/o/r/pull/12\n"))
+    run = Fake({
+        ("git", "rev-parse", "--abbrev-ref", "HEAD"): (0, "fix/issue-7\n", ""),
+        ("git", "status", "--porcelain"): (0, "", ""),
+        ("gh", "pr", "list"): (0, "[]", ""),
+        ("gh", "pr", "view"): (0, _pr_json(), ""),
+    })
+
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), transcript=transcript, run=run)
+
+    assert card.tree_seen and card.pr is None
+    assert not any(argv[:3] == ("gh", "pr", "view") for argv, _ in run.calls)
+
+
+def test_a_gone_tree_finds_the_pr_its_own_branch_opened(tmp_path: Path) -> None:
+    transcript = _write(tmp_path, [
+        *_calls("v1", f"gh pr view {OTHER}", OTHER, branch="fix/issue-7"),
+        *_calls("p1", "git push -u origin HEAD && gh pr create --fill",
+                "https://github.com/o/r/pull/12\n", branch="fix/issue-7"),
+    ])
+    run = Fake({
+        ("gh", "pr", "view", "https://github.com/o/r/pull/12"):
+            (0, _pr_json(headRefName="fix/issue-7"), ""),
+        ("gh", "pr", "checks"): (0, _checks_json("pass"), ""),
+    })
+
+    card = rc.gather("x", cwd=str(tmp_path / "gone-wt-7"), transcript=transcript, run=run)
+
+    assert rc.created_prs(transcript) == [("https://github.com/o/r/pull/12", "fix/issue-7")]
+    assert card.pr is not None and card.pr.number == 12
+    assert rc.state(card) == "ready"
+
+
+def test_a_created_pr_from_another_branch_is_not_the_childs(tmp_path: Path) -> None:
+    # The child's session was on fix/issue-7; the PR its command printed was
+    # opened from another branch (a `cd` into another checkout, say).
+    transcript = _write(tmp_path, _calls(
+        "p1", "cd ../other && gh pr create --fill", OTHER + "\n", branch="fix/issue-7"))
+    run = Fake({("gh", "pr", "view"): (0, _pr_json(url=OTHER, headRefName="main"), "")})
+
+    card = rc.gather("x", cwd=str(tmp_path / "gone-wt-7"), transcript=transcript, run=run)
+
+    assert card.pr is None
+
+
 def test_nothing_readable_is_unknown_and_gathering_never_raises(tmp_path: Path) -> None:
     def broken(argv, cwd):
         raise RuntimeError("boom")
@@ -491,3 +580,61 @@ def test_what_was_sent_is_recorded_one_row_per_event(tmp_path: Path) -> None:
     assert b"\r\n" not in raw
     assert [r["event"] for r in rows] == ["finished", "settled"]
     assert all("ts" in r for r in rows)
+
+
+# --- a branch with no PR: was it pushed? (#771) --------------------------------
+
+
+def _no_pr_runner(origin: Tuple[int, str, str], behind: str = "0\n") -> Fake:
+    return Fake({
+        ("git", "rev-parse", "--abbrev-ref", "HEAD"): (0, "feat/f/roles\n", ""),
+        ("git", "status", "--porcelain"): (0, "", ""),
+        ("gh", "pr", "list"): (0, "[]", ""),
+        ("git", "rev-list", "--count", "master..feat/f/roles"): (0, "2\n", ""),
+        ("git", "for-each-ref"): origin,
+        ("git", "rev-list", "--count",
+         "refs/remotes/origin/feat/f/roles..feat/f/roles"): (0, behind, ""),
+    })
+
+
+@pytest.fixture
+def _master(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mnemo.core.sessions import delivery
+
+    monkeypatch.setattr(delivery, "base_branch", lambda **k: "master")
+
+
+def test_a_branch_never_pushed_is_said_so(tmp_path: Path, _master) -> None:
+    """#616: `git commit … ; claude stop`, nothing on origin."""
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner((0, "", "")))
+
+    assert card.never_pushed and card.not_pushed == 2
+    assert rc.state(card) == "unpublished"
+    assert ("- tree: 2 commits not in any PR, and the branch was never pushed"
+            in rc.render(card))
+
+
+def test_commits_ahead_of_origin_are_counted(tmp_path: Path, _master) -> None:
+    ref = (0, "refs/remotes/origin/feat/f/roles\n", "")
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner(ref, "1\n"))
+
+    assert not card.never_pushed and card.not_pushed == 1
+    assert "- tree: 2 commits not in any PR, 1 of them not pushed" in rc.render(card)
+
+
+def test_a_pushed_branch_without_a_pr_says_all_pushed(tmp_path: Path, _master) -> None:
+    """The `may: push` child: pushed, the PR left for `mnemo deliver`."""
+    ref = (0, "refs/remotes/origin/feat/f/roles\n", "")
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner(ref, "0\n"))
+
+    assert card.not_pushed == 0
+    assert "- tree: 2 commits not in any PR, all pushed" in rc.render(card)
+
+
+def test_a_failed_ref_read_is_not_read_as_never_pushed(tmp_path: Path, _master) -> None:
+    """A fact whose source failed is left out, never filled in (#306)."""
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner((128, "", "boom")))
+
+    assert card.not_pushed is None and not card.never_pushed
+    assert "- tree: 2 commits not in any PR\n" in rc.render(card) + "\n"
+    assert "pushed" not in rc._tree_line(card)

@@ -6,9 +6,9 @@ retrieval.py / user_prompt_submit hook). Same ``is_consumer_visible`` gate as
 ``rule_activation.build_index`` — non-negotiable parity with the HOME
 dashboard.
 
-Schema v1:
+In memory — what :func:`build_index` returns and what every reader sees:
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "generated_at": "YYYY-MM-DDTHH:MM:SSZ",
       "avg_field_length": {name, topic_tags, aliases, description, body, evidence},
       "doc_count": int,
@@ -25,6 +25,18 @@ Schema v1:
         },
       },
     }
+
+On disk (schema v2, #779) the same object is written compactly: ``doc_ids``
+lists the slugs, and each term's postings are one string of space-separated
+entries, a doc id followed by a letter and a count per field the term occurs
+in (``"17b3 204n1b2"``: doc 17 has it 3 times in its body, doc 204 once in its
+name and twice in its body). v1 wrote every entry as a dict carrying the slug
+and all six counts, zeros included, with ``indent=2``: 137 MB and a 0.6 s
+parse on a 4,078-rule vault, paid by every prompt that reached ranking. The
+same index is 7 MB in v2 and parses in ~0.05 s (``tools/measure_reflex_index_load.py``).
+:func:`load_index` decodes a term's string only when it is looked up, so a
+prompt pays for its own few terms, not for 50K. A v1 file still loads, as it
+always did, until the next SessionStart rebuild rewrites it as v2.
 
 The evidence quote is the user's own words from a feedback correction — it is
 the best lexical bridge to how they phrase the same complaint again, so it is
@@ -46,8 +58,11 @@ retired.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from mnemo.core.errors import load_validated_json
 from mnemo.core.filters import derive_rule_slug, is_consumer_visible, is_retired
@@ -56,11 +71,18 @@ from mnemo.core.reflex.tokenizer import tokenize
 from mnemo.core.rule_activation import is_universal, projects_for_rule
 from mnemo.core.text_utils import body_preview, retrieval_body
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# The versions :func:`load_index` reads: v1 has the in-memory shape on disk.
+_READABLE_VERSIONS = (1, 2)
 INDEX_FILENAME = "reflex-index.json"
 
 _FIELD_NAMES = ("name", "topic_tags", "aliases", "description", "body", "evidence")
 _SYSTEM_TAGS: frozenset[str] = frozenset({"auto-promoted", "needs-review"})
+# One letter per field in a v2 posting string; ``_FIELD_NAMES`` order.
+_FIELD_CODES = "ntadbe"
+_CODE_FIELD = dict(zip(_FIELD_CODES, _FIELD_NAMES))
+_ENTRY_RE = re.compile(r"(\d+)((?:[a-z]\d+)*)")
+_COUNT_RE = re.compile(r"([a-z])(\d+)")
 
 
 def _field_tokens(fm: dict, body_text: str, slug: str) -> dict[str, list[str]]:
@@ -167,6 +189,72 @@ def build_index(vault_root: Path, *, universal_threshold: int = 2) -> dict:
     }
 
 
+def _encode_postings(entries: list, doc_ids: dict[str, int]) -> str:
+    parts = []
+    for entry in entries:
+        tf = entry["tf"]
+        parts.append(str(doc_ids[entry["slug"]]) + "".join(
+            code + str(int(tf[field]))
+            for code, field in zip(_FIELD_CODES, _FIELD_NAMES) if tf.get(field)
+        ))
+    return " ".join(parts)
+
+
+def _decode_postings(encoded: str, slugs: list[str]) -> list[dict]:
+    out = []
+    for doc_id, counts in _ENTRY_RE.findall(encoded):
+        tf = {f: 0 for f in _FIELD_NAMES}
+        for code, n in _COUNT_RE.findall(counts):
+            tf[_CODE_FIELD[code]] = int(n)
+        out.append({"slug": slugs[int(doc_id)], "tf": tf})
+    return out
+
+
+def encode_index(index: dict) -> bytes:
+    """The schema v2 bytes for an in-memory index (see the module docstring)."""
+    docs = index.get("docs") or {}
+    slugs = list(docs)
+    doc_ids = {slug: i for i, slug in enumerate(slugs)}
+    on_disk = {k: v for k, v in index.items() if k != "postings"}
+    on_disk["schema_version"] = SCHEMA_VERSION
+    on_disk["doc_ids"] = slugs
+    on_disk["postings"] = {
+        term: _encode_postings(entries, doc_ids)
+        for term, entries in (index.get("postings") or {}).items()
+    }
+    return json.dumps(on_disk, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+class LazyPostings(Mapping):
+    """A v2 file's postings, decoded per term on first lookup.
+
+    Reads like the in-memory ``{term: [{"slug", "tf"}, ...]}``. A lookup of
+    one term decodes that term; iterating ``items()`` or ``values()`` decodes
+    them all, which a batch reader such as ``replay`` may do once.
+    """
+
+    def __init__(self, encoded: dict[str, str], slugs: list[str]) -> None:
+        self._encoded = encoded
+        self._slugs = slugs
+        self._decoded: dict[str, list[dict]] = {}
+
+    def __getitem__(self, term: str) -> list[dict]:
+        entries = self._decoded.get(term)
+        if entries is None:
+            entries = _decode_postings(self._encoded[term], self._slugs)
+            self._decoded[term] = entries
+        return entries
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._encoded)
+
+    def __len__(self) -> int:
+        return len(self._encoded)
+
+    def __contains__(self, term: object) -> bool:
+        return term in self._encoded
+
+
 def write_index(vault_root: Path, index: dict) -> None:
     """Atomic write. Never raises during test runs; callers should still try/except.
 
@@ -182,20 +270,31 @@ def write_index(vault_root: Path, index: dict) -> None:
     from mnemo.core.atomic import atomic_write_bytes
 
     path = vault_root / ".mnemo" / INDEX_FILENAME
-    atomic_write_bytes(path, json.dumps(index, indent=2).encode("utf-8"),
-                       durable=True, keep_previous=True)
+    atomic_write_bytes(path, encode_index(index), durable=True, keep_previous=True)
 
 
 def load_index(vault_root: Path) -> dict | None:
     """Load the index from disk, or the version before it when the file is
-    there but unreadable. Returns None on any error. Never raises."""
+    there but unreadable. Returns None on any error. Never raises.
+
+    A v2 file comes back in the in-memory shape, its postings a
+    :class:`LazyPostings`; a v1 file comes back as it was written.
+    """
     from mnemo.core.atomic import previous_path
 
     path = vault_root / ".mnemo" / INDEX_FILENAME
-    return load_validated_json(
+    data = load_validated_json(
         path,
-        SCHEMA_VERSION,
+        _READABLE_VERSIONS,
         vault_root=vault_root,
         error_namespace="reflex.index.load",
         fallback=previous_path(path),
     )
+    if data is None or data.get("schema_version") == 1:
+        return data
+    slugs = data.pop("doc_ids", None)
+    postings = data.get("postings")
+    if not isinstance(slugs, list) or not isinstance(postings, dict):
+        return None
+    data["postings"] = LazyPostings(postings, slugs)
+    return data

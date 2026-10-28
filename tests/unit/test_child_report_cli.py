@@ -190,6 +190,16 @@ def test_every_reporter_row_names_the_reporter(tmp_path, monkeypatch) -> None:
     assert [r["reporter"] for r in _rows(vault)] == [os.getpid(), os.getpid()]
 
 
+def test_every_reporter_row_echoes_the_hooks_run(tmp_path, monkeypatch) -> None:
+    """#755: on Windows the hook's pid is the venv launcher's, not ours."""
+    vault = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(rc, "gather", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+
+    cli_main(["child-report", "c0da0f55", "--parent", "P1", "--run", "5f0c1a2b3c4d"])
+
+    assert [r["run"] for r in _rows(vault)] == ["5f0c1a2b3c4d"]
+
+
 def test_a_watch_that_stood_down_for_pr_follow_is_not_undelivered(tmp_path, monkeypatch) -> None:
     """#623: pr-follow woke the child for this PR, so the child's next card
     reports — the earlier watch has nothing to say, and nothing was lost."""

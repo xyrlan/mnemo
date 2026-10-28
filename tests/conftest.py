@@ -19,6 +19,85 @@ _REAL_HOME = Path(os.environ.get("HOME") or os.path.expanduser("~")).resolve()
 _REAL_VAULT = _REAL_HOME / "mnemo"
 
 
+def _probe_symlinks() -> str | None:
+    """Why this process cannot use symlinks, or None when it can (#773).
+
+    Creating one is not enough: a Windows session can be allowed to create a
+    symlink and still be refused *following* it (WinError 1463, the symlink
+    class is disabled), which is what a dispatched child's sandbox does. So
+    the probe creates a directory link and a file link, then reads through
+    both.
+    """
+    root = tempfile.mkdtemp(prefix="mnemo-symlink-probe-")
+    try:
+        target = os.path.join(root, "target")
+        os.mkdir(target)
+        with open(os.path.join(target, "f"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        dir_link = os.path.join(root, "dir-link")
+        file_link = os.path.join(root, "file-link")
+        os.symlink(target, dir_link, target_is_directory=True)
+        os.symlink(os.path.join(target, "f"), file_link)
+        os.listdir(dir_link)
+        with open(file_link, encoding="utf-8") as fh:
+            fh.read()
+        return None
+    except (OSError, NotImplementedError) as exc:
+        return "this process cannot create and follow symlinks: %r" % exc
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+_SYMLINKS_UNAVAILABLE = _probe_symlinks()
+
+
+def _tolerate_unfollowable_tmp_symlinks() -> None:
+    """Keep pytest's own tmp cleanup from crashing where symlinks can't be followed.
+
+    pytest links ``<name>current`` to the newest numbered tmp dir, then at
+    session end resolves each link to delete dead ones. Where following is
+    refused, that resolve raises and the whole run ends in a traceback with no
+    summary (#773). Skip the links it cannot resolve; they are pytest's own
+    bookkeeping, not anything a test made.
+    """
+    try:
+        import _pytest.pathlib as pytest_pathlib
+        import _pytest.tmpdir as pytest_tmpdir
+    except ImportError:
+        return
+    if not hasattr(pytest_pathlib, "cleanup_dead_symlinks"):
+        return
+
+    def cleanup_dead_symlinks(root: Path) -> None:
+        for left_dir in root.iterdir():
+            try:
+                if left_dir.is_symlink() and not left_dir.resolve().exists():
+                    left_dir.unlink()
+            except OSError:
+                pass
+
+    pytest_pathlib.cleanup_dead_symlinks = cleanup_dead_symlinks
+    if hasattr(pytest_tmpdir, "cleanup_dead_symlinks"):
+        pytest_tmpdir.cleanup_dead_symlinks = cleanup_dead_symlinks
+
+
+if _SYMLINKS_UNAVAILABLE:
+    _tolerate_unfollowable_tmp_symlinks()
+
+
+@pytest.fixture
+def requires_symlinks() -> None:
+    """Skip the test, with the reason, when this process cannot use symlinks (#773).
+
+    Probed once per run. CI is where these tests have to run, so there the
+    same finding fails the test instead of letting it skip unseen.
+    """
+    if _SYMLINKS_UNAVAILABLE:
+        if os.environ.get("CI"):
+            pytest.fail(_SYMLINKS_UNAVAILABLE + " (on CI, where symlink tests must run)")
+        pytest.skip(_SYMLINKS_UNAVAILABLE)
+
+
 @pytest.fixture(autouse=True)
 def _no_real_install_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop any test that runs the SessionStart hook from really backfilling.

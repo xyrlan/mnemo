@@ -28,12 +28,16 @@ from mnemo.core.rule_activation.activity_log import (  # noqa: F401
 )
 from mnemo.core.rule_activation.index import (  # noqa: F401
     INDEX_FILENAME,
+    INDEX_KEY_FILENAME,
     INDEX_VERSION,
     build_index,
+    index_is_current,
+    index_key,
     is_universal,
     load_index,
     projects_for_rule,
     write_index,
+    write_index_key,
 )
 from mnemo.core.rule_activation.matching import (  # noqa: F401
     EnforceHit,

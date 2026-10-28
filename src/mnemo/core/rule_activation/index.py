@@ -11,6 +11,7 @@ the single in-tree consumer (``reflex/index.py``) was updated atomically.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,6 +41,12 @@ def _is_consumer_visible(md_path: Path, fm: dict, vault_root: Path) -> bool:
 
 INDEX_VERSION = 4
 INDEX_FILENAME = "rule-activation-index.json"
+#: What the last :func:`write_index_key` saw of the pages the index was built
+#: from: see :func:`index_key` (#763).
+INDEX_KEY_FILENAME = "rule-activation-index.key.json"
+
+#: The ``shared/`` folders :func:`build_index` walks, in its order.
+_PAGE_TYPES = ("feedback", "user", "reference", "project")
 
 # System tags that should be stripped from topic_tags in the index.
 _SYSTEM_TAGS: frozenset[str] = frozenset({"auto-promoted", "needs-review"})
@@ -265,7 +272,7 @@ def build_index(vault_root: Path, *, universal_threshold: int | None = None) -> 
         )
     rules: dict[str, dict] = {}
     malformed: list[dict] = []
-    for page_type in ("feedback", "user", "reference", "project"):
+    for page_type in _PAGE_TYPES:
         type_dir = vault_root / "shared" / page_type
         if not type_dir.is_dir():
             continue
@@ -300,6 +307,82 @@ def write_index(vault_root: Path, index: dict) -> None:
     _atomic_write_bytes(target, data)
 
 
+def index_key(vault_root: Path, *, universal_threshold: int | None = None) -> dict:
+    """What an index built now would be built from, without opening a page (#763).
+
+    The newest modification time and the count of the ``*.md`` pages
+    :func:`build_index` reads, the newest of their folders (a delete or a
+    rename touches only the folder), and the inputs that are not pages: the
+    universal threshold, the index schema, the vault path and mnemo's version.
+
+    ``SessionStart`` rebuilt the index from every page on every start: on a
+    Windows box with ~4,100 pages that is ~4,100 file opens, which run ~0.5 s
+    warm and tens of seconds right after a Defender signature update, when
+    every file is scanned again on its next open. A directory listing opens
+    no file, and on Windows it carries each entry's times with it.
+    """
+    from mnemo import __version__
+
+    if universal_threshold is None:
+        from mnemo.core.config import load_config
+        universal_threshold = int(
+            load_config().get("scoping", {}).get("universalThreshold", 2)
+        )
+    newest = 0
+    pages = 0
+    for page_type in _PAGE_TYPES:
+        type_dir = vault_root / "shared" / page_type
+        try:
+            newest = max(newest, type_dir.stat().st_mtime_ns)
+            entries = os.scandir(type_dir)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                # glob("*.md") in build_index skips dotfiles; so does this
+                if entry.name.startswith(".") or not entry.name.endswith(".md"):
+                    continue
+                try:
+                    newest = max(newest, entry.stat().st_mtime_ns)
+                except OSError:
+                    continue
+                pages += 1
+    return {
+        "schema_version": INDEX_VERSION,
+        "mnemo": __version__,
+        "vault_root": str(vault_root),
+        "universal_threshold": universal_threshold,
+        "pages": pages,
+        "newest_mtime_ns": newest,
+    }
+
+
+def index_is_current(vault_root: Path, key: dict) -> bool:
+    """True when the index on disk was built from what *key* describes.
+
+    Never raises: anything unreadable means rebuild."""
+    try:
+        if not (vault_root / ".mnemo" / INDEX_FILENAME).is_file():
+            return False
+        saved = json.loads(
+            (vault_root / ".mnemo" / INDEX_KEY_FILENAME).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return False
+    return saved == key
+
+
+def write_index_key(vault_root: Path, key: dict) -> None:
+    """Record *key* as what the index on disk was built from.
+
+    *key* is taken before the build, so a page edited while the build ran
+    makes the next :func:`index_key` differ and the index is built again."""
+    mnemo_dir = vault_root / ".mnemo"
+    mnemo_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_bytes(mnemo_dir / INDEX_KEY_FILENAME,
+                        json.dumps(key, sort_keys=True).encode("utf-8"))
+
+
 def load_index(vault_root: Path) -> dict | None:
     """Load the index from disk, or the version before it when the file is
     there but unreadable. Returns None on any error. Never raises."""
@@ -317,10 +400,14 @@ def load_index(vault_root: Path) -> dict | None:
 
 __all__ = [
     "INDEX_FILENAME",
+    "INDEX_KEY_FILENAME",
     "INDEX_VERSION",
     "build_index",
+    "index_is_current",
+    "index_key",
     "is_universal",
     "load_index",
     "projects_for_rule",
     "write_index",
+    "write_index_key",
 ]

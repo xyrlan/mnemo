@@ -348,12 +348,29 @@ def test_every_batch_decision_lands_in_the_ledger_with_via_review(tmp_vault: Pat
 
 def test_a_single_text_decision_writes_the_row_it_always_did(tmp_vault: Path, monkeypatch):
     """No ``via``: the offer-driven drain stays distinguishable from the review's."""
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     _page(tmp_vault, "shared/_inbox/project/demo__a.md")
 
     rc, out = _run(tmp_vault, monkeypatch, promote=["project/demo__a"])
 
     assert rc == 0 and "recall can reach it now" in out
     assert "via" not in _ledger(tmp_vault)[0]
+
+
+def test_a_single_decision_a_session_typed_says_so(tmp_vault: Path, monkeypatch):
+    """#762: the offer's route is the session relaying it, and the row counts it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc12345-session")
+    _page(tmp_vault, "shared/_inbox/project/demo__a.md")
+    _page(tmp_vault, "shared/_inbox/project/demo__b.md")
+
+    assert _run(tmp_vault, monkeypatch, promote=["project/demo__a"])[0] == 0
+    assert _run(tmp_vault, monkeypatch, drop=["project/demo__b"])[0] == 0
+
+    rows = _ledger(tmp_vault)
+    assert [(r["event"], r["via"], r["session_id"]) for r in rows] == [
+        ("promoted", "session", "abc12345-session"),
+        ("dropped", "session", "abc12345-session"),
+    ]
 
 
 def test_keys_stdin_reads_one_key_per_line(tmp_vault: Path, monkeypatch):

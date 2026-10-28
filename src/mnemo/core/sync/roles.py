@@ -156,3 +156,20 @@ __all__ = [
     "is_live_shared_path", "is_primary", "is_satellite", "machine_in_briefing", "machine_of",
     "primary_refuses", "role", "satellite_may_publish",
 ]
+
+
+def primary_last_extraction(vault: Path) -> Optional[str]:
+    """When the primary last extracted the whole vault, as this machine has
+    it: ``last_run`` in ``.mnemo/extraction-state.json``, which only the
+    primary writes and every pull brings (#756). ``None`` when there is none
+    or it cannot be read. Read-only: a diagnostic must not repair the file.
+    """
+    import json
+
+    try:
+        data = json.loads((Path(vault) / ".mnemo" / "extraction-state.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    stamp = data.get("last_run") if isinstance(data, dict) else None
+    return stamp if isinstance(stamp, str) and stamp else None

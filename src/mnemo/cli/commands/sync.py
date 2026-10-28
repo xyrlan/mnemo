@@ -69,6 +69,10 @@ def _print_status(s: Dict[str, Any]) -> None:
     print(f"  waiting:    {s['pendingFiles']} file{'s' if s['pendingFiles'] != 1 else ''} to push, "
           f"{s['ahead']} commit{'s' if s['ahead'] != 1 else ''} ahead, {s['behind']} behind "
           "(as of the last fetch)")
+    withheld = int(s.get("withheldFiles") or 0)
+    if withheld:
+        print(f"  withheld:   {withheld} change{'s' if withheld != 1 else ''} a satellite may not "
+              "publish; they stay on this machine")
     print(f"  last pull:  {_when(s['lastPull'], s['lastPullAgoSeconds'])}")
     print(f"  last push:  {_when(s['lastPush'], s['lastPushAgoSeconds'])}")
     print(f"  conflicts:  {s['conflictsResolved']} resolved, {s['losersKept']} losing "

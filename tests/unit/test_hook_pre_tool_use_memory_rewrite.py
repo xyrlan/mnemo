@@ -23,7 +23,7 @@ from mnemo.core import memory_path
 
 
 @pytest.fixture
-def dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requires_symlinks):
     """``(account, real_projects)``: an account dir whose ``projects`` is a
     link into a default-style dir, the layout the desktop app's accounts get."""
     default = tmp_path / "home" / ".claude"
@@ -31,10 +31,7 @@ def dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (real_projects / "-proj" / "memory").mkdir(parents=True)
     account = tmp_path / "home" / ".claude-account"
     account.mkdir()
-    try:
-        os.symlink(str(real_projects), str(account / "projects"), target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip("creating a symlink needs a privilege this platform withholds: %r" % exc)
+    os.symlink(str(real_projects), str(account / "projects"), target_is_directory=True)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(account))
     monkeypatch.delenv("MNEMO_HOOKS_OFF", raising=False)
     # Symlinks in tmp_path's own prefix (/var -> /private/var on macOS) are

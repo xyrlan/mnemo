@@ -187,6 +187,9 @@ def load_validated_json(
         caller's ``rebuild`` path handles recovery).
       - ``schema_version`` mismatch → silent (post-upgrade, expected).
 
+    ``expected_schema_version`` may be a tuple of the versions a reader still
+    accepts, for a format whose old version it can read until a rebuild.
+
     ``fallback`` is read the same way when ``path`` exists but cannot be
     read, parsed, or is not a dict — the empty or NUL-filled file a crash
     leaves behind an atomic write (#767). Its own failures log under
@@ -198,7 +201,9 @@ def load_validated_json(
         data = _read_json(fallback, vault_root, f"{error_namespace}.fallback")
     if not isinstance(data, dict):
         return None
-    if data.get("schema_version") != expected_schema_version:
+    accepted = (expected_schema_version if isinstance(expected_schema_version, tuple)
+                else (expected_schema_version,))
+    if data.get("schema_version") not in accepted:
         return None
     return data
 

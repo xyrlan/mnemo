@@ -385,7 +385,9 @@ def _build_parser() -> argparse.ArgumentParser:
     land_p.add_argument("--admin", action="store_true",
                         help="pass --admin to gh pr merge (a branch protection you own "
                              "and are choosing to bypass; never implied)")
-    sub.add_parser("doctor", help="full diagnostic with actionable fixes")
+    doctor_p = sub.add_parser("doctor", help="full diagnostic with actionable fixes")
+    doctor_p.add_argument("--all", action="store_true",
+                          help="print every item of each list, not only the first few")
     autopilot = sub.add_parser("autopilot", help="autonomous monitoring + self-fix")
     autosub = autopilot.add_subparsers(dest="autopilot_action")
     autosub.required = True
@@ -503,6 +505,7 @@ def _build_parser() -> argparse.ArgumentParser:
     child_report.add_argument("--parent", type=str, required=True)
     child_report.add_argument("--cwd", type=str, default=None)
     child_report.add_argument("--transcript", type=str, default=None)
+    child_report.add_argument("--run", type=str, default=None)
 
     # #436: spawned detached by a dispatched child's SessionEnd (and restarted
     # by SessionStart); never typed. Takes no arguments: its work is the ledger.

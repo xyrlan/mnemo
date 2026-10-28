@@ -13,6 +13,13 @@ import re
 from typing import Any, NamedTuple, Optional
 
 
+#: The event types :func:`flatten_transcript_events` renders. Claude Code's
+#: other record types (``attachment``, ``api-request-blob``, ``system``, …)
+#: are its own bookkeeping, and a Grok history converts to these two
+#: (``core/grok/transcript.py``).
+CONVERSATION_TYPES = frozenset({"user", "assistant"})
+
+
 def flatten_transcript_events(events: list[dict]) -> str:
     """Render a list of Claude Code jsonl events into a flat text transcript.
 
@@ -21,12 +28,21 @@ def flatten_transcript_events(events: list[dict]) -> str:
     skipped without raising. ``tool_result`` blocks longer than 400
     characters are truncated with an ellipsis to keep the prompt within
     sensible token budgets.
+
+    Only the conversation is rendered: an event whose ``type`` is set and is
+    not one of :data:`CONVERSATION_TYPES` is skipped. Claude Code also logs
+    each API request it sends as ``api-request-blob`` events, whose
+    ``message`` carries the system prompt, CLAUDE.md, memory indexes and hook
+    context again; read as conversation they were two thirds of a briefing's
+    prompt (#766, ``tools/measure_briefing_input.py``).
     """
     lines: list[str] = []
     for ev in events:
         if not isinstance(ev, dict):
             continue
         etype = str(ev.get("type") or "")
+        if etype and etype not in CONVERSATION_TYPES:
+            continue
         msg = ev.get("message") or {}
         role = str(msg.get("role") or etype or "?")
         content = msg.get("content")

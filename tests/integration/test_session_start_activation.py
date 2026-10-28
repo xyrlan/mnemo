@@ -338,3 +338,118 @@ def test_session_start_index_rebuild_failure_is_logged_not_raised(
     assert error_log.exists(), ".errors.log must be written"
     log_text = error_log.read_text(encoding="utf-8")
     assert "session_start.rule_activation_index" in log_text
+
+
+# ---------------------------------------------------------------------------
+# Test 7: the rebuild runs only when a page changed (#763)
+# ---------------------------------------------------------------------------
+
+
+def _count_builds(monkeypatch: pytest.MonkeyPatch) -> list:
+    builds: list = []
+    real = rule_activation.build_index
+
+    def counting(vault, **kw):
+        builds.append(vault)
+        return real(vault, **kw)
+
+    monkeypatch.setattr(rule_activation, "build_index", counting)
+    return builds
+
+
+def _bump_mtime(path: Path) -> None:
+    """Move *path*'s mtime a second on, so a coarse filesystem clock still
+    sees the edit."""
+    st = path.stat()
+    import os
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+def test_session_start_skips_rebuild_when_no_page_changed(
+    hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+):
+    """A second start over the same pages reads none of them (#763): the
+    rebuild opened every page, which right after a Defender signature update
+    took SessionStart to tens of seconds."""
+    _write_feedback_page(hook_env, "rule-a", sources=["bots/project-a/MEMORY.md"],
+                         tags=["git"])
+    _set_config(hook_env, enforcement={"enabled": True})
+    builds = _count_builds(monkeypatch)
+    repo = _make_project_repo(tmp_path, "project-a")
+
+    _run_hook(hook_env, {"session_id": "K1", "cwd": str(repo)}, monkeypatch, capsys)
+    _run_hook(hook_env, {"session_id": "K2", "cwd": str(repo)}, monkeypatch, capsys)
+
+    assert len(builds) == 1
+    assert (hook_env / ".mnemo" / rule_activation.INDEX_KEY_FILENAME).exists()
+
+
+@pytest.mark.parametrize("change", ["edit", "add", "delete", "threshold", "index_gone"])
+def test_session_start_rebuilds_when_its_inputs_changed(
+    change: str, hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+):
+    page = _write_feedback_page(hook_env, "rule-a", sources=["bots/project-a/MEMORY.md"],
+                                tags=["git"])
+    _write_feedback_page(hook_env, "rule-b", sources=["bots/project-b/MEMORY.md"],
+                         tags=["css"])
+    _set_config(hook_env, enforcement={"enabled": True})
+    repo = _make_project_repo(tmp_path, "project-a")
+    _run_hook(hook_env, {"session_id": "C1", "cwd": str(repo)}, monkeypatch, capsys)
+    builds = _count_builds(monkeypatch)
+
+    if change == "edit":
+        page.write_text(page.read_text(encoding="utf-8").replace("- git", "- docker"),
+                        encoding="utf-8")
+        _bump_mtime(page)
+    elif change == "add":
+        _write_feedback_page(hook_env, "rule-c", sources=["bots/project-a/MEMORY.md"],
+                             tags=["ci"])
+    elif change == "delete":
+        page.unlink()
+    elif change == "threshold":
+        _set_config(hook_env, enforcement={"enabled": True},
+                    scoping={"universalThreshold": 1})
+    else:
+        (hook_env / ".mnemo" / rule_activation.INDEX_FILENAME).unlink()
+    _run_hook(hook_env, {"session_id": "C2", "cwd": str(repo)}, monkeypatch, capsys)
+
+    assert len(builds) == 1
+    idx = rule_activation.load_index(hook_env)
+    rules = idx["rules"]
+    if change == "edit":
+        assert rules["rule-a"]["topic_tags"] == ["docker"]
+    elif change == "add":
+        assert "rule-c" in rules
+    elif change == "delete":
+        assert "rule-a" not in rules
+    elif change == "threshold":
+        assert rules["rule-a"]["universal"] is True
+
+
+def test_index_key_reads_no_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The key is taken from directory listings alone: no page is opened."""
+    vault = tmp_path / "vault"
+    for page_type in ("feedback", "reference"):
+        (vault / "shared" / page_type).mkdir(parents=True)
+        (vault / "shared" / page_type / "p.md").write_text("---\nname: p\n---\n",
+                                                           encoding="utf-8")
+    (vault / "shared" / "feedback" / ".hidden.md").write_text("x", encoding="utf-8")
+    (vault / "shared" / "feedback" / "notes.txt").write_text("x", encoding="utf-8")
+    opened: list = []
+    real_open = Path.open
+
+    def spy(self, *a, **kw):
+        opened.append(self)
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "open", spy)
+    import builtins
+    real_builtin = builtins.open
+    monkeypatch.setattr(builtins, "open", lambda f, *a, **kw: (opened.append(f),
+                                                              real_builtin(f, *a, **kw))[1])
+    key = rule_activation.index_key(vault, universal_threshold=2)
+    monkeypatch.undo()
+
+    assert not [p for p in opened if str(p).endswith(".md")]
+    assert key["pages"] == 2
+    assert key["universal_threshold"] == 2

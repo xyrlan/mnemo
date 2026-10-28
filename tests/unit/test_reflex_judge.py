@@ -431,3 +431,35 @@ def test_no_key_inside_the_wall_is_still_no_key(tmp_path, monkeypatch):
     picks, info = judge.ask(tmp_path, prompt="q", slugs=["a"],
                             chosen_settings=judge.settings(ON), read_text=_read)
     assert picks is None and info["status"] == "no_key"
+
+
+# --- the bar on machine notices (#789) ----------------------------------------
+
+def test_the_notice_bar_and_the_config_default_agree():
+    assert judge.DEFAULT_NOTICE_INJECT_AT == 0.5
+    assert DEFAULTS["reflex"]["judge"]["noticeInjectAt"] == judge.DEFAULT_NOTICE_INJECT_AT
+    assert judge.settings(DEFAULTS)["noticeInjectAt"] == 0.5
+
+
+@pytest.mark.parametrize("value, expected", [
+    (0.6, 0.6), (0, 0.0), ("high", judge.DEFAULT_NOTICE_INJECT_AT),
+    (True, judge.DEFAULT_NOTICE_INJECT_AT), (None, judge.DEFAULT_NOTICE_INJECT_AT),
+])
+def test_the_notice_bar_reads_like_the_other_one(value, expected):
+    chosen = judge.settings({"reflex": {"judge": {"noticeInjectAt": value}}})
+    assert chosen["noticeInjectAt"] == expected
+
+
+def test_notice_picks_keeps_order_and_says_what_it_dropped():
+    info = {"injected": 3, "scores": [["a", 0.71], ["b", 0.5], ["c", 0.49]]}
+    kept = judge.notice_picks(["a", "b", "c"], info, "task-notification",
+                              {"noticeInjectAt": 0.5})
+    assert kept == ["a", "b"]
+    assert info["injected"] == 2
+    assert info["notice"] == {"kind": "task-notification", "at": 0.5, "dropped": ["c"]}
+
+
+def test_notice_picks_drops_a_pick_with_no_score():
+    info = {"injected": 1, "scores": []}
+    assert judge.notice_picks(["a"], info, "peer-message", {}) == []
+    assert info["notice"]["at"] == judge.DEFAULT_NOTICE_INJECT_AT

@@ -145,15 +145,12 @@ def test_a_registered_child_passes(tmp_jobs_dir: Path, tmp_path: Path) -> None:
     assert claude_cli.verify_registered("a1b2c3d4", cwd=tree) is None
 
 
-def test_cwd_is_compared_through_realpath(tmp_jobs_dir: Path, tmp_path: Path) -> None:
+def test_cwd_is_compared_through_realpath(tmp_jobs_dir: Path, tmp_path: Path, requires_symlinks) -> None:
     """A worktree reached through a symlink is the same tree, not a mismatch."""
     real = tmp_path / "real-wt-1"
     real.mkdir()
     link = tmp_path / "link-wt-1"
-    try:
-        link.symlink_to(real, target_is_directory=True)
-    except (OSError, NotImplementedError):  # pragma: no cover - Windows without privilege
-        pytest.skip("symlinks unavailable")
+    link.symlink_to(real, target_is_directory=True)
     _register(tmp_jobs_dir, "a1b2c3d4", cwd=str(real))
     assert claude_cli.verify_registered("a1b2c3d4", cwd=link) is None
 

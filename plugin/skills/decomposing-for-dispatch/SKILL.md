@@ -34,6 +34,35 @@ If no, they are not two pieces. Merge them and ask again.
 Two pieces may depend on each other's **signatures** — that is what the contract
 records. They may not depend on each other's **internals**.
 
+## Shared code is the seam, not a piece
+
+Code that more than one piece calls *and depends on the content of*, or that
+more than one piece edits, belongs to no piece. It is the **seam**: you land
+it on the base branch yourself, before dispatching, and every piece branches
+from a base that already has it. Children branch from the base, so a seam
+that is not merged yet is not there for them.
+
+Spot it while decomposing:
+
+- **A file in two pieces' `files`.** Two children will edit it in parallel.
+  `mnemo dispatch --contract` warns about every such pair, `--dry-run`
+  included. Treat the warning as a cut to redo, not as noise.
+- **A registration block.** Every piece adds one line to the same list in the
+  same file: a command table, a router, the `mod`/`invoke_handler` lines in a
+  `lib.rs`, an `__init__` export. Land the block with every piece's line
+  already in it, pointing at a stub, so each piece only fills its own stub. In
+  one wave, three pieces edited the same registration lines in one `lib.rs`,
+  and every pair conflicted at merge.
+- **A table or type whose values two pieces rely on.** A permission matrix, a
+  shared enum, a config schema. If a piece consuming it would be *wrong*
+  rather than just unbuilt when its content changes, the boundary runs through
+  its content, not its signature, and the test above already failed. In one
+  contract, two pieces relied on a third piece's permission matrix. After all
+  three stopped, the parent fixed the matrix and then fixed both consumers.
+
+The seam is small: signatures, stubs, the shared table, the registration
+lines. If it turns out to be most of the feature, the answer is `sequential`.
+
 ## `sequential` is a real answer
 
 If the work does not divide, write `verdict: sequential` and say why. That is a
@@ -126,7 +155,19 @@ For a commented example that is itself parsed by the parser it documents:
 
     mnemo dispatch --contract --example
 
+## What each piece is already told
+
+Each piece's brief is built from the contract by `mnemo dispatch`, so the
+contract need not say any of this. It names the piece's files as a hard boundary,
+its signatures, and what it may publish. It also asks for two checks the
+parent used to run at review: a **mutation pass** before the child stops
+(break the code each new test guards and watch the test fail), and, where it
+may publish, a **push** before it stops. A piece that stops with commits that
+are not pushed is reported that way in the parent's finish notice.
+
 ## After writing
+
+If the seam is not on the base branch yet, say so: it lands first.
 
 Tell the maintainer the file is ready for review, and show the command:
 

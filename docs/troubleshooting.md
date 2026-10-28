@@ -278,7 +278,10 @@ say `judge_none_relevant`, and the bar is `reflex.judge.injectAt` (0.4 by
 default since #461). Raising it to 0.6 roughly halves the injections, at 10%
 noise instead of 15%, and reaches fewer of the on-point rules — the tables in
 [configuration](configuration.md#reflexjudge--an-opt-in-judge-as-the-gate)
-are the trade.
+are the trade. Rows that say `notice_below_bar` are machine notices — a
+background task finishing, a peer session's message — whose picks fell short
+of `reflex.judge.noticeInjectAt` (0.5): the judge passed them at `injectAt`,
+and the higher bar for notices kept them out (#789).
 
 Unlike the list stage, this one takes effect on the next prompt: the hook
 reads the config every time, so there is nothing to restart.

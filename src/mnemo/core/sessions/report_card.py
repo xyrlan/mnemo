@@ -55,7 +55,9 @@ STATES = (
 )
 
 _PR_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
-_PR_FIELDS = "number,url,state,isDraft,additions,deletions,changedFiles,headRefOid,mergeable"
+_PR_FIELDS = ("number,url,state,isDraft,additions,deletions,changedFiles,headRefOid,"
+              "headRefName,mergeable")
+_PR_CREATE = re.compile(r"\bgh\s+pr\s+create\b")
 
 
 def _run(argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
@@ -79,6 +81,8 @@ class PR:
     deletions: Optional[int] = None
     files: Optional[int] = None
     head: str = ""
+    #: The branch the PR was opened from; ``""`` when it was not read.
+    head_ref: str = ""
     #: gh's own: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub computes it;
     #: ``""`` when it was not read.
     mergeable: str = ""
@@ -98,6 +102,11 @@ class Card:
     clean: bool = True
     ahead: int = 0
     unpushed: bool = False
+    #: Of the ``ahead`` commits a branch with no PR carries, how many
+    #: ``origin/<branch>`` lacks — all of them when it was never pushed
+    #: (``never_pushed``). ``None`` when it was not read (#771).
+    not_pushed: Optional[int] = None
+    never_pushed: bool = False
     report: str = ""
     report_chars: int = 0
     transcript: str = ""
@@ -187,49 +196,75 @@ def closing_report(transcript: Optional[Path]) -> str:
 
 
 def pr_urls_in(transcript: Optional[Path]) -> List[str]:
-    """PR URLs ``gh pr create`` printed in the transcript, oldest first.
+    """PR URLs ``gh pr create`` printed in the transcript, oldest first."""
+    return [url for url, _ in created_prs(transcript)]
+
+
+def created_prs(transcript: Optional[Path]) -> List[Tuple[str, str]]:
+    """``(url, branch)`` for each PR the child's own ``gh pr create`` printed,
+    oldest first; *branch* is the one the child's session had checked out
+    when it ran the command, ``""`` when the transcript does not say.
 
     The fallback when the tree is gone and the branch cannot be read: the
     child's own ``gh pr create`` output is the one place the URL is on disk.
-    Only tool results are read, so a URL the child merely quoted does not
-    count.
+    Only the result of a ``gh pr create`` call counts, matched to its
+    ``tool_use`` by id (#769): a child that ran ``gh pr view`` on another
+    repository's PR, or quoted a URL, did not open that PR.
     """
     if not transcript:
         return []
-    found: List[str] = []
+    creates: Dict[str, str] = {}
+    found: List[Tuple[str, str]] = []
     grok = _grok_events(transcript)
     if grok is not None:
         for record in grok:
-            _tool_result_urls(record, found)
+            _created_urls(record, creates, found)
         return found
     try:
         with open(transcript, encoding="utf-8") as fh:
             for line in fh:
-                if "tool_result" not in line or "/pull/" not in line:
+                if "create" not in line and "/pull/" not in line:
                     continue
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                _tool_result_urls(record, found)
+                if isinstance(record, dict):
+                    _created_urls(record, creates, found)
     except OSError:
         return []
     return found
 
 
-def _tool_result_urls(record: dict, found: List[str]) -> None:
-    """Add the PR URLs in *record*'s tool results to *found*, in order."""
+def _created_urls(record: dict, creates: Dict[str, str],
+                  found: List[Tuple[str, str]]) -> None:
+    """Note *record*'s ``gh pr create`` calls in *creates* (id -> branch), and
+    add the PR URLs their results printed to *found*, in order."""
     content = (record.get("message") or {}).get("content")
     if not isinstance(content, list):
         return
+    branch = str(record.get("gitBranch") or "")
+    if branch == "HEAD":
+        branch = ""
     for block in content:
-        if not isinstance(block, dict) or block.get("type") != "tool_result":
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use":
+            args = block.get("input")
+            command = args.get("command") if isinstance(args, dict) else None
+            if isinstance(command, str) and _PR_CREATE.search(command):
+                creates[str(block.get("id") or "")] = branch
+            continue
+        if block.get("type") != "tool_result":
+            continue
+        use_id = str(block.get("tool_use_id") or "")
+        if not use_id or use_id not in creates:
             continue
         body = block.get("content")
         text = body if isinstance(body, str) else json.dumps(body)
         for url in _PR_URL.findall(text):
-            if url not in found:
-                found.append(url)
+            if all(url != seen for seen, _ in found):
+                found.append((url, creates[use_id]))
 
 
 def _pr_from(row: object) -> Optional[PR]:
@@ -253,6 +288,7 @@ def _pr_from(row: object) -> Optional[PR]:
         deletions=_int("deletions"),
         files=_int("changedFiles"),
         head=str(row.get("headRefOid") or ""),
+        head_ref=str(row.get("headRefName") or ""),
         mergeable=str(row.get("mergeable") or ""),
     )
 
@@ -332,7 +368,10 @@ def gather(
 
     The branch comes from the tree when it still exists; a child that ran in
     a tree someone already removed falls back to the PR URL its own ``gh pr
-    create`` printed. Each lookup that fails leaves its field empty.
+    create`` printed, and only to a PR opened from the branch the child had
+    checked out. A tree that exists and whose branch has no PR has none: a
+    read-only child, or one that stopped before publishing (#769). Each
+    lookup that fails leaves its field empty.
     """
     from mnemo.core.dispatch import issue_for_cwd
 
@@ -356,10 +395,13 @@ def gather(
 
         if branch:
             card.pr = pr_for_branch(branch, cwd=str(tree), run=run)
-        if card.pr is None:
-            urls = pr_urls_in(transcript)
-            if urls:
-                card.pr = pr_by_url(urls[-1], run=run)
+        if card.pr is None and (tree is None or not tree.is_dir()):
+            created = created_prs(transcript)
+            if created:
+                url, own = created[-1]
+                pr = pr_by_url(url, run=run)
+                if pr is not None and (not own or pr.head_ref == own):
+                    card.pr = pr
 
         if card.tree_seen and tree is not None:
             if card.pr is not None and card.pr.head:
@@ -367,6 +409,10 @@ def gather(
                 card.unpushed = code == 0 and out.strip() != card.pr.head
             elif card.pr is None:
                 card.ahead = _ahead(tree, branch or "", run)
+                if card.ahead > 0 and branch:
+                    card.not_pushed, card.never_pushed = _not_pushed(
+                        tree, branch, card.ahead, run,
+                    )
 
         if card.pr is not None and card.pr.state == "OPEN":
             card.checks, card.failing = checks(
@@ -393,6 +439,32 @@ def _ahead(tree: Path, branch: str, run: Runner) -> int:
             except ValueError:
                 return 0
     return 0
+
+
+def _not_pushed(tree: Path, branch: str, ahead: int, run: Runner) -> Tuple[Optional[int], bool]:
+    """``(commits origin/<branch> lacks, never pushed)``; ``(None, False)`` unread.
+
+    The case #771 names: a piece that ran ``git commit … ; claude stop``
+    (#616) read as "2 commits not in any PR", the same words a ``may: push``
+    child that pushed and left the PR to ``mnemo deliver`` gets. Read from the
+    local remote-tracking ref, as :func:`delivery.unpushed` does, so it costs
+    no network. ``for-each-ref`` rather than ``rev-parse --verify``: a missing
+    ref is an empty answer there, not a failure, so a git that failed is never
+    read as a branch that was never pushed.
+    """
+    remote = f"refs/remotes/origin/{branch}"
+    code, out = _git(["for-each-ref", "--format=%(refname)", remote], tree, run)
+    if code != 0:
+        return None, False
+    if not out.strip():
+        return ahead, True
+    code, out = _git(["rev-list", "--count", f"{remote}..{branch}"], tree, run)
+    if code != 0:
+        return None, False
+    try:
+        return int(out.strip()), False
+    except ValueError:
+        return None, False
 
 
 # ---------------------------------------------------------------------------
@@ -481,10 +553,17 @@ def _tree_line(card: Card) -> str:
     if card.unpushed:
         facts.append("HEAD is not the PR's head")
     if card.pr is None:
-        facts.append(
-            f"{card.ahead} commit{'s' if card.ahead != 1 else ''} not in any PR"
-            if card.ahead else "no commits ahead"
-        )
+        if not card.ahead:
+            facts.append("no commits ahead")
+        else:
+            commits = f"{card.ahead} commit{'s' if card.ahead != 1 else ''} not in any PR"
+            if card.never_pushed:
+                commits += ", and the branch was never pushed"
+            elif card.not_pushed:
+                commits += f", {card.not_pushed} of them not pushed"
+            elif card.not_pushed == 0:
+                commits += ", all pushed"
+            facts.append(commits)
     return "- tree: " + (", ".join(facts) if facts else "clean, pushed")
 
 
@@ -861,11 +940,16 @@ def lost(
     ``killed by SIG…`` row. A ``spawned`` with nothing after it is a reporter
     that died where no ``except`` could run, and a parent that was never told.
 
-    A reporter's rows carry its pid as ``reporter``, which pairs them with the
-    hook's ``pid`` exactly, whichever of the two lands first. Reporters before
-    #460 stamped nothing, so a ``spawned`` row older than the first stamped
-    row is answered by any later row for the same child before its next
-    ``spawned``. Never raises.
+    Since #755 the hook gives each reporter a ``run`` id that both rows
+    carry, and that pairs them exactly, whichever lands first. Rows from
+    before it pair by pid — the reporter's rows carry its own as
+    ``reporter`` — but on Windows the pid the hook gets is the venv
+    launcher's, never the reporter's, so a ``spawned`` row no reporter pid
+    matches is answered by a reporter of the same child that no other
+    ``spawned`` claimed, between that child's previous ``spawned`` and its
+    next one. Reporters before #460 stamped nothing, so a ``spawned`` row
+    older than the first stamped row is answered by any later row for the
+    same child before its next ``spawned``. Never raises.
     """
     try:
         text = (Path(vault_root) / ".mnemo" / LOG_NAME).read_text(encoding="utf-8")
@@ -880,31 +964,75 @@ def lost(
         if isinstance(row, dict):
             rows.append(row)
     now = time.time() if now is None else now
-    reporters = {row.get("reporter") for row in rows if row.get("reporter") is not None}
+    runs = {row.get("run") for row in rows if row.get("event") != "spawned" and row.get("run")}
+    # A reporter is its child and its pid: Windows hands a pid out again
+    # within days, to another child's reporter or launcher.
+    reporters = {_reporter(row) for row in rows if row.get("reporter") is not None}
+    spawned_at = [i for i, row in enumerate(rows) if row.get("event") == "spawned"]
+    # A reporter its ``spawned`` row names exactly, by run or by pid, answers
+    # nothing else.
+    claimed = {
+        _reporter(row) for row in rows
+        if row.get("reporter") is not None and row.get("run") in runs
+    } | {_launched(rows[i]) for i in spawned_at} & reporters
     stamped_from = next(
         (i for i, row in enumerate(rows) if row.get("reporter") is not None), len(rows),
     )
     found = []
-    for i, row in enumerate(rows):
-        if row.get("event") != "spawned":
-            continue
+    for k, i in enumerate(spawned_at):
+        row = rows[i]
         at = _stamp(row)
-        if at is None or not (after_minutes * 60 <= now - at <= window_days * 86400):
-            continue
-        if row.get("pid") is not None and row.get("pid") in reporters:
-            continue
-        answered = False
-        if i > stamped_from:
-            found.append(row)
-            continue
-        for later in rows[i + 1:]:
-            if later.get("short_id") != row.get("short_id"):
-                continue
-            if later.get("event") == "spawned":
-                break
-            if later.get("reporter") is None:
-                answered = True
-                break
-        if not answered:
+        shown = at is not None and after_minutes * 60 <= now - at <= window_days * 86400
+        if row.get("run"):
+            answered = row.get("run") in runs
+        elif row.get("pid") is not None and _launched(row) in reporters:
+            answered = True
+        elif _claim(rows, spawned_at, k, claimed):
+            answered = True
+        elif i > stamped_from:
+            answered = False
+        else:
+            answered = False
+            for later in rows[i + 1:]:
+                if later.get("short_id") != row.get("short_id"):
+                    continue
+                if later.get("event") == "spawned":
+                    break
+                if later.get("reporter") is None:
+                    answered = True
+                    break
+        if shown and not answered:
             found.append(row)
     return found
+
+
+def _reporter(row) -> tuple:
+    return (row.get("short_id"), row.get("reporter"))
+
+
+def _launched(row) -> tuple:
+    return (row.get("short_id"), row.get("pid"))
+
+
+def _claim(rows, spawned_at: List[int], k: int, claimed: set) -> bool:
+    """Pair ``rows[spawned_at[k]]`` with a reporter no pid matched (#755).
+
+    The candidates are reporters of the same child that nothing claimed yet,
+    with a row between that child's previous ``spawned`` and its next one —
+    a reporter's first row can land before the hook's ``spawned``. The
+    earliest one is taken, so each ``spawned`` in log order gets the reporter
+    that started first. Adds it to *claimed*.
+    """
+    i = spawned_at[k]
+    sid = rows[i].get("short_id")
+    same = [j for j in spawned_at if rows[j].get("short_id") == sid]
+    at = same.index(i)
+    lo = same[at - 1] if at else -1
+    hi = same[at + 1] if at + 1 < len(same) else len(rows)
+    for later in rows[lo + 1:hi]:
+        reporter = _reporter(later)
+        if later.get("short_id") != sid or later.get("reporter") is None or reporter in claimed:
+            continue
+        claimed.add(reporter)
+        return True
+    return False

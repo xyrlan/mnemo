@@ -56,16 +56,28 @@ def candidates_for_project(index: dict, project: str) -> list[str]:
     ]
 
 
-def doc_token_sets(index: dict, slugs: list[str] | None = None) -> dict[str, set[str]]:
+def doc_token_sets(
+    index: dict, slugs: list[str] | None = None, terms: list[str] | None = None,
+) -> dict[str, set[str]]:
     """Per-doc token UNION across every indexed field, for the overlap gate.
 
     One pass over the postings. With ``slugs`` given only those docs are
     collected (what the hook needs for its top-2); with ``None`` every doc is,
     which is what a replay of thousands of prompts wants to compute once.
+
+    With ``terms`` given only those terms are looked up: the overlap gate
+    intersects a doc's set with the query, so the query's terms give it the
+    same answer without walking — and, on a loaded index, decoding — the
+    postings of every term in the vault (#779).
     """
     target = None if slugs is None else set(slugs)
     out: dict[str, set[str]] = {s: set() for s in (slugs or [])}
-    for term, entries in (index.get("postings") or {}).items():
+    postings = index.get("postings") or {}
+    if terms is None:
+        pairs = postings.items()
+    else:
+        pairs = ((t, postings[t]) for t in dict.fromkeys(terms) if t in postings)
+    for term, entries in pairs:
         for entry in entries:
             slug = entry["slug"]
             if target is not None and slug not in target:
@@ -105,7 +117,7 @@ def decide(
     is even consulted, so a two-word prompt against a missing index is
     ``below_min_tokens``, not ``index_missing``. ``doc_tokens`` is an optional
     precomputed :func:`doc_token_sets` over the whole index; without it the
-    top-2's token sets are rebuilt from the postings on every call.
+    top-2's token sets are rebuilt from the query terms' postings on every call.
 
     ``index`` may be the loaded index, ``None``, or a zero-argument loader
     that is only called once the pre-gate has passed — the hook uses that so a
@@ -138,7 +150,7 @@ def decide(
     thresholds = gate_thresholds(reflex_cfg, overrides)
     top = [slug for slug, _ in scores[:2]]
     if doc_tokens is None:
-        doc_tokens = doc_token_sets(index, top)
+        doc_tokens = doc_token_sets(index, top, q_tokens)
     doc_count = int(index.get("doc_count", 0))
     result = gates.evaluate_gates(
         scores,
