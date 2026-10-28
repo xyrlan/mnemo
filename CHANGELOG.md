@@ -5,6 +5,189 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-10-28
+
+### Changed
+
+- **The `shared/_inbox/` review queue no longer depends on a reviewer typing
+  the CLI.** Evidence-gate demotions now expire into the archive after
+  `inbox.demotionExpiryDays` (14) like judge-held pages do, and
+  `mnemo inbox --restore KEY` still brings one back; the session-start offer
+  backs off to one block a week for the whole vault once nothing has been
+  promoted or dropped for `inbox.offerIdleDays` (7), and skips dispatched
+  children, who have nobody to relay it to; and the block now asks the session
+  to run `mnemo inbox --promote|--drop KEY` itself once you answer for that
+  page, logged `via: session`. On the maintainer's vault the queue held 514
+  pages with 0 decisions in two weeks; the dry run
+  (`tools/measure_inbox_backlog.py`) says 237 demotions would expire at once.
+  (#762)
+
+- **`list_rules_by_topic` returns the first 10 rules, plus every rule the
+  rerank marked relevant, and answers in milliseconds after its first call.**
+  A topic used to come back whole: p50 62 and up to 244 slugs (~3 KB at the
+  median, ~10 KB at the most) in p50 4.2 s. A longer topic now answers
+  `{"rules": [...], "more": N, "note": ...}`; pass `limit=N` for more, or
+  `limit=0` for the whole topic as before. A topic of 10 or fewer keeps the
+  bare list. The access log records what was shown in `result_count` /
+  `hit_slugs` and the size of the topic in `total`. The local cost was the
+  137 MB reflex index, parsed on every call and parsed again when the rerank
+  ran: the MCP server now keeps it parsed until the file changes, so a queried
+  call drops from 1.3–2.5 s of local work to ~0.7 s for the first and ~20 ms
+  after. The provider's round trip, when `recall.rerank` is on, is unchanged.
+  `tools/measure_list_cap.py` measures what any cap shows, costs and leaves
+  out. (#765)
+
+- **A contract piece now reviews its own work the way its parent used to.** Each
+  piece's brief asks for a mutation pass before the child stops: break the code
+  each new test guards, watch the test fail, restore the code, and report which
+  mutations ran. A piece that may publish is also told to push before it stops.
+  When a child stops with commits on a branch that has no PR, its finish notice
+  now says whether they were pushed ("and the branch was never pushed", "1 of
+  them not pushed", "all pushed"). Before, it said only "2 commits not in any
+  PR", the same words a `may: push` child that had pushed got. In the 17 pieces
+  since 2026-09-29 that were not hands-off, the parent pushed commits on top of
+  11 before landing. Three were tests for mutation survivors, and one piece
+  committed and stopped without pushing (#768). (#771)
+- **`mnemo dispatch --contract` warns when two pieces list the same file.** This
+  includes `--dry-run`, and covers paths that meet through a directory or a
+  glob. The warning names both pieces and the file. Code that more than one
+  piece edits belongs in the seam, landed before the pieces. The
+  `decomposing-for-dispatch` skill now says how to spot that code while
+  decomposing: a file in two `files` lists, a registration block every piece
+  adds a line to, a table whose values two pieces rely on. A contract lists
+  files, not lines, so this warns per file, and it never refuses. (#771)
+
+- **The reflex index is about 20 times smaller on disk and loads about 13 times faster.**
+  `.mnemo/reflex-index.json` (schema v2) stores doc ids and one compact string
+  per term, with zero field counts left out, in place of an indented dict per
+  posting. On a 4,078-rule vault it went from 137.8 MB to 7.2 MB, and loading
+  it from 0.78 s to 0.06 s, which every prompt that reaches ranking pays in
+  a fresh hook process. That hook's end-to-end time on one prompt went from
+  0.83 s to 0.19 s. A prompt now decodes only its own terms' postings. A v1
+  index keeps working until the next SessionStart rebuilds it as v2.
+  `tools/measure_reflex_index_load.py` reproduces the numbers. (#779)
+
+- **With the reflex judge on, a machine notice nobody typed needs a score of 0.5 to get a rule, not 0.4.** A `<task-notification>`, a `<cross-session-message>` or `<agent-message>`, a peer session's message and a `<mnemo-child-finished>` notice reach the hook as if they were prompts; on one vault they were 48% of the prompts the reflex injected into, and their injections under 0.5 were on-point 20% of the time against 46% for typed prompts. The new bar cut 13% of the injected bytes there at about 6% of the on-point injections. A notice that loses every rule to it is logged as `notice_below_bar`, and the row's `judge.notice` says which kind it was and what was dropped. A prompt that only quotes a notice is still a prompt; `<mnemo-resume>` and `<mnemo-pr-follow>` wakes, which carry work, keep the ordinary bar. `reflex.judge.noticeInjectAt` moves the bar; set it to `injectAt`'s value to go back. (#789)
+
+### Fixed
+
+- **The private-names guard checks `git push … 2>&1` and Git Bash `cd /c/...`
+  commands again.** A redirection (`2>&1`, `> out.txt`, `2>/dev/null`, `&>`)
+  was read as push refspecs, so `git log` exited 128; and on Windows
+  `cd /c/Users/...` became `C:/c/Users/...`, which does not exist. Either
+  error made the hook fail open, and on one Windows box that skipped the check
+  for 61 pushes and PRs in four days. Redirections are now dropped, Git Bash
+  drive paths resolve to `C:\...`, a `cd` to a missing directory keeps
+  checking from the last one, and a failing part of a compound command no
+  longer stops the parts after it from being read. (#754)
+
+- **`mnemo doctor` no longer reports every Windows child reporter as lost.**
+  The check paired the hook's `spawned` row with the reporter's rows by pid,
+  but on Windows the hook gets the venv launcher's pid, never the reporter's,
+  and pids come round again within days to other children: on one vault it
+  named 72 reporters lost in a week while `tools/measure_child_notices.py`
+  found every parent told. The hook now hands each reporter a `run` id that
+  both rows carry; rows written before it pair by the child and its pid, and
+  failing that by an unclaimed reporter of the same child between its
+  `spawned` rows. A reporter that wrote nothing is still named. (#755)
+
+- **`mnemo status` and `mnemo doctor` on a sync satellite no longer report what the satellite does on purpose as a failure.** Auto-brain there says that extraction runs on the primary and when the primary last extracted, as this machine pulled it, instead of a local run from before it joined shown as `FAILED`; a primary silent for 7+ days is still reported. Changes a satellite may not publish are counted as withheld, apart from the files waiting to push, in `doctor`, `mnemo sync status` and the statusline. The inert `friction.autoRetire` key is `ℹ`, not `⚠`. Doctor's per-item lists (finished sessions to `claude rm`, lost child reporters) show their first five and how many more; `mnemo doctor --all` prints every one. (#756)
+
+- **A long session gets its briefing again, and a failed `claude -p` says why.**
+  The briefing sent a session's whole transcript, and a long one ran to 2.3M
+  characters (~750K tokens) against the model's 200K: `claude -p` refused it
+  with "Prompt is too long" every time that session ended. The briefing prompt
+  now stops at 360K characters. It keeps the newest user turns, with their
+  original numbers, and the start and end of the transcript, and says what it
+  left out. That refusal lands on stdout with stderr empty, which is why
+  `.errors.log` read `claude exited with code 1: ` with nothing after it. The
+  error now carries the CLI's own message, then stderr, or raw stdout when
+  neither said anything, on one line truncated to 500 characters. A rate limit
+  reported there is retried like one on stderr. (#757)
+
+- **A merged child's worktree no longer leaves its directory behind on
+  Windows.** `git worktree remove` unregisters the tree even when it fails to
+  delete it, and on Windows it often does fail: a file a dev server still holds
+  open, a path in `node_modules` past 260 characters. The sweep logged that as
+  "`git worktree remove` refused", kept the branch, and never looked at the
+  directory again. Now, when git has let go of the tree, the sweep deletes the
+  directory itself (read-only files and long paths included) and the branch
+  with `-d`. A directory it cannot delete is named in the day log with the file
+  and the reason, and every later sweep tries it again. Directories left this
+  way before the fix are picked up from the sweep's ledger the same way. (#761)
+
+- **SessionStart no longer reads every rule page on every start.** It rebuilt
+  the rule-activation index from all of `shared/` each time: ~4,100 file
+  opens on a large vault, ~0.5 s warm and tens of seconds right after a
+  Windows Defender signature update, when every file is scanned again on its
+  next open. Of 19 first starts after an update on one Windows box, 8 ran over
+  8 s (p50 5.8 s against 2.2 s for the others). The hook now checks the pages'
+  folder listings, which open no file, and rebuilds only when a page, the
+  universal threshold or mnemo's version changed. On a copy of that vault
+  whose files had never been opened, the slowest of 10 timed starts went from
+  46 s to 5.4 s. (#763)
+
+- **A session briefing no longer sends Claude Code's own request log to
+  the model.** Recent Claude Code versions write each API request they send
+  into the transcript as `api-request-blob` events, carrying the system
+  prompt, CLAUDE.md, memory indexes and hook context again, and the briefing
+  read them as conversation. They were 61% of the briefing prompts written
+  since 2026-10-13 (144 sessions); a briefing now renders only the user and
+  assistant turns, and three sessions sent before and after went from
+  19-41K input tokens to 8-24K with the same sections. Which sessions get a
+  briefing is unchanged. `tools/measure_briefing_input.py` shows what a
+  briefing's prompt is made of. (#766)
+
+- **A child's finish notice no longer reports a PR it did not open.** When the
+  child's branch had no PR, the card fell back to the last PR URL any tool had
+  printed in its transcript — a `gh pr view` of another repository's PR was
+  enough — so a read-only child's notice reported someone else's merged PR,
+  its size and its merge as its own. The transcript fallback now runs only
+  when the child's tree is gone, reads only the output of a `gh pr create` the
+  child ran (matched to its call by id), and keeps the PR only when it was
+  opened from the branch the child had checked out. A tree that is there and
+  whose branch has no PR gets a card with no PR. (#769)
+
+- The tree sweep now finds a dispatched worktree's PR by the branch its upstream has on the remote, not by its local name. A second dispatch on an issue whose `fix/issue-N` already merged pushes to `fix/issue-N-<suffix>`; the sweep used to judge that tree against the older PR and keep it as "its branch has commits the merged PR does not contain" after its own PR had merged. A tree with no upstream is still looked up by its local name. (#796)
+
+### Internal
+
+- **`tools/measure_test_durations.py` ranks a CI job's test files by time from its `-v` log, and `tools/measure_test_spawns.py` counts the processes each file starts.** The Windows job sets every run's wall time. On master's run 39620055686, 93 of the 522 test files start processes. They hold 26% of the tests and take 73% of the 4 workers' busy time, and six files take 52% of it. Read a job's log with `gh run view RUN --job JOB --log` before deciding what to make faster. (#653)
+
+- **`tools/measure_merge_wait.py --repo` takes several repositories, as its
+  usage line always said.** `--repo o/a o/b` and `--repo o/a --repo o/b` both
+  work; the second name used to be rejected as an unrecognized argument. With
+  more than one repository the report closes on a total over the ones `gh`
+  could list, so the merge wait across every repository a maintainer
+  dispatches into is one run instead of one per repository. (#760)
+
+- **`tools/measure_inject_band.py` measures whether the reflex's 0.40-0.49 injections are worth their bytes.** It rebuilds every rule the judge injected from `reflex-log.jsonl`, finds each prompt again in its transcript, and splits the injections by score band and by whether a person typed the prompt or it was a machine notice. A blind rater then labels a seeded sample under bars committed before any label. On the maintainer's vault, near-band injections were on-point 32% of the time against 62% at >= 0.5. That falls in neither pre-registered branch, so `injectAt` stays at 0.4. 45% of injected prompts turned out to be notices (`<task-notification>`, peer messages, child notices), and neither repeat-rule detector cleared the bar for a `doctor` row. (#764)
+
+- **`tools/measure_dispatch_outcomes.py` no longer counts its own artifacts
+  against hands-off.** A woken child's first stop is now its last assistant
+  turn before the wake, the anchor `child_notices` uses, not the records Claude
+  Code stamps at the wake; the opening prompt, a subagent's hand-back and
+  mnemo's finished notice are no human turn (a message another session sent is
+  counted apart as a peer turn); a repository that had never run a
+  `pull_request` workflow reads `no-ci` and is reported apart instead of
+  failing; and a commit that only merges the base branch in is nobody's work.
+  Over the 26 contract pieces since 2026-09-29, hands-off goes from 9 to 14
+  (2 of them `no-ci`), human input from 3 pieces to 1, and late first-stop
+  notices across dispatch from 22 to 11, every one left a backstop row
+  130–164 s after a stop nothing woke. (#770)
+
+- **The suite passes inside a dispatched child on Windows.** The child's
+  sandbox lets a process create a symlink but refuses to follow one
+  (WinError 1463), so the symlink tests' guard — which only caught a failed
+  create — let them run and fail, and pytest's own end-of-run cleanup of its
+  `*current` links crashed the session with no summary. A `requires_symlinks`
+  fixture now probes once per run whether a symlink can be created *and*
+  followed, and skips with that reason when it cannot (on CI it fails instead,
+  so symlink tests cannot start skipping there unseen); pytest's cleanup skips
+  links it cannot resolve. The push-lag test in `test_measure_sync` bounds the
+  lag by how long the push took rather than a fixed 5 s, which a loaded box
+  overran. (#773)
+
 ## [1.13.1] — 2026-10-21
 
 ### Internal
