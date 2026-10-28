@@ -321,6 +321,66 @@ def test_merged_twin_tree_is_removed(world, tmp_path):
         "proj-wt-7": ts.REMOVED, "proj-wt-8-abc123": ts.REMOVED}
 
 
+def _prs_by_head(by_branch: dict):
+    calls = []
+
+    def run(args, *, cwd):
+        calls.append(list(args))
+        if args[0] == "gh":
+            branch = args[args.index("--head") + 1]
+            return subprocess.CompletedProcess(args, 0, json.dumps(by_branch.get(branch, [])), "")
+        if args[0] == "lsof":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return ts._run(args, cwd=cwd)
+
+    run.calls = calls
+    return run
+
+
+def test_a_second_dispatch_is_judged_by_its_upstreams_pr(world):
+    # #796: fix/issue-7 already merged as #11; the second child's local
+    # fix/issue-7 was pushed to origin/fix/issue-7-measure, which merged as #12.
+    repo = world["repo"]
+    _git("worktree", "remove", str(world["tree"]), cwd=repo)
+    _git("branch", "-D", "fix/issue-7", cwd=repo)
+    tree = world["tree"]
+    _git("worktree", "add", "-b", "fix/issue-7", str(tree), "master", cwd=repo)
+    (tree / "measure.txt").write_text("m\n", encoding="utf-8")
+    _git("add", "measure.txt", cwd=tree)
+    _git("commit", "-m", "measure", cwd=tree)
+    _git("push", "-u", "origin", "fix/issue-7:fix/issue-7-measure", cwd=tree)
+    tip = _git("rev-parse", "HEAD", cwd=tree)
+    assert _git("rev-parse", "--abbrev-ref", "@{upstream}", cwd=tree) == "origin/fix/issue-7-measure"
+
+    run = _prs_by_head({"fix/issue-7": merged(world["head"], 11),
+                        "fix/issue-7-measure": merged(tip, 12)})
+    told: list = []
+    report = ts.sweep({}, vault_root=world["vault"], repo_root=repo, now=NOW,
+                      run=run, reader=lambda: [], tell=told.append)
+
+    [v] = report.verdicts
+    assert v.outcome == ts.REMOVED and v.pr == "#12"
+    assert v.branch == "fix/issue-7"
+    assert not tree.exists()
+    assert "fix/issue-7" not in branches(repo)
+    assert "(PR #12 merged)" in ts.render(told[0])
+    heads = [c[c.index("--head") + 1] for c in run.calls if c[0] == "gh"]
+    assert heads == ["fix/issue-7-measure"]
+    assert ["git", "branch", "-d", "fix/issue-7"] in run.calls
+
+
+def test_a_tree_with_no_upstream_is_judged_by_its_local_name(world):
+    _git("branch", "--unset-upstream", cwd=world["tree"])
+    run = _prs_by_head({"fix/issue-7": merged(world["head"], 11)})
+    report = ts.sweep({}, vault_root=world["vault"], repo_root=world["repo"], now=NOW,
+                      run=run, reader=lambda: [], tell=lambda v: None)
+    # With no upstream, `-d` measures the branch against master and refuses,
+    # as it did before #796.
+    [v] = report.verdicts
+    assert v.outcome == ts.BRANCH_KEPT and v.pr == "#11"
+    assert [c[c.index("--head") + 1] for c in run.calls if c[0] == "gh"] == ["fix/issue-7"]
+
+
 def test_hand_made_worktree_is_never_looked_at(world, tmp_path):
     other = tmp_path / "proj-feature"
     _git("worktree", "add", "-b", "feature", str(other), cwd=world["repo"])

@@ -21,7 +21,10 @@ dispatch paths, as ``git worktree list`` reports them for the repo. A hand-made
 worktree is never looked at. Removal needs every one of these:
 
 - **The branch's PR has merged.** ``gh pr list --head <branch> --state all``
-  returns a ``MERGED`` PR and no ``OPEN`` one. A tree with no PR at all is
+  returns a ``MERGED`` PR and no ``OPEN`` one. ``<branch>`` is the name the
+  tree's upstream has on its remote, the local name only when there is no
+  upstream (#796): a second dispatch on an issue pushes ``fix/issue-N`` to
+  ``fix/issue-N-<suffix>``, and the local name would find the first PR. A tree with no PR at all is
   left alone without comment. That covers a twin that lost: ``dispatch
   --twins`` gives it no PR and no push, so its commits exist only in its
   tree, and removing it would lose them. A twin whose PR merged is removed
@@ -236,6 +239,28 @@ def merged_pr(branch: str, *, repo_root: Path | str, run: Runner = _run
         if row.get("state") == "MERGED" and row.get("headRefOid"):
             merged.append((f"#{row.get('number')}", str(row["headRefOid"])))
     return ("merged" if merged else "none"), merged
+
+
+def pr_branch(tree: Tree, *, run: Runner = _run) -> Optional[str]:
+    """The branch name *tree*'s PR was opened from (#796).
+
+    That is the upstream's branch on its remote, not the local name. A second
+    dispatch on an issue whose ``fix/issue-N`` already belongs to a merged PR
+    pushes ``fix/issue-N`` to ``origin/fix/issue-N-<suffix>``, and asking
+    ``gh`` about the local name finds the older PR. A tree with no upstream,
+    or one tracking a local branch, falls back to the local name.
+    """
+    if not tree.branch:
+        return None
+
+    def config(key: str) -> Optional[str]:
+        return _git_ok(["config", "--get", f"branch.{tree.branch}.{key}"],
+                       cwd=tree.path, run=run)
+
+    remote, merge = config("remote"), config("merge")
+    if remote and remote != "." and merge and merge.startswith("refs/heads/"):
+        return merge[len("refs/heads/"):]
+    return tree.branch
 
 
 def _parse_when(value: Optional[str]) -> Optional[float]:
@@ -481,7 +506,8 @@ def judge(tree: Tree, *, repo_root: Path | str, sessions: Sequence[Any],
         return verdict(DETACHED)
     if skip and in_use(tree.path, [skip]):
         return verdict(IN_USE)
-    state, merged = merged_pr(tree.branch, repo_root=repo_root, run=run)
+    state, merged = merged_pr(pr_branch(tree, run=run) or tree.branch,
+                              repo_root=repo_root, run=run)
     if state == "open":
         return verdict(OPEN_PR)
     if state != "merged":
