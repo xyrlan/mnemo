@@ -34,6 +34,11 @@ def _row_role(s: Summary, reach: Reach) -> bool:
 def _row_commits(s: Summary, reach: Reach) -> bool:
     ahead, behind, pending = int(s["ahead"]), int(s["behind"]), int(s["pending"])
     files = f"{pending} file{'s' if pending != 1 else ''} waiting to push"
+    withheld = int(s.get("withheld") or 0)
+    if withheld:
+        # #756: not a backlog. A satellite keeps these and no push carries them.
+        files += (f", {withheld} withheld (change{'s' if withheld != 1 else ''} a satellite "
+                  "may not publish; they stay on this machine)")
     if behind:
         print(f"  ⚠ Sync commits: {ahead} ahead, {behind} behind the hub as last fetched; {files}")
         print("       → `mnemo sync pull` brings the hub in; the primary's version wins a conflict")

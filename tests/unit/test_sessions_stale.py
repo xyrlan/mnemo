@@ -182,15 +182,46 @@ def test_doctor_names_every_stale_job_with_its_cleanup(tmp_path: Path, capsys, t
     _job(root, "keepme01", state="done", tempo="idle", cwd=alive)
     _job(root, "asking03", state="blocked", tempo="blocked", cwd=gone)
 
-    assert doctor_misc._doctor_check_background_sessions(jobs_root=root) is True
+    from mnemo.cli.commands.doctor_checks import _lists
+
+    _lists.show_all(True)  # `mnemo doctor --all`
+    try:
+        assert doctor_misc._doctor_check_background_sessions(jobs_root=root) is True
+    finally:
+        _lists.show_all(False)
 
     out = capsys.readouterr().out
     assert "7 finished sessions whose worktree is gone" in out
-    command = next(line for line in out.splitlines() if "claude rm" in line)
+    command = next(line for line in out.splitlines() if "claude rm $id" in line
+                   or 'claude rm "$id"' in line)
     for short_id in ids:
         assert short_id in command
     assert "keepme01" not in command
     assert "asking03" not in command
+
+
+def test_doctor_past_the_cap_shows_a_few_ids_and_never_a_partial_cleanup(
+        tmp_path: Path, capsys, trees) -> None:
+    """#756: 104 ids made one line ten screen rows long. Past the cap the
+    first ids are shown and `--all` prints the cleanup, which still names
+    every id: a one-liner that clears five of seven is not the one-liner."""
+    from mnemo.cli.commands.doctor_checks import _lists
+
+    _alive, gone = trees
+    root = tmp_path / "jobs"
+    root.mkdir()
+    ids = [f"stale{n:03d}" for n in range(_lists.CAP + 2)]
+    for short_id in ids:
+        _job(root, short_id, state="done", tempo="idle", cwd=gone)
+
+    assert doctor_misc._doctor_check_background_sessions(jobs_root=root) is True
+
+    out = capsys.readouterr().out
+    assert f"{len(ids)} finished sessions whose worktree is gone" in out
+    assert 'claude rm "$id"' not in out and "claude rm $id" not in out
+    assert ", ".join(ids[:_lists.CAP]) + ", … 2 more" in out
+    assert ids[-1] not in out
+    assert "`mnemo doctor --all` prints the one `claude rm` line" in out
 
 
 def test_doctor_is_silent_about_stale_when_there_are_none(tmp_path: Path, capsys, trees) -> None:

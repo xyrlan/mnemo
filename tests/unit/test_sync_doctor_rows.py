@@ -324,3 +324,33 @@ def test_an_unreadable_state_where_sync_never_ran_is_a_warning_not_silence(tmp_v
     assert "⚠ Sync state: .mnemo/sync-state.json holds 12 NUL bytes and nothing else" in out
     assert "sync reads as off here" in out
     assert rows._doctor_check_sync(tmp_vault) is False
+
+
+@needs_git
+def test_a_satellite_names_what_it_withholds_and_does_not_count_it_as_waiting(
+        tmp_path, monkeypatch, git_env):
+    """#756: 92 "files waiting to push" on a satellite whose every push said
+    ``nothing``: changes a satellite may not publish, which no push carries."""
+    vault = _satellite(tmp_path, monkeypatch)
+    memory = vault / "bots" / "app" / "memory"
+    memory.mkdir(parents=True, exist_ok=True)
+    (memory / "new-note.md").write_text("- added on the satellite\n", encoding="utf-8")
+    assert sync.push(vault, machine="win").outcome == "nothing"
+    health.drop_cache(vault)
+
+    summary = health.summary(vault, "win", max_age=0)
+    assert (summary["pending"], summary["withheld"]) == (0, 1)
+    assert health.segment(summary) == ""
+    out = _printed(rows._doctor_check_sync, vault)
+    assert "0 files waiting to push, 1 withheld (change a satellite may not publish" in out
+    assert "⚠" not in out
+
+    status = sync.status(vault, machine="win")
+    assert (status["pendingFiles"], status["withheldFiles"]) == (0, 1)
+
+    sessions = vault / "bots" / "app" / "briefings" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "s1.md").write_text("# a briefing from win\n", encoding="utf-8")
+    health.drop_cache(vault)
+    summary = health.summary(vault, "win", max_age=0)
+    assert (summary["pending"], summary["withheld"]) == (1, 1)

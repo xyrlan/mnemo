@@ -26,11 +26,16 @@ def _doctor_check_child_reports(vault: Path) -> bool:
         f"{report_card.LOST_WINDOW_DAYS} days started and wrote nothing after; "
         f"their parent was never told the child finished"
     )
-    for row in rows:
+    from mnemo.cli.commands.doctor_checks import _lists
+
+    shown, hidden = _lists.capped(rows)
+    for row in shown:
         at = report_card._stamp(row)
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(at)) if at else "?"
         parent = str(row.get("parent") or "")[:8] or "?"
         print(f"    {row.get('short_id')} -> {parent} at {when} (reporter pid {row.get('pid')})")
+    if hidden:
+        print(f"    {_lists.more(hidden)}")
     print(
         "    → `mnemo sessions` has each child's state and PR. A reporter that "
         "crashes or gets SIGTERM/SIGHUP/SIGINT leaves a row saying so, so one "

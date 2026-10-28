@@ -379,10 +379,24 @@ def _print_numbers_status(vault: Path) -> None:
         )
 
 
+def _ago_text(stamp: str) -> str:
+    """``40s ago``, ``12m ago`` or ``194h ago`` for a local ISO stamp; ``unknown``."""
+    from datetime import datetime
+
+    try:
+        total_sec = int((datetime.now() - datetime.fromisoformat(stamp)).total_seconds())
+    except ValueError:
+        return "unknown"
+    if total_sec < 60:
+        return f"{total_sec}s ago"
+    if total_sec < 3600:
+        return f"{total_sec // 60}m ago"
+    return f"{total_sec // 3600}h ago"
+
+
 def _print_auto_brain_status(vault: Path) -> None:
     import json as _json
     import time
-    from datetime import datetime
     from mnemo.core import config as cfg_mod
 
     cfg = cfg_mod.load_config()
@@ -417,6 +431,22 @@ def _print_auto_brain_status(vault: Path) -> None:
 
     print(f"  enabled:     yes (minNewMemories={min_new}, minIntervalMinutes={min_interval})")
 
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault, cfg):
+        # #756: a satellite never extracts; its own last run predates that.
+        from mnemo.core.sync import state as sync_state
+
+        primary = sync_state.primary_of(vault) or "?"
+        stamp = sync_roles.primary_last_extraction(vault)
+        pulled = sync_state.load(vault).get("lastPull") or "never"
+        print(f"  extracts:    on the primary '{primary}' (this machine is a sync satellite)")
+        if stamp is None:
+            print(f"  primary run: none has arrived here (last pull: {pulled})")
+        else:
+            print(f"  primary run: {_ago_text(stamp)} — {stamp}, as of the last pull {pulled}")
+        return
+
     last_run_path = vault / ".mnemo" / "last-auto-run.json"
     if not last_run_path.exists():
         print("  last run:    (none yet)")
@@ -431,20 +461,7 @@ def _print_auto_brain_status(vault: Path) -> None:
     exit_code = payload.get("exit_code", 0)
     summary = payload.get("summary", {}) or {}
     finished_at = payload.get("finished_at")
-    elapsed_str = "unknown"
-    if finished_at:
-        try:
-            finished_dt = datetime.fromisoformat(finished_at)
-            delta = datetime.now() - finished_dt
-            total_sec = int(delta.total_seconds())
-            if total_sec < 60:
-                elapsed_str = f"{total_sec}s ago"
-            elif total_sec < 3600:
-                elapsed_str = f"{total_sec // 60}m ago"
-            else:
-                elapsed_str = f"{total_sec // 3600}h ago"
-        except ValueError:
-            pass
+    elapsed_str = _ago_text(finished_at) if finished_at else "unknown"
 
     pages = summary.get("pages_written", 0)
     auto_n = summary.get("auto_promoted", 0)
