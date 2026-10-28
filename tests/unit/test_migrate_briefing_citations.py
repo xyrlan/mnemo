@@ -15,7 +15,7 @@ from mnemo.cli.commands import migrate_worktree_briefings as cmd_mod
 from mnemo.core.migrations import briefing_citations as citations
 
 _UUID = "ba5d51e7-be91-484a-8191-8b6c5cf3e306"
-_OLD = f"bots/myproj-feature-x/briefings/sessions/{_UUID}.md"
+_OLD = f"bots/myproj-wt-feature-x/briefings/sessions/{_UUID}.md"
 _NEW = f"bots/myproj/briefings/sessions/{_UUID}.md"
 
 
@@ -52,11 +52,11 @@ def _make_vault(tmp_path: Path) -> tuple[Path, Path]:
     wt_gitdir = main / ".git" / "worktrees" / "feature-x"
     wt_gitdir.mkdir(parents=True)
     (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
-    worktree = tmp_path / "myproj-feature-x"
+    worktree = tmp_path / "myproj-wt-feature-x"
     worktree.mkdir()
     (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
 
-    orphan = vault / "bots" / "myproj-feature-x" / "briefings" / "sessions"
+    orphan = vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions"
     orphan.mkdir(parents=True)
     (orphan / f"{_UUID}.md").write_text("# orphan briefing\n", encoding="utf-8")
 
@@ -143,7 +143,7 @@ def test_index_files_the_rule_under_the_canonical_project(tmp_path: Path, monkey
     """The real consequence: a stale -wt- source hides the rule from its project.
 
     ``projects_for_rule`` reads the project out of the ``bots/<name>/`` segment,
-    so before the rewrite this rule is filed under ``myproj-feature-x`` — a
+    so before the rewrite this rule is filed under ``myproj-wt-feature-x`` — a
     project nothing ever queries.
     """
     vault, main = _make_vault(tmp_path)
@@ -155,7 +155,7 @@ def test_index_files_the_rule_under_the_canonical_project(tmp_path: Path, monkey
     rules = index.get("rules", {})
     entry = rules.get("feedback/a-rule") or next(iter(rules.values()))
     assert "myproj" in entry["projects"]
-    assert "myproj-feature-x" not in entry["projects"]
+    assert "myproj-wt-feature-x" not in entry["projects"]
 
 
 def test_dry_run_reports_blast_radius_and_writes_nothing(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -172,7 +172,7 @@ def test_dry_run_reports_blast_radius_and_writes_nothing(tmp_path: Path, monkeyp
     assert "extraction-state" in out
     assert "would rebuild" in out
     # Nothing moved, nothing rewritten.
-    assert (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / f"{_UUID}.md").exists()
+    assert (vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions" / f"{_UUID}.md").exists()
     assert (vault / "shared" / "feedback" / "a-rule.md").read_text(encoding="utf-8") == before
     assert not (vault / ".mnemo" / "rule-activation-index.json").exists()
 

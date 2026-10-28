@@ -17,12 +17,12 @@ def _make_repo_with_worktree_briefings(tmp_path: Path) -> tuple[Path, Path, Path
     wt_gitdir = main / ".git" / "worktrees" / "feature-x"
     wt_gitdir.mkdir(parents=True)
     (wt_gitdir / "commondir").write_text("../..\n", encoding="utf-8")
-    worktree = tmp_path / "myproj-feature-x"
+    worktree = tmp_path / "myproj-wt-feature-x"
     worktree.mkdir()
     (worktree / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
 
     # Orphan briefing under the worktree's old agent dir.
-    orphan_dir = vault / "bots" / "myproj-feature-x" / "briefings" / "sessions"
+    orphan_dir = vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions"
     orphan_dir.mkdir(parents=True)
     (orphan_dir / "session-1.md").write_text("orphan briefing", encoding="utf-8")
 
@@ -39,7 +39,7 @@ def test_migrate_dry_run_lists_moves_only(tmp_path: Path, capsys, monkeypatch) -
     assert "would move" in out
     assert "session-1.md" in out
     # No move actually happened.
-    assert (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
+    assert (vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
     assert not (vault / "bots" / "myproj" / "briefings" / "sessions" / "session-1.md").exists()
 
 
@@ -53,7 +53,7 @@ def test_migrate_moves_orphans(tmp_path: Path, monkeypatch) -> None:
     assert moved.exists()
     assert moved.read_text(encoding="utf-8") == "orphan briefing"
     # Source removed.
-    assert not (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
+    assert not (vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
 
 
 def test_migrate_skips_collisions(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -70,7 +70,7 @@ def test_migrate_skips_collisions(tmp_path: Path, capsys, monkeypatch) -> None:
     out = capsys.readouterr().out
     assert "collision" in out.lower() or "skipped" in out.lower()
     # Original orphan stays in place.
-    assert (vault / "bots" / "myproj-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
+    assert (vault / "bots" / "myproj-wt-feature-x" / "briefings" / "sessions" / "session-1.md").exists()
     # Canonical file untouched.
     assert (canonical_dir / "session-1.md").read_text(encoding="utf-8") == "existing canonical"
 
@@ -89,29 +89,65 @@ def test_migrate_noop_when_nothing_to_move(tmp_path: Path, capsys, monkeypatch) 
     assert "nothing to migrate" in out.lower()
 
 
-def test_migrate_sweeps_name_prefix_siblings_known_limitation(tmp_path: Path, capsys, monkeypatch) -> None:
-    """KNOWN LIMITATION: the name-prefix heuristic cannot distinguish an
-    unrelated project ``myproj-experimental`` from a worktree ``myproj-feature-x``.
-    Both start with ``myproj-``, so both are targets. Document that behavior
-    here so any future fix that tightens the heuristic breaks this test
-    loudly — prompting a code owner to decide whether the fix is wanted.
-    """
+def _bare_repo_vault(tmp_path: Path, *names: str) -> tuple[Path, Path]:
+    """A vault holding one briefing under each ``bots/<name>/``; repo ``myproj``."""
     vault = tmp_path / "vault"
     vault.mkdir()
     main = tmp_path / "myproj"
     main.mkdir()
     (main / ".git").mkdir()
+    for name in names:
+        sessions = vault / "bots" / name / "briefings" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / f"{name}-1.md").write_text(f"{name} briefing", encoding="utf-8")
+    return vault, main
 
-    # An UNRELATED project whose name shares a prefix with `myproj`.
-    # This is NOT a worktree — it has its own .git/ (or no .git, doesn't matter).
-    unrelated_dir = vault / "bots" / "myproj-experimental" / "briefings" / "sessions"
-    unrelated_dir.mkdir(parents=True)
-    (unrelated_dir / "unrelated-1.md").write_text("unrelated briefing", encoding="utf-8")
 
+def _sessions(vault: Path, name: str) -> Path:
+    return vault / "bots" / name / "briefings" / "sessions"
+
+
+def test_migrate_never_moves_a_sibling_checkout(tmp_path: Path, capsys, monkeypatch) -> None:
+    """``myproj-experimental`` shares the prefix but is its own checkout (#802).
+
+    Until #802 the pick was ``startswith("myproj-")``, which moved it.
+    """
+    vault, main = _bare_repo_vault(tmp_path, "myproj-experimental")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    args = argparse.Namespace(dry_run=False, repos=[str(main)])
+    assert cmd_mod.cmd_migrate_worktree_briefings(args) == 0
+    out = capsys.readouterr().out
+    assert (_sessions(vault, "myproj-experimental") / "myproj-experimental-1.md").exists()
+    assert not (_sessions(vault, "myproj") / "myproj-experimental-1.md").exists()
+    assert "nothing to migrate" in out.lower()
+
+
+def test_migrate_dry_run_lists_moves_and_skipped_siblings(tmp_path: Path, capsys, monkeypatch) -> None:
+    vault, main = _bare_repo_vault(tmp_path, "myproj-src", "myproj-wt-12", "myproj-src-wt-3")
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
     args = argparse.Namespace(dry_run=True, repos=[str(main)])
-    rc = cmd_mod.cmd_migrate_worktree_briefings(args)
-    assert rc == 0
-    out = capsys.readouterr().out
-    # The heuristic would pick up the unrelated project's briefing.
-    assert "unrelated-1.md" in out
+    assert cmd_mod.cmd_migrate_worktree_briefings(args) == 0
+    lines = capsys.readouterr().out.splitlines()
+    moves = [line for line in lines if line.startswith("would move")]
+    skips = [line for line in lines if line.startswith("skipped")]
+    assert len(moves) == 1 and "myproj-wt-12-1.md" in moves[0]
+    assert len(skips) == 2
+    assert any(str(vault / "bots" / "myproj-src") in s and "sibling checkout" in s for s in skips)
+    # A worktree of the sibling is the sibling's, not myproj's.
+    assert any("myproj-src-wt-3" in s and "'myproj-src'" in s for s in skips)
+
+
+def test_migrate_moves_wt_dirs_including_nested(tmp_path: Path, monkeypatch) -> None:
+    """``<repo>-wt-a-wt-b`` — a child cut from a child — still goes to ``<repo>``."""
+    vault, main = _bare_repo_vault(tmp_path, "myproj-wt-7", "myproj-wt-r6-wt-41", "myproj-src")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    args = argparse.Namespace(dry_run=False, repos=[str(main)])
+    assert cmd_mod.cmd_migrate_worktree_briefings(args) == 0
+    canonical = _sessions(vault, "myproj")
+    assert sorted(p.name for p in canonical.glob("*.md")) == [
+        "myproj-wt-7-1.md",
+        "myproj-wt-r6-wt-41-1.md",
+    ]
+    assert not list(_sessions(vault, "myproj-wt-7").glob("*.md"))
+    assert not list(_sessions(vault, "myproj-wt-r6-wt-41").glob("*.md"))
+    assert (_sessions(vault, "myproj-src") / "myproj-src-1.md").exists()
