@@ -305,6 +305,26 @@ def test_build_briefing_prompt_skips_non_dict_events_and_empty_content():
     assert "not a dict" not in prompt
 
 
+def test_flatten_renders_only_the_conversation_not_claude_codes_bookkeeping():
+    """#766: Claude Code logs each API request as an ``api-request-blob`` event
+    whose ``message`` carries CLAUDE.md and the system prompt again; rendered,
+    they were two thirds of a briefing's prompt."""
+    from mnemo.core.transcript import flatten_transcript_events
+
+    events = [
+        {"type": "user", "message": {"role": "user", "content": "fix the parser"}},
+        {"type": "api-request-blob", "hash": "h", "message": {
+            "role": "user", "content": [{"type": "text", "text": "Contents of CLAUDE.md"}]}},
+        {"type": "api-request-blob", "message": {"role": "system", "content": "You are Claude Code"}},
+        {"type": "attachment", "message": {"role": "user", "content": "skill listing"}},
+        {"type": "assistant", "message": {"role": "assistant",
+                                          "content": [{"type": "text", "text": "fixed"}]}},
+        {"message": {"role": "user", "content": "an event with no type"}},
+    ]
+    out = flatten_transcript_events(events)
+    assert out == "[user] fix the parser\n\n[assistant] fixed\n\n[user] an event with no type"
+
+
 def test_generate_briefing_falls_back_when_llm_returns_empty_body(tmp_vault: Path, tmp_path: Path, stub_llm):
     from mnemo.core import briefing
 
