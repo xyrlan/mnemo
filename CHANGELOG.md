@@ -5,6 +5,105 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.14.1] — 2026-10-28
+
+### Fixed
+
+- **A go-ahead or a question is no longer recorded as a correction.** Both
+  capture paths now drop a verified item whose whole user turn only lets the
+  agent proceed ("pode mergear", "segue com o deploy", "go ahead", "ship it")
+  or only asks for information ("como está indo X?"), in Portuguese and
+  English. A turn naming a rule ("pode mergear quando o CI passar",
+  "go ahead, but never push to main") or asking why is kept. The screen is
+  mechanical and always on, so it does not depend on the off-by-default LLM
+  correction check. A quote taken from a compaction summary, which Claude Code
+  writes and the user never typed, is refused like one taken from a dispatch
+  brief. An echoed bullet template (`"<verbatim quote from a USER TURN>"`) is
+  read as an empty section, not logged as a rejected quote, and
+  `briefing.corrections_rejected` now says why each quote was rejected. On one
+  Windows vault's 45 rows from 2026-10-14 to 10-26, the new screen keeps 28: it
+  drops 14 go-aheads, 1 question and 2 quotes taken from compaction summaries.
+  `tools/measure_friction_screen.py` replays a ledger and reports these counts. (#758)
+
+- **The `[recent-briefings]` index is newest by when each session ended, not by
+  file mtime.** A sync pull stamps every briefing it brings with the time of
+  the pull (182 of one vault's 200 shared one mtime), and the index then
+  listed a pulled day in session-id order and put an old briefing above newer
+  ones. Briefings now record `ended_at`, the session's last event in UTC. One
+  without it is placed by its start `date` plus `duration_minutes`, with the
+  mtime used only within the 24 hours the session could have ended in. A
+  session that ran past its start day is headed `### <start> → <end>`, so a
+  two-day session listed above one started the day between no longer looks
+  out of order. (#759)
+
+- **A crash or a racing rebuild no longer silences prompts for want of an
+  index.** Both rule indexes were already written atomically (a temp file and
+  `os.replace`). On NTFS, though, a crash can keep the rename and lose the
+  bytes. On one Windows vault a BSOD left `reflex-index.json` NUL-filled and
+  `rule-activation-index.json` cut off mid-write, and every prompt until the
+  next rebuild was silenced. Both writers now flush to disk before the rename
+  and keep the version they replace as `<name>.prev`. That is a hard link, so
+  the write copies nothing, but it keeps the replaced bytes on disk: one more
+  copy of each index, 7.3 MB for the reflex index of a 4,092-rule vault. On
+  that index the flush adds 2 to 4 ms and keeping `.prev` about 10 ms more,
+  to a write that takes about 1 s with the encoding;
+  `tools/measure_reflex_index_load.py` reproduces the numbers. When the live
+  file is there but empty or unparsable, the loaders read `.prev` instead. A
+  Windows reader that races a rebuild's rename finds the file locked for a
+  moment: it now waits the lock out and reads the new version, and reads
+  `.prev` only if the lock outlasts the wait. A sync pull does not carry
+  either file; it rebuilds both through the same writer. (#767)
+- **`index_missing` now means the index is missing.** A prompt for a project
+  with no rules in the index is now `no_candidates`. A prompt that shares no
+  term with any of the project's rules is now `no_term_match`. Both used to
+  be logged, and explained by `mnemo why`, as "no rule index for this project
+  yet". In the vault behind #767 that covered 74 of the 83 `index_missing`
+  rows, and only 8 prompts were really silenced by a damaged index. The
+  calibrator still leaves all three out of its emit rate. (#767)
+
+- **`mnemo doctor` no longer calls sibling checkouts "orphan worktree
+  briefings".** The check split a `bots/` directory name on its first `-`, so
+  `mnemo-src` and `mnemo-desktop` were reported as orphans of `mnemo`. Those
+  are separate checkouts that canonical-agent resolution keeps apart, and
+  running the suggested `mnemo migrate-worktree-briefings` on them would have
+  merged three projects' briefings. Only a `<repo>-wt-<suffix>` directory
+  (dispatch children, hand-made `-wt-` trees) is now an orphan, and it names
+  the repo before its first `-wt-`. So `x-desk-wt-r6-wt-41` belongs to
+  `x-desk`, and `shop-api-wt-workspace-1`, which the old split looked up
+  under a `shop` agent and missed, is now found. (#798)
+
+- **`mnemo migrate-worktree-briefings` no longer moves sibling checkouts'
+  briefings.** It picked `bots/` directories by name prefix, so `--repos
+  ~/mnemo` would have moved `bots/mnemo-src/` and `bots/mnemo-desktop/` into
+  `bots/mnemo/`, filing another repo's sessions under the wrong agent. It now
+  uses the same `<repo>-wt-<suffix>` rule as the `mnemo doctor` check that
+  points at it (#798): a nested `<repo>-wt-a-wt-b` still goes to `<repo>`, and
+  a prefix-sharing directory without `-wt-` is listed as a skipped sibling
+  checkout, on `--dry-run` too. A worktree whose name lacks `-wt-` is no longer
+  picked up; move its briefings by hand. (#802)
+
+- **A crash that zeroes the rule-activation index no longer keeps it zeroed
+  until a page changes.** SessionStart skips the rebuild when the index's key
+  file still matches the vault (#763), and it trusted the key whenever the
+  index file existed. A crash on NTFS can keep an index's name and lose its
+  bytes (#767), and the key is a second file that can survive it. The index
+  stayed empty or NUL-filled, and prompts read `.prev` or nothing, until some
+  page changed. SessionStart now rebuilds an index that is empty or starts
+  with a NUL byte, whatever its key says. It reads only the first byte to
+  tell. (#804)
+
+### Internal
+
+- **The slow test files build their git fixtures once per worker and copy them per test.** `tests/unit/_git_template.py` builds a fixture's repositories the first time a worker asks, `copytree`s them into each test's `tmp_path`, rewrites the absolute paths git recorded (a worktree's `.git` file and `gitdir`, a remote's URL), and refuses a copy whose git metadata still names the template. `test_tree_sweep`, `test_landing`, `test_deliver_command` and `test_dispatch_twins` use it: processes started in fixture setup fell from 1301 to 142 across those four files (`tools/measure_test_spawns.py`, Windows dev box), with the same tests and the same processes in their bodies. (#799)
+
+- **The sync doctor tests no longer turn red when the hub probe is slow under load.**
+  Four tests that ran the whole `doctor` sync check on a real hub also ran its
+  3 s `ls-remote` probe, and a loaded `-n auto` run outlasted it, printing
+  `⚠ Sync hub: not reachable within 3 s` in tests about other rows. They now
+  get a fixed probe answer, as the row tests do; the real probe is tested on
+  its own with a budget load cannot spend, and the 3 s bound is checked by the
+  budget git is handed, not by a clock. The product's budget is unchanged. (#807)
+
 ## [1.14.0] — 2026-10-28
 
 ### Changed
