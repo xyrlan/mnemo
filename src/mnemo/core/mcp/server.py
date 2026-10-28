@@ -45,7 +45,9 @@ _TOOL_DEFS: list[dict[str, Any]] = [
             "projects. Call this BEFORE writing code when the task matches a "
             "known topic. When items carry a `relevant` flag, read the ones "
             "marked true first; none marked true means nothing in this topic "
-            "was judged to be about the task."
+            "was judged to be about the task. Returns the first 10 (and every "
+            "rule marked relevant); a longer topic answers {\"rules\": [...], "
+            "\"more\": N} — pass limit=0 for all of them."
         ),
         "inputSchema": {
             "type": "object",
@@ -59,6 +61,10 @@ _TOOL_DEFS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["project", "local-only", "vault"],
                     "description": "Filter scope. Default: project (local rules + universal rules). Use local-only to exclude universal; vault for everything.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many rules to return, best first. Default 10; rules marked relevant are always all returned. 0 returns the whole topic.",
                 },
             },
             "required": ["topic"],
@@ -105,6 +111,45 @@ _TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+#: #765: how many rules ``list_rules_by_topic`` hands back unless asked for
+#: more. Over the 63 calls of a Windows vault's two weeks (the topic held p50
+#: 62 / max 244 rules), 10 plus every judge-marked rule still shows 111 of the
+#: 141 reads that followed, in p50 453 / max 1,645 bytes of slugs instead of
+#: 2,937 / 10,157; ``tools/measure_list_cap.py`` is that measurement.
+DEFAULT_LIST_LIMIT = 10
+
+
+def _limit(value: Any) -> int:
+    """The caller's ``limit``, or the default. 0 (or less) means everything."""
+    if value is None or isinstance(value, bool):
+        return DEFAULT_LIST_LIMIT
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return DEFAULT_LIST_LIMIT
+
+
+def cap(rules: list, limit: int) -> list:
+    """The head of ``rules`` a call shows: the first ``limit``, stretched to
+    every rule marked ``relevant`` — the rerank puts them first, and a mark is
+    the one thing the stage says to read, so a cap never hides one.
+    ``limit`` 0 shows everything."""
+    if limit <= 0:
+        return list(rules)
+    marked = sum(1 for r in rules if r.get("relevant") is True)
+    return list(rules[:max(limit, marked)])
+
+
+def _list_payload(shown: list, total: int) -> Any:
+    """The bare list when nothing was cut — the shape the tool always had —
+    else the head and how many more there are."""
+    more = total - len(shown)
+    if more <= 0:
+        return shown
+    return {"rules": shown, "more": more,
+            "note": f"{more} more in this topic; limit=0 returns all {total}"}
 
 
 def handle_request(
@@ -204,6 +249,7 @@ def _handle_tool_call(
     result = None
     hit_slugs: list[str] = []
     result_count = 0
+    total = None
     rerank_info = None
 
     if name == "list_rules_by_topic":
@@ -219,8 +265,11 @@ def _handle_tool_call(
             vault_root, result, str(query) if query else None,
             project=project, cfg=cfg,
         )
-        result_count = len(result)
-        hit_slugs = [r["slug"] for r in result]
+        total = len(result)
+        shown = cap(result, _limit(args.get("limit")))
+        result = _list_payload(shown, total)
+        result_count = len(shown)
+        hit_slugs = [r["slug"] for r in shown]
     elif name == "read_mnemo_rule":
         result = mcp_tools.read_mnemo_rule(
             vault_root, str(args.get("slug", "")),
@@ -251,7 +300,10 @@ def _handle_tool_call(
             # #416: so a list and the reads that followed it join on the
             # session rather than on project + a time window.
             "session_id": session_id(),
+            # `result_count`/`hit_slugs` are what the caller was shown;
+            # `total` is the topic before the cap (#765).
             "result_count": result_count,
+            **({"total": total} if total is not None else {}),
             "hit_slugs": hit_slugs,
             "elapsed_ms": round(elapsed_ms, 2),
             **({"rerank": rerank_info} if rerank_info else {}),

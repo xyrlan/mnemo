@@ -328,6 +328,12 @@ as `false`. The tool description tells the agent to read the true ones first,
 and an empty set of true ones is a real answer: nothing in this topic is about
 this task.
 
+The call hands back the first 10 rules of that order, and every rule marked
+`relevant: true` even past the tenth (#765). A longer topic answers
+`{"rules": [...], "more": N, "note": ...}`; `limit=N` asks for more and
+`limit=0` for the whole topic. The judge marks its `maxRules` before the cut,
+so the cut never hides a marked rule.
+
 ```json
 { "recall": { "rerank": { "provider": "typesafe" } } }
 ```
