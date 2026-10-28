@@ -243,6 +243,39 @@ def _query_rerank(
     return hits + rest
 
 
+#: ``(path, mtime_ns, size)`` and the reflex index parsed from that file.
+_REFLEX_CACHE: dict = {}
+
+
+def load_reflex_index(vault_root: Path) -> dict | None:
+    """The reflex index, parsed once per file version in this process (#765).
+
+    The MCP server is one long-lived process per session, and each queried
+    ``list_rules_by_topic`` parsed the whole index — twice when the rerank
+    stage ran, once here and once for its tie-break. On a vault of 4,016 rules
+    that file is 137 MB and one parse is ~1 s, which is why a call answered in
+    1 s with no provider and 4 s with one. Keyed on the file's mtime and size,
+    so a SessionStart rebuild is picked up on the next call. The dict is
+    shared: callers read it and never write to it.
+    """
+    from mnemo.core.reflex import index as reflex_index
+
+    path = vault_root / ".mnemo" / reflex_index.INDEX_FILENAME
+    try:
+        st = path.stat()
+    except OSError:
+        _REFLEX_CACHE.clear()
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key in _REFLEX_CACHE:
+        return _REFLEX_CACHE[key]
+    idx = reflex_index.load_index(vault_root)
+    _REFLEX_CACHE.clear()
+    if idx is not None:
+        _REFLEX_CACHE[key] = idx
+    return idx
+
+
 def _rerank_by_query(
     vault_root: Path,
     matches: list[RuleRef],
@@ -255,10 +288,9 @@ def _rerank_by_query(
     break the tool.
     """
     from mnemo.core.reflex import bm25
-    from mnemo.core.reflex import index as reflex_index
     from mnemo.core.reflex.tokenizer import tokenize_query
 
-    idx = reflex_index.load_index(vault_root)
+    idx = load_reflex_index(vault_root)
     if idx is None:
         return matches
     q_tokens = tokenize_query(query)

@@ -282,11 +282,12 @@ def order(matches: Sequence[Any], signal: Mapping[str, float]) -> List[Any]:
 def bm25f_scores(vault_root: Path, query: str, slugs: Sequence[str]) -> Dict[str, float]:
     """BM25F over the rules the judge is sent, the way ``tools._rerank_by_query``
     gets them — and ``{}`` on every gap that one degrades on."""
+    from mnemo.core.mcp import tools
     from mnemo.core.reflex import bm25
-    from mnemo.core.reflex import index as reflex_index
     from mnemo.core.reflex.tokenizer import tokenize_query
 
-    index = reflex_index.load_index(vault_root)
+    # The parse ``list_rules_by_topic`` already paid for, not a second one (#765).
+    index = tools.load_reflex_index(vault_root)
     if index is None:
         return {}
     tokens = tokenize_query(query)
