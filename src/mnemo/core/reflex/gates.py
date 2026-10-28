@@ -87,8 +87,11 @@ def evaluate_gates(
     doc_count: int | None = None,
 ) -> GateResult:
     """Run the gates and return at most 2 accepted slugs (top-1, [top-2])."""
+    # No candidate shares a term with the prompt. This was `index_missing`,
+    # which made 74 of 83 such silences in one vault read as a broken index
+    # (#767).
     if not scores:
-        return GateResult(silence_reason="index_missing")
+        return GateResult(silence_reason="no_term_match")
 
     top1_slug, top1_score = scores[0]
     top2 = scores[1] if len(scores) > 1 else (None, 0.0)

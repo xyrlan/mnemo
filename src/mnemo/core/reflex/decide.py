@@ -25,7 +25,8 @@ class Decision:
     """What one prompt would get, and the numbers behind it.
 
     ``scores`` is empty and ``thresholds`` is ``{}`` when the decision was
-    made before ranking ran (``below_min_tokens``, ``index_missing``): the
+    made before ranking ran (``below_min_tokens``, ``index_missing``,
+    ``no_candidates``): the
     hook's log distinguishes "retrieval looked and found nothing" from
     "retrieval never ran" by the absence of those keys, and so must this.
     """
@@ -121,9 +122,11 @@ def decide(
     if index is None:
         return Decision(silence_reason="index_missing", query_tokens=q_tokens)
 
+    # An index that loaded is not missing: no rule applying to this project
+    # (#767 — a session started in C:\Windows\System32) gets its own reason.
     candidates = candidates_for_project(index, project)
     if not candidates:
-        return Decision(silence_reason="index_missing", query_tokens=q_tokens, index=index)
+        return Decision(silence_reason="no_candidates", query_tokens=q_tokens, index=index)
 
     bm25f_cfg = reflex_cfg.get("bm25f") or {}
     weights = bm25f_cfg.get("fieldWeights") or bm25.DEFAULT_WEIGHTS

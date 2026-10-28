@@ -307,7 +307,7 @@ def test_silence_reasons_are_the_hooks(env):
         R.Prompt(SID_B, "nobody", (T0 + timedelta(days=2)).timestamp(), PROMPT),
     ])
     assert out.injections == []
-    assert out.silence == {"below_min_tokens": 1, "index_missing": 1}
+    assert out.silence == {"below_min_tokens": 1, "no_candidates": 1}
 
 
 def test_project_overrides_are_asked_once_per_project(env):

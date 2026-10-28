@@ -141,6 +141,13 @@ def _explain(
         return ("no rule index for this project yet — it builds in the "
                 "background after a session starts", False)
 
+    if reason == "no_candidates":
+        return ("no rule in the index applies to this project", False)
+
+    if reason == "no_term_match":
+        return ("no rule for this project shares a search term with the "
+                "prompt", False)
+
     if reason == "session_cap_reached":
         return ("this session's injection cap is spent — a budget, not a miss",
                 False)

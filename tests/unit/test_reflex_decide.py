@@ -63,10 +63,11 @@ def test_missing_index_is_index_missing(tmp_path):
     assert d.scores == [] and d.thresholds == {}
 
 
-def test_a_project_with_no_rules_in_scope_is_index_missing(tmp_path):
+def test_a_project_with_no_rules_in_scope_is_no_candidates(tmp_path):
+    """An index that loaded is not missing (#767)."""
     index = build_index(_vault(tmp_path))
     d = D.decide(index, project="nobody", prompt=PROMPT, reflex_cfg=_CFG)
-    assert d.silence_reason == "index_missing"
+    assert d.silence_reason == "no_candidates"
     assert d.index is index
 
 

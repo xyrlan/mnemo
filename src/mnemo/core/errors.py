@@ -170,6 +170,7 @@ def load_validated_json(
     *,
     vault_root: Path,
     error_namespace: str,
+    fallback: Path | None = None,
 ) -> dict | None:
     """Load a JSON dict from ``path`` with discriminating error handling.
 
@@ -185,21 +186,41 @@ def load_validated_json(
       - Root is not a dict → silent (hand-authored malformed file; the
         caller's ``rebuild`` path handles recovery).
       - ``schema_version`` mismatch → silent (post-upgrade, expected).
+
+    ``fallback`` is read the same way when ``path`` exists but cannot be
+    read, parsed, or is not a dict — the empty or NUL-filled file a crash
+    leaves behind an atomic write (#767). Its own failures log under
+    ``<error_namespace>.fallback``. A missing ``path`` or a schema mismatch
+    does not fall back: neither is damage.
     """
+    data = _read_json(path, vault_root, error_namespace)
+    if data is _UNREADABLE and fallback is not None:
+        data = _read_json(fallback, vault_root, f"{error_namespace}.fallback")
+    if not isinstance(data, dict):
+        return None
+    if data.get("schema_version") != expected_schema_version:
+        return None
+    return data
+
+
+_UNREADABLE = object()
+
+
+def _read_json(path: Path, vault_root: Path, error_namespace: str) -> Any:
+    """The parsed JSON dict at ``path``, ``None`` when it does not exist, or
+    ``_UNREADABLE`` when it exists and cannot be read as a dict."""
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError:
         return None
     except OSError as exc:
         log_error(vault_root, f"{error_namespace}.read", exc)
-        return None
+        return _UNREADABLE
     try:
         data = json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         log_error(vault_root, f"{error_namespace}.parse", exc)
-        return None
+        return _UNREADABLE
     if not isinstance(data, dict):
-        return None
-    if data.get("schema_version") != expected_schema_version:
-        return None
+        return _UNREADABLE
     return data

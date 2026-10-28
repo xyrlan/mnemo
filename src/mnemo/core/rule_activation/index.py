@@ -113,7 +113,9 @@ def is_universal(projects: list[str], threshold: int) -> bool:
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     from mnemo.core.atomic import atomic_write_bytes
 
-    atomic_write_bytes(path, data)
+    # Durable, keeping the replaced version for load_index to fall back to:
+    # a crash on 2026-10-18 left this file zeroed and half-written (#767).
+    atomic_write_bytes(path, data, durable=True, keep_previous=True)
 
 
 # ---------------------------------------------------------------------------
@@ -299,12 +301,17 @@ def write_index(vault_root: Path, index: dict) -> None:
 
 
 def load_index(vault_root: Path) -> dict | None:
-    """Load the index from disk. Returns None on any error. Never raises."""
+    """Load the index from disk, or the version before it when the file is
+    there but unreadable. Returns None on any error. Never raises."""
+    from mnemo.core.atomic import previous_path
+
+    path = vault_root / ".mnemo" / INDEX_FILENAME
     return load_validated_json(
-        vault_root / ".mnemo" / INDEX_FILENAME,
+        path,
         INDEX_VERSION,
         vault_root=vault_root,
         error_namespace="rule_activation.load_index",
+        fallback=previous_path(path),
     )
 
 

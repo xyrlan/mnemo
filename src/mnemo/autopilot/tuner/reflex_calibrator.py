@@ -84,7 +84,8 @@ DEFAULT_REFLEX_CONFIG = None  # set after class definition
 # belongs in this set for a different reason: the gates DID run and DID pick a
 # winner, but the prompt was still answered — by the rules file Claude Code
 # already loaded, not by reflex.
-_DEAD_END_REASONS = frozenset({"index_missing", "below_min_tokens", "all_exported"})
+_DEAD_END_REASONS = frozenset({"index_missing", "no_candidates", "no_term_match",
+                               "below_min_tokens", "all_exported"})
 
 # Minimum replayed prompts required before a project is tuned at all. Below
 # this, a carried count is noise dressed as a number
