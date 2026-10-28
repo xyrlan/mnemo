@@ -34,5 +34,5 @@ def test_session_start_writes_reflex_index(tmp_vault, monkeypatch):
     idx_path = tmp_vault / ".mnemo" / "reflex-index.json"
     assert idx_path.exists()
     data = json.loads(idx_path.read_text(encoding="utf-8"))
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert "r" in data["docs"]

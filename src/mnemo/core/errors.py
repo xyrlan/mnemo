@@ -185,6 +185,9 @@ def load_validated_json(
       - Root is not a dict → silent (hand-authored malformed file; the
         caller's ``rebuild`` path handles recovery).
       - ``schema_version`` mismatch → silent (post-upgrade, expected).
+
+    ``expected_schema_version`` may be a tuple of the versions a reader still
+    accepts, for a format whose old version it can read until a rebuild.
     """
     try:
         raw_bytes = path.read_bytes()
@@ -200,6 +203,8 @@ def load_validated_json(
         return None
     if not isinstance(data, dict):
         return None
-    if data.get("schema_version") != expected_schema_version:
+    accepted = (expected_schema_version if isinstance(expected_schema_version, tuple)
+                else (expected_schema_version,))
+    if data.get("schema_version") not in accepted:
         return None
     return data
