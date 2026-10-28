@@ -102,6 +102,11 @@ class Card:
     clean: bool = True
     ahead: int = 0
     unpushed: bool = False
+    #: Of the ``ahead`` commits a branch with no PR carries, how many
+    #: ``origin/<branch>`` lacks — all of them when it was never pushed
+    #: (``never_pushed``). ``None`` when it was not read (#771).
+    not_pushed: Optional[int] = None
+    never_pushed: bool = False
     report: str = ""
     report_chars: int = 0
     transcript: str = ""
@@ -404,6 +409,10 @@ def gather(
                 card.unpushed = code == 0 and out.strip() != card.pr.head
             elif card.pr is None:
                 card.ahead = _ahead(tree, branch or "", run)
+                if card.ahead > 0 and branch:
+                    card.not_pushed, card.never_pushed = _not_pushed(
+                        tree, branch, card.ahead, run,
+                    )
 
         if card.pr is not None and card.pr.state == "OPEN":
             card.checks, card.failing = checks(
@@ -430,6 +439,32 @@ def _ahead(tree: Path, branch: str, run: Runner) -> int:
             except ValueError:
                 return 0
     return 0
+
+
+def _not_pushed(tree: Path, branch: str, ahead: int, run: Runner) -> Tuple[Optional[int], bool]:
+    """``(commits origin/<branch> lacks, never pushed)``; ``(None, False)`` unread.
+
+    The case #771 names: a piece that ran ``git commit … ; claude stop``
+    (#616) read as "2 commits not in any PR", the same words a ``may: push``
+    child that pushed and left the PR to ``mnemo deliver`` gets. Read from the
+    local remote-tracking ref, as :func:`delivery.unpushed` does, so it costs
+    no network. ``for-each-ref`` rather than ``rev-parse --verify``: a missing
+    ref is an empty answer there, not a failure, so a git that failed is never
+    read as a branch that was never pushed.
+    """
+    remote = f"refs/remotes/origin/{branch}"
+    code, out = _git(["for-each-ref", "--format=%(refname)", remote], tree, run)
+    if code != 0:
+        return None, False
+    if not out.strip():
+        return ahead, True
+    code, out = _git(["rev-list", "--count", f"{remote}..{branch}"], tree, run)
+    if code != 0:
+        return None, False
+    try:
+        return int(out.strip()), False
+    except ValueError:
+        return None, False
 
 
 # ---------------------------------------------------------------------------
@@ -518,10 +553,17 @@ def _tree_line(card: Card) -> str:
     if card.unpushed:
         facts.append("HEAD is not the PR's head")
     if card.pr is None:
-        facts.append(
-            f"{card.ahead} commit{'s' if card.ahead != 1 else ''} not in any PR"
-            if card.ahead else "no commits ahead"
-        )
+        if not card.ahead:
+            facts.append("no commits ahead")
+        else:
+            commits = f"{card.ahead} commit{'s' if card.ahead != 1 else ''} not in any PR"
+            if card.never_pushed:
+                commits += ", and the branch was never pushed"
+            elif card.not_pushed:
+                commits += f", {card.not_pushed} of them not pushed"
+            elif card.not_pushed == 0:
+                commits += ", all pushed"
+            facts.append(commits)
     return "- tree: " + (", ".join(facts) if facts else "clean, pushed")
 
 

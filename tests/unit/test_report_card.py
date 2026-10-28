@@ -580,3 +580,61 @@ def test_what_was_sent_is_recorded_one_row_per_event(tmp_path: Path) -> None:
     assert b"\r\n" not in raw
     assert [r["event"] for r in rows] == ["finished", "settled"]
     assert all("ts" in r for r in rows)
+
+
+# --- a branch with no PR: was it pushed? (#771) --------------------------------
+
+
+def _no_pr_runner(origin: Tuple[int, str, str], behind: str = "0\n") -> Fake:
+    return Fake({
+        ("git", "rev-parse", "--abbrev-ref", "HEAD"): (0, "feat/f/roles\n", ""),
+        ("git", "status", "--porcelain"): (0, "", ""),
+        ("gh", "pr", "list"): (0, "[]", ""),
+        ("git", "rev-list", "--count", "master..feat/f/roles"): (0, "2\n", ""),
+        ("git", "for-each-ref"): origin,
+        ("git", "rev-list", "--count",
+         "refs/remotes/origin/feat/f/roles..feat/f/roles"): (0, behind, ""),
+    })
+
+
+@pytest.fixture
+def _master(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mnemo.core.sessions import delivery
+
+    monkeypatch.setattr(delivery, "base_branch", lambda **k: "master")
+
+
+def test_a_branch_never_pushed_is_said_so(tmp_path: Path, _master) -> None:
+    """#616: `git commit … ; claude stop`, nothing on origin."""
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner((0, "", "")))
+
+    assert card.never_pushed and card.not_pushed == 2
+    assert rc.state(card) == "unpublished"
+    assert ("- tree: 2 commits not in any PR, and the branch was never pushed"
+            in rc.render(card))
+
+
+def test_commits_ahead_of_origin_are_counted(tmp_path: Path, _master) -> None:
+    ref = (0, "refs/remotes/origin/feat/f/roles\n", "")
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner(ref, "1\n"))
+
+    assert not card.never_pushed and card.not_pushed == 1
+    assert "- tree: 2 commits not in any PR, 1 of them not pushed" in rc.render(card)
+
+
+def test_a_pushed_branch_without_a_pr_says_all_pushed(tmp_path: Path, _master) -> None:
+    """The `may: push` child: pushed, the PR left for `mnemo deliver`."""
+    ref = (0, "refs/remotes/origin/feat/f/roles\n", "")
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner(ref, "0\n"))
+
+    assert card.not_pushed == 0
+    assert "- tree: 2 commits not in any PR, all pushed" in rc.render(card)
+
+
+def test_a_failed_ref_read_is_not_read_as_never_pushed(tmp_path: Path, _master) -> None:
+    """A fact whose source failed is left out, never filled in (#306)."""
+    card = rc.gather("x", cwd=str(_tree(tmp_path)), run=_no_pr_runner((128, "", "boom")))
+
+    assert card.not_pushed is None and not card.never_pushed
+    assert "- tree: 2 commits not in any PR\n" in rc.render(card) + "\n"
+    assert "pushed" not in rc._tree_line(card)

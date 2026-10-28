@@ -814,9 +814,25 @@ Nothing about *how* to build this is specified, deliberately. If the contract's
 boundary turns out to be wrong — the work does not divide where it says, or a
 signature cannot be delivered as written — stop and say so rather than widening
 your boundary to make it fit.
+
+Before you finish, run the mutation pass a reviewer would otherwise run on your
+piece: for each test you added, break the code it guards — invert a condition,
+drop a call, return early — run that test, watch it fail, then restore the
+code. A test that still passes against the broken code guards nothing; fix it
+before you stop. Say in your report which mutations you ran and which test
+caught each.
 {changelog}
 {publish}
 {closing}"""
+
+#: Said after a granted piece's publish clause (#771). The closing's step 2
+#: already says to push, and #616's child still ran ``git commit … ; claude
+#: stop`` and left the parent to push and open the PR. Not said without a
+#: grant: there the line it would follow is "do not push without asking".
+PIECE_PUSH = (
+    " Push before you stop: a commit left only in this worktree reaches no "
+    "one, and the notice your parent gets when you stop says so."
+)
 
 _CONSUMES_PROMPT = """**What you may assume exists** — another piece is delivering
 these. They may not exist in your worktree yet: write against the signature,
@@ -851,6 +867,13 @@ def build_piece_prompt(
     putting another piece's files inside this prompt weakens the one thing
     that makes the boundary hard: that they are not in it.
 
+    **The mutation pass and the push are asked here** (#771). Reading the
+    commits on the 17 pieces since 2026-09-29 that were not hands-off (#768),
+    the parent pushed commits on top of 11 before landing; three of those were
+    tests for mutation-pass survivors the child could have found itself, and
+    one piece committed and stopped without pushing. Both are checks on the
+    child's own work, not an approach to it.
+
     A Grok child's is this one through :func:`for_agent`, as for an issue.
     """
     branch = branch_name(piece.slug, feature=feature)
@@ -875,7 +898,7 @@ def build_piece_prompt(
         publish=(
             f"Run the full test suite before you finish. {NO_GRANT}" if not may
             else _wrap("Run the full test suite before you finish. "
-                       + _publish_clause(may, branch=branch))
+                       + _publish_clause(may, branch=branch) + PIECE_PUSH)
         ),
         closing=_closing_clause(may),
     )

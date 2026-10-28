@@ -387,6 +387,8 @@ def _dispatch_contract(
         print(f"contract unusable: {path}: {exc}")
         return 1
 
+    _warn_shared_files(contract)
+
     model = getattr(args, "model", None) or None
     effort = getattr(args, "effort", None) or None
 
@@ -422,6 +424,25 @@ def _dispatch_contract(
         print(str(exc))
         return 1
     return _report(results, lean=lean)
+
+
+def _warn_shared_files(contract) -> None:
+    """Name every pair of pieces whose ``files`` meet, before anything spawns.
+
+    Printed on ``--dry-run`` too, which is where the maintainer reviews the
+    contract. A warning, not a refusal (:func:`contracts.shared_files` says
+    why): the file is the finest grain a contract carries, and the lines two
+    children will touch are not known until they have.
+    """
+    from mnemo.core import contracts
+
+    shared = contracts.shared_files(contract)
+    for slug, other, entries in shared:
+        print(f"warning: {slug} and {other} both list {', '.join(entries)} — "
+              "their children will edit it in parallel")
+    if shared:
+        print("  code more than one piece edits belongs in the seam, landed "
+              f"before the pieces ({contracts.SKILL})")
 
 
 def _label(target: object) -> str:
