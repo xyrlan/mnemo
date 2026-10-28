@@ -192,6 +192,7 @@ the machine.**
 | `reflex.judge.timeoutSeconds` | `2.5` | The whole budget a prompt may spend waiting. It is a hard wall, not a socket timeout: past it the request is abandoned. |
 | `reflex.judge.candidates` | `3` | How deep into the BM25F ranking the pool goes. |
 | `reflex.judge.injectAt` | `0.4` | The probability a rule has to clear to be injected. It was `0.6` until #461; a config that sets it keeps its own value. |
+| `reflex.judge.noticeInjectAt` | `0.5` | The same bar for a machine notice nobody typed: a `<task-notification>`, a `<cross-session-message>` or `<agent-message>`, a peer session's message, a `<mnemo-child-finished>` notice. A notice whose picks all fall under it is logged as `notice_below_bar` (#789). Set it to `injectAt`'s value to treat notices like prompts. |
 
 **When it is on, it replaces the accept step — it does not stack on it.** The
 pool is the top `candidates` of the *ranking*, including the prompts the

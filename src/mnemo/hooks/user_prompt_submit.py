@@ -250,6 +250,21 @@ def _reflex(payload: dict, throwaway_session) -> int:
                     project=project)
                 if picks is not None:
                     judge_picks = list(picks)
+                    # A notice nobody typed — a task finished, a peer wrote —
+                    # is held to a higher bar than a prompt (#789). See
+                    # `core.reflex.notice` and `judge.DEFAULT_NOTICE_INJECT_AT`.
+                    from mnemo.core.reflex import notice
+
+                    notice_kind = notice.kind(prompt_raw)
+                    if notice_kind and picks:
+                        picks = judge_stage.notice_picks(picks, judge_row, notice_kind, chosen)
+                        if not picks:
+                            _log_silence(vault, sid, project, prompt_raw,
+                                         reason=judge_stage.NOTICE_SILENCE_REASON,
+                                         candidates=receipt, thresholds=gate_thresholds,
+                                         exported=exported, judge=judge_row,
+                                         judge_picks=judge_picks)
+                            return 0
                     if not picks:
                         _log_silence(vault, sid, project, prompt_raw,
                                      reason=judge_stage.SILENCE_REASON,
