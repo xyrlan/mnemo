@@ -384,7 +384,8 @@ def test_session_start_skips_rebuild_when_no_page_changed(
     assert (hook_env / ".mnemo" / rule_activation.INDEX_KEY_FILENAME).exists()
 
 
-@pytest.mark.parametrize("change", ["edit", "add", "delete", "threshold", "index_gone"])
+@pytest.mark.parametrize("change", ["edit", "add", "delete", "threshold", "index_gone",
+                                    "index_zeroed", "index_empty"])
 def test_session_start_rebuilds_when_its_inputs_changed(
     change: str, hook_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ):
@@ -409,8 +410,14 @@ def test_session_start_rebuilds_when_its_inputs_changed(
     elif change == "threshold":
         _set_config(hook_env, enforcement={"enabled": True},
                     scoping={"universalThreshold": 1})
-    else:
+    elif change == "index_gone":
         (hook_env / ".mnemo" / rule_activation.INDEX_FILENAME).unlink()
+    else:
+        # what a crash on NTFS leaves when it keeps the rename and loses the
+        # bytes (#767): the key survives, the index does not (#804)
+        index = hook_env / ".mnemo" / rule_activation.INDEX_FILENAME
+        size = index.stat().st_size if change == "index_zeroed" else 0
+        index.write_bytes(b"\x00" * size)
     _run_hook(hook_env, {"session_id": "C2", "cwd": str(repo)}, monkeypatch, capsys)
 
     assert len(builds) == 1

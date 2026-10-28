@@ -147,6 +147,21 @@ def test_the_rule_index_key_keeps_no_previous(tmp_vault):
     assert not previous_path(key_path).exists()
 
 
+@pytest.mark.parametrize("how", ["empty", "nul", None])
+def test_a_crashed_index_with_a_surviving_key_is_not_current(tmp_vault, how):
+    """The key and the index are two files. A crash can keep the key and
+    zero the index; the next SessionStart must rebuild it, not trust the key
+    until some page changes (#804). A sound index still is current."""
+    _seed(tmp_vault)
+    key = rule_activation.index_key(tmp_vault, universal_threshold=2)
+    rule_activation.write_index(tmp_vault, rule_activation.build_index(tmp_vault))
+    rule_activation.write_index_key(tmp_vault, key)
+    if how is not None:
+        index = tmp_vault / ".mnemo" / rule_activation.INDEX_FILENAME
+        index.write_bytes(_DAMAGE[how](index.read_bytes()))
+    assert rule_activation.index_is_current(tmp_vault, key) is (how is None)
+
+
 # --- the readers ------------------------------------------------------------
 
 
