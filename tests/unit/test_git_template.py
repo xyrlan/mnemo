@@ -1,6 +1,7 @@
 """``_git_template``: a copied git fixture is the test's own, not the template's (#799)."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -33,6 +34,22 @@ def _relink(root: Path) -> None:
 
 def _same(a: str, b: Path) -> bool:
     return Path(a).resolve() == b.resolve()
+
+
+def test_a_template_is_built_with_automatic_maintenance_off(tmp_path, tmp_path_factory,
+                                                            monkeypatch):
+    """A detached ``maintenance --auto`` would write into the template while it
+    is being copied; the build runs with it off, and the setting goes after."""
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    seen = {}
+
+    def build(root: Path) -> None:
+        for key in ("maintenance.auto", "gc.auto"):
+            seen[key] = _git("config", "--get", key, cwd=root)
+
+    _git_template.copy("git-template-maintenance", build, tmp_path, tmp_path_factory)
+    assert seen == {"maintenance.auto": "false", "gc.auto": "0"}
+    assert "GIT_CONFIG_COUNT" not in os.environ
 
 
 def test_a_copy_left_naming_its_template_is_refused(tmp_path, tmp_path_factory):

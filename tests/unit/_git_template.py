@@ -15,10 +15,12 @@ template, so a test can never reach back into it — or into another test.
 """
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 import shutil
 from pathlib import Path
-from typing import Callable, Dict, Iterable
+from typing import Callable, Dict, Iterable, Iterator
 
 import pytest
 
@@ -40,7 +42,8 @@ def copy(
     """
     if key not in _BUILT:
         root = factory.mktemp(f"template-{key}")
-        build(root)
+        with _no_auto_maintenance():
+            build(root)
         _BUILT[key] = root
     template = _BUILT[key]
     dest.mkdir(parents=True, exist_ok=True)
@@ -50,6 +53,32 @@ def copy(
     stale = list(_naming(dest, template))
     assert not stale, f"the copy of {key!r} still names its template in: {stale}"
     return dest
+
+
+@contextlib.contextmanager
+def _no_auto_maintenance() -> Iterator[None]:
+    """Build with git's automatic maintenance off, through the environment.
+
+    Since git 2.47 a ``commit`` or ``push`` may leave ``git maintenance run
+    --auto`` running detached, and it takes ``.git/objects/maintenance.lock``
+    in the template after *build* has returned: a copy made then trips over
+    the lock vanishing mid-``copytree`` (seen on macOS CI). Nothing may touch
+    a template once it is built.
+    """
+    n = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    added = {"GIT_CONFIG_COUNT": str(n + 2)}
+    for i, (k, v) in enumerate((("maintenance.auto", "false"), ("gc.auto", "0")), n):
+        added[f"GIT_CONFIG_KEY_{i}"], added[f"GIT_CONFIG_VALUE_{i}"] = k, v
+    saved = {k: os.environ.get(k) for k in added}
+    os.environ.update(added)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def relink_worktree(repo: Path, tree: Path) -> None:
