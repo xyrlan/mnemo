@@ -441,9 +441,12 @@ def test_the_card_reads_the_report_and_the_pr_from_a_grok_history(tmp_path):
 def test_a_claude_transcript_is_read_as_before(tmp_path):
     path = tmp_path / "594436f2.jsonl"
     path.write_text(json.dumps({"type": "assistant", "message": {"content": [
-        {"type": "text", "text": "the report"}]}}) + "\n" + json.dumps({
+        {"type": "tool_use", "id": "p1", "name": "Bash",
+         "input": {"command": "gh pr create --fill"}}]}}) + "\n" + json.dumps({
             "type": "user", "message": {"content": [
-                {"type": "tool_result", "content": PR_URL}]}}) + "\n", encoding="utf-8")
+                {"type": "tool_result", "tool_use_id": "p1", "content": PR_URL}]}}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "the report"}]}}) + "\n", encoding="utf-8")
     assert rc.closing_report(path) == "the report"
     assert rc.pr_urls_in(path) == [PR_URL]
 

@@ -55,7 +55,9 @@ STATES = (
 )
 
 _PR_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
-_PR_FIELDS = "number,url,state,isDraft,additions,deletions,changedFiles,headRefOid,mergeable"
+_PR_FIELDS = ("number,url,state,isDraft,additions,deletions,changedFiles,headRefOid,"
+              "headRefName,mergeable")
+_PR_CREATE = re.compile(r"\bgh\s+pr\s+create\b")
 
 
 def _run(argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
@@ -79,6 +81,8 @@ class PR:
     deletions: Optional[int] = None
     files: Optional[int] = None
     head: str = ""
+    #: The branch the PR was opened from; ``""`` when it was not read.
+    head_ref: str = ""
     #: gh's own: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub computes it;
     #: ``""`` when it was not read.
     mergeable: str = ""
@@ -187,49 +191,75 @@ def closing_report(transcript: Optional[Path]) -> str:
 
 
 def pr_urls_in(transcript: Optional[Path]) -> List[str]:
-    """PR URLs ``gh pr create`` printed in the transcript, oldest first.
+    """PR URLs ``gh pr create`` printed in the transcript, oldest first."""
+    return [url for url, _ in created_prs(transcript)]
+
+
+def created_prs(transcript: Optional[Path]) -> List[Tuple[str, str]]:
+    """``(url, branch)`` for each PR the child's own ``gh pr create`` printed,
+    oldest first; *branch* is the one the child's session had checked out
+    when it ran the command, ``""`` when the transcript does not say.
 
     The fallback when the tree is gone and the branch cannot be read: the
     child's own ``gh pr create`` output is the one place the URL is on disk.
-    Only tool results are read, so a URL the child merely quoted does not
-    count.
+    Only the result of a ``gh pr create`` call counts, matched to its
+    ``tool_use`` by id (#769): a child that ran ``gh pr view`` on another
+    repository's PR, or quoted a URL, did not open that PR.
     """
     if not transcript:
         return []
-    found: List[str] = []
+    creates: Dict[str, str] = {}
+    found: List[Tuple[str, str]] = []
     grok = _grok_events(transcript)
     if grok is not None:
         for record in grok:
-            _tool_result_urls(record, found)
+            _created_urls(record, creates, found)
         return found
     try:
         with open(transcript, encoding="utf-8") as fh:
             for line in fh:
-                if "tool_result" not in line or "/pull/" not in line:
+                if "create" not in line and "/pull/" not in line:
                     continue
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                _tool_result_urls(record, found)
+                if isinstance(record, dict):
+                    _created_urls(record, creates, found)
     except OSError:
         return []
     return found
 
 
-def _tool_result_urls(record: dict, found: List[str]) -> None:
-    """Add the PR URLs in *record*'s tool results to *found*, in order."""
+def _created_urls(record: dict, creates: Dict[str, str],
+                  found: List[Tuple[str, str]]) -> None:
+    """Note *record*'s ``gh pr create`` calls in *creates* (id -> branch), and
+    add the PR URLs their results printed to *found*, in order."""
     content = (record.get("message") or {}).get("content")
     if not isinstance(content, list):
         return
+    branch = str(record.get("gitBranch") or "")
+    if branch == "HEAD":
+        branch = ""
     for block in content:
-        if not isinstance(block, dict) or block.get("type") != "tool_result":
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use":
+            args = block.get("input")
+            command = args.get("command") if isinstance(args, dict) else None
+            if isinstance(command, str) and _PR_CREATE.search(command):
+                creates[str(block.get("id") or "")] = branch
+            continue
+        if block.get("type") != "tool_result":
+            continue
+        use_id = str(block.get("tool_use_id") or "")
+        if not use_id or use_id not in creates:
             continue
         body = block.get("content")
         text = body if isinstance(body, str) else json.dumps(body)
         for url in _PR_URL.findall(text):
-            if url not in found:
-                found.append(url)
+            if all(url != seen for seen, _ in found):
+                found.append((url, creates[use_id]))
 
 
 def _pr_from(row: object) -> Optional[PR]:
@@ -253,6 +283,7 @@ def _pr_from(row: object) -> Optional[PR]:
         deletions=_int("deletions"),
         files=_int("changedFiles"),
         head=str(row.get("headRefOid") or ""),
+        head_ref=str(row.get("headRefName") or ""),
         mergeable=str(row.get("mergeable") or ""),
     )
 
@@ -332,7 +363,10 @@ def gather(
 
     The branch comes from the tree when it still exists; a child that ran in
     a tree someone already removed falls back to the PR URL its own ``gh pr
-    create`` printed. Each lookup that fails leaves its field empty.
+    create`` printed, and only to a PR opened from the branch the child had
+    checked out. A tree that exists and whose branch has no PR has none: a
+    read-only child, or one that stopped before publishing (#769). Each
+    lookup that fails leaves its field empty.
     """
     from mnemo.core.dispatch import issue_for_cwd
 
@@ -356,10 +390,13 @@ def gather(
 
         if branch:
             card.pr = pr_for_branch(branch, cwd=str(tree), run=run)
-        if card.pr is None:
-            urls = pr_urls_in(transcript)
-            if urls:
-                card.pr = pr_by_url(urls[-1], run=run)
+        if card.pr is None and (tree is None or not tree.is_dir()):
+            created = created_prs(transcript)
+            if created:
+                url, own = created[-1]
+                pr = pr_by_url(url, run=run)
+                if pr is not None and (not own or pr.head_ref == own):
+                    card.pr = pr
 
         if card.tree_seen and tree is not None:
             if card.pr is not None and card.pr.head:
