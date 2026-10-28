@@ -221,3 +221,91 @@ def test_prompt_holds_counts_slow_runs_only():
     assert out["sessions"] == 5 and out["prompt_before_hook_end"] == 2
     assert out["slow"] == 4 and out["slow_prompt_within"] == 2
     assert out["slow_prompt_before_hook_end"] == 1
+
+
+# --- what the slow starts follow (#763) ---------------------------------------
+
+def test_the_first_start_after_each_stamp_is_split_from_the_rest():
+    cmd = "/usr/bin/python3 -m mnemo.hooks.session_start"
+    rows = [
+        _attachment(cmd, 900, ts="2026-10-01T00:00:00Z"),       # before any stamp
+        _attachment(cmd, 20000, ts="2026-10-02T10:00:00Z"),     # first after stamp 1
+        _attachment(cmd, 20000, ts="2026-10-02T10:00:00Z"),     # the same row twice
+        _attachment(cmd, 1000, ts="2026-10-02T11:00:00Z"),
+        _attachment(cmd, 9000, ts="2026-10-03T10:00:01Z"),      # first after stamp 2
+        _attachment(cmd, 2000, ts="2026-10-03T12:00:00Z"),
+        _attachment(cmd, 30000, kind="hook_cancelled", timed_out=True,
+                    timeout_ms=30000, ts="2026-10-03T13:00:00Z"),
+        _attachment("/usr/bin/python3 -m mnemo.hooks.pre_tool_use", 5000,
+                    ts="2026-10-03T14:00:00Z"),
+    ]
+    runs = mhd.start_runs(rows)
+    assert [r["ms"] for r in runs] == [900, 20000, 1000, 9000, 2000]
+    out = mhd.first_after(runs, ["2026-10-03T10:00:00", "2026-10-02T09:00:00Z", ""])
+    assert out["stamps"] == 2
+    assert out["first"]["n"] == 2 and out["first"]["max"] == 20000
+    assert out["first_slow"] == 2
+    assert out["rest"]["n"] == 2 and out["rest_slow"] == 0
+    # A stamp with no run after it adds nothing to either side.
+    late = mhd.first_after(runs, ["2026-10-02T09:00:00", "2027-01-01T00:00:00"])
+    assert late["first"]["n"] == 1 and late["rest"]["n"] == 3
+
+
+def test_measure_reports_the_split_only_when_asked(tmp_path):
+    projects = tmp_path / "projects"
+    cmd = "/usr/bin/python3 -m mnemo.hooks.session_start"
+    _write_jsonl(projects / "-p" / "a.jsonl", [
+        _attachment(cmd, 15000, ts="2026-10-02T10:00:00Z"),
+        _attachment(cmd, 1000, ts="2026-10-02T11:00:00Z"),
+    ])
+    assert "first_after" not in mhd.measure(str(tmp_path / "vault"), str(projects))
+    report = mhd.measure(str(tmp_path / "vault"), str(projects),
+                         stamps=["2026-10-02T09:00:00"])
+    assert report["first_after"]["first"]["n"] == 1
+    assert "first run after each" in mhd.render(report)
+
+
+def _vault_with_rules(root: Path) -> Path:
+    from mnemo.core import rule_activation as ra
+
+    vault = root / "vault"
+    (vault / "shared" / "feedback").mkdir(parents=True)
+    (vault / "shared" / "feedback" / "r.md").write_text(
+        "---\nname: r\nsources:\n  - bots/p/MEMORY.md\ntags:\n  - git\n---\n\nBody.\n",
+        encoding="utf-8")
+    (vault / "mnemo.config.json").write_text(json.dumps({"vaultRoot": str(vault)}),
+                                             encoding="utf-8")
+    key = ra.index_key(vault, universal_threshold=2)
+    ra.write_index(vault, ra.build_index(vault, universal_threshold=2))
+    ra.write_index_key(vault, key)
+    return vault
+
+
+def test_the_clone_gets_the_real_vaults_current_index_key(tmp_path):
+    """#763: without the key a clone's first timed start rebuilds the index —
+    opening every page — where a start in the real vault would not."""
+    from mnemo.core import rule_activation as ra
+
+    vault = _vault_with_rules(tmp_path)
+    env = mhd.prepare_scratch(str(vault), str(tmp_path / "scratch"))
+    clone = Path(env["MNEMO_CONFIG_PATH"]).parent
+    assert ra.index_is_current(clone, ra.index_key(clone, universal_threshold=2))
+    index = ra.load_index(clone)
+    assert Path(index["vault_root"]) == clone
+    assert Path(index["rules"]["r"]["path"]) == clone / "shared" / "feedback" / "r.md"
+
+
+def test_a_stale_real_key_is_not_carried(tmp_path):
+    from mnemo.core import rule_activation as ra
+
+    vault = _vault_with_rules(tmp_path)
+    (vault / "shared" / "feedback" / "s.md").write_text("---\nname: s\n---\n",
+                                                        encoding="utf-8")
+    env = mhd.prepare_scratch(str(vault), str(tmp_path / "scratch"))
+    clone = Path(env["MNEMO_CONFIG_PATH"]).parent
+    assert not (clone / ".mnemo" / ra.INDEX_KEY_FILENAME).exists() or not ra.index_is_current(
+        clone, ra.index_key(clone, universal_threshold=2))
+    # and a vault with no key at all is no error
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert mhd.carry_index_key(str(bare), str(tmp_path / "bare-clone")) is False
