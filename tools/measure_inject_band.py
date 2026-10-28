@@ -80,6 +80,34 @@ rubric as #411: 0 noise, 1 marginal, 2 on-point ("inject").
   at most :data:`REPEAT_MAX_FLAGS` rules and at least 80% of the flagged
   rules' labelled pairs are not on-point.
 
+**The result on the maintainer's Windows vault (2026-10-28).** The bars
+above were committed (1ac3b04, the rubric in 84e4ca6) before the rater read
+a chunk. Population 2026-10-13 to 10-28: 540 injected prompts, 814 judged
+rule injections, 230 (28%) in the near band carrying 28% of the 1.75 MB
+injected; the prompt was found for 787. **351 of those 787 (45%) are
+notices**, not typed prompts: 230 ``<task-notification>``, 52
+``<cross-session-message>``, 48 ``<mnemo-child-finished>``, 17
+``<mnemo-pr-follow>``, 4 ``<agent-message>``. 240 pairs labelled blind
+(``claude-fable-5-1``, four raters, one per chunk):
+
+- on-point near **32%**, above **62%**: ``d`` +30.8 pp, 95% CI
+  [+18.5, +42.8]. The CI excludes 0, but 32.5% is not at most half of 61.7%:
+  **neither branch** — not "raise to 0.5", not "keep 0.4";
+- typed prompts alone, 46% against 68%: +21.3 pp [+4.2, +38.1], neither;
+- typed against notices, 58% against 35%: +23.6 pp [+10.6, +35.9],
+  neither. The weakest cell is notices in the near band, 20% on-point of 66;
+- the score detector flags 2 rules and the kind detector 7 (the 83-injection
+  rule among them, 4 of its 28 sampled pairs on-point, 24 marginal), with
+  67% and 68% of their labelled pairs not on-point: **not a doctor row**
+  for either.
+
+Read beyond the bars, and labelled as such: raising ``injectAt`` to 0.5
+would cut 28% of injected bytes and about 17% of the on-point injections
+(230 × 32% ≈ 74, against about 360 kept above). This rater is far more
+lenient than #411's: 2% noise overall, where #411 measured 15% at the same
+bar. A stricter rater would move both bands, and nothing here says which way
+the ratio would go.
+
 **Limits** to carry with any number from here: one rater, a model, blind,
 never the developer; the prompt alone with no earlier turn, as in #411, so a
 terse "sim, pode rodar" reads as noise against any rule; the rule as its page
