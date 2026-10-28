@@ -33,7 +33,9 @@ def _keep_previous(path: Path) -> None:
     """Hard-link ``path`` as :func:`previous_path` before it is replaced.
 
     A link, not a copy: the replace only drops the target's name, so the old
-    bytes live on under ``.prev`` at no cost however large the file is. A
+    bytes live on under ``.prev`` without being copied, however large the
+    file is. They stay on disk until the next write replaces ``.prev``: one
+    more copy of the file (``tools/measure_reflex_index_load.py``). A
     target that is empty or starts with NUL is what a crash leaves (#735) and
     is not kept, so a rebuild after one does not overwrite the last good
     version with it. Best-effort: a filesystem without hard links keeps none.
