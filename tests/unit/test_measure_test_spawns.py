@@ -25,7 +25,9 @@ def test_spawns_count_against_the_running_test_s_file_only():
     c = tool.Counter()
     c.audit("subprocess.Popen", ("git", ["git", "init"], None, None))  # outside a test
     c.pytest_runtest_protocol(_Item("tests/a.py::t1"), None)
+    c.pytest_runtest_setup(_Item("tests/a.py::t1"))
     c.audit("subprocess.Popen", (None, ["git", "init"], None, None))
+    c.pytest_runtest_call(_Item("tests/a.py::t1"))
     c.audit("subprocess.Popen", (None, ["git", "commit"], None, None))
     c.audit("subprocess.Popen", (sys.executable, [sys.executable, "-m", "mnemo"], None, None))
     c.audit("open", ("x", "r", 0))                                      # not a spawn
@@ -39,4 +41,5 @@ def test_spawns_count_against_the_running_test_s_file_only():
     assert (row["file"], row["tests"], row["processes"]) == ("tests/a.py", 2, 3)
     assert row["spawns"] == {"git": 2, "python": 1}
     assert row["per_test"] == 1.5
+    assert row["phases"] == {"setup": 1, "call": 2}
     assert "git 2, python 1" in tool.render(rows)
