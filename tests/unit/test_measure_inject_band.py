@@ -286,6 +286,7 @@ def test_build_export_import_and_report_round_trip(tmp_path, monkeypatch, capsys
     ids = json.loads((blind / "ids.json").read_text(encoding="utf-8"))["ids"]
     chunk = (blind / "chunk-001.json").read_text(encoding="utf-8")
     assert "ci-rule" not in chunk and "0.45" not in chunk
+    assert (blind / "RUBRIC.txt").read_text(encoding="utf-8") == mib.RUBRIC
     answers = {key: (mib.ON_POINT if slug == "domain-rule" else mib.NOISE)
                for key, (_, slug) in ids.items()}
     (blind / "chunk-001.labels.json").write_text(json.dumps(answers), encoding="utf-8")

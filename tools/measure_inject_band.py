@@ -161,6 +161,29 @@ NOISE = mrg.NOISE
 
 DEFAULT_RATER = "claude-fable-5-1"
 
+#: What the rater is told, written next to the chunks by ``--export-blind``.
+#: #411 kept only its scale ("0 noise / 1 marginal / 2 inject"); this is that
+#: scale spelled out, so the next rater reads the same words as this one.
+RUBRIC = """\
+Each chunk file holds messages a developer's coding agent received, each with
+one or more rules that a memory system injected into the agent's context right
+after that message. Some messages were typed by the developer; others are
+machine notices (a background task finished, another session sent a message).
+
+For every rule, answer one number:
+
+  2  inject   - the rule bears on what this message asks for or reports; an
+                agent handling this message is better off having read it now.
+  1  marginal - same area or vocabulary, but it would not change what the agent
+                does with this message.
+  0  noise    - nothing to do with this message.
+
+Judge each rule on the message alone; you will not see the earlier turns. Do
+not reward a rule for being true or well written, only for bearing on this
+message. Answer chunk-NNN.json with chunk-NNN.labels.json next to it:
+{"<id>": 0|1|2, ...}, one entry per rule id, nothing else.
+"""
+
 BOOTSTRAP = 10000
 SEED = 764
 
@@ -760,6 +783,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for i, chunk in enumerate(chunks, start=1):
             _write_json(target / ("chunk-%03d.json" % i), chunk)
         _write_json(target / "ids.json", {"sample_file": SAMPLE_NAME, "ids": ids})
+        (target / "RUBRIC.txt").write_text(RUBRIC, encoding="utf-8")
         print("%d rules in %d chunk file(s) -> %s\n"
               "the rater answers each chunk-NNN.json with a chunk-NNN.labels.json "
               "next to it: {\"<id>\": 0|1|2}" % (len(ids), len(chunks), target))
