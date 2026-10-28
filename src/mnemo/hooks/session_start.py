@@ -1460,7 +1460,10 @@ def main() -> int:
         # enforcement (PreToolUse deny), enrichment (PreToolUse context), or
         # injection (SessionStart topic list). Reflex is NOT a consumer of this
         # index — it builds its own BM25F index (reflex-index.json) below.
-        # Disabled-everything sessions still pay zero cost.
+        # Disabled-everything sessions still pay zero cost. Rebuilt only when
+        # a page changed since the last build (#763): the rebuild opens every
+        # page, and right after a Defender signature update each open is a
+        # fresh scan — the SessionStarts that ran tens of seconds.
         inj_enabled = bool(cfg.get("injection", {}).get("enabled", False))
         enf_enabled = bool(cfg.get("enforcement", {}).get("enabled", False))
         enr_enabled = bool(cfg.get("enrichment", {}).get("enabled", False))
@@ -1468,7 +1471,10 @@ def main() -> int:
         if enf_enabled or enr_enabled or inj_enabled:
             try:
                 from mnemo.core import rule_activation
-                rule_activation.write_index(vault, rule_activation.build_index(vault))
+                key = rule_activation.index_key(vault)
+                if not rule_activation.index_is_current(vault, key):
+                    rule_activation.write_index(vault, rule_activation.build_index(vault))
+                    rule_activation.write_index_key(vault, key)
             except Exception as exc:
                 errors.log_error(vault, "session_start.rule_activation_index", exc)
         phases.lap("rule_activation_index")
