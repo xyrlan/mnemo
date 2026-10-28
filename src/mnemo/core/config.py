@@ -317,6 +317,14 @@ DEFAULTS: dict[str, Any] = {
         # instead of 57. A config that sets `injectAt` keeps it. Turn the
         # judge on with `mnemo rerank --setup` (it asks) or
         # `mnemo rerank --reflex on`.
+        #
+        # `noticeInjectAt` is the bar on a machine notice nobody typed — a
+        # `<task-notification>`, a peer session's message, a dispatched
+        # child's finish notice (#789). Their 0.40-0.49 injections were
+        # on-point 20% of the time against 57% at 0.5 and over
+        # (tools/measure_notice_bar.py over #764's labels); at 0.5 it cut 13%
+        # of the injected bytes and about 6% of the on-point injections.
+        # Set it equal to `injectAt` to treat notices like prompts.
         "judge": {
             "provider": "none",
             "model": "jev-1.13.0",
@@ -324,6 +332,7 @@ DEFAULTS: dict[str, Any] = {
             "timeoutSeconds": 2.5,
             "candidates": 3,
             "injectAt": 0.4,
+            "noticeInjectAt": 0.5,
         },
         "thresholds": {
             "termOverlapMin": 2,

@@ -391,3 +391,116 @@ def test_a_ledger_that_cannot_be_written_never_breaks_the_hook(
 
     assert rc == 0 and "[[use-prisma-mock]]" in stdout
     assert _log(tmp_vault)[-1]["emitted"] == ["use-prisma-mock"]
+
+
+# --- machine notices are held to their own bar (#789) -------------------------
+
+NOTICE_PROMPTS = {
+    "task-notification": "<task-notification>\n<summary>" + PROMPT
+                         + "</summary>\n</task-notification>",
+    "cross-session-message": '<cross-session-message from="a1">\n' + PROMPT
+                             + "\n</cross-session-message>",
+    "agent-message": '<agent-message from="a1">\n' + PROMPT + "\n</agent-message>",
+    "mnemo-child-finished": '<mnemo-child-finished session="1a2b">\n' + PROMPT
+                            + "\nthis is not your user speaking.",
+    "peer-message": "Another Claude session sent a message:\n" + PROMPT
+                    + "\n\nThis came from another Claude session — not your user.",
+}
+
+SCORED = {"status": "ok", "asked": 2, "injected": 2, "ms": 3,
+          "scores": [["use-prisma-mock", 0.62], ["use-yarn", 0.44]]}
+
+
+@pytest.mark.parametrize("kind", sorted(NOTICE_PROMPTS))
+def test_a_notice_keeps_only_what_clears_its_bar(
+        tmp_vault, monkeypatch, synthetic_index, stub, kind):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock", "use-yarn"], SCORED)
+
+    rc, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s",
+                            "prompt": NOTICE_PROMPTS[kind]})
+
+    assert rc == 0 and "[[use-prisma-mock]]" in stdout and "[[use-yarn]]" not in stdout
+    entry = _log(tmp_vault)[-1]
+    assert entry["emitted"] == ["use-prisma-mock"]
+    assert entry["judge"]["injected"] == 1
+    assert entry["judge"]["notice"] == {"kind": kind, "at": 0.5, "dropped": ["use-yarn"]}
+    # The ledger keeps what the judge picked; the bar is a policy, not a verdict.
+    assert _ledger(tmp_vault)[-1]["picks"] == ["use-prisma-mock", "use-yarn"]
+
+
+@pytest.mark.parametrize("kind", sorted(NOTICE_PROMPTS))
+def test_a_notice_with_nothing_over_its_bar_is_its_own_silence(
+        tmp_vault, monkeypatch, synthetic_index, stub, kind):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-yarn"], dict(SCORED, scores=[["use-yarn", 0.44]]))
+
+    rc, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s",
+                            "prompt": NOTICE_PROMPTS[kind]})
+
+    assert rc == 0 and stdout == ""
+    entry = _log(tmp_vault)[-1]
+    assert entry["silence_reason"] == judge.NOTICE_SILENCE_REASON == "notice_below_bar"
+    assert entry["judge"]["notice"]["kind"] == kind
+    assert entry["judge"]["injected"] == 0
+    assert _ledger(tmp_vault)[-1]["picks"] == ["use-yarn"]
+
+
+def test_a_typed_prompt_that_quotes_a_notice_keeps_the_ordinary_bar(
+        tmp_vault, monkeypatch, synthetic_index, stub):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock", "use-yarn"], SCORED)
+    quoted = NOTICE_PROMPTS["task-notification"] + "\n\nwhy did this one fail?"
+
+    rc, stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": quoted})
+
+    assert rc == 0 and "[[use-prisma-mock]]" in stdout and "[[use-yarn]]" in stdout
+    entry = _log(tmp_vault)[-1]
+    assert entry["emitted"] == ["use-prisma-mock", "use-yarn"]
+    assert "notice" not in entry["judge"]
+
+
+def test_a_typed_prompt_keeps_the_ordinary_bar(tmp_vault, monkeypatch, synthetic_index, stub):
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock", "use-yarn"], SCORED)
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s", "prompt": PROMPT})
+
+    entry = _log(tmp_vault)[-1]
+    assert entry["emitted"] == ["use-prisma-mock", "use-yarn"]
+    assert "notice" not in entry["judge"]
+
+
+def test_the_notice_bar_is_configurable(tmp_vault, monkeypatch, synthetic_index, stub):
+    """Set to `injectAt`'s value, a notice is treated like a prompt."""
+    _configure(tmp_vault, monkeypatch, noticeInjectAt=0.4)
+    synthetic_index(tmp_vault)
+    stub(["use-prisma-mock", "use-yarn"], SCORED)
+
+    _run_hook({"cwd": str(tmp_vault), "session_id": "s",
+               "prompt": NOTICE_PROMPTS["task-notification"]})
+
+    entry = _log(tmp_vault)[-1]
+    assert entry["emitted"] == ["use-prisma-mock", "use-yarn"]
+    assert entry["judge"]["notice"] == {"kind": "task-notification", "at": 0.4, "dropped": []}
+
+
+def test_a_failed_judge_on_a_notice_falls_back_as_before(
+        tmp_vault, monkeypatch, synthetic_index, stub):
+    """The bar is read off the judge's scores; with no answer there are none,
+    and the shipped fallback runs unchanged."""
+    _configure(tmp_vault, monkeypatch)
+    synthetic_index(tmp_vault)
+    stub(None, {"status": "timeout", "asked": 0, "injected": 0, "ms": 2500, "scores": []})
+
+    rc, _stdout = _run_hook({"cwd": str(tmp_vault), "session_id": "s",
+                             "prompt": NOTICE_PROMPTS["task-notification"]})
+
+    assert rc == 0
+    entry = _log(tmp_vault)[-1]
+    assert entry["silence_reason"] != judge.NOTICE_SILENCE_REASON
+    assert "notice" not in entry["judge"]
