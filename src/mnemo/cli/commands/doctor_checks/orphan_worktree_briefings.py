@@ -1,12 +1,21 @@
 """Doctor check — flag orphan worktree briefing dirs (v0.10).
 
 A briefing dir under ``bots/<X>/briefings/sessions/`` is "orphan" when ``X``
-looks like ``<canonical>-<suffix>`` AND ``bots/<canonical>/briefings/sessions/``
-also exists with at least one briefing. The combination is the signature of a
-pre-v0.10 worktree write that the new canonical-agent code can't see — the
-SessionStart briefing picker now resolves every worktree back to its canonical
-agent, so a directory named after a worktree will never be read from again
-unless we surface it and prompt the user to migrate.
+is a worktree's name, ``<canonical>-wt-<suffix>``, AND
+``bots/<canonical>/briefings/sessions/`` also exists with at least one
+briefing. The combination is the signature of a pre-v0.10 worktree write that
+the new canonical-agent code can't see — the SessionStart briefing picker now
+resolves every worktree back to its canonical agent, so a directory named
+after a worktree will never be read from again unless we surface it and
+prompt the user to migrate.
+
+Only the name is there to go on: a briefing records no ``cwd``, and the tree
+is usually gone. ``resolve_canonical_agent`` folds a tree into another agent
+by its ``.git`` pointer, never by its name, so a sibling checkout that shares
+a prefix — ``mnemo``, ``mnemo-src``, ``mnemo-desktop`` — is its own agent and
+must never be flagged (#798). The one name that says "worktree of ``<repo>``"
+is the ``-wt-`` suffix that ``dispatch.worktree_path`` and the hand-made
+``<repo>-wt-<name>`` trees carry, so that is the only thing folded.
 
 Returning ``None`` (silent) on any error is deliberate: the doctor check must
 never be the thing that breaks ``mnemo doctor``. When in doubt, say nothing.
@@ -16,18 +25,33 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def worktree_canonical(name: str) -> str | None:
+    """The agent a ``<repo>-wt-<suffix>`` dir was cut from, else ``None``.
+
+    Split on the *first* ``-wt-``: a child dispatched from inside a child's
+    tree is ``mnemo-desktop-wt-round6-wt-41``, still ``mnemo-desktop``'s.
+    """
+    from mnemo.core.dispatch import WORKTREE_SUFFIX
+
+    base, sep, suffix = name.partition(WORKTREE_SUFFIX)
+    if not sep or not base or not suffix:
+        return None
+    return base
+
+
 def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
     """Return human-readable findings, or ``None`` when there's nothing to flag.
 
     Heuristic:
       1. Enumerate ``bots/*/briefings/sessions/`` dirs that hold >=1 briefing.
-      2. For each such dir whose agent name contains a ``-``, split on the
-         first ``-`` and check whether the prefix is also in the set from (1).
+      2. For each such dir named ``<canonical>-wt-<suffix>``, check whether
+         ``<canonical>`` is also in the set from (1).
       3. If yes, the directory is a probable worktree orphan — emit a finding.
 
-    The "canonical must itself have >=1 briefing" guard keeps us from
-    false-positive-flagging two unrelated projects that happen to share a
-    name prefix (e.g. ``myapp`` and ``myapp-cms`` both as standalone repos).
+    A first-``-`` split is what this did until #798, and it named
+    ``mnemo-src`` and ``mnemo-desktop`` orphans of ``mnemo``: three checkouts
+    that canonical resolution keeps apart. The "canonical must itself have
+    >=1 briefing" guard could not catch it, because all three are active.
     """
     try:
         bots_root = vault_root / "bots"
@@ -48,10 +72,8 @@ def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
             if not agent_dir.is_dir():
                 continue
             name = agent_dir.name
-            if "-" not in name:
-                continue
-            prefix = name.split("-", 1)[0]
-            if prefix == name or prefix not in canonicals_with_briefings:
+            prefix = worktree_canonical(name)
+            if prefix is None or prefix not in canonicals_with_briefings:
                 continue
             sessions = agent_dir / "briefings" / "sessions"
             if not sessions.is_dir():
