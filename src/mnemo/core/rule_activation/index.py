@@ -361,10 +361,14 @@ def index_key(vault_root: Path, *, universal_threshold: int | None = None) -> di
 def index_is_current(vault_root: Path, key: dict) -> bool:
     """True when the index on disk was built from what *key* describes.
 
-    Never raises: anything unreadable means rebuild."""
+    Never raises: anything unreadable means rebuild. An index that is empty
+    or starts with NUL is what a crash leaves (#767) and is not current,
+    whatever its key says (#804). Only its first byte is read: this runs on
+    every SessionStart (#763)."""
     try:
-        if not (vault_root / ".mnemo" / INDEX_FILENAME).is_file():
-            return False
+        with open(vault_root / ".mnemo" / INDEX_FILENAME, "rb") as fh:
+            if fh.read(1) in (b"", b"\x00"):
+                return False
         saved = json.loads(
             (vault_root / ".mnemo" / INDEX_KEY_FILENAME).read_text(encoding="utf-8")
         )
