@@ -555,13 +555,26 @@ last of them is one of two review offers — never both (see below):
    --promote <key>`. A staged page is invisible to recall, so whatever it holds
    carries nothing while it waits; this is what puts it in front of you while
    you are already working on the project it came from. It only reads: nothing
-   promotes, accepts or drops a page without you — except the expiry of pages
-   the reference judge held, below under `mnemo inbox`.
+   promotes, accepts or drops a page without you — except the expiries below
+   under `mnemo inbox`.
+
+   **You answer, the session types it** (#762). The block asks the session to
+   relay the pages to you, and, once you answer for a page in that
+   conversation, to run its `mnemo inbox --promote <key>` (or `--drop <key>`)
+   itself — never on its own judgment. You do not have to open a terminal: in
+   two weeks of offers on the maintainer's vault the CLI was typed 0 times and
+   nothing was decided. A decision a session ran is logged with `via: session`
+   in the ledger. The block never goes to a dispatched child (a `-wt-<n>`
+   worktree), which has nobody to relay it to.
 
    Three numbers under `inbox` bound it, because it rides on the same prompt as
    the briefing: `offerMax` (2) bullets per block, at most one block per project
    per `offerIntervalHours` (24), and no page offered twice inside
    `offerCooldownDays` (7) — so the queue rotates instead of repeating its head.
+   When nothing has been promoted, dropped or restored for `offerIdleDays` (7),
+   the offer backs off to one block for the whole vault per
+   `offerIdleIntervalHours` (168), and says so in the block; the first decision
+   brings back the daily pace. `0` for either turns the backoff off.
    `offerOnSessionStart: false` silences the block; `mnemo inbox` still lists
    the queue. Every offer and every decision is appended to
    `.mnemo/inbox-offers.jsonl`, which is what makes `mnemo inbox --stats` able
@@ -702,6 +715,20 @@ any page with no stamp (the judge gave no answer, or it staged before the
 judge saw it). The judge's verdict is the measured one: it stages 30 of 31
 junk pages and 3 of 41 good ones. The other reasons for staging have no such
 number yet. `heldExpiryDays: 0` turns it off.
+
+Evidence-gate demotions expire too (#762), on their own window,
+`inbox.demotionExpiryDays` (14). A demotion — a feedback rule whose "the user
+said X" quote was not found — that the judge did not hold is archived the same
+way once it has been staged that long; one it held as `generic`/`narrative`
+keeps the `heldExpiryDays` window. Most of these are pages the judge rated
+`system` or `technique`, and #465 measured that population at 72.5% good under
+two blind raters: too low to promote unseen, so they wait for you for two
+weeks and then go to the archive, not away — `mnemo inbox --restore KEY` brings
+one back. They arrive at about ten a day, so without an exit the queue only
+grows. `mnemo extract` counts them as `demotions expired`;
+`demotionExpiryDays: 0` turns it off. Multi-source and other staged pages
+still wait for a human. `tools/measure_inbox_backlog.py --vault V` is the dry
+run: what each rule would archive now, by kind.
 
 Backfill pages (#496) expire on the same window. A page with the backfill
 origin — reconstructed from a past session by `mnemo backfill` and staged for

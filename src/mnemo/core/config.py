@@ -253,8 +253,17 @@ DEFAULTS: dict[str, Any] = {
         # #429: a page the reference judge held (#417) is archived after this
         # many days untouched, offered or not; `mnemo inbox --restore KEY`
         # brings it back. Undecided backfill-origin pages expire on the same
-        # window (#496). Nothing else in the queue expires. 0 turns it off.
+        # window (#496). 0 turns it off.
         "heldExpiryDays": 14,
+        # #762: an evidence-gate demotion the judge did not hold is archived
+        # after this many days, the same way. Multi-source and other pages
+        # still wait for a human. 0 turns it off.
+        "demotionExpiryDays": 14,
+        # #762: when nobody has promoted or dropped anything for
+        # `offerIdleDays`, the offer falls back to one block for the whole
+        # vault per `offerIdleIntervalHours`, until a decision lands again.
+        "offerIdleDays": 7,
+        "offerIdleIntervalHours": 168,
     },
     "install": {
         # #337: a matcher this version widened reaches an install that already

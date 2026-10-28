@@ -373,10 +373,13 @@ def cmd_inbox(args: argparse.Namespace) -> int:
         if getattr(args, "show", None):
             print(page.path.read_text(encoding="utf-8", errors="replace"), end="")
             return 0
+        # #762: a session relaying the offer is how most decisions arrive;
+        # its row says so, so the route can be counted.
+        via, session_id = I.session_via()
         if promote_keys is not None:
-            result = I.promote(vault, page, project=project)
+            result = I.promote(vault, page, project=project, via=via, session_id=session_id)
         else:
-            result = I.drop(vault, page, project=project)
+            result = I.drop(vault, page, project=project, via=via, session_id=session_id)
         print(result.message)
         if not result.ok:
             return 1

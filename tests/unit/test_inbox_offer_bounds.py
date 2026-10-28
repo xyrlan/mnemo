@@ -52,6 +52,11 @@ def test_defaults_are_two_bullets_a_day_a_week_apart():
         "offerIntervalHours": 24,
         # Not an offer bound: how long a judge-held page may wait (#429).
         "heldExpiryDays": 14,
+        # Nor this: how long an evidence-gate demotion may wait (#762).
+        "demotionExpiryDays": 14,
+        # The backoff (#762): a week of no decisions, then one block a week.
+        "offerIdleDays": 7,
+        "offerIdleIntervalHours": 168,
     }
 
 

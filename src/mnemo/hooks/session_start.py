@@ -967,7 +967,10 @@ def _learned_block(vault_root: Path, cfg: dict, project: str) -> str:
         return ""
 
 
-def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
+def _staged_offer_block(
+    vault_root: Path, cfg: dict, project: str,
+    cwd: str | None = None, session_id: str | None = None,
+) -> str:
     """What waits in ``shared/_inbox/`` for this project, with the act that clears it.
 
     The other half of :func:`_learned_block`. That one discloses what
@@ -989,12 +992,28 @@ def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
     repeating its head — and the ledger row is what makes drain measurable
     (``mnemo inbox --stats``).
 
+    Who acts (#762). The block used to tell the session "do not promote
+    anything yourself", which left the CLI as the only way out — and the
+    maintainer typed ``mnemo`` 0 times in 28 days while sessions ran it 89
+    times; 0 promoted, 0 dropped against 63 offers. So the session is now the
+    hands and the maintainer the decision: it relays the page, and runs the
+    promote or drop itself once the maintainer answers for that page in the
+    conversation — never on its own reading. The CLI stamps that row
+    ``via: session`` so the route is measurable.
+
+    Never in a dispatch worktree, for the reason :func:`_procedures_offer_block`
+    gives: a dispatched child has nobody to relay to, and spending the day's
+    block on it is spending it on no one — 7 of the 26 blocks found in
+    transcripts over 2026-10-13..27 went to one.
+
     Reads and records; it never promotes. Fail-silent, like the rest of the
     session-start path.
     """
     try:
         from mnemo.core import inbox as inbox_mod
 
+        if _is_dispatch_worktree(cwd):
+            return ""
         pages, waiting = inbox_mod.pick_offers(vault_root, project, cfg=cfg)
         if not pages:
             return ""
@@ -1002,8 +1021,9 @@ def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
         lines = [f"[mnemo staged for review — project={project}, {waiting} waiting]"]
         lines.append(
             "Extraction staged these in shared/_inbox/, where nothing reads them. "
-            "The decision is the maintainer's: relay this, do not promote anything "
-            "yourself."
+            "The decision is the maintainer's: relay this, and run a page's promote "
+            "(or `mnemo inbox --drop KEY`) yourself only once they answer for that "
+            "page in this conversation. Never decide one on your own judgment."
         )
         for page in pages:
             # A description is LLM-written text going into the agent's context
@@ -1027,11 +1047,19 @@ def _staged_offer_block(vault_root: Path, cfg: dict, project: str) -> str:
                 f"({waiting - len(pages)} more — `mnemo inbox` lists them, "
                 "`mnemo inbox --drop KEY` discards one)"
             )
+        if inbox_mod.offer_idle(vault_root, cfg=cfg):
+            settings = inbox_mod.offer_settings(cfg)
+            lines.append(
+                f"(nothing promoted or dropped in {settings['idle_days']}d, so this "
+                f"block now comes once per {settings['idle_interval_hours']}h for "
+                "the whole vault until something is)"
+            )
         lines.append("[/mnemo staged]")
 
         for page in pages:
             inbox_mod.record(
                 vault_root, event=inbox_mod.OFFERED, key=page.key, project=project,
+                session_id=session_id,
             )
         return "\n".join(lines)
     except Exception as exc:
@@ -1175,7 +1203,7 @@ def _offer_block(
     from mnemo.core import procedures as procedures_mod
 
     def _staged() -> str:
-        return _staged_offer_block(vault_root, cfg, project)
+        return _staged_offer_block(vault_root, cfg, project, cwd, session_id)
 
     def _procedures() -> str:
         return _procedures_offer_block(vault_root, cfg, project, cwd, session_id)

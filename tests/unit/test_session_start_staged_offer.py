@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -95,13 +96,47 @@ def test_the_overflow_is_counted_not_printed(vault):
     assert lines[-2].startswith("(3 more — `mnemo inbox`")
 
 
-def test_the_block_tells_the_agent_the_decision_is_not_its_to_make(vault):
-    """The boundary the issue drew: nothing may promote without the maintainer."""
+def test_the_block_hands_the_session_the_act_and_keeps_the_decision_human(vault):
+    """#380's boundary, #762's route: the session types it, the maintainer decides it."""
     _staged(vault, "x")
 
     block = session_start._staged_offer_block(vault, DEFAULTS, "proj")
 
-    assert "do not promote anything yourself" in block
+    assert "The decision is the maintainer's" in block
+    assert "yourself only once they answer for that page in this conversation" in block
+    assert "Never decide one on your own judgment." in block
+
+
+def test_a_dispatched_child_is_never_offered_the_queue(vault, tmp_path):
+    """#762: 7 of 26 blocks went to children, who have nobody to relay to."""
+    _staged(vault, "x")
+    child = tmp_path / "mnemo-wt-762"
+    child.mkdir()
+
+    assert session_start._staged_offer_block(vault, DEFAULTS, "proj", str(child)) == ""
+    assert inbox_mod.read_ledger(vault) == []
+    # The day's block is still there for the maintainer's own session.
+    assert session_start._staged_offer_block(vault, DEFAULTS, "proj", str(tmp_path))
+
+
+def test_the_offer_row_names_the_session_it_went_to(vault):
+    _staged(vault, "x")
+
+    session_start._staged_offer_block(vault, DEFAULTS, "proj", None, "sid-1")
+
+    assert [r["session_id"] for r in inbox_mod.read_ledger(vault)] == ["sid-1"]
+
+
+def test_a_backed_off_block_says_why_it_is_rarer(vault):
+    _staged(vault, "x")
+    old = (datetime.now() - timedelta(days=10)).isoformat(timespec="seconds")
+    ledger = vault / inbox_mod.LEDGER_REL
+    ledger.write_text(json.dumps({"ts": old, "event": "offered", "key": "reference/gone",
+                                  "project": "proj"}) + "\n", encoding="utf-8")
+
+    block = session_start._staged_offer_block(vault, DEFAULTS, "proj")
+
+    assert "(nothing promoted or dropped in 7d, so this block now comes once per 168h" in block
 
 
 def test_offering_is_recorded_so_the_next_session_moves_on(vault):
