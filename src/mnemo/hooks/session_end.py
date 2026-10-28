@@ -509,14 +509,22 @@ def _notice_text(short_id: str, detail: str | None = None) -> str:
     )
 
 
-def _spawn_detached_child_report(short_id: str, *, parent: str, cwd: str, transcript):
+def _spawn_detached_child_report(
+    short_id: str, *, parent: str, cwd: str, transcript, run: str = "",
+):
     """Fire-and-forget ``mnemo child-report`` (#426). Detach semantics match
     :func:`_spawn_detached_briefing`; raises when the process cannot start, so
-    the caller can fall back to the one-line notice. Returns the reporter's pid."""
+    the caller can fall back to the one-line notice. Returns the reporter's pid.
+
+    *run* is echoed on every row the reporter writes (#755): the pid returned
+    here is not the reporter's own on Windows, where a venv's ``python.exe``
+    launcher starts the real interpreter as a child of its own."""
     from mnemo._detach import spawn
     from mnemo._selfexec import self_argv
 
     argv = self_argv("child-report", short_id, "--parent", parent)
+    if run:
+        argv += ["--run", run]
     if cwd:
         argv += ["--cwd", cwd]
     if transcript:
@@ -576,13 +584,17 @@ def _maybe_notify_parent(
         report_card.undelivered(vault, row, why, text=_notice_text(short_id))
         return
 
+    import uuid
+
+    run = uuid.uuid4().hex[:12]
     try:
         pid = _spawn_detached_child_report(
-            short_id, parent=parent, cwd=cwd, transcript=transcript,
+            short_id, parent=parent, cwd=cwd, transcript=transcript, run=run,
         )
         # The reporter writes its own row; this one says it was started, so a
         # reporter that dies before writing is a "spawned" with nothing after.
-        report_card.record(vault, {**row, "event": "spawned", "pid": pid})
+        # ``run`` pairs the two, not ``pid`` (#755).
+        report_card.record(vault, {**row, "event": "spawned", "pid": pid, "run": run})
         return
     except Exception as exc:
         from mnemo.core import errors
