@@ -296,10 +296,12 @@ def test_sweep_tells_through_the_hooks_own_notice_and_marks_the_row(tmp_vault, t
                       find=lambda _s: transcript)
 
     assert report.told == [SHORT]
+    run = started[0][1].pop("run")
     assert started == [(SHORT, {"parent": PARENT, "cwd": "/x/app-wt-7", "transcript": transcript})]
     assert followed == [{"session_id": FULL, "cwd": "/x/app-wt-7"}]
     rows = [json.loads(l) for l in (tmp_vault / ".mnemo" / report_card.LOG_NAME).read_text(encoding="utf-8").splitlines()]
     assert rows[-1]["event"] == "spawned" and rows[-1]["via"] == cn.VIA and rows[-1]["pid"] == 4242
+    assert run and rows[-1]["run"] == run
 
     # The next pass finds it answered.
     again = cn.sweep(ON, vault_root=tmp_vault, now=T0 + 600, reader=lambda: sessions,

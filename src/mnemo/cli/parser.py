@@ -503,6 +503,7 @@ def _build_parser() -> argparse.ArgumentParser:
     child_report.add_argument("--parent", type=str, required=True)
     child_report.add_argument("--cwd", type=str, default=None)
     child_report.add_argument("--transcript", type=str, default=None)
+    child_report.add_argument("--run", type=str, default=None)
 
     # #436: spawned detached by a dispatched child's SessionEnd (and restarted
     # by SessionStart); never typed. Takes no arguments: its work is the ledger.

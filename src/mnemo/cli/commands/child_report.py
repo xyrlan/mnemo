@@ -30,8 +30,11 @@ def cmd_child_report(args: argparse.Namespace) -> int:
     vault_root = paths.vault_root(cfg)
     # Every row this process writes names it, so ``mnemo doctor`` can pair the
     # hook's ``spawned`` row with what came of it even when this row lands
-    # first (#460).
+    # first (#460). The pid alone does not pair them on Windows, where the
+    # hook sees the venv launcher's pid, not this one; ``run`` does (#755).
     base = {"short_id": args.short_id, "parent": args.parent, "reporter": os.getpid()}
+    if getattr(args, "run", None):
+        base["run"] = args.run
     devnull = open(os.devnull, "w", encoding="utf-8")
     try:
         with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull), \

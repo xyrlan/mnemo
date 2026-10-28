@@ -861,11 +861,16 @@ def lost(
     ``killed by SIG…`` row. A ``spawned`` with nothing after it is a reporter
     that died where no ``except`` could run, and a parent that was never told.
 
-    A reporter's rows carry its pid as ``reporter``, which pairs them with the
-    hook's ``pid`` exactly, whichever of the two lands first. Reporters before
-    #460 stamped nothing, so a ``spawned`` row older than the first stamped
-    row is answered by any later row for the same child before its next
-    ``spawned``. Never raises.
+    Since #755 the hook gives each reporter a ``run`` id that both rows
+    carry, and that pairs them exactly, whichever lands first. Rows from
+    before it pair by pid — the reporter's rows carry its own as
+    ``reporter`` — but on Windows the pid the hook gets is the venv
+    launcher's, never the reporter's, so a ``spawned`` row no reporter pid
+    matches is answered by a reporter of the same child that no other
+    ``spawned`` claimed, between that child's previous ``spawned`` and its
+    next one. Reporters before #460 stamped nothing, so a ``spawned`` row
+    older than the first stamped row is answered by any later row for the
+    same child before its next ``spawned``. Never raises.
     """
     try:
         text = (Path(vault_root) / ".mnemo" / LOG_NAME).read_text(encoding="utf-8")
@@ -880,31 +885,75 @@ def lost(
         if isinstance(row, dict):
             rows.append(row)
     now = time.time() if now is None else now
-    reporters = {row.get("reporter") for row in rows if row.get("reporter") is not None}
+    runs = {row.get("run") for row in rows if row.get("event") != "spawned" and row.get("run")}
+    # A reporter is its child and its pid: Windows hands a pid out again
+    # within days, to another child's reporter or launcher.
+    reporters = {_reporter(row) for row in rows if row.get("reporter") is not None}
+    spawned_at = [i for i, row in enumerate(rows) if row.get("event") == "spawned"]
+    # A reporter its ``spawned`` row names exactly, by run or by pid, answers
+    # nothing else.
+    claimed = {
+        _reporter(row) for row in rows
+        if row.get("reporter") is not None and row.get("run") in runs
+    } | {_launched(rows[i]) for i in spawned_at} & reporters
     stamped_from = next(
         (i for i, row in enumerate(rows) if row.get("reporter") is not None), len(rows),
     )
     found = []
-    for i, row in enumerate(rows):
-        if row.get("event") != "spawned":
-            continue
+    for k, i in enumerate(spawned_at):
+        row = rows[i]
         at = _stamp(row)
-        if at is None or not (after_minutes * 60 <= now - at <= window_days * 86400):
-            continue
-        if row.get("pid") is not None and row.get("pid") in reporters:
-            continue
-        answered = False
-        if i > stamped_from:
-            found.append(row)
-            continue
-        for later in rows[i + 1:]:
-            if later.get("short_id") != row.get("short_id"):
-                continue
-            if later.get("event") == "spawned":
-                break
-            if later.get("reporter") is None:
-                answered = True
-                break
-        if not answered:
+        shown = at is not None and after_minutes * 60 <= now - at <= window_days * 86400
+        if row.get("run"):
+            answered = row.get("run") in runs
+        elif row.get("pid") is not None and _launched(row) in reporters:
+            answered = True
+        elif _claim(rows, spawned_at, k, claimed):
+            answered = True
+        elif i > stamped_from:
+            answered = False
+        else:
+            answered = False
+            for later in rows[i + 1:]:
+                if later.get("short_id") != row.get("short_id"):
+                    continue
+                if later.get("event") == "spawned":
+                    break
+                if later.get("reporter") is None:
+                    answered = True
+                    break
+        if shown and not answered:
             found.append(row)
     return found
+
+
+def _reporter(row) -> tuple:
+    return (row.get("short_id"), row.get("reporter"))
+
+
+def _launched(row) -> tuple:
+    return (row.get("short_id"), row.get("pid"))
+
+
+def _claim(rows, spawned_at: List[int], k: int, claimed: set) -> bool:
+    """Pair ``rows[spawned_at[k]]`` with a reporter no pid matched (#755).
+
+    The candidates are reporters of the same child that nothing claimed yet,
+    with a row between that child's previous ``spawned`` and its next one —
+    a reporter's first row can land before the hook's ``spawned``. The
+    earliest one is taken, so each ``spawned`` in log order gets the reporter
+    that started first. Adds it to *claimed*.
+    """
+    i = spawned_at[k]
+    sid = rows[i].get("short_id")
+    same = [j for j in spawned_at if rows[j].get("short_id") == sid]
+    at = same.index(i)
+    lo = same[at - 1] if at else -1
+    hi = same[at + 1] if at + 1 < len(same) else len(rows)
+    for later in rows[lo + 1:hi]:
+        reporter = _reporter(later)
+        if later.get("short_id") != sid or later.get("reporter") is None or reporter in claimed:
+            continue
+        claimed.add(reporter)
+        return True
+    return False
