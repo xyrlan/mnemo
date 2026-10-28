@@ -255,6 +255,7 @@ def generate_session_briefing(
     try:
         proposed = corrections_mod.parse_section(body)
         kept, rejected = corrections_mod.verify(proposed, turns)
+        kept, _screened = corrections_mod.screen(kept, turns)
         if kept:
             from mnemo.core import correction_check
             from mnemo.core.friction import capture as capture_mod
@@ -269,7 +270,7 @@ def generate_session_briefing(
                 "briefing.corrections_rejected",
                 ValueError(
                     f"{len(rejected)} correction quote(s) not found in user turns after "
-                    f"the opening brief; dropped"
+                    f"the opening brief; dropped ({corrections_mod.rejection_causes(rejected, turns)})"
                 ),
             )
     except Exception as exc:

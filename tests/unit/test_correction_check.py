@@ -187,4 +187,6 @@ def test_with_the_check_off_both_paths_make_one_call_as_before(vault, tmp_path, 
     fake, calls = _two_calls(SECTION, _verdict(False, False))
     monkeypatch.setattr(llm_mod, "call", fake)
     kept = capture.corrections_only(_write(tmp_path / "s.jsonl", _events()), "app", config.DEFAULTS)
-    assert len(kept) == 2 and len(calls) == 1
+    # The go-ahead is dropped all the same, by the mechanical screen (#758).
+    assert [k.quote for k in kept] == ["never use npm in this repo, always yarn"]
+    assert len(calls) == 1

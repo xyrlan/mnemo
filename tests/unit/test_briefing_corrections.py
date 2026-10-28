@@ -159,3 +159,33 @@ def test_system_prompt_excludes_the_opening_brief_and_requests_from_corrections(
     for word in ("approval", "question", "feature request", "bug report"):
         assert word in low, word
     assert "imperative" in low
+
+
+def test_briefing_drops_a_go_ahead_and_logs_why_a_quote_was_rejected(vault: Path, tmp_path: Path, monkeypatch):
+    """#758: "pode mergear" is not a correction; a rejection says which way it missed."""
+    events = _events() + [
+        {"type": "user", "timestamp": "2026-09-01T10:04:00.000Z",
+         "message": {"role": "user", "content": "Pode mergear os dois por favor"}},
+    ]
+    body = LLM_BODY.replace(
+        '- "always use tabs" → Use tabs\n',
+        '- "always use tabs" → Use tabs\n- "Pode mergear os dois por favor" → Merge when asked\n',
+    )
+
+    def fake_call(prompt, *, system, model, timeout):
+        return llm_mod.LLMResponse(text=body, total_cost_usd=0.0, input_tokens=1,
+                                   output_tokens=1, api_key_source="none", raw={})
+    monkeypatch.setattr(llm_mod, "call", fake_call)
+    logged = []
+    monkeypatch.setattr("mnemo.core.errors.log_error", lambda root, where, exc: logged.append((where, str(exc))))
+
+    jsonl = tmp_path / "sess2.jsonl"
+    jsonl.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    text = briefing_mod.generate_session_briefing(jsonl, "proj", {"extraction": {}}).read_text(encoding="utf-8")
+
+    assert "never retry on 4xx" in text
+    assert "Pode mergear" not in text
+    assert "corrections: 1\n" in text.split("---")[1]
+    assert ("briefing.corrections_rejected",
+            "1 correction quote(s) not found in user turns after the opening brief; "
+            "dropped (not typed: 1)") in logged
