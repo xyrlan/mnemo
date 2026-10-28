@@ -135,7 +135,7 @@ def test_the_count_is_cached_and_not_walked_on_every_render(tmp_path, monkeypatc
     cached = json.loads(health.cache_path(vault).read_text(encoding="utf-8"))
     assert cached["pending"] == 1 and "at" in cached
 
-    def boom(_vault):
+    def boom(_vault, _machine=None):
         raise AssertionError("walked")
 
     monkeypatch.setattr(health, "_count", boom)

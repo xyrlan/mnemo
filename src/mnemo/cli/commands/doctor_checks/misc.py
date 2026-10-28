@@ -44,8 +44,8 @@ def _doctor_check_friction_auto_retire(vault: Path) -> bool:
     ``friction.retire.auto_retire`` exists and honours the key, but nothing
     calls it: extraction never retires a rule, whatever the config says
     (#553). Wiring it would start retiring live rules, so until that is
-    decided the doctor names the key as inert. Silent when the key is off or
-    absent — there is nothing to correct then.
+    decided the doctor names the key as inert, as information: there is
+    nothing to fix (#756). Silent when the key is off or absent.
     """
     from mnemo.core import config as cfg_mod
     from mnemo.core.friction import retire
@@ -56,10 +56,11 @@ def _doctor_check_friction_auto_retire(vault: Path) -> bool:
         return True
     if not on:
         return True
-    print(f"  ⚠ friction.{retire.AUTO_RETIRE_KEY} is true, but it is inert: nothing calls "
+    # ℹ, not ⚠ (#756): a key with no effect is nothing to fix.
+    print(f"  ℹ friction.{retire.AUTO_RETIRE_KEY} is true, but it is inert: nothing calls "
           "the automatic retirement, so no rule is retired by it")
     print("       → no action needed; the key has no effect in this version")
-    return False
+    return True
 
 
 def _doctor_check_legacy_wiki_dirs(vault: Path) -> bool:
@@ -112,6 +113,11 @@ def _doctor_check_auto_brain(vault: Path) -> bool:
     if not enabled:
         return ok
 
+    from mnemo.core.sync import roles as sync_roles
+
+    if sync_roles.is_satellite(vault, cfg):
+        return _auto_brain_on_satellite(vault) and ok
+
     if not last_run_path.exists():
         print("  ℹ Auto-brain: enabled but has never run. Hook scheduling may not be firing.")
         return ok
@@ -144,6 +150,39 @@ def _doctor_check_auto_brain(vault: Path) -> bool:
 
     return ok
 
+
+def _auto_brain_on_satellite(vault: Path) -> bool:
+    """A sync satellite never extracts (#643), so its own
+    ``last-auto-run.json`` is what it did before it was one: on 2026-10-27 a
+    satellite reported a run from eight days earlier as FAILED while the
+    primary's pages arrived by pull every day (#756). What it can tell is
+    when the primary last extracted, from the extraction state every pull
+    brings; a primary silent for 7+ days is still reported.
+    """
+    from datetime import datetime, timedelta
+    from mnemo.core.sync import roles as sync_roles
+    from mnemo.core.sync import state as sync_state
+
+    primary = sync_state.primary_of(vault) or "?"
+    stamp = sync_roles.primary_last_extraction(vault)
+    pulled = sync_state.load(vault).get("lastPull") or "never"
+    where = (f"this machine is a sync satellite; extraction runs on the primary "
+             f"'{primary}'")
+    if stamp is None:
+        print(f"  ℹ Auto-brain: {where}, and no extraction of it has arrived here "
+              f"(last pull: {pulled})")
+        return True
+    try:
+        late = datetime.now() - datetime.fromisoformat(stamp) > timedelta(days=7)
+    except ValueError:
+        late = False
+    if late:
+        print(f"  ℹ Auto-brain: {where}, which has not extracted in 7+ days "
+              f"(last: {stamp}, as of this machine's last pull {pulled})")
+        print("       → run `mnemo doctor` on the primary")
+        return False
+    print(f"  ℹ Auto-brain: {where}, last at {stamp} (as of this machine's last pull {pulled})")
+    return True
 
 
 def _doctor_check_background_sessions(
@@ -208,14 +247,23 @@ def _doctor_check_background_sessions(
     # Finished children whose worktree was removed after merge (#292). Claude
     # Code keeps each job record until `claude rm`, so they pile up: 48 on
     # 2026-09-15. `mnemo sessions` already hides them; this names the command
-    # that actually lets them go. Every id is printed — a one-liner that
-    # clears five of sixteen is not the one-liner.
+    # that actually lets them go. The command names every id — a one-liner
+    # that clears five of sixteen is not the one-liner — so past the cap it
+    # is left to `--all` and only the first ids are shown (#756: 104 of them).
     stale = [s.short_id for s in sessions if s.is_stale]
     if stale:
+        from mnemo.cli.commands.doctor_checks import _lists
+
         noun = "session" if len(stale) == 1 else "sessions"
         print(f"  ℹ {len(stale)} finished {noun} whose worktree is gone "
               f"(hidden from `mnemo sessions`; the branch is kept):")
-        print(f"       → {_claude_rm_each(stale)}")
+        shown, hidden = _lists.capped(stale)
+        if not hidden:
+            print(f"       → {_claude_rm_each(stale)}")
+        else:
+            print(f"       {', '.join(shown)}, … {hidden} more")
+            print("       → `mnemo doctor --all` prints the one `claude rm` line that "
+                  "removes them all")
     return True
 
 

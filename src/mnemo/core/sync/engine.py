@@ -53,7 +53,7 @@ _LOCK_STALE_SECONDS = 900.0
 #: sync's own lock, so no other mnemo sync can be the git that took it.
 DEAD_AFTER_SECONDS = 2 * gitmod._LOCAL_TIMEOUT
 
-# Where `_pending` stages its throwaway copies of the index, and what it
+# Where `_pending_changes` stages its throwaway copies of the index, and what it
 # named them before #735: one per pid, straight in `.git/`.
 _SCRATCH_DIR = "mnemo-sync-scratch"
 _LEGACY_SCRATCH = "mnemo-sync-status-index-"
@@ -575,6 +575,17 @@ def _refusal(found: List[Dict[str, str]]) -> str:
 # --- one push, already holding the lock ------------------------------------
 
 
+def _held(git: Git, machine: str,
+          publishing: Dict[str, Tuple[Optional[str], str]]) -> List[str]:
+    """The tracked paths in ``publishing`` a satellite may not publish."""
+    blobs = git.blobs([sha for rel, (sha, _m) in publishing.items()
+                       if sha and roles.is_briefing_path(rel)])
+    return [rel for rel, (sha, _mode) in publishing.items() if tracked.is_tracked(rel)
+            and not roles.satellite_may_publish(
+                rel, blobs.get(sha) if sha and roles.is_briefing_path(rel) else
+                (b"" if sha else None), machine)]
+
+
 def _withhold(git: Git, machine: str, tree: str, tips: _Tips,
               publishing: Dict[str, Tuple[Optional[str], str]]) -> Tuple[str, int]:
     """On a satellite, take out of the index what a satellite may not publish
@@ -583,12 +594,7 @@ def _withhold(git: Git, machine: str, tree: str, tips: _Tips,
     or loses the entry when the hub has none."""
     if _role(git, machine, tips) != st.SATELLITE:
         return tree, 0
-    blobs = git.blobs([sha for rel, (sha, _m) in publishing.items()
-                       if sha and roles.is_briefing_path(rel)])
-    held = [rel for rel, (sha, _mode) in publishing.items() if tracked.is_tracked(rel)
-            and not roles.satellite_may_publish(
-                rel, blobs.get(sha) if sha and roles.is_briefing_path(rel) else
-                (b"" if sha else None), machine)]
+    held = _held(git, machine, publishing)
     if not held:
         return tree, 0
     theirs = _blobs_in(git, tips.theirs_tree, held)
@@ -1121,7 +1127,29 @@ def _sweep_scratch(git: Git, now: Optional[float] = None) -> None:
 
 
 def _pending(git: Git, head_tree: Optional[str]) -> int:
-    """How many tracked files differ from the branch, without touching the
+    """How many tracked files differ from the branch; see :func:`_pending_changes`."""
+    return len(_pending_changes(git, head_tree))
+
+
+def pending_split(git: Git, tips: _Tips, machine: Optional[str]) -> Tuple[int, int]:
+    """``(pending, withheld)``: the tracked files that differ from the branch
+    and a push would carry, and those it would hold back because a satellite
+    may not publish them (#756).
+
+    A withheld file stays on disk and differs from the branch on every count
+    until it is gone, so counted as pending it read as a backlog no push would
+    ever clear: 92 "files waiting to push" on a satellite whose every push
+    said ``nothing``. With no ``machine``, or on the primary, nothing is held.
+    """
+    changes = _pending_changes(git, tips.head_tree)
+    if not changes or machine is None or _role(git, machine, tips) != st.SATELLITE:
+        return len(changes), 0
+    held = len(_held(git, machine, changes))
+    return len(changes) - held, held
+
+
+def _pending_changes(git: Git, head_tree: Optional[str]) -> Dict[str, Tuple[Optional[str], str]]:
+    """The tracked files that differ from the branch, without touching the
     index a push will use.
 
     It stages into a copy of the index under ``.git/mnemo-sync-scratch/``,
@@ -1141,7 +1169,7 @@ def _pending(git: Git, head_tree: Optional[str]) -> int:
         except OSError:
             pass
         tree = _stage(git, env={"GIT_INDEX_FILE": str(scratch)})
-        return len(_changes(git, head_tree, tree))
+        return _changes(git, head_tree, tree)
     finally:
         for leftover in (scratch, scratch.with_name(scratch.name + ".lock")):
             try:
@@ -1165,6 +1193,7 @@ def status(vault: Path, *, machine: str) -> Dict[str, Any]:
         if len(counts) == 2:
             ahead, behind = int(counts[0]), int(counts[1])
 
+    pending, withheld = pending_split(git, tips, machine)
     hub_format = state.get("hubFormatVersion")
     last_error = state.get("lastError") if isinstance(state.get("lastError"), dict) else None
     return {
@@ -1175,7 +1204,8 @@ def status(vault: Path, *, machine: str) -> Dict[str, Any]:
         "primary": st.primary_of(vault),
         "ahead": ahead,
         "behind": behind,
-        "pendingFiles": _pending(git, tips.head_tree),
+        "pendingFiles": pending,
+        "withheldFiles": withheld,
         "lastPull": state.get("lastPull"),
         "lastPullAgoSeconds": st.seconds_since(state.get("lastPull")),
         "lastPush": state.get("lastPush"),

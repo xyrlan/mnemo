@@ -80,9 +80,10 @@ def drop_cache(vault: Path) -> None:
         pass
 
 
-def _count(vault: Path) -> Dict[str, int]:
+def _count(vault: Path, machine: Optional[str] = None) -> Dict[str, int]:
     """Commits ahead and behind as last fetched, and tracked files that
-    differ from the branch. Three git calls and one walk."""
+    differ from the branch: ``pending`` a push would carry, ``withheld`` it
+    would hold back on a satellite (#756). Three git calls and one walk."""
     from mnemo.core.sync import engine
 
     git = engine.Git(vault)
@@ -93,11 +94,12 @@ def _count(vault: Path) -> Dict[str, int]:
                          f"{tips.head}...{tips.theirs}").split()
         if len(counts) == 2:
             ahead, behind = int(counts[0]), int(counts[1])
-    return {"ahead": ahead, "behind": behind, "pending": engine._pending(git, tips.head_tree)}
+    pending, withheld = engine.pending_split(git, tips, machine)
+    return {"ahead": ahead, "behind": behind, "pending": pending, "withheld": withheld}
 
 
-def counts(vault: Path, *, max_age: float = CACHE_SECONDS,
-           now: Optional[datetime] = None) -> Dict[str, Any]:
+def counts(vault: Path, *, max_age: float = CACHE_SECONDS, now: Optional[datetime] = None,
+           machine: Optional[str] = None) -> Dict[str, Any]:
     """The cached counts when they are younger than ``max_age`` seconds,
     else fresh ones, written back. ``countsAgeSeconds`` says which."""
     now = _now(now)
@@ -109,12 +111,13 @@ def counts(vault: Path, *, max_age: float = CACHE_SECONDS,
     if max_age > 0 and isinstance(data, dict):
         age = _ago(data.get("at"), now)
         if age is not None and age <= max_age and all(
-            isinstance(data.get(k), int) for k in ("ahead", "behind", "pending")
+            isinstance(data.get(k), int) for k in ("ahead", "behind", "pending", "withheld")
         ):
             return {"ahead": data["ahead"], "behind": data["behind"],
-                    "pending": data["pending"], "countsAt": data["at"],
+                    "pending": data["pending"], "withheld": data["withheld"],
+                    "countsAt": data["at"],
                     "countsAgeSeconds": age}
-    fresh = _count(vault)
+    fresh = _count(vault, machine)
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         atomic_write_bytes(path, (json.dumps(dict(fresh, at=stamp), sort_keys=True) + "\n")
@@ -164,7 +167,7 @@ def summary(vault: Path, machine: str, *, max_age: float = CACHE_SECONDS,
     from mnemo.core.sync import engine
 
     out["gitLocks"] = engine.stale_git_locks(vault, now=now.timestamp())
-    out.update(counts(vault, max_age=max_age, now=now))
+    out.update(counts(vault, max_age=max_age, now=now, machine=machine))
     # A push is late only when there is something to push: a satellite that
     # joined and has written nothing yet has never needed one (#655).
     waiting = bool(out.get("pending") or out.get("ahead"))

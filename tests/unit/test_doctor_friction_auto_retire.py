@@ -20,9 +20,11 @@ def config(monkeypatch):
 
 def test_doctor_names_the_key_inert_when_it_is_on(tmp_path, config, capsys):
     config({"friction": {"autoRetire": True}})
-    assert misc._doctor_check_friction_auto_retire(tmp_path) is False
+    # #756: information, not a warning — a key with no effect is nothing to fix.
+    assert misc._doctor_check_friction_auto_retire(tmp_path) is True
     out = capsys.readouterr().out
-    assert "friction.autoRetire is true, but it is inert" in out
+    assert "ℹ friction.autoRetire is true, but it is inert" in out
+    assert "⚠" not in out
 
 
 @pytest.mark.parametrize("cfg", [{}, {"friction": {}}, {"friction": {"autoRetire": False}},
