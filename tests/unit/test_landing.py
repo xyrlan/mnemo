@@ -19,16 +19,15 @@ import pytest
 
 from mnemo.core import contracts, landing
 from mnemo.core.contracts import Contract, Piece
+from tests.unit import _git_template
 
 
 def _run(args, *, cwd) -> None:
     subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=True)
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    """A real git repo with one commit on ``master`` and no remote."""
-    root = tmp_path / "mnemo"
+def _build_repo(parent: Path) -> None:
+    root = parent / "mnemo"
     root.mkdir()
     _run(["git", "init", "-b", "master"], cwd=root)
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
@@ -37,7 +36,14 @@ def repo(tmp_path: Path) -> Path:
     (root / "src" / "base.py").write_text("BASE = 1\n", encoding="utf-8")
     _run(["git", "add", "src/base.py"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
-    return root
+
+
+@pytest.fixture
+def repo(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real git repo with one commit on ``master`` and no remote."""
+    # Built once per worker and copied per test (#799): a git call is a process.
+    _git_template.copy("landing-repo", _build_repo, tmp_path, tmp_path_factory)
+    return tmp_path / "mnemo"
 
 
 def _branch(repo: Path, branch: str, files: dict[str, str]) -> None:
