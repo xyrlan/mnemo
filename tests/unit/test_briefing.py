@@ -132,6 +132,21 @@ def test_generate_briefing_computes_duration_from_event_timestamps(tmp_vault: Pa
     assert "duration_minutes: 42" in text
 
 
+def test_generate_briefing_stamps_when_the_session_ended(tmp_vault: Path, tmp_path: Path, stub_llm):
+    # ``date`` is the start day; the index orders by the end (#759).
+    from mnemo.core import briefing
+    from mnemo.core.extract.scanner import parse_frontmatter
+
+    jsonl = _minimal_jsonl(tmp_path / "jsonls", session_id="sid")  # 10:00 → 10:42
+    cfg = {"vaultRoot": str(tmp_vault), "extraction": {"model": "claude-haiku-4-5", "subprocessTimeout": 60}}
+
+    out = briefing.generate_session_briefing(jsonl, agent="agent_a", cfg=cfg)
+
+    fm, _ = parse_frontmatter(out.read_text(encoding="utf-8"))
+    assert fm["date"] == "2026-04-14"
+    assert fm["ended_at"] == "2026-04-14T10:42:00Z"
+
+
 def test_generate_briefing_includes_llm_body(tmp_vault: Path, tmp_path: Path, stub_llm):
     from mnemo.core import briefing
 

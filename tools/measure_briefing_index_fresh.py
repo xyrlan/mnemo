@@ -185,7 +185,8 @@ def with_slot(head: str, slot: str) -> str:
 
 def pool_at(briefings: Sequence[Dict[str, Any]], sid: str, start: float) -> List[Dict[str, Any]]:
     """The project's briefings written before ``start``, newest by mtime first
-    (``briefing_select.recent_briefings``' order, and #534's)."""
+    (#534's order, and ``briefing_select.recent_briefings``' until #759 put
+    it by session end)."""
     before = [b for b in briefings if b["mtime"] < start and b["id"] != sid]
     return sorted(before, key=lambda b: (b["mtime"], b.get("date") or "", b["id"]), reverse=True)
 

@@ -11,7 +11,7 @@ import json
 import os
 import time as _time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -143,18 +143,24 @@ def _render_briefing(
     body: str,
     source_sha256: str = "",
     machine: str = "",
+    ended_at: str = "",
 ) -> str:
     """``machine`` is the sync machine id that wrote it (#643), stamped only
-    once the vault syncs: with sync off a briefing is what it always was."""
+    once the vault syncs: with sync off a briefing is what it always was.
+    ``ended_at`` is the session's last event, in UTC: ``date`` is the day it
+    started, and a file's mtime stops being its write once a sync pull
+    rewrites it, so the briefing index orders by this (#759)."""
     header = f"# Briefing — {agent} — {session_id}\n"
     sha_line = f"transcript_sha256: {source_sha256}\n" if source_sha256 else ""
     machine_line = f"machine: {machine}\n" if machine else ""
+    ended_line = f"ended_at: {ended_at}\n" if ended_at else ""
     return (
         "---\n"
         "type: briefing\n"
         f"agent: {agent}\n"
         f"session_id: {session_id}\n"
         f"date: {date}\n"
+        f"{ended_line}"
         f"duration_minutes: {duration_minutes}\n"
         f"corrections: {corrections}\n"
         f"{sha_line}"
@@ -290,8 +296,12 @@ def generate_session_briefing(
 
     timestamps = [_parse_timestamp(ev.get("timestamp")) for ev in events]
     real_times = [t for t in timestamps if t is not None]
+    ended_at = ""
     if real_times:
         date_str = min(real_times).date().isoformat()
+        last = max(real_times)
+        if last.tzinfo is not None:
+            ended_at = last.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
         date_str = datetime.now().date().isoformat()
 
@@ -306,6 +316,7 @@ def generate_session_briefing(
         body=body,
         source_sha256=source_sha,
         machine=sync_roles.briefing_machine(cfg, vault_root),
+        ended_at=ended_at,
     )
     _atomic_write(out_path, content)
     if record_corrections and kept:

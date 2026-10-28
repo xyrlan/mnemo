@@ -148,6 +148,7 @@ def test_a_claude_transcript_is_briefed_exactly_as_before(vault: Path, tmp_path:
         "agent: proj\n"
         "session_id: abc123\n"
         "date: 2026-04-14\n"
+        "ended_at: 2026-04-14T10:42:00Z\n"
         "duration_minutes: 42\n"
         "corrections: 0\n"
         f"transcript_sha256: {briefing.transcript_sha256(jsonl)}\n"

@@ -81,7 +81,14 @@ def fair_cut(sizes: Sequence[int], room: int) -> List[int]:
 
 
 def entry_head(meta: Dict[str, Any]) -> str:
-    return "### %s" % (meta.get("date") or "undated")
+    """``### <date>``, and ``→ <day it ended>`` for a session that ran past its
+    start day: entries are newest by end (#759), and the start date alone made
+    a two-day session above a session of the day between look out of order."""
+    date = meta.get("date") or "undated"
+    ended = str(meta.get("ended_at") or "")[:10]
+    if meta.get("date") and ended > date:
+        return "### %s → %s" % (date, ended)
+    return "### %s" % date
 
 
 def index_block(entries: Sequence[Tuple[Dict[str, Any], str]], room: int) -> Tuple[str, int]:

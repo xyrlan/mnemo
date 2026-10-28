@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -57,20 +58,95 @@ def _pool(target_body: str, target_at: int) -> list[BriefingRecord]:
 # --- pick() with no query is newest-wins, newest by mtime (#551) -------------
 
 
+def _utc(stamp: str) -> float:
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc).timestamp()
+
+
 def test_pick_without_query_is_the_newest_by_mtime(tmp_path: Path) -> None:
     # Until #551 the sort was date, then session id: within one day the id
     # decided, and an undated file sorted last whatever its mtime. #534 and
     # #548 measured the pool by mtime, when SessionEnd wrote the file.
-    t0 = 1_700_000_000
-    for sid, date, at in (("aaa", "2026-09-01", 1), ("zzzz", "2026-09-03", 2),
-                          ("zzz", "2026-09-03", 3), ("undated", None, 4)):
+    for sid, date, at in (("aaa", "2026-09-01", "2026-09-01T10:00"),
+                          ("zzzz", "2026-09-03", "2026-09-03T09:00"),
+                          ("zzz", "2026-09-03", "2026-09-03T15:00"),
+                          ("undated", None, "2026-09-03T18:00")):
         p = _write(tmp_path, "p", sid, date=date, body=sid)
-        os.utime(p, (t0 + at, t0 + at))
+        os.utime(p, (_utc(at), _utc(at)))
 
     got = briefing_select.pick(tmp_path, "p", query=None)
     assert got is not None and got.frontmatter["session_id"] == "undated"
     order = [r.frontmatter["session_id"] for r in briefing_select.recent_briefings(tmp_path, "p")]
     assert order == ["undated", "zzz", "zzzz", "aaa"]
+
+
+# --- newest by when the session ended, whatever the mtimes say (#759) --------
+
+
+def _write_fm(vault: Path, sid: str, *, mtime: str, **fm: str) -> Path:
+    d = vault / "bots" / "p" / "briefings" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{sid}.md"
+    lines = "".join(f"{k}: {v}\n" for k, v in fm.items())
+    p.write_text(f"---\ntype: briefing\nsession_id: {sid}\n{lines}---\n\n{sid}\n",
+                 encoding="utf-8")
+    os.utime(p, (_utc(mtime), _utc(mtime)))
+    return p
+
+
+def _order(vault: Path) -> list[str]:
+    return [r.frontmatter["session_id"] for r in briefing_select.recent_briefings(vault, "p")]
+
+
+def test_a_sync_pull_that_stamped_one_mtime_does_not_decide_the_order(tmp_path: Path) -> None:
+    # A pull writes every file it brings at the time of the pull: one vault had
+    # 182 of its 200 briefings on one mtime, and the old tie-break, the session
+    # id, then decided the day's order. Ids here sort against the dates.
+    for sid, date in (("a-newest", "2026-10-21"), ("m-middle", "2026-10-19"),
+                      ("z-oldest", "2026-10-17")):
+        _write_fm(tmp_path, sid, mtime="2026-10-27T12:00", date=date, duration_minutes="30")
+    assert _order(tmp_path) == ["a-newest", "m-middle", "z-oldest"]
+
+
+def test_mtimes_in_the_reverse_of_the_session_order_do_not_decide_it(tmp_path: Path) -> None:
+    # Two pulls, the older sessions arriving last: by mtime the oldest led.
+    _write_fm(tmp_path, "new", mtime="2026-10-25T08:00", date="2026-10-21", duration_minutes="20")
+    _write_fm(tmp_path, "mid", mtime="2026-10-26T08:00", date="2026-10-19", duration_minutes="20")
+    _write_fm(tmp_path, "old", mtime="2026-10-27T08:00", date="2026-10-17", duration_minutes="20")
+    assert _order(tmp_path) == ["new", "mid", "old"]
+
+
+def test_a_session_that_ran_two_days_is_newer_than_one_started_between(tmp_path: Path) -> None:
+    # #759's index: a session started 2026-10-20 that ran to the 22nd sat above
+    # three started on the 21st. It was right to: ``date`` is the start day.
+    _write_fm(tmp_path, "long", mtime="2026-10-22T03:32", date="2026-10-20",
+              duration_minutes=str(30 * 60 + 43))
+    _write_fm(tmp_path, "day21", mtime="2026-10-21T14:36", date="2026-10-21", duration_minutes="90")
+    _write_fm(tmp_path, "day20", mtime="2026-10-20T20:00", date="2026-10-20", duration_minutes="60")
+    assert _order(tmp_path) == ["long", "day21", "day20"]
+
+
+def test_ended_at_orders_ahead_of_date_and_mtime(tmp_path: Path) -> None:
+    # Same start day, one pull: ended_at alone tells them apart.
+    for sid, ended in (("b", "2026-10-21T09:00:00Z"), ("a", "2026-10-21T22:00:00Z"),
+                       ("c", "2026-10-21T03:00:00Z")):
+        _write_fm(tmp_path, sid, mtime="2026-10-27T12:00", date="2026-10-21",
+                  ended_at=ended, duration_minutes="10")
+    assert _order(tmp_path) == ["a", "b", "c"]
+
+
+def test_session_end_bounds_the_mtime_by_the_day_and_duration() -> None:
+    fm = {"date": "2026-10-20", "duration_minutes": "90"}
+    earliest = _utc("2026-10-20T01:30")
+    # an mtime inside the window is the write, so the end
+    assert briefing_select.session_end(fm, _utc("2026-10-20T17:00")) == _utc("2026-10-20T17:00")
+    # a later rewrite cannot lift it past the last moment it could have ended
+    assert briefing_select.session_end(fm, _utc("2026-10-27T00:00")) == earliest + 86400
+    # an mtime before it could have ended is not the write either
+    assert briefing_select.session_end(fm, _utc("2026-01-01T00:00")) == earliest
+    # ended_at is the end; with neither, the mtime is all there is
+    assert briefing_select.session_end({**fm, "ended_at": "2026-10-20T05:00:00Z"}, 0.0) == _utc("2026-10-20T05:00")
+    assert briefing_select.session_end({}, 123.0) == 123.0
+    assert briefing_select.session_end({"date": "garbage"}, 123.0) == 123.0
 
 
 def test_an_mtime_tie_falls_back_to_date_then_session_id(tmp_path: Path) -> None:
