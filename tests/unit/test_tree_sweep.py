@@ -18,6 +18,7 @@ from typing import List, Optional
 import pytest
 
 from mnemo.core.sessions import tree_sweep as ts
+from tests.unit import _git_template
 
 NOW = 2_000_000_000.0
 LONG_AGO = "2020-01-01T00:00:00.000Z"
@@ -43,26 +44,46 @@ class Job:
         return self.tempo == "blocked"
 
 
-@pytest.fixture
-def world(tmp_path: Path):
-    origin = tmp_path / "origin.git"
-    _git("init", "--bare", "-b", "master", str(origin), cwd=tmp_path)
-    repo = tmp_path / "proj"
-    _git("clone", str(origin), str(repo), cwd=tmp_path)
+def _build_world(root: Path) -> None:
+    origin = root / "origin.git"
+    _git("init", "--bare", "-b", "master", str(origin), cwd=root)
+    repo = root / "proj"
+    _git("clone", str(origin), str(repo), cwd=root)
     for k, v in (("user.email", "t@t"), ("user.name", "t"), ("commit.gpgsign", "false")):
         _git("config", k, v, cwd=repo)
     (repo / "a.txt").write_text("a\n", encoding="utf-8")
     _git("add", "a.txt", cwd=repo)
     _git("commit", "-m", "init", cwd=repo)
     _git("push", "-u", "origin", "master", cwd=repo)
-    tree = tmp_path / "proj-wt-7"
+    tree = root / "proj-wt-7"
     _git("worktree", "add", "-b", "fix/issue-7", str(tree), cwd=repo)
     (tree / "fix.txt").write_text("fix\n", encoding="utf-8")
     _git("add", "fix.txt", cwd=tree)
     _git("commit", "-m", "fix", cwd=tree)
     _git("push", "-u", "origin", "fix/issue-7", cwd=tree)
+    _WORLD_HEAD["head"] = _git("rev-parse", "HEAD", cwd=tree)
+
+
+_WORLD_HEAD: dict = {}
+
+
+def _relink_world(root: Path) -> None:
+    _git_template.set_remote_url(root / "proj", "origin", root / "origin.git")
+    _git_template.relink_worktree(root / "proj", root / "proj-wt-7")
+
+
+@pytest.fixture
+def world(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory):
+    """An origin, its clone ``proj``, and a dispatch tree whose branch is pushed.
+
+    Built once per worker and copied per test (#799): each git call costs a
+    process, which on CI's Windows runner is most of what these tests cost.
+    """
+    _git_template.copy("tree-sweep-world", _build_world, tmp_path, tmp_path_factory,
+                       relink=_relink_world)
+    repo, tree = tmp_path / "proj", tmp_path / "proj-wt-7"
     return {"repo": repo, "tree": tree, "vault": tmp_path / "vault",
-            "head": _git("rev-parse", "HEAD", cwd=tree)}
+            "head": _WORLD_HEAD["head"]}
 
 
 def fake_run(prs: List[dict], cwds: Optional[List[str]] = None):

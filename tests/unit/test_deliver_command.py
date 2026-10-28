@@ -21,15 +21,15 @@ import pytest
 
 from mnemo.cli.commands import deliver
 from mnemo.core.sessions import delivery
+from tests.unit import _git_template
 
 
 def _run(args, *, cwd) -> None:
     subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=True)
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "mnemo"
+def _build_repo(parent: Path) -> None:
+    root = parent / "mnemo"
     root.mkdir()
     _run(["git", "init", "-b", "master"], cwd=root)
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
@@ -37,7 +37,32 @@ def repo(tmp_path: Path) -> Path:
     (root / "README.md").write_text("base\n", encoding="utf-8")
     _run(["git", "add", "README.md"], cwd=root)
     _run(["git", "commit", "-m", "base"], cwd=root)
-    return root
+
+
+def _build_pushed(parent: Path) -> None:
+    """The repo, with a bare ``origin`` beside it holding its ``master``."""
+    _build_repo(parent)
+    root, bare = parent / "mnemo", parent / "origin.git"
+    _run(["git", "init", "--bare", "-b", "master", str(bare)], cwd=parent)
+    _run(["git", "remote", "add", "origin", str(bare)], cwd=root)
+    _run(["git", "push", "-q", "origin", "master"], cwd=root)
+
+
+def _relink_pushed(parent: Path) -> None:
+    _git_template.set_remote_url(parent / "mnemo", "origin", parent / "origin.git")
+
+
+@pytest.fixture
+def repo(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
+         request: pytest.FixtureRequest) -> Path:
+    # Built once per worker and copied per test (#799): a git call is a process.
+    # A test that asks for ``origin`` gets the copy that already has one.
+    if "origin" in request.fixturenames:
+        _git_template.copy("deliver-command-pushed", _build_pushed, tmp_path,
+                           tmp_path_factory, relink=_relink_pushed)
+    else:
+        _git_template.copy("deliver-command-repo", _build_repo, tmp_path, tmp_path_factory)
+    return tmp_path / "mnemo"
 
 
 @pytest.fixture(autouse=True)
@@ -266,10 +291,9 @@ def test_a_pr_the_child_opened_itself_is_delivered(
 @pytest.fixture
 def origin(in_repo: Path) -> Path:
     """A bare repo standing in for ``origin``: local git, no network."""
+    # ``repo`` copied it in with the repo, already pushed to (see ``_build_pushed``).
     bare = in_repo.parent / "origin.git"
-    _run(["git", "init", "--bare", "-b", "master", str(bare)], cwd=in_repo.parent)
-    _run(["git", "remote", "add", "origin", str(bare)], cwd=in_repo)
-    _run(["git", "push", "-q", "origin", "master"], cwd=in_repo)
+    assert bare.is_dir()
     return bare
 
 

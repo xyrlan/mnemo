@@ -20,6 +20,7 @@ from mnemo.cli.commands import deliver, dispatch as dispatch_cmd, twins as twins
 from mnemo.core import claude_cli, dispatch, twins
 from mnemo.core.sessions import delivery, grants, pr_follow
 from mnemo.hooks import session_end
+from tests.unit import _git_template
 
 
 def _run(args, *, cwd) -> str:
@@ -34,16 +35,21 @@ def _commit(root: Path, name: str, text: str) -> str:
     return _run(["git", "rev-parse", "HEAD"], cwd=root).strip()
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "mnemo"
+def _build_repo(parent: Path) -> None:
+    root = parent / "mnemo"
     root.mkdir()
     _run(["git", "init", "-b", "master"], cwd=root)
     _run(["git", "config", "user.email", "t@example.com"], cwd=root)
     _run(["git", "config", "user.name", "t"], cwd=root)
     _commit(root, "README.md", "base\n")
     (root / "changelog.d").mkdir()
-    return root
+
+
+@pytest.fixture
+def repo(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    # Built once per worker and copied per test (#799): a git call is a process.
+    _git_template.copy("dispatch-twins-repo", _build_repo, tmp_path, tmp_path_factory)
+    return tmp_path / "mnemo"
 
 
 @pytest.fixture
