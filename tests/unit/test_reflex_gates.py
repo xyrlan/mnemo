@@ -11,7 +11,7 @@ from mnemo.core.reflex.gates import (
 def test_empty_scores_returns_silence_reason():
     res = evaluate_gates([], query_tokens=["x"], doc_tokens_by_slug={}, thresholds=DEFAULT_THRESHOLDS)
     assert res.accepted_slugs == []
-    assert res.silence_reason == "index_missing"
+    assert res.silence_reason == "no_term_match"
 
 
 def test_absolute_floor_failure():

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -170,6 +171,7 @@ def load_validated_json(
     *,
     vault_root: Path,
     error_namespace: str,
+    fallback: Path | None = None,
 ) -> dict | None:
     """Load a JSON dict from ``path`` with discriminating error handling.
 
@@ -180,7 +182,8 @@ def load_validated_json(
     Error-logging policy:
       - Missing file → silent (first run, expected).
       - Read error (OSError other than FileNotFoundError) → logged under
-        ``<error_namespace>.read``.
+        ``<error_namespace>.read``. A ``PermissionError`` is retried first:
+        see :data:`_LOCKED_READ_ATTEMPTS`.
       - Decode / parse error → logged under ``<error_namespace>.parse``.
       - Root is not a dict → silent (hand-authored malformed file; the
         caller's ``rebuild`` path handles recovery).
@@ -188,23 +191,63 @@ def load_validated_json(
 
     ``expected_schema_version`` may be a tuple of the versions a reader still
     accepts, for a format whose old version it can read until a rebuild.
+
+    ``fallback`` is read the same way when ``path`` exists but cannot be
+    read, parsed, or is not a dict — the empty or NUL-filled file a crash
+    leaves behind an atomic write (#767), or a file still locked after the
+    retries. Its own failures log under ``<error_namespace>.fallback``. A
+    missing ``path`` or a schema mismatch does not fall back: neither is
+    damage.
     """
-    try:
-        raw_bytes = path.read_bytes()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        log_error(vault_root, f"{error_namespace}.read", exc)
-        return None
-    try:
-        data = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        log_error(vault_root, f"{error_namespace}.parse", exc)
-        return None
+    data = _read_json(path, vault_root, error_namespace)
+    if data is _UNREADABLE and fallback is not None:
+        data = _read_json(fallback, vault_root, f"{error_namespace}.fallback")
     if not isinstance(data, dict):
         return None
     accepted = (expected_schema_version if isinstance(expected_schema_version, tuple)
                 else (expected_schema_version,))
     if data.get("schema_version") not in accepted:
         return None
+    return data
+
+
+_UNREADABLE = object()
+
+# On Windows a reader that opens a file while a writer's ``os.replace`` moves
+# a new version over it gets a sharing violation, PermissionError, for the
+# moment the rename holds the file. The kept ``.prev`` is no refuge: the next
+# write replaces it the same way, so a writer rebuilding back to back (or a
+# second SessionStart rebuilding at once) can hold both, and a reader that
+# lost the live file to one rename lost ``.prev`` to the next
+# (``test_readers_during_rebuilds_always_get_an_index`` on Windows CI, #767).
+# The lock lasts as long as a rename, so it is waited out, staggered as the
+# writer staggers its own retries (core/atomic.py), before the file counts as
+# unreadable. It also means a race reads the new version, not the one before.
+_LOCKED_READ_ATTEMPTS = 5
+
+
+def _read_json(path: Path, vault_root: Path, error_namespace: str) -> Any:
+    """The parsed JSON dict at ``path``, ``None`` when it does not exist, or
+    ``_UNREADABLE`` when it exists and cannot be read as a dict."""
+    for attempt in range(_LOCKED_READ_ATTEMPTS):
+        try:
+            raw_bytes = path.read_bytes()
+            break
+        except FileNotFoundError:
+            return None
+        except PermissionError as exc:
+            if attempt == _LOCKED_READ_ATTEMPTS - 1:
+                log_error(vault_root, f"{error_namespace}.read", exc)
+                return _UNREADABLE
+            time.sleep(0.002 * (attempt + 1))
+        except OSError as exc:
+            log_error(vault_root, f"{error_namespace}.read", exc)
+            return _UNREADABLE
+    try:
+        data = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log_error(vault_root, f"{error_namespace}.parse", exc)
+        return _UNREADABLE
+    if not isinstance(data, dict):
+        return _UNREADABLE
     return data

@@ -1,4 +1,5 @@
-"""Size and load time of the reflex index, v1 on disk against v2 (#779).
+"""Size and load time of the reflex index, v1 on disk against v2 (#779), and
+what the durable write that keeps ``.prev`` costs a v2 rebuild (#767).
 
 Usage:
     PYTHONPATH=src python3 tools/measure_reflex_index_load.py [--vault ~/mnemo]
@@ -19,7 +20,16 @@ and for each reports:
 - ``decide_s``: the fastest of ``--repeats`` load + :func:`reflex.decide.decide`
   on one prompt, everything the hook does with the index;
 - ``write_s``: the fastest serialize + atomic write, what a SessionStart
-  rebuild pays on top of the build.
+  rebuild pays on top of the build (v2 as ``write_index`` writes it: flushed
+  and keeping ``.prev``, see ``write_cost``).
+
+``write_cost`` takes the v2 write apart (#767): the fastest atomic write of
+the v2 bytes as it was before (``plain_s``), with the flush to disk
+(``durable_s``; ``flush_s`` is the difference), and with the flush and the
+hard-linked ``.prev`` (``kept_s``, what ``write_index`` does), and the bytes
+``.prev`` holds on disk once the index has been rebuilt over itself
+(``prev_bytes``): the link copies nothing, but it keeps the replaced
+version's bytes alive.
 
 With ``--vault`` the index is that vault's own (either version); without it,
 a synthetic one of ``--docs`` documents, ``--terms`` terms and about
@@ -50,7 +60,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mnemo.core.atomic import atomic_write_bytes  # noqa: E402
+from mnemo.core.atomic import atomic_write_bytes, previous_path  # noqa: E402
 from mnemo.core.reflex import index as reflex_index  # noqa: E402
 from mnemo.core.reflex.decide import decide  # noqa: E402
 
@@ -183,6 +193,28 @@ def measure(index: Dict[str, Any], *, repeats: int = 5,
     }
 
 
+def write_cost(index: Dict[str, Any], *, repeats: int = 5) -> Dict[str, Any]:
+    """The v2 write with and without the flush and the kept ``.prev`` (#767)."""
+    data = reflex_index.encode_index(index)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / reflex_index.INDEX_FILENAME
+        atomic_write_bytes(path, data)
+        plain = _fastest(lambda: atomic_write_bytes(path, data), repeats)
+        durable = _fastest(lambda: atomic_write_bytes(path, data, durable=True), repeats)
+        kept = _fastest(lambda: atomic_write_bytes(path, data, durable=True,
+                                                   keep_previous=True), repeats)
+        prev = previous_path(path)
+        prev_bytes = prev.stat().st_size if prev.exists() else 0
+    return {
+        "index_bytes": len(data),
+        "plain_s": plain,
+        "durable_s": durable,
+        "kept_s": kept,
+        "flush_s": durable - plain,
+        "prev_bytes": prev_bytes,
+    }
+
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 #: Two tokens: the hook's pre-gate returns before it loads the index.
 SHORT_PROMPT = "hi there"
@@ -252,6 +284,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         index = synthetic_index(args.docs, args.terms, args.postings)
         project = PROJECT
     report = measure(index, repeats=args.repeats, project=project)
+    report["write_cost"] = write_cost(index, repeats=args.repeats)
     if args.hook:
         report["hook_s"] = measure_hook(index, repeats=args.repeats)
     prov = _provenance.provenance(__file__, argv if argv is not None else sys.argv[1:],
@@ -267,6 +300,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"load+decide {r['decide_s']:.3f} s  write {r['write_s']:.3f} s")
     print(f"v2/v1: bytes {report['bytes_ratio']:.3f}  load {report['load_ratio']:.3f}  "
           f"same scores: {report['same_scores']}")
+    cost = report["write_cost"]
+    print(f"v2 write: {cost['plain_s']:.3f} s, flushed {cost['durable_s']:.3f} s "
+          f"(+{cost['flush_s']:.3f} s), flushed and keeping .prev {cost['kept_s']:.3f} s; "
+          f".prev holds {cost['prev_bytes']:,} bytes")
     hook = report.get("hook_s")
     if hook:
         print(f"hook, one prompt: v1 {hook['v1']:.3f} s  v2 {hook['v2']:.3f} s  "

@@ -27,6 +27,15 @@ def test_measure_reports_both_versions_and_their_agreement():
     assert report["bytes_ratio"] == report["v2"]["bytes"] / report["v1"]["bytes"]
 
 
+def test_write_cost_takes_the_v2_write_apart():
+    index = tool.synthetic_index(40, 500, 2000)
+    cost = tool.write_cost(index, repeats=1)
+    assert cost["index_bytes"] == len(tool.reflex_index.encode_index(index))
+    assert cost["prev_bytes"] == cost["index_bytes"], ".prev keeps one whole version"
+    assert cost["flush_s"] == cost["durable_s"] - cost["plain_s"]
+    assert min(cost["plain_s"], cost["durable_s"], cost["kept_s"]) > 0
+
+
 def test_the_prompt_is_made_of_terms_the_index_has():
     index = tool.synthetic_index(40, 500, 2000)
     words = tool.prompt_for(index).split()
@@ -38,3 +47,4 @@ def test_main_prints_a_report(capsys):
                       "--repeats", "1"]) == 0
     out = capsys.readouterr().out
     assert "v1:" in out and "v2:" in out and "same scores: True" in out
+    assert "v2 write:" in out and ".prev holds" in out
