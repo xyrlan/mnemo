@@ -28,8 +28,9 @@ corrections-only one 3.1k (p90 9.4k), and its answer is a few lines or empty
 where a briefing's is a page.
 
 Both paths go through :func:`corrections.verify`, so the rules are the same:
-no quote from a dispatch brief, none from a ``!`` shell turn. Both then go
-through :func:`mnemo.core.correction_check.check` (#524), which drops a verified
+no quote from a dispatch brief, none from a ``!`` shell turn, and an item whose
+turn is a go-ahead or a question is dropped (:func:`corrections.screen`, #758).
+Both then go through :func:`mnemo.core.correction_check.check` (#524), which drops a verified
 item that corrects nothing when ``extraction.correctionCheck`` is on (off by
 default: it missed its bar, see that module).
 """
@@ -249,8 +250,12 @@ def corrections_only(
         errors.log_error(
             vault_root,
             "corrections_only.rejected",
-            ValueError(f"{len(rejected)} correction quote(s) not found in user turns; dropped"),
+            ValueError(
+                f"{len(rejected)} correction quote(s) not found in user turns; dropped "
+                f"({corrections.rejection_causes(rejected, turns)})"
+            ),
         )
+    kept, _screened = corrections.screen(kept, turns)
     from mnemo.core import correction_check
 
     kept, _dropped = correction_check.check(kept, pairs, cfg, vault_root=vault_root, agent=agent)
