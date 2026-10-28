@@ -15,12 +15,13 @@ citation is rewritten in the same run and the indexes rebuilt; see
 :mod:`mnemo.core.migrations.briefing_citations`. ``--dry-run`` reports that
 blast radius before anything moves.
 
-Heuristic caveat: orphan detection uses a name-prefix match
-(``bots/<canonical>-<suffix>/``). If you have an unrelated project
-whose name happens to start with the canonical prefix (e.g.,
-``myproj-experimental`` next to ``myproj``), it will be swept too.
-Always run with ``--dry-run`` first and audit the output before
-executing the real move.
+Only the name is there to go on, since the tree is usually gone, and the
+only name that says "worktree of ``<repo>``" is ``<repo>-wt-<suffix>``: the
+same rule the doctor check that points here uses,
+:func:`~mnemo.cli.commands.doctor_checks.orphan_worktree_briefings.worktree_canonical`.
+A bare name-prefix match (``<repo>-*``) is what this did until #802, and it
+would have moved ``mnemo-src`` and ``mnemo-desktop`` — separate checkouts —
+into ``mnemo``. Such a sibling is reported as skipped, never moved.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import argparse
 import shutil
 from pathlib import Path
 
+from mnemo.cli.commands.doctor_checks.orphan_worktree_briefings import worktree_canonical
 from mnemo.cli.parser import command
 from mnemo.core import agent as agent_mod
 from mnemo.core.migrations import briefing_citations as citations
@@ -48,6 +50,7 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
 
     moves: list[tuple[Path, Path]] = []
     collisions: list[Path] = []
+    siblings: list[tuple[Path, str]] = []
 
     bots_root = vault / "bots"
     if not bots_root.is_dir():
@@ -65,9 +68,11 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
             sessions = agent_dir / "briefings" / "sessions"
             if not sessions.is_dir():
                 continue
-            # Heuristic: name-prefix match. We can't always cwd-resolve a vault dir
-            # back to a worktree because the worktree may have been deleted.
-            if not agent_dir.name.startswith(canonical + "-"):
+            # Name only: the worktree may have been deleted, so it can't be
+            # cwd-resolved. A shared prefix without `-wt-` is a sibling.
+            if worktree_canonical(agent_dir.name) != canonical:
+                if agent_dir.name.startswith(canonical + "-"):
+                    siblings.append((agent_dir, canonical))
                 continue
             target_dir = bots_root / canonical / "briefings" / "sessions"
             for src in sorted(sessions.glob("*.md")):
@@ -76,6 +81,13 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
                     collisions.append(src)
                 else:
                     moves.append((src, target))
+
+    for agent_dir, canonical in siblings:
+        owner = worktree_canonical(agent_dir.name) or agent_dir.name
+        print(
+            f"skipped {agent_dir}: sibling checkout {owner!r}, "
+            f"not a worktree of {canonical!r}"
+        )
 
     if not moves and not collisions:
         print("nothing to migrate")
