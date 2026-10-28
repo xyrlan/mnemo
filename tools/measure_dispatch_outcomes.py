@@ -34,15 +34,29 @@ from ``~/.claude/jobs`` is still counted. Each is one of two arms:
   job's ``state.json`` ``children`` when there is exactly one. The source is
   kept per row;
 - *merged*, and the hours from the PR's creation to its merge (``gh``);
+- *first stop*: the child's last assistant turn before its first
+  ``<mnemo-pr-follow`` wake, or its last assistant turn when nothing woke it —
+  the anchor ``child_notices`` uses ("What counts as told"), so the two tools
+  agree. Not the last record before the wake: on resume Claude Code writes
+  records stamped at the *wake* (``[Tool call interrupted …]``, a
+  ``<synthetic>`` ``No response requested.``, the ``SessionStart:resume``
+  hook), and the stop measured from them is the wake (#770);
 - *commits after the child*: each commit on the PR classified by author date
   against the child's first stop and its last turn
   (``measure_post_done_commits.classify``). ``after_child`` is work somebody
-  else did once nothing of the child's was running;
+  else did once nothing of the child's was running. A commit whose headline is
+  git's or GitHub's own for merging the PR's base branch in (``Merge branch
+  'master'``, ``… into <branch>``) is nobody's work and is counted apart, as
+  ``base_merges``: a landing that brings the branch up to date is not a fix.
+  The headline is all GitHub gives, so a merge that resolved conflicts by hand
+  reads the same;
 - *CI at hand-off*: the check runs on the PR commit that was its head when the
   child first stopped — the last commit authored by then — read from GitHub:
   ``green``, ``red``, ``pending`` or ``none``. And the same for the PR's last
-  commit, *CI at the end*. What the parent was told at the first report is
-  kept beside it (``child-reports.jsonl``'s first ``finished`` state). A red
+  commit, *CI at the end*. ``none`` becomes ``no-ci`` when the repository had
+  never run a ``pull_request`` workflow by the PR's last commit: nothing there
+  checks a PR, so there is nothing for the job to pass or fail. What the
+  parent was told at the first report is kept beside it (``child-reports.jsonl``'s first ``finished`` state). A red
   commit is split by :func:`failure_kind`: ``flaky`` (a rerun on the same
   commit passed, or a matrix job failed where its same-OS sibling passed, in
   tests the PR never touched), ``not-run`` (GitHub never started the job — a
@@ -55,8 +69,12 @@ from ``~/.claude/jobs`` is still counted. Each is one of two arms:
   green;
 - *rate-limit resumes*: ``<mnemo-resume`` turns;
 - *human turns*: turns :func:`mnemo.core.sessions.detector.is_human_turn`
-  counts after the job's first reply, plus answered ``AskUserQuestion`` calls
-  — how :func:`mnemo.core.twins.conditions_of` reads a twin;
+  counts, plus answered ``AskUserQuestion`` calls — how
+  :func:`mnemo.core.twins.conditions_of` reads a twin. Not the job's opening
+  prompt, wherever Claude Code wrote it (it can land after the first reply's
+  records), and not a turn another session sent (:func:`turn_source`): those
+  are *peer turns*, counted apart, and a subagent's hand-back or a
+  ``<mnemo-child-finished`` notice is counted as neither (#770);
 - *notice*: for a dispatched child with a parent, whether a ``finished`` row
   in ``child-reports.jsonl`` answers its first stop (``told``), after more
   than ``child_notices.GRACE_SECONDS`` (``late``), only a ``spawned`` row
@@ -73,8 +91,9 @@ from ``~/.claude/jobs`` is still counted. Each is one of two arms:
   changing its files, within :data:`FOLLOWUP_DAYS` of the merge.
 
 **Hands-off**, #556's primary outcome for one job: a PR whose last commit's
-checks pass (green, or red only by flaky failures), no commit by anyone after
-the job's last turn, and no human input.
+checks pass (green, or red only by flaky failures) or whose repository has no
+CI (``no-ci``, reported apart), no commit by anyone after the job's last turn
+but a base merge, and no human input.
 
 **The two-arm study.** ``--pilot <pairs.jsonl>`` reads a ledger of issue
 pairs — one ``mnemo dispatch`` child and one plain ``claude --bg`` job on the
@@ -133,6 +152,15 @@ PASSING = frozenset({"green", "flaky", "non-blocking"})
 
 _PR = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 
+#: Claude Code's model name on the records it writes itself, such as the
+#: ``No response requested.`` a resumed session gets.
+SYNTHETIC_MODEL = "<synthetic>"
+
+#: What Claude Code writes around a subagent's report, and the notice mnemo
+#: sends a parent when a child finishes: a turn from no one.
+HANDBACK = "[Subagent hand-back]"
+CHILD_FINISHED = "<mnemo-child-finished"
+
 Runner = Callable[[Sequence[str], Optional[str]], Tuple[int, str, str]]
 
 
@@ -142,6 +170,27 @@ def _epoch(value: Any) -> Optional[float]:
 
 def _text(record: Dict[str, Any]) -> str:
     return post_done._user_text(record)
+
+
+def turn_source(record: Dict[str, Any]) -> str:
+    """``human``, ``peer`` or ``automated`` for a turn
+    :func:`detector.is_human_turn` counts.
+
+    ``peer`` is a turn another Claude session sent: Claude Code marks it
+    ``origin.kind: "peer"`` and opens it with its header, and says in its
+    trailer it was "not typed by your user". ``automated`` is a peer turn no
+    session chose to send: a subagent handing back its report, or mnemo's
+    notice that a child finished.
+    """
+    origin = record.get("origin")
+    origin = origin if isinstance(origin, dict) else {}
+    text = _text(record).lstrip()
+    if not (origin.get("kind") == "peer" or text.startswith(detector._PEER_HEADER)
+            or text.startswith("<cross-session-message")):
+        return "human"
+    if origin.get("handback") or HANDBACK in text or CHILD_FINISHED in text:
+        return "automated"
+    return "peer"
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +204,9 @@ def read_transcript(path: str) -> Optional[Dict[str, Any]]:
     first: Optional[Dict[str, Any]] = None
     stamps: List[float] = []
     first_stop: Optional[float] = None
-    wakes = resumes = human = answered = hooks = mcp = 0
-    replied = False
+    turn: Optional[float] = None  # the last assistant turn the model wrote
+    opened = False  # the opening prompt is behind us
+    wakes = resumes = human = peers = answered = hooks = mcp = 0
     asked: set = set()
     creating: set = set()
     urls: List[str] = []
@@ -191,19 +241,27 @@ def read_transcript(path: str) -> Optional[Dict[str, Any]]:
                     if text.startswith(FOLLOW):
                         wakes += 1
                         if first_stop is None:
-                            first_stop = stamps[-1] if stamps else stamp
+                            first_stop = turn if turn is not None else (
+                                stamps[-1] if stamps else stamp)
                     elif text.startswith(RESUME):
                         resumes += 1
-                    if replied and detector.is_human_turn(record):
-                        human += 1
+                    if detector.is_human_turn(record):
+                        source = turn_source(record)
+                        if not opened:
+                            opened = True  # the prompt, even written after the reply
+                        elif source == "human":
+                            human += 1
+                        elif source == "peer":
+                            peers += 1
                     for block in blocks:
                         if (block.get("type") == "tool_result"
                                 and block.get("tool_use_id") in asked
                                 and not block.get("is_error")):
                             answered += 1
                 elif kind == "assistant":
-                    replied = True
                     message = record.get("message") or {}
+                    if stamp is not None and message.get("model") != SYNTHETIC_MODEL:
+                        turn = stamp
                     usage = message.get("usage") or {}
                     if message.get("id") and isinstance(usage.get("output_tokens"), int):
                         # A message is written once per content block, each
@@ -234,13 +292,15 @@ def read_transcript(path: str) -> Optional[Dict[str, Any]]:
         "cwd": str(first.get("cwd") or ""),
         "branch": branch,
         "started": min(stamps),
-        "first_stop": first_stop if first_stop is not None else last,
+        "first_stop": (first_stop if first_stop is not None
+                       else turn if turn is not None else last),
         "last_turn": last,
         "prompt": _text(first)[:200],
         "created_prs": list(dict.fromkeys(urls)),
         "wakes": wakes,
         "resumes": resumes,
         "human_turns": human,
+        "peer_turns": peers,
         "answered_questions": answered,
         "transcript_tokens": sum(tokens.values()),
         "mnemo_hooks": hooks,
@@ -341,10 +401,21 @@ def pr_for_branch(row: Dict[str, Any], *, run: Runner) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def base_merge(headline: str, base: str) -> bool:
+    """Whether *headline* is git's or GitHub's own for merging *base* into the
+    PR's branch: ``Merge branch 'master'``, ``… of <url>``, ``… into <head>``,
+    or the remote-tracking spelling."""
+    if not base:
+        return False
+    return bool(re.match(r"Merge (?:remote-tracking )?branch '(?:origin/)?%s'(?: of \S+)?"
+                         r"(?: into \S+)?\s*$" % re.escape(base), headline or ""))
+
+
 def pr_facts(url: str, *, run: Runner) -> Optional[Dict[str, Any]]:
-    """State, merge time and commits ``(authored, oid)`` of *url*, or ``None``."""
+    """State, merge time and commits ``(authored, oid)`` of *url*, and the
+    oids of its :func:`base_merge` commits, or ``None``."""
     code, out, _ = run(["gh", "pr", "view", url, "--json",
-                        "state,createdAt,mergedAt,commits"], None)
+                        "state,createdAt,mergedAt,commits,baseRefName"], None)
     if code != 0:
         return None
     try:
@@ -352,18 +423,37 @@ def pr_facts(url: str, *, run: Runner) -> Optional[Dict[str, Any]]:
     except ValueError:
         return None
     commits = []
+    merges = set()
     for c in data.get("commits") or []:
         if not isinstance(c, dict):
             continue
         at = _epoch(c.get("authoredDate"))
         if at is not None:
             commits.append((at, str(c.get("oid") or "")))
+            if base_merge(str(c.get("messageHeadline") or ""), str(data.get("baseRefName") or "")):
+                merges.add(commits[-1][1])
     return {
         "state": data.get("state"),
         "created": _epoch(data.get("createdAt")),
         "merged": _epoch(data.get("mergedAt")),
         "commits": commits,
+        "base_merges": merges,
     }
+
+
+def checks_prs(repo: str, by: float, *, run: Runner) -> Optional[bool]:
+    """Whether *repo* had run any ``pull_request`` workflow by *by*; ``None``
+    when GitHub does not say. Bounded in time so a PR that adds the CI is not
+    judged by the CI it added."""
+    when = datetime.fromtimestamp(by, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    code, out, _ = run(["gh", "api", f"repos/{repo}/actions/runs?event=pull_request"
+                        f"&created=<={when}&per_page=1", "--jq", ".total_count"], None)
+    if code != 0:
+        return None
+    try:
+        return int((out or "").strip()) > 0
+    except ValueError:
+        return None
 
 
 def check_state(repo: str, oid: str, *, run: Runner) -> Optional[str]:
@@ -752,13 +842,17 @@ def outcome(row: Dict[str, Any], *, run: Runner) -> Optional[Dict[str, Any]]:
     facts = pr_facts(row["pr"], run=run)
     if facts is None:
         return None
-    stamps = [at for at, _ in facts["commits"]]
+    stamps = [at for at, oid in facts["commits"] if oid not in facts["base_merges"]]
     counts = post_done.classify(row, stamps)
     handoff = head_at(facts["commits"], row["first_stop"])
     last = facts["commits"][-1][1] if facts["commits"] else None
     ci_handoff = check_state(row["repo"], handoff, run=run) if handoff else None
     ci_end = (ci_handoff if last == handoff
               else check_state(row["repo"], last, run=run) if last else None)
+    if "none" in (ci_handoff, ci_end) and checks_prs(
+            row["repo"], facts["commits"][-1][0], run=run) is False:
+        ci_handoff = "no-ci" if ci_handoff == "none" else ci_handoff
+        ci_end = "no-ci" if ci_end == "none" else ci_end
     failures: Dict[str, List[Dict[str, str]]] = {}
     changed: Optional[set] = None
     if "red" in (ci_handoff, ci_end):
@@ -785,6 +879,7 @@ def outcome(row: Dict[str, Any], *, run: Runner) -> Optional[Dict[str, Any]]:
         "merged": merged,
         "hours_to_merge": hours,
         "commits": counts,
+        "base_merges": len(facts["base_merges"]),
         "ci_handoff": ci_handoff,
         "ci_end": ci_end,
         "red_fixed_by": fixed,
@@ -807,10 +902,12 @@ def _median(values: Sequence[float]) -> Optional[float]:
 
 def hands_off(row: Dict[str, Any]) -> bool:
     """#556's primary outcome for one job: it opened a PR whose last commit's
-    checks pass (green, or red only by a :func:`failure_kind` flaky failure), nobody else committed to it after the job's last turn,
-    and no person reached the job after its first reply."""
+    checks pass (green, or red only by a :func:`failure_kind` flaky failure)
+    or whose repository checks no PR (``no-ci``, which :func:`summarize`
+    counts apart), nobody else committed to it after the job's last turn,
+    and no person reached the job after its opening prompt."""
     g = row.get("gh")
-    return bool(row.get("pr") and g and g["ci_end"] in PASSING
+    return bool(row.get("pr") and g and (g["ci_end"] in PASSING or g["ci_end"] == "no-ci")
                 and not g["commits"]["after_child"]
                 and not (row["human_turns"] or row["answered_questions"]))
 
@@ -851,6 +948,8 @@ def summarize(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "merged": len(merged),
         "merged_no_commit_after_child": len(clean),
         "hands_off": sum(1 for r in rows if hands_off(r)),
+        "hands_off_no_ci": sum(1 for r in rows if hands_off(r) and r["gh"]["ci_end"] == "no-ci"),
+        "with_base_merge": sum(1 for r in read if r["gh"].get("base_merges")),
         "hours_to_merge_median": _median([r["gh"]["hours_to_merge"] for r in merged
                                           if r["gh"]["hours_to_merge"] is not None]),
         "ci": ci,
@@ -861,6 +960,7 @@ def summarize(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "resumed": sum(1 for r in rows if r["resumes"]),
         "with_human_input": sum(1 for r in rows if r["human_turns"] or r["answered_questions"]),
         "human_turns": sum(r["human_turns"] + r["answered_questions"] for r in rows),
+        "with_peer_turns": sum(1 for r in rows if r.get("peer_turns")),
         "notices": notices,
         "tokens_median": _median(tokens),
         "tokens_p75": tokens[max(0, math.ceil(0.75 * len(tokens)) - 1)] if tokens else None,
@@ -899,13 +999,17 @@ def format_group(name: str, s: Dict[str, Any]) -> List[str]:
         lines.append(f"  CI at the end: {_tally(s['ci']['ci_end'])}")
         lines.append(f"  red at hand-off, then green by: {_tally(s['red_fixed_by'])}")
         lines.append(f"  hands-off (PR, last commit passes, nobody else's commit, no human "
-                     f"input): {_pct(s['hands_off'], s['jobs'])}")
+                     f"input): {_pct(s['hands_off'], s['jobs'])}, {s['hands_off_no_ci']} of them "
+                     f"in a repo with no CI on PRs")
+        lines.append(f"  PRs with a base-branch merge commit (not counted as anyone's work): "
+                     f"{s['with_base_merge']}")
     if s["first_report"]:
         lines.append(f"  first report told the parent: {_tally(s['first_report'])}")
     lines.append(f"  woken by pr-follow: {s['woken_for_pr']} (for ci-red: {s['woken_red']}); "
                  f"rate-limit resumes: {s['resumed']}")
     lines.append(f"  human input after the first reply: {_pct(s['with_human_input'], s['jobs'])} "
-                 f"({s['human_turns']} turn(s) or answers)")
+                 f"({s['human_turns']} turn(s) or answers); a message from another session: "
+                 f"{s['with_peer_turns']}")
     if s["notices"]:
         lines.append(f"  parent notice for the first stop: {_tally(s['notices'])}")
     lines.append(f"  output tokens: median {_num(s['tokens_median'], '{:,.0f}')}, "
@@ -934,6 +1038,7 @@ def format_report(report: Dict[str, Any], rows: Sequence[Dict[str, Any]] = (), *
                 f"merged {g.get('merged', '—')}  ci {g.get('ci_handoff') or '—'}→{g.get('ci_end') or '—'}  "
                 f"after-child {((g.get('commits') or {}).get('after_child', '—'))}  "
                 f"wakes {r['wakes']}  human {r['human_turns'] + r['answered_questions']}  "
+                f"peer {r.get('peer_turns', 0)}  "
                 f"notice {r['notice'] or '—'}  tokens {r['tokens']}"
             )
     return "\n".join(lines) + "\n"

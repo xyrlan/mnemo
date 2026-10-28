@@ -126,6 +126,7 @@ SEAMS: Dict[str, str] = {
     "tools/measure_prevented_repeats.py:Sender.run.<locals>.worker:self.provider": "mnemo.core.llm:_claude_cli",
     "tools/measure_dispatch_outcomes.py:changed_files:run": "mnemo.core.sessions.report_card:_run",
     "tools/measure_dispatch_outcomes.py:check_state:run": "mnemo.core.sessions.report_card:_run",
+    "tools/measure_dispatch_outcomes.py:checks_prs:run": "mnemo.core.sessions.report_card:_run",
     "tools/measure_dispatch_outcomes.py:classify_red:run": "mnemo.core.sessions.report_card:_run",
     "tools/measure_dispatch_outcomes.py:failure_kind:run": "mnemo.core.sessions.report_card:_run",
     "tools/measure_dispatch_outcomes.py:followup:run": "mnemo.core.sessions.report_card:_run",
