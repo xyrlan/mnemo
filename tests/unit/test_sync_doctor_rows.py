@@ -172,6 +172,26 @@ def test_the_rows_are_registered_once_in_doctor():
 
 
 @pytest.fixture
+def steady_hub(monkeypatch: pytest.MonkeyPatch) -> list:
+    """The hub probe answers :data:`REACH_OK` at once; the list holds each call's kwargs.
+
+    The adapter's probe is one ``ls-remote`` under the product's 3 s budget,
+    and a loaded ``-n auto`` run outlasted it (#807): the hub row went red in
+    tests about other rows. Those tests get a fixed answer, as the row tests
+    do; the probe itself is tested on its own below, with a budget load
+    cannot spend.
+    """
+    calls: list = []
+
+    def fake(vault: Path, **kwargs: Any) -> Dict[str, Any]:
+        calls.append(kwargs)
+        return dict(REACH_OK)
+
+    monkeypatch.setattr(health, "reach", fake)
+    return calls
+
+
+@pytest.fixture
 def git_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
@@ -202,9 +222,12 @@ def primary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, machine: str = "mac
 
 
 @needs_git
-def test_on_a_vault_that_syncs_the_rows_print_and_off_they_do_not(tmp_path, tmp_vault, monkeypatch, git_env):
+def test_on_a_vault_that_syncs_the_rows_print_and_off_they_do_not(tmp_path, tmp_vault, monkeypatch,
+                                                                    git_env, steady_hub):
     vault = primary(tmp_path, monkeypatch)
     out = _printed(rows._doctor_check_sync, vault)
+    # The adapter asks the hub once, under the product's budget.
+    assert steady_hub == [{}]
     assert "ℹ Sync hub: reachable (" in out
     assert "ℹ Sync role: primary (machine 'mac', primary 'mac')" in out
     assert "ℹ Sync commits: 0 ahead, 0 behind (as of the last fetch); 0 files waiting to push" in out
@@ -214,22 +237,46 @@ def test_on_a_vault_that_syncs_the_rows_print_and_off_they_do_not(tmp_path, tmp_
     _off(tmp_vault)
 
 
+# Budgets load cannot spend: these ask whether git answers, not how fast (#807).
+PROBE_BUDGET = 120.0
+
+
 @needs_git
-def test_a_hub_that_does_not_answer_is_a_warning_within_the_bound(tmp_path, monkeypatch, git_env):
+def test_the_probe_reaches_a_real_hub_and_names_one_that_is_not_there(tmp_path, monkeypatch,
+                                                                     git_env):
     vault = primary(tmp_path, monkeypatch)
+    up = health.reach(vault, timeout=PROBE_BUDGET)
+    assert up["ok"] is True and up["message"].startswith("reachable"), up
     # Pointed at a hub that is not there, as the two-vault tests do. Removing
     # the real one fails on Windows: git's object files are read-only there.
     subprocess.run(["git", "-C", str(vault), "remote", "set-url", "origin",
                     str(tmp_path / "gone.git")], check=True)
-    started = datetime.now(timezone.utc)
-    out = _printed(rows._doctor_check_sync, vault)
-    assert datetime.now(timezone.utc) - started < timedelta(seconds=health.REACH_TIMEOUT + 5)
-    assert "⚠ Sync hub: not reachable (" in out
-    assert rows._doctor_check_sync(vault) is False
+    down = health.reach(vault, timeout=PROBE_BUDGET)
+    assert down["ok"] is False and down["message"].startswith("not reachable ("), down
+
+
+def test_a_probe_past_its_budget_is_a_warning_naming_the_budget(tmp_path, monkeypatch):
+    """The bound, counted rather than timed: git is handed the 3 s budget, and
+    git running past it is the warning doctor prints."""
+    from mnemo.core.sync import engine
+    from mnemo.core.sync.git import GitTimeout
+
+    seen = []
+
+    def slow(self, *args: str, **kwargs: Any):
+        seen.append(kwargs.get("timeout"))
+        raise GitTimeout(args, -1, f"timed out after {kwargs.get('timeout'):.0f}s")
+
+    monkeypatch.setattr(engine.Git, "run", slow)
+    down = health.reach(tmp_path)
+    assert seen == [health.REACH_TIMEOUT] and health.REACH_TIMEOUT == 3.0
+    assert down["ok"] is False and down["message"] == "not reachable within 3 s"
+    out = _printed(rows._row_hub, _summary(), down)
+    assert "⚠ Sync hub: not reachable within 3 s" in out
 
 
 @needs_git
-def test_pending_files_and_a_stale_pull_show_on_the_real_summary(tmp_path, monkeypatch, git_env):
+def test_pending_files_and_a_stale_pull_show_on_the_real_summary(tmp_path, monkeypatch, git_env, steady_hub):
     vault = primary(tmp_path, monkeypatch)
     (vault / "bots" / "app" / "briefings" / "sessions").mkdir(parents=True)
     (vault / "bots" / "app" / "briefings" / "sessions" / "s1.md").write_text("# b\n", encoding="utf-8")
@@ -258,7 +305,7 @@ def _satellite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @needs_git
 def test_a_satellite_that_never_pushed_with_nothing_waiting_is_not_warned(tmp_path, monkeypatch,
-                                                                          git_env):
+                                                                          git_env, steady_hub):
     """#655: one second after `join`, doctor said no push in a day."""
     vault = _satellite(tmp_path, monkeypatch)
     out = _printed(rows._doctor_check_sync, vault)
@@ -271,7 +318,7 @@ def test_a_satellite_that_never_pushed_with_nothing_waiting_is_not_warned(tmp_pa
 
 @needs_git
 def test_a_satellite_with_files_waiting_past_the_threshold_is_still_warned(tmp_path, monkeypatch,
-                                                                           git_env):
+                                                                           git_env, steady_hub):
     vault = _satellite(tmp_path, monkeypatch)
     sessions = vault / "bots" / "app" / "briefings" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
@@ -299,7 +346,7 @@ def _aged(path: Path, seconds: float) -> Path:
 
 
 @needs_git
-def test_a_zeroed_state_and_a_dead_index_lock_show_on_a_real_vault(tmp_path, monkeypatch, git_env):
+def test_a_zeroed_state_and_a_dead_index_lock_show_on_a_real_vault(tmp_path, monkeypatch, git_env, steady_hub):
     """#735: a BSOD zeroed the state and left ``index.lock``; doctor said nothing."""
     vault = primary(tmp_path, monkeypatch)
     (vault / ".mnemo" / "sync-state.json").write_bytes(b"\0" * 361)
@@ -328,7 +375,7 @@ def test_an_unreadable_state_where_sync_never_ran_is_a_warning_not_silence(tmp_v
 
 @needs_git
 def test_a_satellite_names_what_it_withholds_and_does_not_count_it_as_waiting(
-        tmp_path, monkeypatch, git_env):
+        tmp_path, monkeypatch, git_env, steady_hub):
     """#756: 92 "files waiting to push" on a satellite whose every push said
     ``nothing``: changes a satellite may not publish, which no push carries."""
     vault = _satellite(tmp_path, monkeypatch)
