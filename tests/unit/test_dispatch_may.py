@@ -451,3 +451,33 @@ def test_a_contract_piece_can_still_withhold_against_the_default():
 
     assert dispatch.piece_grant(spike, default) == ()
     assert dispatch.piece_grant(normal, default) == ("push", "pr")
+
+
+# --- the review a piece runs on itself (#771) ----------------------------------
+
+
+@pytest.mark.parametrize("may", [(), ("push",), ("push", "pr")])
+def test_every_piece_is_asked_for_a_mutation_pass(may) -> None:
+    prompt = _flat(dispatch.build_piece_prompt(_piece(), feature="f", may=may))
+    assert "run the mutation pass" in prompt
+    assert "watch it fail, then restore the code" in prompt
+    assert "which mutations you ran" in prompt
+
+
+@pytest.mark.parametrize("value", ["push", "pr"])
+def test_a_granted_piece_is_told_to_push_before_it_stops(value: str) -> None:
+    prompt = _flat(dispatch.build_piece_prompt(_piece(), feature="f",
+                                               may=grants.parse(value)))
+    assert _flat(dispatch.PIECE_PUSH.strip()) in prompt
+
+
+def test_an_ungranted_piece_is_not_told_to_push() -> None:
+    """Its line is "do not push without asking"; a push order would contradict it."""
+    prompt = dispatch.build_piece_prompt(_piece(), feature="f")
+    assert "Push before you stop" not in prompt
+
+
+def test_an_issue_prompt_is_unchanged_by_the_piece_review() -> None:
+    prompt = _flat(dispatch.build_prompt(7, title="T", body="B", may=("push", "pr")))
+    assert "mutation pass" not in prompt
+    assert "Push before you stop" not in prompt

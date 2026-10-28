@@ -370,3 +370,54 @@ def test_no_note_when_nothing_started(monkeypatch, capsys, tmp_path: Path) -> No
     assert dispatch_cmd.cmd_dispatch(_args(issues=[4242])) == 1
 
     assert "tells this session" not in capsys.readouterr().out
+
+
+SHARED_CONTRACT = VALID_CONTRACT + """
+## roles
+- **files:** src/mnemo/core/contracts.py, src/roles.py
+- **exposes:** `roles() -> list`
+"""
+
+
+def test_dry_run_warns_when_two_pieces_list_one_file(monkeypatch, tmp_path, capsys) -> None:
+    """#771: two pieces' `files` meet, so the maintainer hears it at review."""
+    contract = tmp_path / "c.md"
+    contract.write_text(SHARED_CONTRACT, encoding="utf-8")
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path / "proj")
+    args = argparse.Namespace(issues=[], contract=str(contract), dry_run=True)
+
+    assert dispatch_cmd.cmd_dispatch(args) == 0
+    out = capsys.readouterr().out
+    assert ("warning: parser and roles both list src/mnemo/core/contracts.py"
+            in out)
+    assert "belongs in the seam" in out
+    # A warning, not a refusal: the plan is still printed.
+    assert "feat/contract-dispatch/roles" in out
+
+
+def test_a_real_dispatch_warns_before_it_spawns(monkeypatch, tmp_path, capsys) -> None:
+    contract = tmp_path / "c.md"
+    contract.write_text(SHARED_CONTRACT, encoding="utf-8")
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path / "proj")
+    seen = []
+
+    def fake(contract, **kw):
+        seen.append(capsys.readouterr().out)
+        return []
+
+    monkeypatch.setattr(core, "dispatch_contract", fake)
+    monkeypatch.setattr(dispatch_cmd, "_report", lambda results, **kw: 0)
+    args = argparse.Namespace(issues=[], contract=str(contract), dry_run=False)
+
+    assert dispatch_cmd.cmd_dispatch(args) == 0
+    assert seen and "warning: parser and roles" in seen[0]
+
+
+def test_disjoint_pieces_print_no_warning(monkeypatch, tmp_path, capsys) -> None:
+    contract = tmp_path / "c.md"
+    contract.write_text(VALID_CONTRACT, encoding="utf-8")
+    monkeypatch.setattr(dispatch_cmd, "_repo_root", lambda: tmp_path / "proj")
+    args = argparse.Namespace(issues=[], contract=str(contract), dry_run=True)
+
+    assert dispatch_cmd.cmd_dispatch(args) == 0
+    assert "warning" not in capsys.readouterr().out

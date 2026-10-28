@@ -469,3 +469,52 @@ def test_a_field_before_the_first_piece_is_ignored(tmp_path: Path) -> None:
         "src/mnemo/core/contracts.py",
         "tests/unit/test_contracts.py",
     ]
+
+
+# --- files two pieces list (#771) ---------------------------------------------
+
+
+def _pieces(*files: list) -> contracts.Contract:
+    return contracts.Contract(
+        feature="f", verdict="parallel",
+        pieces=[contracts.Piece(slug=f"p{i}", files=list(f)) for i, f in enumerate(files)],
+    )
+
+
+def test_disjoint_files_share_nothing(tmp_path: Path) -> None:
+    assert contracts.shared_files(contracts.parse_contract(write(tmp_path, VALID))) == []
+
+
+def test_one_file_in_two_pieces_is_named_with_both_slugs() -> None:
+    """#526: three pieces edited one `lib.rs`'s registration lines."""
+    contract = _pieces(["src/lib.rs", "src/a.rs"], ["src/b.rs", "./src/lib.rs"],
+                       ["src/c.rs"])
+    assert contracts.shared_files(contract) == [("p0", "p1", ["src/lib.rs"])]
+
+
+@pytest.mark.parametrize("a, b", [
+    ("src/perm/", "src/perm/matrix.py"),
+    ("src/perm", "src/perm/matrix.py"),
+    ("src/*.py", "src/matrix.py"),
+    ("src/**/*.py", "src/perm/matrix.py"),
+])
+def test_a_directory_or_glob_meets_the_path_it_holds(a: str, b: str) -> None:
+    assert contracts.shared_files(_pieces([a], [b])) == [("p0", "p1", [f"{a} ~ {b}"])]
+    assert contracts.shared_files(_pieces([b], [a])) == [("p0", "p1", [f"{b} ~ {a}"])]
+
+
+@pytest.mark.parametrize("a, b", [
+    ("src/perm.py", "src/perm.pyi"),
+    ("src/perm", "src/permissions.py"),
+    ("src/*.py", "src/a.rs"),
+    ("src/*.py", "src/a*"),
+])
+def test_paths_that_cannot_name_one_file_do_not_meet(a: str, b: str) -> None:
+    assert contracts.shared_files(_pieces([a], [b])) == []
+
+
+def test_every_pair_is_reported_once() -> None:
+    contract = _pieces(["x.py", "y.py"], ["x.py", "y.py", "x.py"], ["x.py"])
+    assert contracts.shared_files(contract) == [
+        ("p0", "p1", ["x.py", "y.py"]), ("p0", "p2", ["x.py"]), ("p1", "p2", ["x.py"]),
+    ]
