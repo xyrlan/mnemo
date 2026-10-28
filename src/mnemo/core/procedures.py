@@ -163,6 +163,14 @@ class Candidate:
     first_day: str
     last_day: str
     repo_root: Optional[str] = None
+    #: The shape as children typed it, where that differs: ``python3 -m
+    #: pytest`` for the shape ``python3 pytest`` (#811). Empty means the shape.
+    spelled: str = ""
+
+    @property
+    def typed(self) -> str:
+        """The shape as a command that runs — ``-m`` kept where children typed it."""
+        return self.spelled or self.shape
 
     @property
     def key(self) -> str:
@@ -187,7 +195,7 @@ class Candidate:
     def command(self) -> str:
         """The shape with its carriers in front, as a child would have to type it."""
         prefix = " ".join(f"{c.name}={c.value or '…'}" for c in self.carriers)
-        return f"{prefix} {self.shape}".strip()
+        return f"{prefix} {self.typed}".strip()
 
 
 @dataclass(frozen=True)
@@ -288,6 +296,17 @@ def invocations(command: str) -> Iterator[Tuple[str, Dict[str, str], Tuple[str, 
     ``tools/measure_rediscovered_procedures.py --rejected`` counts what
     treating flags the same way would have proposed.
     """
+    for shape, _spelled, carriers, flags in _commands(command):
+        yield shape, carriers, flags
+
+
+def _commands(command: str) -> Iterator[Tuple[str, str, Dict[str, str], Tuple[str, ...]]]:
+    """:func:`invocations`, with each shape also as it was typed.
+
+    ``-m pytest`` folds into the shape ``python3 pytest``, which is the right
+    unit to group and key on, but not a command: it runs a file called
+    ``pytest`` (#811). The second string keeps the ``-m``.
+    """
     from mnemo.core.activity.exploration import _mask_quotes, _split_heredocs
 
     body, _ = _split_heredocs(command)
@@ -324,17 +343,20 @@ def invocations(command: str) -> Iterator[Tuple[str, Dict[str, str], Tuple[str, 
         if not _PROGRAM.match(program):
             continue
         shape = [program]
+        spelled = [program]
         rest = words[index + 1:]
         position = 0
         while position < len(rest):
             word = rest[position]
             if word == "-m" and position + 1 < len(rest):
                 shape.append(rest[position + 1])
+                spelled.extend(("-m", rest[position + 1]))
                 position += 2
                 continue
             if word.startswith("-") or len(shape) >= 3 or not _SUBCOMMAND.match(word):
                 break
             shape.append(word)
+            spelled.append(word)
             position += 1
             if program in _RUNNERS and shape[-1] in _PASSTHROUGH:
                 continue
@@ -343,7 +365,7 @@ def invocations(command: str) -> Iterator[Tuple[str, Dict[str, str], Tuple[str, 
             word.split("=")[0] for word in rest
             if word.startswith("--") and _FLAG.match(word.split("=")[0])
         }))
-        yield " ".join(shape), carriers, flags
+        yield " ".join(shape), " ".join(spelled), carriers, flags
 
 
 #: The two kinds of carrier :func:`scan` can be asked about. ``ENV`` is what
@@ -352,9 +374,14 @@ ENV = "env"
 FLAG = "flag"
 
 
-def _runs_by_shape(path: str, kind: str = ENV) -> Dict[str, List[Dict[str, str]]]:
-    """Every shape this child ran, in order, with the carriers each run had."""
+def _runs_by_shape(path: str, kind: str = ENV) -> Dict[str, Any]:
+    """Every shape this child ran, in order, with the carriers each run had.
+
+    ``{"runs": {shape: [carriers, …]}, "spelled": {shape: typed}}`` — the
+    second only for a shape typed otherwise than it reads (``-m``).
+    """
     runs: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    spellings: Dict[str, str] = {}
     for record in _records(path):
         for block in _blocks(record):
             if block.get("type") != "tool_use" or block.get("name") != "Bash":
@@ -362,9 +389,11 @@ def _runs_by_shape(path: str, kind: str = ENV) -> Dict[str, List[Dict[str, str]]
             command = (block.get("input") or {}).get("command")
             if not isinstance(command, str):
                 continue
-            for shape, env, flags in invocations(command):
+            for shape, spelled, env, flags in _commands(command):
                 runs[shape].append(env if kind == ENV else {flag: "" for flag in flags})
-    return runs
+                if spelled != shape:
+                    spellings[shape] = spelled
+    return {"runs": dict(runs), "spelled": spellings}
 
 
 def _first_day(path: str) -> str:
@@ -524,13 +553,17 @@ def scan(
     """
     memo = _TranscriptCache(cache)
     children: List[Tuple[str, str, str, str, Dict[str, List[Dict[str, str]]]]] = []
+    spellings: Dict[Tuple[str, str], Counter] = defaultdict(Counter)
     for path, cwd in dispatch_transcripts(projects, memo=memo):
         name = os.path.basename(cwd.rstrip("/"))
+        read = memo.get(path, f"runs:{kind}", lambda: _runs_by_shape(path, kind))
         children.append((
             fold_repo(name), name, cwd,
             memo.get(path, "day", lambda: _first_day(path)),
-            memo.get(path, f"runs:{kind}", lambda: _runs_by_shape(path, kind)),
+            read["runs"],
         ))
+        for shape, spelled in read["spelled"].items():
+            spellings[(fold_repo(name), shape)][spelled] += 1
     memo.save()
 
     shape_repos: Dict[str, Set[str]] = defaultdict(set)
@@ -598,6 +631,7 @@ def scan(
             first_day=days[0] if days else "",
             last_day=days[-1] if days else "",
             repo_root=root if root and os.path.isdir(root) else None,
+            spelled=next((s for s, _n in spellings[(repo_name, shape)].most_common(1)), ""),
         ))
     out.sort(key=lambda c: (c.repo, -len(c.rediscovered), c.shape))
     return out
@@ -661,14 +695,14 @@ def proposed_section(candidate: Candidate, *, today: Optional[str] = None) -> st
     varied = (" Children gave " + ", ".join(f"`{c.name}` {len(c.values)} values" for c in spread)
               + " — the commonest is above.") if spread else ""
     return "\n".join([
-        f"## Run `{candidate.shape}` with {names}",
+        f"## Run `{candidate.typed}` with {names}",
         "",
         "```sh",
-        f"{prefix} {candidate.shape}".strip(),
+        f"{prefix} {candidate.typed}".strip(),
         "```",
         "",
         f"{n} dispatched {child_word} of the {candidate.shape_children} that ran "
-        f"`{candidate.shape}` ran it without this first and added it after "
+        f"`{candidate.typed}` ran it without this first and added it after "
         f"({stamp}, `mnemo procedures`). Say here why it is needed."
         + varied,
     ]) + "\n"
@@ -874,6 +908,7 @@ def candidate_row(candidate: Candidate) -> Dict[str, Any]:
         "first_day": candidate.first_day,
         "last_day": candidate.last_day,
         "repo_root": candidate.repo_root,
+        "spelled": candidate.spelled,
     }
 
 
@@ -892,6 +927,7 @@ def candidate_from_row(row: Dict[str, Any]) -> Optional[Candidate]:
             first_day=str(row.get("first_day") or ""),
             last_day=str(row.get("last_day") or ""),
             repo_root=row.get("repo_root") or None,
+            spelled=str(row.get("spelled") or ""),
         )
     except Exception:  # noqa: BLE001
         return None
