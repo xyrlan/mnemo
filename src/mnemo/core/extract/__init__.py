@@ -215,6 +215,9 @@ class ExtractionSummary:
     reference_expired: int = 0
     # #496: undecided backfill pages archived this run, 14 days after staging.
     backfill_expired: int = 0
+    # #762: evidence-gate demotions archived this run, unreviewed past
+    # `inbox.demotionExpiryDays`.
+    demotion_expired: int = 0
     # #470: pages whose drift a known machine edit explained, re-baselined this
     # run, and the diverted `.proposed.md` updates applied with them.
     rebaselined: int = 0
@@ -1084,6 +1087,7 @@ def run_extraction(
                 from mnemo.core import inbox as inbox_queue
                 expired = inbox_queue.expire_held(
                     vault_root, days=inbox_queue.held_expiry_days(cfg),
+                    demotion_days=inbox_queue.demotion_expiry_days(cfg),
                 )
                 summary.reference_expired = sum(
                     1 for r in expired if r.ok and r.why == inbox_queue.WHY_HELD
@@ -1092,6 +1096,9 @@ def run_extraction(
                 # did not hold these, nobody reviewed them.
                 summary.backfill_expired = sum(
                     1 for r in expired if r.ok and r.why == inbox_queue.WHY_BACKFILL
+                )
+                summary.demotion_expired = sum(
+                    1 for r in expired if r.ok and r.why == inbox_queue.WHY_DEMOTION
                 )
             try:
                 _cleanup_legacy_wiki_dirs(vault_root)

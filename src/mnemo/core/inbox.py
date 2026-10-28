@@ -29,7 +29,7 @@ that a page had ever been put in front of anyone, so "pages resolved per week"
 and "how long from being shown to being judged" were not answerable questions.
 :func:`stats` answers them from it.
 
-The decision stays human, with two exceptions. A page the reference judge held
+The decision stays human, with three exceptions. A page the reference judge held
 (#417 — it carries ``reference_gate: generic|narrative``) is archived by
 :func:`expire_held` once ``inbox.heldExpiryDays`` have passed since it first
 entered the inbox (#429, #518): 44 offers over four days produced 0
@@ -40,10 +40,19 @@ page the judge called generic or narrative expires like any other. The
 second is a page with the backfill origin (#496): the install review asks the
 user once to keep or drop what the backfill learned, and a page they skipped
 or never saw expires on the same clock, as the install-review spec
-(``design/specs/2026-09-24-install-review-design.md``) decided.
-Nothing else expires — a page the judge would keep, or never judged, waits
-for a human however old. The expiry is logged as ``expired``, never as a
-decision, and :func:`restore` undoes it (or a drop).
+(``design/specs/2026-09-24-install-review-design.md``) decided. The third is
+an evidence-gate demotion (#762), on its own window,
+``inbox.demotionExpiryDays``: 344 of 512 staged pages on a vault on
+2026-10-27 were demotions, against 0 promoted and 0 dropped in two weeks of
+offers, so "waits for a human" had come to mean "waits forever" — and they
+arrive at ~10 a day against an offer of 2 per block. Most that expire are
+ones the judge would keep (#465 measured that population at 72.5% good under
+two blind raters, too low to promote unseen), which is why the archive is
+undoable rather than a delete: an archived page and a staged one are equally
+invisible to recall, and only the archived one stops costing the queue.
+Nothing else expires — a multi-source or other page the judge would keep, or
+never judged, waits for a human however old. The expiry is logged as
+``expired``, never as a decision, and :func:`restore` undoes it (or a drop).
 """
 from __future__ import annotations
 
@@ -78,10 +87,15 @@ EXPIRED_ARCHIVE_PREFIX = "expired-"
 #: so read it through :func:`held_expiry_days` or :func:`expires_at`, never
 #: restate it.
 HELD_EXPIRY_DAYS = 14
+#: ``inbox.demotionExpiryDays`` when config does not say (#762): the window
+#: for an evidence-gate demotion the judge did not hold. Read it through
+#: :func:`demotion_expiry_days` or :func:`expires_at`, never restate it.
+DEMOTION_EXPIRY_DAYS = 14
 
 #: Why :func:`expire_held` archived a page, on :attr:`DecisionResult.why`.
 WHY_HELD = "held"
 WHY_BACKFILL = "backfill"
+WHY_DEMOTION = "demotion"
 
 #: Frontmatter key the extractor stamps on a page the first time it stages it
 #: (#518), and carries over on every later rewrite of the same staged key.
@@ -131,6 +145,9 @@ class StagedPage:
     #: Carries the backfill origin stamp (#496), whatever else happened to it
     #: since — :func:`expire_held` archives it once nobody decided it.
     backfill: bool = False
+    #: Carries the evidence-gate demotion marker (#762) — expires on
+    #: ``inbox.demotionExpiryDays`` unless the judge held it first.
+    demoted: bool = False
     #: When the page first entered the inbox (#518), as :func:`first_staged`
     #: reads it. None on a page built without one: :attr:`staged_since` then
     #: falls back to :attr:`mtime`.
@@ -143,11 +160,17 @@ class StagedPage:
 
     @property
     def expiry_why(self) -> str:
-        """:data:`WHY_HELD`, :data:`WHY_BACKFILL`, or ``""`` for a page that never expires."""
+        """:data:`WHY_HELD`, :data:`WHY_BACKFILL`, :data:`WHY_DEMOTION`, or ``""``.
+
+        ``""`` is a page that never expires. First match wins, and the order
+        decides the window: a demotion the judge held expires as a held page.
+        """
         if self.gate_held:
             return WHY_HELD
         if self.backfill:
             return WHY_BACKFILL
+        if self.demoted:
+            return WHY_DEMOTION
         return ""
 
     @property
@@ -288,6 +311,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
     194 on the real vault — is returned only when ``project`` is None.
     """
     from mnemo.core.backfill.origin import is_backfill_frontmatter
+    from mnemo.core.extract.demotion import is_demoted_frontmatter
     from mnemo.core.extract.reference_gate import is_held_frontmatter
     from mnemo.core.filters import is_proposed_sibling, iter_staged_pages, parse_frontmatter
     from mnemo.core.rule_activation.index import projects_for_rule
@@ -319,6 +343,7 @@ def staged_pages(vault_root: Path, *, project: str | None = None) -> list[Staged
             gate_held=is_held_frontmatter(fm),
             gate_verdict=_gate_verdict(fm),
             backfill=is_backfill_frontmatter(fm),
+            demoted=is_demoted_frontmatter(fm),
             staged_at=first_staged(fm, mtime),
         ))
     out.sort(key=lambda p: (p.mtime, p.key))
@@ -410,9 +435,16 @@ def last_offered(vault_root: Path) -> dict[str, datetime]:
 
 def last_block_at(vault_root: Path, project: str) -> datetime | None:
     """When this project was last shown a block, from its newest offer row."""
+    return _newest_offer(read_ledger(vault_root), project)
+
+
+def _newest_offer(rows: list[dict], project: str | None) -> datetime | None:
+    """Newest ``offered`` time in *rows* for *project*, or for any project when None."""
     newest: datetime | None = None
-    for row in read_ledger(vault_root):
-        if row.get("event") != OFFERED or str(row.get("project") or "") != project:
+    for row in rows:
+        if row.get("event") != OFFERED:
+            continue
+        if project is not None and str(row.get("project") or "") != project:
             continue
         ts = _parse_ts(row.get("ts"))
         if ts is not None and (newest is None or ts > newest):
@@ -425,8 +457,13 @@ def last_block_at(vault_root: Path, project: str) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
+#: Ledger events a human wrote: any of them in the idle window means someone is
+#: reviewing, and the offer goes back to its daily pace (#762).
+_HUMAN_EVENTS = (PROMOTED, DROPPED, RESTORED)
+
+
 def offer_settings(cfg: dict) -> dict:
-    """The three bounds, resolved from config with the documented defaults."""
+    """The bounds, resolved from config with the documented defaults."""
     raw = (cfg or {}).get("inbox") or {}
 
     def _int(key: str, default: int) -> int:
@@ -440,7 +477,40 @@ def offer_settings(cfg: dict) -> dict:
         "max": max(0, _int("offerMax", 2)),
         "cooldown_days": max(0, _int("offerCooldownDays", 7)),
         "interval_hours": max(0, _int("offerIntervalHours", 24)),
+        "idle_days": max(0, _int("offerIdleDays", 7)),
+        "idle_interval_hours": max(0, _int("offerIdleIntervalHours", 168)),
     }
+
+
+def _idle(rows: list[dict], *, idle_days: int, ref: datetime) -> bool:
+    """Has the queue been offered for *idle_days* with no human decision in them?
+
+    Both halves are needed. Without the first, a vault whose first block went
+    out an hour ago would read as ignored; without the second, as reviewed.
+    """
+    if idle_days <= 0:
+        return False
+    since = ref - timedelta(days=idle_days)
+    first_offer: datetime | None = None
+    for row in rows:
+        ts = _parse_ts(row.get("ts"))
+        if ts is None:
+            continue
+        if row.get("event") in _HUMAN_EVENTS and ts >= since:
+            return False
+        if row.get("event") == OFFERED and (first_offer is None or ts < first_offer):
+            first_offer = ts
+    return first_offer is not None and first_offer <= since
+
+
+def offer_idle(vault_root: Path, *, cfg: dict, now: datetime | None = None) -> bool:
+    """True while the offer is backed off (#762): offered, and nobody deciding. Never raises."""
+    try:
+        settings = offer_settings(cfg)
+        return _idle(read_ledger(vault_root), idle_days=settings["idle_days"],
+                     ref=now or datetime.now())
+    except Exception:  # noqa: BLE001 — runs inside the session-start hook
+        return False
 
 
 def pick_offers(
@@ -466,16 +536,29 @@ def pick_offers(
     it would let expire — oldest first within each. By age alone, the
     130 evidence-gate demotions the judge rated on 2026-09-22 (G 69, N 3,
     S 41, T 17) would spend most slots on the 72 that expire regardless.
+
+    The backoff (#762). While :func:`_idle` — offered for ``offerIdleDays``
+    and nothing promoted, dropped or restored in them — the vault gets one
+    block per ``offerIdleIntervalHours`` across every project, not one per
+    project per day: 36 blocks over 2026-10-13..28 on a vault with 0
+    decisions, each one context in a session that was told not to act on it.
+    The first decision restores the daily pace.
     """
     try:
         settings = offer_settings(cfg)
         if not settings["enabled"] or settings["max"] == 0:
             return [], 0
         ref = now or datetime.now()
+        rows = read_ledger(vault_root)
         interval = settings["interval_hours"]
         if interval:
-            previous = last_block_at(vault_root, project)
+            previous = _newest_offer(rows, project)
             if previous is not None and ref - previous < timedelta(hours=interval):
+                return [], 0
+        idle_interval = settings["idle_interval_hours"]
+        if idle_interval and _idle(rows, idle_days=settings["idle_days"], ref=ref):
+            previous = _newest_offer(rows, None)
+            if previous is not None and ref - previous < timedelta(hours=idle_interval):
                 return [], 0
         waiting = staged_pages(vault_root, project=project)
         if not waiting:
@@ -583,7 +666,7 @@ def _rebuild_indexes(vault_root: Path) -> None:
 
 def promote(
     vault_root: Path, page: StagedPage, *, project: str | None = None,
-    via: str | None = None, rebuild: bool = True,
+    via: str | None = None, rebuild: bool = True, session_id: str | None = None,
 ) -> DecisionResult:
     """Move a staged page into ``shared/<type>/`` and make it reachable.
 
@@ -619,7 +702,8 @@ def promote(
     state_updated = _update_state_entry(vault_root, page.key, status="promoted", page=dest)
     if rebuild:
         _rebuild_indexes(vault_root)
-    record(vault_root, event=PROMOTED, key=page.key, project=project, via=via)
+    record(vault_root, event=PROMOTED, key=page.key, project=project, via=via,
+           session_id=session_id)
     return DecisionResult(
         ok=True,
         message=f"promoted {page.key} → shared/{page.type}/{page.slug}.md",
@@ -630,7 +714,7 @@ def promote(
 
 def _archive_out(
     vault_root: Path, page: StagedPage, *, prefix: str, event: str,
-    project: str | None, verb: str, via: str | None = None,
+    project: str | None, verb: str, via: str | None = None, session_id: str | None = None,
 ) -> DecisionResult:
     """Copy *page* under ``shared/_archive/<prefix><stamp>/``, then unlink it.
 
@@ -650,7 +734,8 @@ def _archive_out(
         return DecisionResult(ok=False, message=f"could not archive {page.key}: {exc}")
 
     state_updated = _update_state_entry(vault_root, page.key, status="dismissed", page=None)
-    record(vault_root, event=event, key=page.key, project=project, via=via)
+    record(vault_root, event=event, key=page.key, project=project, via=via,
+           session_id=session_id)
     return DecisionResult(
         ok=True,
         message=f"{verb} {page.key}; archived to {dest.relative_to(vault_root).as_posix()}",
@@ -661,6 +746,7 @@ def _archive_out(
 
 def drop(
     vault_root: Path, page: StagedPage, *, project: str | None = None, via: str | None = None,
+    session_id: str | None = None,
 ) -> DecisionResult:
     """Archive a staged page, then delete it from the queue.
 
@@ -671,7 +757,8 @@ def drop(
     :func:`restore` brings the archived copy back.
     """
     return _archive_out(vault_root, page, prefix=DROPPED_ARCHIVE_PREFIX,
-                        event=DROPPED, project=project, verb="dropped", via=via)
+                        event=DROPPED, project=project, verb="dropped", via=via,
+                        session_id=session_id)
 
 
 def held_expiry_days(cfg: dict) -> int:
@@ -681,6 +768,24 @@ def held_expiry_days(cfg: dict) -> int:
         return max(0, int(raw))
     except (TypeError, ValueError):
         return HELD_EXPIRY_DAYS
+
+
+def demotion_expiry_days(cfg: dict) -> int:
+    """``inbox.demotionExpiryDays``, or :data:`DEMOTION_EXPIRY_DAYS`. ``0`` turns it off."""
+    raw = ((cfg or {}).get("inbox") or {}).get("demotionExpiryDays", DEMOTION_EXPIRY_DAYS)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEMOTION_EXPIRY_DAYS
+
+
+def expiry_days(cfg: dict, why: str) -> int:
+    """The window a page expiring for *why* gets; ``0`` when it never expires."""
+    if why == WHY_DEMOTION:
+        return demotion_expiry_days(cfg)
+    if why in (WHY_HELD, WHY_BACKFILL):
+        return held_expiry_days(cfg)
+    return 0
 
 
 def restored_keys(vault_root: Path) -> frozenset:
@@ -700,18 +805,24 @@ def expires_at(
     the inbox, not its last write (#518).
     Pass :func:`restored_keys` as *restored* so a restored page reads None.
     The sweep runs at the end of an extraction, so a page is archived at the
-    first extraction on or after this time, not at it.
+    first extraction on or after this time, not at it. The window is
+    :func:`expiry_days` for the page's :attr:`StagedPage.expiry_why`.
     """
-    days = held_expiry_days(cfg or {})
-    if days <= 0 or not page.expiry_why or page.key in restored:
+    days = expiry_days(cfg or {}, page.expiry_why)
+    if days <= 0 or page.key in restored:
         return None
     return datetime.fromtimestamp(page.staged_since) + timedelta(days=days)
 
 
 def expire_held(
-    vault_root: Path, *, days: int, now: datetime | None = None,
+    vault_root: Path, *, days: int, demotion_days: int = 0, now: datetime | None = None,
 ) -> list[DecisionResult]:
-    """Archive every expiring page staged *days* or more ago. Never raises.
+    """Archive every expiring page whose window has passed. Never raises.
+
+    *days* is the held and backfill window (``inbox.heldExpiryDays``),
+    *demotion_days* the demotion one (``inbox.demotionExpiryDays``, #762);
+    ``0`` turns that kind off, and the default keeps a caller that predates
+    demotion expiry from archiving demotions.
 
     Nothing on a sync satellite (#643): ``shared/_inbox`` is the primary's.
 
@@ -731,9 +842,11 @@ def expire_held(
     Offered or not makes no difference: at ``inbox.offerMax`` = 2 offers a
     day per project, most held pages would never be shown, and an exit gated
     on being shown would not bound the queue. Each result's ``why`` says
-    which rule archived it.
+    which rule archived it. A demotion expires on *demotion_days* (#762),
+    unless the judge held it, which makes it a held page on *days*.
     """
-    if days <= 0:
+    days, demotion_days = max(0, days), max(0, demotion_days)
+    if not days and not demotion_days:
         return []
     from mnemo.core.sync import roles as sync_roles
 
@@ -741,7 +854,7 @@ def expire_held(
         return []
     try:
         ref = now or datetime.now()
-        cfg = {"inbox": {"heldExpiryDays": days}}
+        cfg = {"inbox": {"heldExpiryDays": days, "demotionExpiryDays": demotion_days}}
         restored = restored_keys(vault_root)
         out: list[DecisionResult] = []
         for page in staged_pages(vault_root):
@@ -817,9 +930,24 @@ def restore(vault_root: Path, key: str, *, project: str | None = None) -> Decisi
 # ---------------------------------------------------------------------------
 
 #: ``via`` on a ledger row a batch or terminal review wrote (#495). A single
-#: ``mnemo inbox --promote KEY`` writes no ``via``, so the install review's
+#: ``mnemo inbox --promote KEY`` typed in a terminal writes no ``via``
+#: (:data:`VIA_SESSION` when a session typed it), so the install review's
 #: drain can be told apart from the one the session-start offer drives.
 VIA_REVIEW = "review"
+#: ``via`` on a single decision run from inside a Claude Code session (#762):
+#: the session-start offer relayed, the maintainer answered, the session typed
+#: the command. Read from :data:`SESSION_ENV`, which Claude Code exports to
+#: every command it runs.
+VIA_SESSION = "session"
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+
+
+def session_via() -> tuple[str | None, str | None]:
+    """``(via, session_id)`` for a single decision: who is typing it. Never raises."""
+    import os
+
+    sid = (os.environ.get(SESSION_ENV) or "").strip()
+    return (VIA_SESSION, sid) if sid else (None, None)
 #: How much of a page's body the JSON listing carries (#495).
 EXCERPT_CHARS = 300
 
