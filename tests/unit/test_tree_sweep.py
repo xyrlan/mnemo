@@ -8,6 +8,8 @@ jobs roster are stood in for.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -448,3 +450,164 @@ def test_the_parent_is_told_in_a_framed_notice_the_detector_skips(tmp_path, monk
     # The bare line, as it went out before #553, is what the detector counted.
     bare = {"type": "user", "message": {"role": "user", "content": ts.render(v)}}
     assert detector.is_human_turn(bare) is True
+
+
+# --- what git leaves behind (#761) -----------------------------------------
+
+
+def _leaves_it(world, run=None):
+    """A run where `git worktree remove` fails the way it does on Windows.
+
+    git deletes the tree's admin entry, stops at the first entry it cannot
+    delete, and exits 1. The tree is no longer registered; its directory, with
+    the ignored output in it, stays.
+    """
+    inner = run or fake_run(merged(world["head"]))
+
+    def run_(args, *, cwd):
+        if list(args[:3]) == ["git", "worktree", "remove"]:
+            (world["tree"] / ".git").unlink()
+            _git("worktree", "prune", cwd=world["repo"])
+            return subprocess.CompletedProcess(
+                args, 1, "",
+                f"error: failed to delete '{world['tree'].as_posix()}': Permission denied")
+        return inner(args, cwd=cwd)
+
+    return run_
+
+
+def _ignored_node_modules(world) -> Path:
+    tree = world["tree"]
+    (tree / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    _git("add", ".gitignore", cwd=tree)
+    _git("commit", "-m", "ignore", cwd=tree)
+    _git("push", cwd=tree)
+    world["head"] = _git("rev-parse", "HEAD", cwd=tree)
+    pkg = tree / "node_modules" / "pkg"
+    pkg.mkdir(parents=True)
+    locked = pkg / "index.js"
+    locked.write_text("x", encoding="utf-8")
+    os.chmod(str(locked), stat.S_IREAD)
+    os.chmod(str(pkg), stat.S_IREAD | stat.S_IEXEC)
+    return locked
+
+
+def _sweep_with(world, run, *, jobs=None):
+    told = []
+    report = ts.sweep(
+        {}, vault_root=world["vault"], repo_root=world["repo"], now=NOW, run=run,
+        reader=lambda: list(jobs if jobs is not None else [Job(cwd=str(world["tree"]))]),
+        cwds=lambda: [], tell=told.append,
+    )
+    return report, told
+
+
+def test_a_directory_git_leaves_behind_is_deleted_read_only_files_and_all(world):
+    _ignored_node_modules(world)
+
+    report, told = _sweep_with(world, _leaves_it(world))
+
+    [v] = report.verdicts
+    assert v.outcome == ts.REMOVED, v.detail
+    assert not world["tree"].exists()
+    assert "fix/issue-7" not in branches(world["repo"])
+    assert [t.outcome for t in told] == [ts.REMOVED]
+
+
+def test_a_leftover_past_windows_path_limit_is_deleted(world):
+    deep = world["tree"] / "node_modules"
+    while len(str(deep)) < 300:
+        deep = deep / ("d" * 40)
+    os.makedirs(ts._long(deep))
+    with open(ts._long(deep / "f.js"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    exclude = Path(_git("rev-parse", "--git-common-dir", cwd=world["repo"]))
+    if not exclude.is_absolute():
+        exclude = world["repo"] / exclude
+    (exclude / "info").mkdir(exist_ok=True)
+    (exclude / "info" / "exclude").write_text("node_modules/\n", encoding="utf-8")
+
+    report, _ = _sweep_with(world, _leaves_it(world))
+    assert report.verdicts[0].outcome == ts.REMOVED, report.verdicts[0].detail
+    assert not os.path.lexists(ts._long(world["tree"]))
+
+
+def test_a_leftover_it_cannot_delete_is_named_with_why_then_tried_again(world, monkeypatch):
+    _ignored_node_modules(world)
+    real = ts.clear
+    monkeypatch.setattr(ts, "clear", lambda path: "node_modules\pkg\index.js: in use")
+
+    report, told = _sweep_with(world, _leaves_it(world))
+    [v] = report.verdicts
+    assert v.outcome == ts.LEFTOVER
+    assert world["tree"].exists()
+    assert "fix/issue-7" not in branches(world["repo"])  # git let go of it
+    line = ts.render(told[0])
+    assert "proj-wt-7 (PR #11 merged)" in line and "index.js: in use" in line
+    assert "refused" not in line
+    assert ts.load_ledger(world["vault"])["said"][str(world["tree"])] == ts.LEFTOVER
+
+    # Still stuck: said once, not again.
+    report, told = _sweep_with(world, fake_run([]), jobs=[])
+    assert [v.outcome for v in report.verdicts] == [ts.LEFTOVER] and told == []
+
+    monkeypatch.setattr(ts, "clear", real)
+    report, told = _sweep_with(world, fake_run([]), jobs=[])
+    assert [t.outcome for t in told] == [ts.LEFTOVER_CLEARED]
+    assert not world["tree"].exists()
+    assert "removed proj-wt-7" in ts.render(told[0])
+    assert str(world["tree"]) not in ts.load_ledger(world["vault"])["said"]
+
+
+def test_a_refusal_that_keeps_the_tree_registered_is_still_a_refusal(world):
+    inner = fake_run(merged(world["head"]))
+
+    def run(args, *, cwd):
+        if list(args[:3]) == ["git", "worktree", "remove"]:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: is locked")
+        return inner(args, cwd=cwd)
+
+    report, _ = _sweep_with(world, run)
+    assert report.verdicts[0].outcome == ts.REMOVE_FAILED
+    assert (world["tree"] / "fix.txt").exists()
+    assert "fix/issue-7" in branches(world["repo"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="an open file blocks a delete only on Windows")
+def test_a_file_held_open_is_the_reason_given(tmp_path):
+    held = tmp_path / "proj-wt-8" / "node_modules" / "held.js"
+    held.parent.mkdir(parents=True)
+    with open(str(held), "w", encoding="utf-8") as fh:
+        fh.write("x")
+        fh.flush()
+        why = ts.clear(held.parent.parent)
+    assert why and "held.js" in why
+    assert ts.clear(held.parent.parent) is None
+
+
+def test_leftovers_from_before_761_are_cleared_and_owned_trees_never(world, tmp_path):
+    # Logged as "`git worktree remove` refused" before #761: one empty, one
+    # with ignored output. And the live tree, which a ledger entry must not
+    # make deletable.
+    empty = tmp_path / "proj-wt-8"
+    empty.mkdir()
+    built = tmp_path / "proj-wt-9"
+    (built / ".next").mkdir(parents=True)
+    (built / ".next" / "x").write_text("x", encoding="utf-8")
+    (built / ".git").write_text(
+        f"gitdir: {(world['repo'] / '.git' / 'worktrees' / 'proj-wt-9').as_posix()}\n",
+        encoding="utf-8")
+    plain = tmp_path / "not-a-dispatch-tree"
+    plain.mkdir()
+    ledger = ts.ledger_path(world["vault"])
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(json.dumps({"said": {
+        str(p): ts.REMOVE_FAILED for p in (empty, built, plain, world["tree"])}}),
+        encoding="utf-8")
+
+    report, told = _sweep_with(world, fake_run([]))
+
+    assert not empty.exists() and not built.exists()
+    assert plain.exists() and (world["tree"] / "fix.txt").exists()
+    cleared = sorted(Path(v.tree).name for v in told if v.outcome == ts.LEFTOVER_CLEARED)
+    assert cleared == ["proj-wt-8", "proj-wt-9"]
