@@ -158,3 +158,76 @@ def test_the_report_names_the_watcher_and_the_person(tmp_path) -> None:
     assert "merged by the watcher: 1 — median 3 min" in text
     assert "merged by a person: 1 — median 45 min" in text
     assert f"{REPO}#1" in text and "mnemo" in text
+
+
+def _gh_by_repo(prs_of: Dict[str, Sequence[Dict[str, Any]]]):
+    """A fake ``gh pr list`` answering for each ``-R`` repository; one it
+    does not know fails as ``gh`` would."""
+    calls: List[Tuple[str, ...]] = []
+
+    def run(argv: Sequence[str], cwd: Optional[str]) -> Tuple[int, str, str]:
+        calls.append(tuple(argv))
+        repo = argv[list(argv).index("-R") + 1]
+        if repo not in prs_of:
+            return 1, "", "not found"
+        return 0, json.dumps(list(prs_of[repo])), ""
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+def _in(repo: str, pr: Dict[str, Any]) -> Dict[str, Any]:
+    return dict(pr, url=f"https://github.com/{repo}/pull/{pr['number']}")
+
+
+def test_repo_takes_several_after_one_flag_or_repeated(monkeypatch, tmp_path) -> None:
+    seen: List[Sequence[str]] = []
+    monkeypatch.setattr(tool.report_card, "_run", _gh_by_repo({}))
+    monkeypatch.setattr(tool, "measure", lambda repos, **kw: seen.append(list(repos))
+                        or {"prefix": tool.PREFIX, "limit": 1, "repos": {}, "rows": [],
+                            "total": None})
+    vault = ["--vault", str(tmp_path)]
+    assert tool.main(["--repo", "o/a", "o/b"] + vault) == 0
+    assert tool.main(["--repo", "o/a", "--repo", "o/b", "o/c"] + vault) == 0
+    assert seen == [["o/a", "o/b"], ["o/a", "o/b", "o/c"]]
+
+
+def test_two_repositories_get_a_block_each_and_a_total(tmp_path) -> None:
+    a, b = "o/a", "o/b"
+    run = _gh_by_repo({
+        a: [_in(a, _pr(1, wait=10)), _in(a, _pr(2, wait=30)),
+            _in(a, _pr(3, branch="feature/x"))],
+        b: [_in(b, _pr(1, wait=50)), _in(b, _pr(7, wait=-5))],
+    })
+    report = tool.measure([a, b], limit=100, vault=tmp_path, run=run)
+    assert [c[c.index("-R") + 1] for c in run.calls] == [a, b]
+    assert report["repos"][a]["wait_minutes"]["n"] == 2
+    assert report["repos"][b]["wait_minutes"]["n"] == 1
+    total = report["total"]
+    assert (total["merged_read"], total["child_prs"], total["repos_read"]) == (5, 4, 2)
+    w = total["wait_minutes"]
+    assert (w["n"], w["median"], w["max"]) == (3, 30, 50)
+    assert total["merged_early"] == ["o/b#7"]
+    assert total["numbers"] is None
+    text = tool.format_report(report)
+    assert text.count("\no/a: ") + text.startswith("o/a: ") == 1
+    assert "\no/b: 2 of the last 2 merged PRs" in text
+    assert "total over 2 of 2 repositories: 4 of the 5 merged PRs" in text
+    assert "merged before the last check completed: 1 (o/b#7)" in text
+
+
+def test_the_total_counts_only_the_repositories_gh_could_list(tmp_path) -> None:
+    a = "o/a"
+    report = tool.measure([a, "o/gone"], limit=100, vault=tmp_path,
+                          run=_gh_by_repo({a: [_in(a, _pr(1))]}))
+    assert report["repos"]["o/gone"] is None
+    assert report["total"]["repos_read"] == 1
+    text = tool.format_report(report)
+    assert "o/gone: gh could not list its merged PRs" in text
+    assert "total over 1 of 2 repositories: 1 of the 1 merged PRs" in text
+
+
+def test_one_repository_has_no_total(tmp_path) -> None:
+    report = tool.measure([REPO], limit=100, vault=tmp_path, run=_gh([_pr(1)]))
+    assert report["total"] is None
+    assert "total over" not in tool.format_report(report)
