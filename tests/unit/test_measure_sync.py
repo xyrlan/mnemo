@@ -205,11 +205,16 @@ def test_push_lag_from_the_write_to_the_hub_and_the_push_that_waited(tmp_path, m
     vault = _primary(tmp_path, monkeypatch)
     config = vault / "mnemo.config.json"
     # The worker pushed this one 100 s after it was written...
+    spent = {}
+    started = time.time()
     _write_briefing(vault, "s2", age_seconds=100)
     assert sync.push(vault, machine="mac", config_path=config, trigger="session_end").outcome == "ok"
+    spent["s2"] = time.time() - started
     # ...and this one waited for the next SessionStart, 1,000 s later.
+    started = time.time()
     _write_briefing(vault, "s3", age_seconds=1000)
     assert sync.push(vault, machine="mac", config_path=config, trigger="session_start").outcome == "ok"
+    spent["s3"] = time.time() - started
 
     rows = list(iter_rotated_rows(vault / ".mnemo" / "sync-log.jsonl"))
     pushes = [r for r in rows if r["op"] == "push"]
@@ -225,12 +230,18 @@ def test_push_lag_from_the_write_to_the_hub_and_the_push_that_waited(tmp_path, m
     report = ms.measure(str(vault), str(tmp_path / "projects"), project="app", machine="mac")
     lag = report["pushLag"]
     by_path = {r["path"]: r for r in report["pushLagRows"]}
-    assert abs(by_path["bots/app/briefings/sessions/s2.md"]["lagSeconds"] - 100) < 5
-    assert abs(by_path["bots/app/briefings/sessions/s3.md"]["lagSeconds"] - 1000) < 5
+    # The lag is the backdated age plus however long the push itself took --
+    # seconds on a loaded Windows box (#773) -- and git dates a commit to the
+    # whole second.
+    for sid, age in (("s2", 100), ("s3", 1000)):
+        lag_seconds = by_path["bots/app/briefings/sessions/%s.md" % sid]["lagSeconds"]
+        assert age - 1 <= lag_seconds <= age + spent[sid] + 1
     # s1 went out with `init`, whose row is not a push row: trigger unknown.
     assert lag["waitedForSessionStart"] == 1 and lag["triggerUnknown"] == 1
     assert lag["awake"]["n"] == 1 and lag["all"]["n"] == 3
-    assert abs(lag["judged"]["p95"] - 100) < 5 and lag["withinBar"] is True
+    # Judged over the awake pushes, s2 alone.
+    assert lag["judged"]["p95"] == by_path["bots/app/briefings/sessions/s2.md"]["lagSeconds"]
+    assert lag["withinBar"] is True
     assert report["conflicts"]["unresolved"] == 0
     verdicts = {b["bar"].split(" ")[0]: b["verdict"] for b in report["bars"]}
     assert verdicts["push"] == "pass" and verdicts["0"] == "pass"

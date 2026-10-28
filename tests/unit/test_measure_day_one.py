@@ -212,7 +212,9 @@ def corpus(tmp_path):
     return root
 
 
-def test_both_arms_run_isolated_and_a_rerun_spends_nothing(corpus, tmp_path, monkeypatch, capsys):
+def test_both_arms_run_isolated_and_a_rerun_spends_nothing(corpus, tmp_path, monkeypatch, capsys,
+                                                           requires_symlinks):
+    # Arm (a) stages its history transcripts as symlinks to the corpus.
     from mnemo.core import llm
 
     calls = []

@@ -31,7 +31,7 @@ def _run(monkeypatch, cwd: str, **flags) -> list[str | None]:
     return seen
 
 
-def test_passes_the_normalized_cwd_to_the_reader(monkeypatch, tmp_path: Path) -> None:
+def test_passes_the_normalized_cwd_to_the_reader(monkeypatch, tmp_path: Path, requires_symlinks) -> None:
     real = tmp_path / "real-repo"
     real.mkdir()
     link = tmp_path / "linked-repo"
