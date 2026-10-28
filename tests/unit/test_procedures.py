@@ -128,6 +128,33 @@ def test_two_children_of_one_repo_make_a_candidate(tmp_path: Path) -> None:
     assert candidate.command == "SDKROOT=/sdk cargo test"
 
 
+def test_a_shape_from_dash_m_is_proposed_as_a_command_that_runs(tmp_path: Path) -> None:
+    """``python pytest`` runs a file called ``pytest`` (#811); the children ran ``-m``."""
+    projects, repo = tmp_path / "projects", _repo(tmp_path, "app")
+    for n in (1, 2):
+        _child(projects, repo, f"app-wt-{n}",
+               ["python -m pytest -q", "PYTHONUTF8=1 python -m pytest -q"])
+
+    candidate, = P.scan(str(projects), cache=tmp_path / "runs.json")
+    assert (candidate.shape, candidate.key) == ("python pytest", "python-pytest")
+    assert candidate.command == "PYTHONUTF8=1 python -m pytest"
+    text = P.proposed_section(candidate, today="2026-09-19")
+    assert "```sh\nPYTHONUTF8=1 python -m pytest\n```" in text
+    assert "python pytest" not in text
+    assert P.candidate_from_row(P.candidate_row(candidate)) == candidate
+    # The second scan reads the transcript cache, and must agree with the first.
+    assert P.scan(str(projects), cache=tmp_path / "runs.json") == [candidate]
+
+
+def test_a_shape_without_dash_m_is_proposed_as_it_was(tmp_path: Path) -> None:
+    projects, repo = tmp_path / "projects", _repo(tmp_path, "app")
+    for n in (1, 2):
+        _child(projects, repo, f"app-wt-{n}", ["cargo test", "SDKROOT=/sdk cargo test"])
+    candidate, = P.scan(str(projects))
+    assert candidate.spelled == ""
+    assert "```sh\nSDKROOT=/sdk cargo test\n```" in P.proposed_section(candidate)
+
+
 def test_one_child_working_something_out_is_a_child_not_a_procedure(tmp_path: Path) -> None:
     projects, repo = tmp_path / "projects", _repo(tmp_path, "app")
     _child(projects, repo, "app-wt-1", ["cargo test", "SDKROOT=/sdk cargo test"])

@@ -133,7 +133,7 @@ def _print_show(candidate) -> None:
     print(f"{candidate.repo}  {candidate.key}"
           f"{'  (already stated in CLAUDE.md)' if candidate.stated else ''}")
     print(f"  {candidate.shape_children} children of {candidate.repo} ran "
-          f"`{candidate.shape}`; {len(candidate.rediscovered)} of them worked out what it "
+          f"`{candidate.typed}`; {len(candidate.rediscovered)} of them worked out what it "
           f"needs here, between {candidate.first_day or '?'} and {candidate.last_day or '?'}.")
     for c in candidate.carriers:
         spellings = "; ".join(f"{value} ×{count}" for value, count in c.values) or "—"
