@@ -711,14 +711,14 @@ def test_a_pull_that_changed_shared_rebuilds_the_reflex_index_in_the_worker(pair
 
     mac, win, _hub = pair
     reflex_index.write_index(win.vault, reflex_index.build_index(win.vault))
-    assert "tuesday-rule" not in json.dumps(reflex_index.load_index(win.vault))
+    assert "tuesday-rule" not in reflex_index.load_index(win.vault)["docs"]
     mac.write("shared/feedback/tuesday-rule.md",
               b"---\nname: tuesday-rule\ndescription: deploy on tuesdays\ntype: feedback\n"
               b"tags:\n  - deploy\n---\nDeploy on Tuesdays.\n")
     assert mac.push().ok
     out = sync_hooks.run_hook_pull(win.cfg(), win.vault)
     assert out.detail["sharedChanged"] is True
-    assert "tuesday-rule" in json.dumps(reflex_index.load_index(win.vault))
+    assert "tuesday-rule" in reflex_index.load_index(win.vault)["docs"]
 
 
 # --- item 6: the primary extracts what a pull brought ----------------------
