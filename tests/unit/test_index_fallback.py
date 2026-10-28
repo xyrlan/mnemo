@@ -135,6 +135,18 @@ def test_both_indexes_are_written_durably_keeping_the_previous(tmp_vault, monkey
     ]
 
 
+def test_the_rule_index_key_keeps_no_previous(tmp_vault):
+    """The key #763 writes beside the rule index shares its writer. A damaged
+    key already reads as "rebuild", so it gets neither the flush nor a .prev."""
+    _seed(tmp_vault)
+    key = rule_activation.index_key(tmp_vault, universal_threshold=2)
+    rule_activation.write_index_key(tmp_vault, key)
+    rule_activation.write_index_key(tmp_vault, key)
+    key_path = tmp_vault / ".mnemo" / rule_activation.INDEX_KEY_FILENAME
+    assert key_path.exists()
+    assert not previous_path(key_path).exists()
+
+
 # --- the readers ------------------------------------------------------------
 
 
@@ -181,10 +193,60 @@ def test_a_removed_index_does_not_fall_back(tmp_vault, mod, where):
     assert _errors(tmp_vault) == []
 
 
+def _lock(monkeypatch, path: Path, times: int) -> list:
+    """Make reading ``path`` raise PermissionError, as a Windows rename holding
+    it does, ``times`` times; return the sleeps the reader took meanwhile."""
+    from mnemo.core import errors
+
+    real = Path.read_bytes
+    left = [times]
+
+    def read_bytes(self):
+        if self == path and left[0] > 0:
+            left[0] -= 1
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    sleeps: list = []
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(errors.time, "sleep", sleeps.append)
+    return sleeps
+
+
+@pytest.mark.parametrize("mod, where", _INDEXES)
+def test_a_locked_index_is_read_once_the_rename_lets_go(tmp_vault, monkeypatch, mod, where):
+    """A lock is a rename in progress, not damage: the reader waits it out and
+    gets the new version, not the one before, and nothing is logged."""
+    _seed(tmp_vault)
+    first = mod.build_index(tmp_vault)
+    mod.write_index(tmp_vault, first)
+    mod.write_index(tmp_vault, dict(first, rebuilt=True))
+    sleeps = _lock(monkeypatch, tmp_vault / ".mnemo" / mod.INDEX_FILENAME, 3)
+
+    loaded = mod.load_index(tmp_vault)
+    assert loaded is not None and loaded.get("rebuilt") is True
+    assert len(sleeps) == 3
+    assert _errors(tmp_vault) == []
+
+
+@pytest.mark.parametrize("mod, where", _INDEXES)
+def test_an_index_locked_through_every_retry_falls_back(tmp_vault, monkeypatch, mod, where):
+    _seed(tmp_vault)
+    first = mod.build_index(tmp_vault)
+    mod.write_index(tmp_vault, first)
+    mod.write_index(tmp_vault, dict(first, rebuilt=True))
+    _lock(monkeypatch, tmp_vault / ".mnemo" / mod.INDEX_FILENAME, 1000)
+
+    loaded = mod.load_index(tmp_vault)
+    assert loaded is not None and "rebuilt" not in loaded, "the version before"
+    assert _errors(tmp_vault) == [where.replace(".parse", ".read")]
+
+
 def test_readers_during_rebuilds_always_get_an_index(tmp_vault):
     """Concurrent read: a reader racing a writer gets the new index or the
     old one, never nothing. On Windows the read can lose to the rename with
-    a sharing violation, which the fallback covers."""
+    a sharing violation, and a fallback to .prev can lose to the next write's
+    rename of .prev the same way, so the reader waits the lock out."""
     _seed(tmp_vault)
     index = reflex_index.build_index(tmp_vault)
     reflex_index.write_index(tmp_vault, index)
