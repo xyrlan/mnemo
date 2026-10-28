@@ -24,10 +24,13 @@ Cost: a command with no ``git push``/``gh`` in it is decided on its text alone
 — no file read, no subprocess. The list is read only for a publishing command,
 and ``git`` runs only once the list exists. :func:`check` raises on a broken
 list or a failing ``git``; the hook logs that and lets the command run.
+A failing ``git`` in one part of a compound command does not stop the other
+parts from being read: one of them may still be denied.
 """
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -39,6 +42,9 @@ _OPERATORS = frozenset({"&&", "||", "|", "&", ";", ";;", "(", ")", "\n", "|&"})
 _GH_GROUPS = frozenset({"issue", "pr", "release"})
 _GH_VERBS = frozenset({"create", "comment", "edit", "review", "merge"})
 _GH_FILE_FLAGS = frozenset({"--body-file", "--notes-file", "-F"})
+_REDIRECT_CHARS = frozenset("<>&|")
+_DRIVE_PATH = re.compile(r"^/([A-Za-z])(?=/|$)")
+_WINDOWS = os.name == "nt"
 _GIT_TIMEOUT = 10
 _MAX_FILE_BYTES = 1 << 20
 
@@ -99,6 +105,44 @@ def _tokens(command: str) -> List[str]:
         return command.split()
 
 
+def _is_redirect(tok: str) -> bool:
+    """``>``, ``2>`` split as ``2``/``>``, ``>&``, ``&>``, ``>>``, ``<<``, ``>|``…"""
+    return bool(tok) and set(tok) <= _REDIRECT_CHARS and ("<" in tok or ">" in tok)
+
+
+def _strip_redirects(seg: List[str]) -> List[str]:
+    """*seg* without its redirections: ``2>&1`` and ``> out.txt`` are no arguments."""
+    out: List[str] = []
+    i = 0
+    while i < len(seg):
+        if _is_redirect(seg[i]):
+            if out and out[-1].isdigit():
+                out.pop()  # the fd of ``2>``; the tokenizer split it off
+            i += 2  # the operator and its target
+            continue
+        out.append(seg[i])
+        i += 1
+    return out
+
+
+def _native(path: str) -> str:
+    """*path* as Windows reads it: Git Bash's ``/c/Users`` is ``C:/Users``."""
+    if not _WINDOWS:
+        return path
+    return _DRIVE_PATH.sub(lambda m: m.group(1).upper() + ":", path)
+
+
+def _chdir(cwd: str, target: str) -> str:
+    """*cwd* after ``cd target`` — *cwd* itself when *target* is no directory.
+
+    On Windows a Git Bash path (``/c/Users/...``) means ``C:/Users/...``. A
+    target that does not exist leaves *cwd* as it was: after ``;`` the shell
+    runs the next command there too, and after ``&&`` nothing runs at all.
+    """
+    new = os.path.join(cwd, _native(os.path.expanduser(target)))
+    return new if os.path.isdir(new) else cwd
+
+
 def _invocations(tokens: List[str], cwd: str) -> Iterable[Tuple[str, List[str], str]]:
     """``(program, args, cwd)`` per simple command, following ``cd``."""
     seg: List[str] = []
@@ -106,12 +150,13 @@ def _invocations(tokens: List[str], cwd: str) -> Iterable[Tuple[str, List[str], 
         if tok not in _OPERATORS:
             seg.append(tok)
             continue
+        seg = _strip_redirects(seg)
         while seg and "=" in seg[0] and not seg[0].startswith("-"):
             seg.pop(0)  # FOO=bar git push
         if seg and seg[0] == "cd":
             target = seg[1] if len(seg) > 1 else "~"
             if target != "-":
-                cwd = os.path.join(cwd, os.path.expanduser(target))
+                cwd = _chdir(cwd, target)
         elif seg:
             yield seg[0], seg[1:], cwd
         seg = []
@@ -147,7 +192,7 @@ def _git_push(args: List[str], cwd: str, names: Names) -> Optional[Tuple[str, st
     while args and args[0] != "push":
         flag = args.pop(0)
         if flag == "-C" and args:
-            cwd = os.path.join(cwd, os.path.expanduser(args.pop(0)))
+            cwd = _chdir(cwd, args.pop(0))
         elif flag == "-c" and args:
             args.pop(0)
         elif not flag.startswith("-"):
@@ -206,7 +251,7 @@ def _read_file(cwd: str, path: str) -> str:
     if not path or path == "-":
         return ""  # stdin: a heredoc is already in the command text
     try:
-        with open(os.path.join(cwd, os.path.expanduser(path)), "rb") as fh:
+        with open(os.path.join(cwd, _native(os.path.expanduser(path))), "rb") as fh:
             return fh.read(_MAX_FILE_BYTES).decode("utf-8", "replace")
     except OSError:
         return ""  # gh fails on it too, publishing nothing
@@ -287,9 +332,14 @@ def check(command: str, cwd: str, vault: Path) -> Optional[str]:
     if not names:
         return None
     names.sort(key=lambda na: -len(na[0]))
+    error: Optional[Exception] = None
     for prog, args, d in pubs:
-        hit = (_git_push(list(args), d, names) if prog == "git"
-               else _gh(list(args), d, command, names))
+        try:
+            hit = (_git_push(list(args), d, names) if prog == "git"
+                   else _gh(list(args), d, command, names))
+        except Exception as exc:  # noqa: BLE001 — still read the others
+            error = error or exc
+            continue
         if hit:
             name, how = hit
             alias = next(a for n, a in names if n == name)
@@ -299,6 +349,8 @@ def check(command: str, cwd: str, vault: Path) -> Optional[str]:
                 f"Public text never names a private repository."
             )
             return _scrub(reason, names)
+    if error is not None:
+        raise error
     return None
 
 

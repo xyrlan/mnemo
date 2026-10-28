@@ -283,3 +283,87 @@ def test_comments_and_blank_lines_are_not_malformed(tmp_vault, tmp_path, monkeyp
     cmd = f'gh issue create --body "{NAME}"'
 
     _assert_names_alias_only(_deny_reason(_run(monkeypatch, tmp_vault, cmd, tmp_path)))
+
+
+# -- shell syntax around the publishing command (#754) -------------------------
+
+
+@pytest.mark.parametrize("tail", [
+    "2>&1 | tail -2", "> out.txt", "2>/dev/null", "&> out.txt", ">> out.txt 2>&1",
+])
+def test_redirections_are_not_refspecs(tmp_vault, repo, monkeypatch, tail):
+    """``2>&1`` once became the refspecs ``2`` and ``1``; git log exited 128."""
+    _write_tsv(tmp_vault)
+    _commit(repo, NAME)
+
+    out = _run(monkeypatch, tmp_vault, f"git push -q -u origin main {tail}", repo)
+
+    _assert_names_alias_only(_deny_reason(out))
+    assert not (tmp_vault / ".errors.log").exists()
+
+
+def test_redirections_after_gh_leave_the_flags_readable(tmp_vault, tmp_path, monkeypatch):
+    _write_tsv(tmp_vault)
+    (tmp_path / "body.md").write_text(f"see {NAME}\n", encoding="utf-8")
+    cmd = "gh pr create --title x --body-file body.md > out.txt 2>&1"
+
+    _assert_names_alias_only(_deny_reason(_run(monkeypatch, tmp_vault, cmd, tmp_path)))
+
+
+def test_cd_to_a_missing_dir_keeps_checking_from_the_last_one(tmp_vault, repo, tmp_path, monkeypatch):
+    _write_tsv(tmp_vault)
+    _commit(repo, NAME)
+    missing = (tmp_path / "no-such-dir").as_posix()
+
+    out = _run(monkeypatch, tmp_vault, f"cd {missing}; git push", repo)
+
+    _assert_names_alias_only(_deny_reason(out))
+
+
+def test_a_failing_part_does_not_skip_the_next(tmp_vault, repo, monkeypatch):
+    """The ``git push`` of a branch git cannot log raises; ``gh`` is still read."""
+    _write_tsv(tmp_vault)
+    cmd = f'git push origin no-such-branch; gh pr create --title x --body "{NAME}"'
+
+    _assert_names_alias_only(_deny_reason(_run(monkeypatch, tmp_vault, cmd, repo)))
+
+
+def test_a_failing_part_alone_still_fails_open_and_logs(tmp_vault, repo, monkeypatch):
+    _write_tsv(tmp_vault)
+
+    out = _run(monkeypatch, tmp_vault, "git push origin no-such-branch; gh pr list", repo)
+
+    assert out == ""
+    assert "private_names" in (tmp_vault / ".errors.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("windows, target, expected", [
+    (True, "/c/Users/you/repo", Path("C:/Users/you/repo")),
+    (True, "/d", Path("D:")),
+    (True, "/cd/x", Path("/cd/x")),
+    (True, "repo/sub", Path("repo/sub")),
+    (False, "/c/Users/you/repo", Path("/c/Users/you/repo")),
+])
+def test_git_bash_drive_paths(monkeypatch, windows, target, expected):
+    from mnemo.core import private_names
+
+    monkeypatch.setattr(private_names, "_WINDOWS", windows)
+
+    assert Path(private_names._native(target)) == expected
+
+
+def _git_bash(path: Path) -> str:
+    """*path* as Claude Code's Bash tool on Windows writes it: ``/c/Users/...``."""
+    posix = path.as_posix()
+    return "/" + posix[0].lower() + posix[2:]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+def test_cd_to_a_git_bash_path_resolves_on_windows(tmp_vault, repo, tmp_path, monkeypatch):
+    _write_tsv(tmp_vault)
+    _commit(repo, NAME)
+
+    out = _run(monkeypatch, tmp_vault, f"cd {_git_bash(repo)}; git push -q -u origin main 2>&1", tmp_path)
+
+    _assert_names_alias_only(_deny_reason(out))
+    assert not (tmp_vault / ".errors.log").exists()
