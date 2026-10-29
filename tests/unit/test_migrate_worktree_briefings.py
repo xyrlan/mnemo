@@ -151,3 +151,97 @@ def test_migrate_moves_wt_dirs_including_nested(tmp_path: Path, monkeypatch) -> 
     assert not list(_sessions(vault, "myproj-wt-7").glob("*.md"))
     assert not list(_sessions(vault, "myproj-wt-r6-wt-41").glob("*.md"))
     assert (_sessions(vault, "myproj-src") / "myproj-src-1.md").exists()
+
+
+# --- #813: the doctor's hint runs as printed --------------------------------
+
+import shlex  # noqa: E402
+
+import pytest  # noqa: E402
+
+from mnemo import cli  # noqa: E402
+from mnemo.cli.commands.doctor_checks import orphan_worktree_briefings as check_mod  # noqa: E402
+
+
+def _printed_command(vault: Path) -> list[str]:
+    """The argv after ``mnemo`` in the one ``Run:`` hint the doctor prints."""
+    findings = check_mod.check_orphan_worktree_briefings(vault)
+    assert findings is not None and len(findings) == 1
+    _, sep, command = findings[0].partition("Run: ")
+    assert sep, findings[0]
+    argv = shlex.split(command)
+    assert argv[0] == "mnemo"
+    return argv[1:]
+
+
+def test_the_doctor_hint_previews_then_performs_the_flagged_move(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    """Printed, run verbatim: a preview of the flagged dir; then the move; then silence."""
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12", "myproj-src")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+
+    argv = _printed_command(vault)
+    assert "<" not in " ".join(argv), "nothing is left to fill in"
+    assert "--dry-run" in argv
+
+    assert cli.main(argv) == 0
+    out = capsys.readouterr().out
+    moves = [line for line in out.splitlines() if line.startswith("would move")]
+    assert len(moves) == 1 and "myproj-wt-12-1.md" in moves[0]
+    assert (_sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md").exists()
+
+    assert cli.main([a for a in argv if a != "--dry-run"]) == 0
+    assert (_sessions(vault, "myproj") / "myproj-wt-12-1.md").exists()
+    assert not list(_sessions(vault, "myproj-wt-12").glob("*.md"))
+    # The #802 guard: a sibling sharing the prefix stays put.
+    assert (_sessions(vault, "myproj-src") / "myproj-src-1.md").exists()
+
+    assert check_mod.check_orphan_worktree_briefings(vault) is None
+
+
+def test_agents_never_moves_a_sibling_checkout(tmp_path: Path, capsys, monkeypatch) -> None:
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-src", "myproj-src-wt-3")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    assert cli.main(["migrate-worktree-briefings", "--agents", "myproj"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing to migrate" in out.lower()
+    assert (_sessions(vault, "myproj-src") / "myproj-src-1.md").exists()
+    assert (_sessions(vault, "myproj-src-wt-3") / "myproj-src-wt-3-1.md").exists()
+
+
+def test_agents_and_repos_naming_one_agent_list_each_move_once(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    vault, main = _bare_repo_vault(tmp_path, "myproj-wt-12")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    rc = cli.main([
+        "migrate-worktree-briefings", "--repos", str(main), "--agents", "myproj", "--dry-run",
+    ])
+    assert rc == 0
+    moves = [line for line in capsys.readouterr().out.splitlines() if line.startswith("would move")]
+    assert len(moves) == 1
+
+
+@pytest.mark.parametrize("argv", [
+    ["migrate-worktree-briefings"],
+    ["migrate-worktree-briefings", "--dry-run"],
+])
+def test_called_without_a_target_is_a_usage_error(
+    argv: list[str], tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    """``--dry-run`` alone is what the maintainer ran; "nothing ran" must not exit 0."""
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    assert cli.main(argv) == 2
+    err = capsys.readouterr().err
+    assert "--agents" in err
+    assert (_sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md").exists()
+
+
+@pytest.mark.parametrize("name", ["..", ".", "bots/myproj", str(Path("a") / "b")])
+def test_agents_refuses_a_path(name: str, tmp_path: Path, capsys, monkeypatch) -> None:
+    vault, _main = _bare_repo_vault(tmp_path, "myproj-wt-12")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    assert cli.main(["migrate-worktree-briefings", "--agents", name]) == 2
+    assert "agent name" in capsys.readouterr().err

@@ -39,6 +39,18 @@ def worktree_canonical(name: str) -> str | None:
     return base
 
 
+def migrate_hint(canonical: str) -> str:
+    """The command that previews this canonical's orphan moves, runnable as printed.
+
+    It names the agent, not a checkout (#813): the name is all the command
+    uses, and all the doctor has. Quoted for a POSIX shell in case a name
+    carries something a shell would split on.
+    """
+    import shlex
+
+    return f"mnemo migrate-worktree-briefings --agents {shlex.quote(canonical)} --dry-run"
+
+
 def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
     """Return human-readable findings, or ``None`` when there's nothing to flag.
 
@@ -84,7 +96,7 @@ def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
             findings.append(
                 f"orphan worktree briefings: bots/{name}/briefings/sessions/ has "
                 f"{len(orphans)} file(s); canonical agent {prefix!r} also has briefings. "
-                f"Run: mnemo migrate-worktree-briefings --repos <repo_path> --dry-run"
+                f"Run: {migrate_hint(prefix)}"
             )
 
         return findings or None

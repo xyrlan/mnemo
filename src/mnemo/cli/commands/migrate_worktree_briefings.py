@@ -22,11 +22,18 @@ same rule the doctor check that points here uses,
 A bare name-prefix match (``<repo>-*``) is what this did until #802, and it
 would have moved ``mnemo-src`` and ``mnemo-desktop`` — separate checkouts —
 into ``mnemo``. Such a sibling is reported as skipped, never moved.
+
+``--repos`` is only ever used for that name, so ``--agents`` takes the name
+itself (#813). It is what the doctor check prints in its hint — a command
+that runs as printed, where ``--repos <repo_path>`` asked for a checkout the
+doctor never saw. Called with neither, this is a usage error and exits 2:
+"nothing ran" must not read as "nothing to migrate".
 """
 from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 from mnemo.cli.commands.doctor_checks.orphan_worktree_briefings import worktree_canonical
@@ -42,11 +49,26 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
     vault = cli._resolve_vault()
 
     repos: list[str] = list(getattr(args, "repos", []) or [])
+    agents: list[str] = list(getattr(args, "agents", []) or [])
     dry_run: bool = bool(getattr(args, "dry_run", False))
 
-    if not repos:
-        print("(usage) mnemo migrate-worktree-briefings --repos /path/to/repo [/path/to/another ...]")
-        return 0
+    if not repos and not agents:
+        print(
+            "usage: mnemo migrate-worktree-briefings "
+            "(--agents NAME [NAME ...] | --repos PATH [PATH ...]) [--dry-run]",
+            file=sys.stderr,
+        )
+        return 2
+    for name in agents:
+        # A name is one entry of bots/, never a path into or out of it.
+        if not name or name in (".", "..") or Path(name).name != name or "/" in name or "\\" in name:
+            print(f"error: --agents takes an agent name, not a path: {name!r}", file=sys.stderr)
+            return 2
+
+    canonicals: list[str] = []
+    for name in [agent_mod.resolve_canonical_agent(str(Path(r))).name for r in repos] + agents:
+        if name not in canonicals:
+            canonicals.append(name)
 
     moves: list[tuple[Path, Path]] = []
     collisions: list[Path] = []
@@ -57,9 +79,7 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
         print("nothing to migrate (no bots/ dir in vault)")
         return 0
 
-    for repo_path in repos:
-        repo_p = Path(repo_path)
-        canonical = agent_mod.resolve_canonical_agent(str(repo_p)).name
+    for canonical in canonicals:
         # Find any agent dir whose name resolves to the same canonical (i.e. its own
         # .git is a worktree pointing to this repo's main .git).
         for agent_dir in sorted(bots_root.iterdir()):
