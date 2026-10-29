@@ -621,11 +621,15 @@ def _build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--window-s", type=float, default=120.0, help="list→read pair window in seconds (default 120)")
     migrate = sub.add_parser(
         "migrate-worktree-briefings",
-        help="move orphan worktree briefings to canonical dir, rewriting every citation (uses name-prefix heuristic — always --dry-run first)",
+        help="move orphan worktree briefings to canonical dir, rewriting every citation (picks `<repo>-wt-*` dirs by name — always --dry-run first)",
     )
     migrate.add_argument(
         "--repos", nargs="+", default=[],
         help="canonical repo paths whose worktree briefings should be relocated",
+    )
+    migrate.add_argument(
+        "--agents", nargs="+", default=[],
+        help="canonical agent names (bots/<name>/) whose <name>-wt-* briefings should be relocated — what `mnemo doctor` prints",
     )
     migrate_plugin = sub.add_parser(
         "migrate-plugin",
