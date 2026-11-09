@@ -17,16 +17,19 @@ to answer it, and a prompting parent already accepts an unattested notice.
 ``auto`` too. The operator chose to let the parent act without prompts, and
 the child does the parent's work; what it may *publish* is still ``--may``'s.
 
-**Measured on 2.1.306 (2026-10-21), on throwaway ``--bg`` sessions:**
+**Measured on 2.1.306 (2026-10-21), on throwaway ``--bg`` sessions, and again
+on 2.1.321 (2026-11-09) with the argv dispatch builds since #822
+(``tools/measure_child_mode.py``, #827). The modes, tools and files below held
+on both; what the CLI printed was read on 2.1.306 only:**
 
 - ``--disallowedTools Edit Write NotebookEdit`` still removes those tools under
   ``bypassPermissions``: a read-only child asked to use ``Write`` found it in
   neither its tool list nor ToolSearch, and wrote nothing. So a read-only
   dispatch inherits the class like any other.
-- ``--bg --resume <id>`` restores the saved ``--permission-mode`` (the CLI
-  prints "woke session … with its saved options (--permission-mode,
-  --disallowedTools, --model)", and the resumed turns record
-  ``bypassPermissions``), so ``sessions/wake.py`` passes nothing.
+- ``--bg --resume <id>`` restores the saved ``--permission-mode`` (the resumed
+  turns record ``bypassPermissions``; on 2.1.306 the CLI printed "woke session
+  … with its saved options (--permission-mode, --disallowedTools, --model)"),
+  so ``sessions/wake.py`` passes nothing.
 - With ``permissions.disableBypassPermissionsMode: "disable"`` in a settings
   file, ``--permission-mode bypassPermissions`` neither fails nor warns: the
   child quietly runs ``auto``. So that setting is read here, wherever mnemo

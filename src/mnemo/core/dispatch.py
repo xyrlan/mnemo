@@ -1270,6 +1270,40 @@ def spawn_child(
             raise DispatchError(GROK_NO_ADVISOR)
         return _spawn_grok(prompt, cwd=cwd, model=model, effort=effort,
                            read_only=read_only, home=home)
+    args = claude_argv(prompt, cwd=cwd, model=model, lean=lean, effort=effort,
+                       read_only=read_only, settings=settings,
+                       permission_mode=permission_mode, advisor=advisor)
+    try:
+        result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError) as exc:
+        raise DispatchError(f"could not spawn claude: {exc}") from exc
+
+    if result.returncode != 0:
+        said = result.stderr.strip() or result.stdout.strip()
+        raise DispatchError(
+            f"claude --bg failed: {said}{_bypass_way_out(said, lean=lean)}"
+        )
+    return claude_cli.require_short_id(result.stdout)
+
+
+def claude_argv(
+    prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
+    effort: str | None = None, read_only: bool = False,
+    settings: Mapping[str, Any] | None = None,
+    permission_mode: str | None = None,
+    advisor: str | None = None,
+) -> list[str]:
+    """The ``claude --bg`` argv :func:`spawn_child` runs for a Claude child.
+
+    Its docstring says why each flag is there and where it sits. Apart so a
+    measurement starts its probes with exactly this argv rather than a copy of
+    the flags (#827): ``tools/measure_child_mode.py`` copied the lean flags,
+    kept the shape #822 replaced, and the CLI refused all three of its bypass
+    probes. Writes the child's profile files under *cwd*, as the spawn does,
+    and refuses an unknown effort or an advisor no child could use before any
+    of that.
+    """
     if effort and effort not in claude_cli.EFFORT_LEVELS:
         raise DispatchError(
             f"unknown effort {effort!r}: "
@@ -1314,18 +1348,7 @@ def spawn_child(
         # them — `lean=False` with no model leaves none at all.
         args.append("--")
     args.append(prompt)
-    try:
-        result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
-                                encoding="utf-8", errors="replace")
-    except (FileNotFoundError, OSError) as exc:
-        raise DispatchError(f"could not spawn claude: {exc}") from exc
-
-    if result.returncode != 0:
-        said = result.stderr.strip() or result.stdout.strip()
-        raise DispatchError(
-            f"claude --bg failed: {said}{_bypass_way_out(said, lean=lean)}"
-        )
-    return claude_cli.require_short_id(result.stdout)
+    return args
 
 
 def _bypass_way_out(said: str, *, lean: bool) -> str:
