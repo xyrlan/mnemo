@@ -540,8 +540,16 @@ def _report(results: list, *, lean: bool = True) -> int:
             # What the child does *not* have is the surprising half, so it is
             # stated once per dispatch rather than left to be discovered when
             # a child cannot find a tool the maintainer takes for granted.
-            print("  profile: lean — repo settings + mnemo only, no user "
-                  "plugins/MCP/skills (--full-profile opts out)")
+            if any(child_profile.reads_user_settings(getattr(r, "permission_mode", None))
+                   for r in started):
+                # Every child of one dispatch gets the same mode, so one line.
+                # It loads more than a lean child usually does, and says so (#822).
+                print("  profile: lean + your user settings, which bypassPermissions "
+                      "needs — your plugins off, no MCP but mnemo; your skills, "
+                      "hooks and default model on (--full-profile opts out)")
+            else:
+                print("  profile: lean — repo settings + mnemo only, no user "
+                      "plugins/MCP/skills (--full-profile opts out)")
             # Deliberately not the word WARNING, which in this report means
             # "a `claude` CLI assumption broke" (#235). This is a different
             # thing — mnemo is not installed — and giving both the same label

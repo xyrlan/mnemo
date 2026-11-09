@@ -1248,7 +1248,11 @@ def spawn_child(
     ``--bg``'s own ``auto`` exactly as before. The caller chooses it
     (:func:`mnemo.core.child_mode.choose`): ``bypassPermissions`` for a child
     of a bypass parent, nothing otherwise. Grok has no such mode and never
-    gets it.
+    gets it. A lean child in bypass also loads the user's settings, which the
+    CLI requires since 2.1.321 (#822, :mod:`mnemo.core.child_profile`). If the
+    CLI still refuses the mode, the error names mnemo's way out
+    (``dispatch.childMode: auto``, or ``--full-profile``) after the CLI's own
+    sentence.
 
     **The advisor (#818).** *advisor* is passed as ``--advisor <model>``
     right after ``--model``, and omitted when ``None`` — the argv and the
@@ -1298,8 +1302,9 @@ def spawn_child(
         # Before the prompt, which is positional: a flag after it would be
         # read as a second positional by any CLI that stops parsing there.
         # Alongside --model, never instead of it: the two choose different
-        # things (who the child is, and what it loads) and both survive.
-        args += child_profile.lean_args(cwd, settings)
+        # things (who the child is, and what it loads) and both survive. The
+        # mode goes in too: a bypass child must load user settings (#822).
+        args += child_profile.lean_args(cwd, settings, permission_mode=permission_mode)
     elif settings:
         args += ["--settings", str(child_profile.write_settings(cwd, settings))]
     if read_only:
@@ -1316,10 +1321,28 @@ def spawn_child(
         raise DispatchError(f"could not spawn claude: {exc}") from exc
 
     if result.returncode != 0:
+        said = result.stderr.strip() or result.stdout.strip()
         raise DispatchError(
-            f"claude --bg failed: {result.stderr.strip() or result.stdout.strip()}"
+            f"claude --bg failed: {said}{_bypass_way_out(said, lean=lean)}"
         )
     return claude_cli.require_short_id(result.stdout)
+
+
+def _bypass_way_out(said: str, *, lean: bool) -> str:
+    """What to do when the CLI refused the child's bypass mode (#822), or ``""``.
+
+    The CLI's sentence says what to do in the CLI's terms. It does not say that
+    mnemo chose the mode, or which mnemo setting changes that choice.
+    ``--full-profile`` is offered only for the refusal it can fix: the launch did
+    not read user settings, and a full-profile child does.
+    """
+    if claude_cli.BYPASS_REFUSAL not in said:
+        return ""
+    ways = ["`dispatch.childMode: auto` in mnemo's config starts children in auto"]
+    if child_profile.is_lean(lean) and claude_cli.BYPASS_NO_USER_SETTINGS in said:
+        ways.append("`--full-profile` starts this one on your whole user profile")
+    return (" — mnemo asked for bypassPermissions because this session runs in "
+            f"it (#741, #822); {', or '.join(ways)}")
 
 
 # --- grok ------------------------------------------------------------------

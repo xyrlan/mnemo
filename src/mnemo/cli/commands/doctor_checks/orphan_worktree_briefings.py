@@ -51,6 +51,25 @@ def migrate_hint(canonical: str) -> str:
     return f"mnemo migrate-worktree-briefings --agents {shlex.quote(canonical)} --dry-run"
 
 
+def remedy(vault_root: Path, canonical: str) -> str:
+    """What to do about one orphan dir, for the machine the doctor runs on.
+
+    A sync satellite may never take a tracked file away, so the move run
+    there is undone by the next sync and leaves a copy on every machine
+    (#821). There the hint names the primary instead of offering ``Run:``.
+    """
+    from mnemo.core.sync import roles
+
+    if not roles.is_satellite(vault_root):
+        return f"Run: {migrate_hint(canonical)}"
+    from mnemo.cli.commands.migrate_worktree_briefings import primary_label
+
+    return (
+        f"This machine is a sync satellite, where sync would undo the move: "
+        f"on {primary_label(vault_root)}, run {migrate_hint(canonical)}"
+    )
+
+
 def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
     """Return human-readable findings, or ``None`` when there's nothing to flag.
 
@@ -96,11 +115,11 @@ def check_orphan_worktree_briefings(vault_root: Path) -> list[str] | None:
             findings.append(
                 f"orphan worktree briefings: bots/{name}/briefings/sessions/ has "
                 f"{len(orphans)} file(s); canonical agent {prefix!r} also has briefings. "
-                f"Run: {migrate_hint(prefix)}"
+                f"{remedy(vault_root, prefix)}"
             )
 
         return findings or None
-    except OSError:
+    except Exception:  # noqa: BLE001
         # Defensive: surface nothing rather than break `mnemo doctor`.
         return None
 

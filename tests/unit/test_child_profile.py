@@ -370,3 +370,185 @@ def test_is_lean_is_the_single_answer(monkeypatch) -> None:
     monkeypatch.setenv("MNEMO_DISPATCH_FULL_PROFILE", "1")
     assert child_profile.is_lean(True) is False   # the environment wins
     assert child_profile.is_lean(False) is False
+
+
+# --- a child in bypassPermissions (#822) ------------------------------------
+
+BYPASS = "bypassPermissions"
+
+#: What `claude --bg` 2.1.321 prints, verbatim, when the launch leaves user
+#: settings out (measured, `bg-bypass-needs-user-settings`).
+REFUSED_LEAN = ("--bg with bypassPermissions requires accepting the disclaimer first. "
+                "Acceptance is kept in your user settings, which this launch does not "
+                "read. Launch again with user settings on.")
+#: ... and, read from the same bundle, when user settings were read but hold
+#: no acceptance.
+REFUSED_NO_CONSENT = ("--bg with bypassPermissions requires accepting the disclaimer "
+                      "first. Run `claude --dangerously-skip-permissions` once "
+                      "interactively.")
+
+
+def _settings_of(args) -> dict:
+    return json.loads(Path(args[args.index("--settings") + 1]).read_text(encoding="utf-8"))
+
+
+@pytest.mark.real_spawn
+def test_a_lean_child_of_a_bypass_parent_reads_user_settings(installed, tmp_path, monkeypatch) -> None:
+    """The argv, whole. Before #822 it carried `project,local`, which Claude
+    Code 2.1.321 refuses, so a dispatch from a bypass session spawned nothing."""
+    seen: dict = {}
+    _spy(monkeypatch, seen)
+    monkeypatch.setattr("mnemo.core.child_priority.supported", lambda: False)  # #723's own tests pin the marker
+    tree = tmp_path / "wt"
+    tree.mkdir()
+
+    dispatch.spawn_child("do the thing", cwd=tree, permission_mode=BYPASS)
+
+    profile = tree / child_profile.PROFILE_DIRNAME
+    assert seen["args"] == [
+        "claude", "--bg", "--permission-mode", BYPASS,
+        "--setting-sources", "user,project,local", "--strict-mcp-config",
+        "--mcp-config", str(profile / "mcp.json"),
+        "--settings", str(profile / "settings.json"),
+        "do the thing",
+    ]
+
+
+def test_its_settings_close_the_users_plugins_and_hand_back_no_hooks(installed, tmp_path) -> None:
+    """User settings bring the plugins back, so they are switched off again
+    from `--settings`, which outranks them. mnemo's hooks are not handed back:
+    the user's own file registers them already."""
+    tree = tmp_path / "wt"
+    tree.mkdir()
+
+    args = child_profile.lean_args(tree, permission_mode=BYPASS)
+
+    written = _settings_of(args)
+    assert written == {"enabledPlugins": {"superpowers@superpowers-dev": False,
+                                          "vercel@official": False}}
+    served = json.loads(Path(args[args.index("--mcp-config") + 1]).read_text(encoding="utf-8"))
+    assert set(served["mcpServers"]) == {"mnemo"}
+
+
+def test_extra_settings_share_the_one_file(installed, tmp_path) -> None:
+    """A second `--settings` would replace the first whole (#453)."""
+    tree = tmp_path / "wt"
+    tree.mkdir()
+
+    args = child_profile.lean_args(tree, {"autoMemoryEnabled": False}, permission_mode=BYPASS)
+
+    assert args.count("--settings") == 1
+    written = _settings_of(args)
+    assert written["autoMemoryEnabled"] is False
+    assert written["enabledPlugins"]["vercel@official"] is False
+
+
+@pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
+def test_a_plugin_the_repo_enables_stays_on(installed, tmp_path, name) -> None:
+    """A `false` from `--settings` would outrank the repo too, and a lean child
+    loads the repo's plugins."""
+    tree = tmp_path / "wt"
+    (tree / ".claude").mkdir(parents=True)
+    (tree / ".claude" / name).write_text(
+        json.dumps({"enabledPlugins": {"vercel@official": True}}), encoding="utf-8")
+
+    assert child_profile.plugins_to_close(tree) == {"superpowers@superpowers-dev": False}
+
+
+def test_only_plugins_the_user_turns_on_are_closed(tmp_path) -> None:
+    user = {"enabledPlugins": {"on@m": True, "off@m": False, "pinned@m": ["^1.0"],
+                               3: True}}
+    assert child_profile.plugins_to_close(tmp_path, user) == {"on@m": False, "pinned@m": False}
+    assert child_profile.plugins_to_close(tmp_path, {}) == {}
+    assert child_profile.plugins_to_close(tmp_path, {"enabledPlugins": ["a@m"]}) == {}
+
+
+def test_no_plugins_and_no_extra_settings_write_no_settings_file(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    tree = tmp_path / "wt"
+    tree.mkdir()
+
+    args = child_profile.lean_args(tree, permission_mode=BYPASS)
+
+    assert args == list(child_profile.BYPASS_LEAN_FLAGS)
+
+
+@pytest.mark.parametrize("mode", [None, "auto", "acceptEdits", "default", "plan"])
+def test_every_other_mode_keeps_the_lean_profile_as_it_was(installed, tmp_path, mode) -> None:
+    tree = tmp_path / "wt"
+    tree.mkdir()
+
+    args = child_profile.lean_args(tree, permission_mode=mode)
+
+    assert args[:3] == list(child_profile.LEAN_FLAGS)
+    assert set(_settings_of(args)) == {"hooks"}
+
+
+def test_the_bypass_flags_are_stated_as_an_assumption() -> None:
+    from mnemo.core import claude_cli
+
+    claim = claude_cli.assumption("bg-bypass-needs-user-settings").claim
+    assert "user,project,local" in claim and "project,local" in claim
+    assert claude_cli.BYPASS_REFUSAL in REFUSED_LEAN
+    assert claude_cli.BYPASS_REFUSAL in REFUSED_NO_CONSENT
+    assert claude_cli.BYPASS_NO_USER_SETTINGS in REFUSED_LEAN
+    assert claude_cli.BYPASS_NO_USER_SETTINGS not in REFUSED_NO_CONSENT
+
+
+def _refuse(monkeypatch, message: str) -> None:
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr=message + "\n")
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+
+
+@pytest.mark.real_spawn
+def test_a_refusal_names_mnemos_way_out(installed, tmp_path, monkeypatch) -> None:
+    """The CLI's sentence is kept, and followed by the switches that are mnemo's."""
+    _refuse(monkeypatch, REFUSED_LEAN)
+
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.spawn_child("x", cwd=tmp_path, permission_mode=BYPASS)
+
+    said = str(caught.value)
+    assert REFUSED_LEAN in said
+    assert "dispatch.childMode: auto" in said
+    assert "--full-profile" in said
+
+
+@pytest.mark.real_spawn
+def test_full_profile_is_not_offered_where_it_cannot_help(installed, tmp_path, monkeypatch) -> None:
+    """With no acceptance at all, a full-profile child is refused too."""
+    _refuse(monkeypatch, REFUSED_NO_CONSENT)
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.spawn_child("x", cwd=tmp_path, permission_mode=BYPASS)
+    assert "dispatch.childMode: auto" in str(caught.value)
+    assert "--full-profile" not in str(caught.value)
+
+    _refuse(monkeypatch, REFUSED_LEAN)
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.spawn_child("x", cwd=tmp_path, permission_mode=BYPASS, lean=False)
+    assert "--full-profile" not in str(caught.value)
+
+
+@pytest.mark.real_spawn
+def test_any_other_failure_reads_as_it_did(installed, tmp_path, monkeypatch) -> None:
+    _refuse(monkeypatch, "Workspace not trusted.")
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.spawn_child("x", cwd=tmp_path, permission_mode=BYPASS)
+    assert str(caught.value) == "claude --bg failed: Workspace not trusted."
+
+
+def test_the_report_says_a_bypass_child_loads_user_settings(installed, capsys, tmp_path) -> None:
+    from mnemo.cli.commands import dispatch as dispatch_cmd
+
+    started = [dispatch.Dispatched(issue=1, worktree=tmp_path, short_id="a1b2c3d4",
+                                   permission_mode=BYPASS)]
+    dispatch_cmd._report(started, lean=True)
+
+    out = capsys.readouterr().out
+    assert "profile: lean + your user settings" in out
+    assert "--full-profile" in out
+    assert "repo settings + mnemo only" not in out

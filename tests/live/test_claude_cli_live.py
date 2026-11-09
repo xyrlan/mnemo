@@ -484,6 +484,72 @@ def test_full_profile_child_resolves_the_machine_default(
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
+def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -> None:
+    """``bg-bypass-needs-user-settings``: refused lean, started with user settings.
+
+    Two halves, against the installed binary. The lean flags as dispatch passed
+    them before #822 are refused before anything starts. The flags dispatch
+    passes now start a child that runs ``bypassPermissions``. Both need the
+    disclaimer accepted in user settings, which a machine that never ran bypass
+    has not done, so that machine skips rather than failing for the wrong
+    reason. A plain directory, not a fresh git repo: ``--bg`` does not trust a
+    new repository ("Workspace not trusted"). One haiku child, one word.
+    """
+    from mnemo.core import child_mode
+
+    key = "bg-bypass-needs-user-settings"
+    bypass = child_profile.BYPASS_MODE
+    if child_mode.bypass_accepted_in(real_claude) is None:
+        pytest.skip("the bypass disclaimer was never accepted in user settings here")
+
+    old = tmp_path / "old-shape"
+    old.mkdir()
+    refused = subprocess.run(
+        ["claude", "--bg", "--permission-mode", bypass, *child_profile.LEAN_FLAGS, PROMPT],
+        cwd=old, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60,
+    )
+    said = (refused.stderr or refused.stdout).strip()
+    if refused.returncode == 0:
+        started = claude_cli.short_id_from(refused.stdout)
+        if started:
+            subprocess.run(["claude", "stop", started], capture_output=True, timeout=60)
+            subprocess.run(["claude", "rm", started], capture_output=True, timeout=60)
+    assert refused.returncode != 0 and claude_cli.BYPASS_REFUSAL in said, (
+        f"{key}: the pre-#822 lean shape in bypass was not refused as measured "
+        f"(exit {refused.returncode}: {said[:300]!r}). If the CLI starts it again, "
+        "the user settings a bypass child now loads may no longer be needed"
+    )
+
+    tree = tmp_path / "new-shape"
+    tree.mkdir()
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku",
+                                        permission_mode=bypass)
+        state_path = real_claude / "jobs" / short_id / "state.json"
+        finished = _until(
+            lambda: (lambda d: d if d and d.get("state") in ("done", "stopped")
+                     and d.get("linkScanPath") else None)(_state(state_path)),
+            seconds=180,
+        )
+        assert finished, f"{key}: child never finished: {_state(state_path)}"
+        flags = finished.get("respawnFlags") or []
+        assert "user,project,local" in flags, f"{key}: respawnFlags={flags!r}"
+        from mnemo.core.sessions import inbound_policy
+
+        mode = inbound_policy.last_mode(Path(finished["linkScanPath"]))
+        assert mode == bypass, (
+            f"{key}: a lean child with user settings ran {mode!r}, not {bypass}; "
+            "the acceptance is no longer read from user settings, or a bypass "
+            "child is downgraded for another reason"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+
+
 # --- bg-advisor-flag (#818) ----------------------------------------------------
 
 #: Asks for the one advisor call the assertions read back. The session decides
@@ -502,34 +568,6 @@ ADVISOR_IF_ANY_PROMPT = (
     "Do not read, write or run anything. If you have a tool named advisor, "
     "call it exactly once. Either way, reply with exactly the word OK."
 )
-
-
-def _trusted_tree(name: str) -> tuple:
-    """A detached worktree of the checkout under test, and that checkout.
-
-    Not ``_git_repo(tmp_path)``: on 2.1.321 ``claude --bg`` refuses a
-    workspace nobody accepted the trust prompt for ("Workspace not
-    trusted"), a fresh repo under the temp dir is one, and trust follows a
-    worktree's main checkout — a new repo nested inside a trusted tree is
-    refused too (measured 2026-11-09). The checkout running this suite is
-    the one a maintainer works in. Detached, so no branch is made; removed
-    by :func:`_drop_tree`.
-    """
-    repo = Path(__file__).resolve().parents[2]
-    tree = repo.parent / f"{repo.name}-live-{name}-{os.getpid()}"
-    subprocess.run(["git", "worktree", "add", "--detach", str(tree), "HEAD"],
-                   cwd=repo, check=True, capture_output=True)
-    return repo, tree
-
-
-def _drop_tree(repo: Path, tree: Path) -> None:
-    """Remove :func:`_trusted_tree`'s worktree. Retried: on Windows the
-    stopped child's process holds the directory for a few seconds."""
-    subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
-                   cwd=repo, capture_output=True)
-    _until(lambda: (shutil.rmtree(tree, ignore_errors=True), not tree.exists())[1],
-           seconds=30, every=1)
-    subprocess.run(["git", "worktree", "prune"], cwd=repo, capture_output=True)
 
 
 def _finished_transcript(real_claude: Path, short_id: str) -> tuple:
@@ -570,7 +608,7 @@ def _advisor_calls(records: list) -> tuple:
     return blocks, iterations
 
 
-def test_bg_and_advisor_compose(real_claude: Path) -> None:
+def test_bg_and_advisor_compose(real_claude: Path, tmp_path: Path) -> None:
     """``bg-advisor-flag``: ``--advisor`` reaches a lean ``--bg`` child (#818).
 
     The real ``spawn_child``, on the lean default, and the cheapest advised
@@ -579,7 +617,10 @@ def test_bg_and_advisor_compose(real_claude: Path) -> None:
     model is most of the bill. The transcript is the proof: the flag only
     says what was asked for, and a child whose advisor is dropped keeps it.
     """
-    repo, tree = _trusted_tree("advisor")
+    # A plain directory, as for the bypass test above: `--bg` refuses a
+    # fresh git repository as untrusted ("Workspace not trusted").
+    tree = tmp_path / "advisor"
+    tree.mkdir()
     short_id = ""
     try:
         short_id = dispatch.spawn_child(
@@ -617,10 +658,9 @@ def test_bg_and_advisor_compose(real_claude: Path) -> None:
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
-        _drop_tree(repo, tree)
 
 
-def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path) -> None:
+def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path, tmp_path: Path) -> None:
     """``bg-advisor-flag``, the half dispatch refuses on: dropped, silently.
 
     A Sonnet 5.5 child takes no Haiku 5.5 advisor. Claude Code starts it
@@ -631,7 +671,10 @@ def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path) -> None:
     failing because the child *was* advised, or the spawn now errors, the
     refusal is the thing to revisit.
     """
-    repo, tree = _trusted_tree("advisor-below")
+    # A plain directory, as for the bypass test above: `--bg` refuses a
+    # fresh git repository as untrusted ("Workspace not trusted").
+    tree = tmp_path / "advisor-below"
+    tree.mkdir()
     short_id = ""
     try:
         short_id = dispatch.spawn_child(
@@ -652,7 +695,6 @@ def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path) -> None:
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
-        _drop_tree(repo, tree)
 
 
 def _load_user_servers() -> dict:

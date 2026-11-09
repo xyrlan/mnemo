@@ -1070,6 +1070,14 @@ advised twin never called its advisor is listed apart, because it measured
 the cheaper model alone. So is a twin that stopped on a rate limit, which is
 left out of the speed figures because that time measures the account.
 
+One thing to keep out of the way while the pairs run: `/advisor` saves your
+choice as `advisorModel` in your user settings, and a child of a session in
+bypass mode reads user settings, because Claude Code requires it for bypass
+(see "A child runs in your session's permission class" below). A twin's own
+`--advisor` wins over that setting, but the twin meant to run alone would
+inherit it. The readout flags such a pair ("the alone twin called an advisor
+too"). Clear the setting with `/advisor off` before dispatching the pairs.
+
 ### Saying up front what a child may publish
 
 Ungranted, a child that finishes stops to ask "may I push / open a PR?", and

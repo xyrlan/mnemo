@@ -86,13 +86,61 @@ an OAuth-authenticated maintainer would not start at all. Neither can express
 maintaining a copy of it. The files this writes are derived on each spawn from
 whatever is installed at that moment, live under the child's own worktree, and
 die with it. Nothing here is a second source of truth to keep in sync.
+
+**A child in ``bypassPermissions`` reads the user's settings (#822).** Claude
+Code 2.1.321 refuses ``--bg --permission-mode bypassPermissions`` when the
+launch leaves user settings out: "Acceptance is kept in your user settings,
+which this launch does not read". Read from the bundle and measured on
+throwaway ``--bg`` children (``tools/measure_bypass_lean.py``), a background
+child in bypass counts the disclaimer's acceptance
+(``skipDangerousModePermissionPrompt``) only from user or managed settings. The
+two ways around that both fail. Consent handed over in the child's own
+``--settings`` file is refused at launch the same way. Consent in the tree's
+``.claude/settings.local.json`` gets past the launch, but the child then runs
+``default`` and stops at its first prompt with nobody there to answer it. So a
+child of a bypass parent (:mod:`mnemo.core.child_mode`) gets
+:data:`BYPASS_LEAN_FLAGS`, which add ``user`` to the setting sources. That is
+the CLI's own way out.
+
+It then turns back off what it can of what that lets in. Every plugin the
+user's settings enable is set to ``false`` in the child's ``--settings``
+file, which outranks user settings. A plugin the repo's own settings enable is
+left alone, because the lean child loads it today. mnemo's hooks are not
+handed back, because the user's file now supplies them. ``--strict-mcp-config``
+still keeps every MCP server but mnemo's out. What stays open, because no
+setting closes it without closing mnemo too:
+
+- the user's skills (``~/.claude/skills``, including the ones synced from
+  claude.ai);
+- the user's hooks besides mnemo's;
+- ``env``, ``permissions``, ``statusLine``, and ``model`` /
+  ``modelSettings``. A dispatch that names no model runs on the user's default
+  model and effort, as a full-profile child does.
+
+First-turn input and skills listed, one ``--bg`` haiku child per arm, same
+one-line prompt, read by ``tools/measure_bypass_lean.py`` on the maintainer's
+machine (one user plugin, user skills plus ones synced from claude.ai, mnemo's
+four hooks; claude 2.1.321, 2026-11-09):
+
+==============================================  ==========  ======
+arm                                             input       skills
+==============================================  ==========  ======
+lean, ``auto`` (unchanged)                          49,526      18
+lean + user settings, plugins closed (bypass)       53,623      36
+full profile                                        61,180      73
+==============================================  ==========  ======
+
+On that machine a bypass child is about 4,100 tokens heavier than a lean
+``auto`` one. It is about 7,600 lighter than the full profile, which was the
+only way to dispatch from a bypass session before this change.
+``dispatch.childMode: auto`` keeps a child fully lean, in ``auto``.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 #: Where the derived files live inside the child's worktree. Under the tree so
 #: they are removed with it, and dot-prefixed and gitignore-worthy so a child
@@ -102,6 +150,27 @@ PROFILE_DIRNAME = ".mnemo-child-profile"
 #: The flags that stop the user-level profile from loading. Stated once so the
 #: live test and the argv builder cannot disagree about what "lean" means.
 LEAN_FLAGS = ("--setting-sources", "project,local", "--strict-mcp-config")
+
+#: The one ``--permission-mode`` Claude Code will not start a lean child in
+#: without user settings (#822). Spelled here rather than imported from
+#: :mod:`mnemo.core.child_mode`, which reads transcripts and has no business in
+#: an argv builder; a test pins that the two agree.
+BYPASS_MODE = "bypassPermissions"
+
+#: :data:`LEAN_FLAGS` for a child started in :data:`BYPASS_MODE`: the user's
+#: settings join the sources, because that is where the CLI reads the bypass
+#: disclaimer's acceptance from. See "A child in bypassPermissions" above.
+BYPASS_LEAN_FLAGS = ("--setting-sources", "user,project,local", "--strict-mcp-config")
+
+
+def reads_user_settings(permission_mode: Optional[str]) -> bool:
+    """Whether a lean child started in *permission_mode* must load user settings."""
+    return permission_mode == BYPASS_MODE
+
+
+def lean_flags(permission_mode: Optional[str] = None) -> Tuple[str, ...]:
+    """The flags that make a child started in *permission_mode* lean."""
+    return BYPASS_LEAN_FLAGS if reads_user_settings(permission_mode) else LEAN_FLAGS
 
 
 def user_settings_path() -> Path:
@@ -207,6 +276,34 @@ def mnemo_mcp_servers(claude_json: Optional[Dict[str, Any]] = None) -> Dict[str,
     return {MCPSERVER_NAME: entry} if isinstance(entry, dict) else {}
 
 
+def _enabled(settings: Mapping[str, Any]) -> List[str]:
+    """The plugin ids *settings* turn on. A value that is not ``false`` counts:
+    the CLI also takes a version-constraint list there."""
+    plugins = settings.get("enabledPlugins")
+    if not isinstance(plugins, dict):
+        return []
+    return [name for name, value in plugins.items()
+            if isinstance(name, str) and value not in (False, None)]
+
+
+def plugins_to_close(tree: Path | str,
+                     settings: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+    """``{plugin: False}`` for each plugin only the user's settings enable (#822).
+
+    For a child that reads user settings because it runs in bypass. Set in the
+    child's ``--settings`` file, which outranks user settings (the CLI's own
+    order is user < project < local < flag < policy; measured: the user's
+    plugin's skills left the listing). A plugin the tree's ``.claude/``
+    settings enable is skipped, because a ``false`` from ``--settings`` would
+    outrank the repo too, and the lean child loads the repo's plugins.
+    """
+    user = _load(user_settings_path()) if settings is None else settings
+    repo = set()
+    for name in ("settings.json", "settings.local.json"):
+        repo.update(_enabled(_load(Path(tree) / ".claude" / name)))
+    return {name: False for name in _enabled(user) if name not in repo}
+
+
 def _profile_dir(tree: Path | str) -> Path:
     directory = Path(tree) / PROFILE_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
@@ -221,6 +318,7 @@ def _profile_dir(tree: Path | str) -> Path:
 
 def write_profile(
     tree: Path | str, settings: Optional[Mapping[str, Any]] = None,
+    *, user_settings: bool = False,
 ) -> Dict[str, Path]:
     """Write the derived settings and MCP config under *tree*; return their paths.
 
@@ -234,14 +332,23 @@ def write_profile(
     than a second ``--settings``: given two, the CLI keeps the last and drops
     the first whole (measured on 2.1.280), which would take mnemo's hooks
     with it.
+
+    *user_settings* is for a child that loads the user's settings (#822). Its
+    file closes the user's plugins (:func:`plugins_to_close`) and leaves the
+    hooks out, because the user's own file already registers mnemo's.
     """
     directory = _profile_dir(tree)
     written: Dict[str, Path] = {}
 
     data: Dict[str, Any] = {}
-    hooks = mnemo_hooks()
-    if hooks:
-        data["hooks"] = hooks
+    if user_settings:
+        closed = plugins_to_close(tree)
+        if closed:
+            data["enabledPlugins"] = closed
+    else:
+        hooks = mnemo_hooks()
+        if hooks:
+            data["hooks"] = hooks
     data.update(settings or {})
     if data:
         path = directory / "settings.json"
@@ -270,15 +377,20 @@ def write_settings(tree: Path | str, settings: Mapping[str, Any]) -> Path:
 
 def lean_args(
     tree: Path | str, settings: Optional[Mapping[str, Any]] = None,
+    *, permission_mode: Optional[str] = None,
 ) -> List[str]:
     """The ``claude`` flags that start a lean child in *tree*.
 
     Order is not significant to the CLI, but is kept stable — drop, then hand
     back — so a maintainer reading a spawn in ``ps`` sees the shape of the
     decision rather than a flag soup. *settings* as in :func:`write_profile`.
+
+    *permission_mode* is the one the child will be started in. In
+    :data:`BYPASS_MODE` it loads the user's settings (#822).
     """
-    written = write_profile(tree, settings)
-    args = list(LEAN_FLAGS)
+    user = reads_user_settings(permission_mode)
+    written = write_profile(tree, settings, user_settings=user)
+    args = list(lean_flags(permission_mode))
     if "mcp" in written:
         args += ["--mcp-config", str(written["mcp"])]
     if "settings" in written:

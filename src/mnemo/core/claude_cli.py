@@ -108,6 +108,14 @@ def advisor_ranks_below(model: Optional[str], advisor: Optional[str]) -> bool:
     child, adviser = _alias_rank(model), _alias_rank(advisor)
     return child is not None and adviser is not None and adviser < child
 
+
+#: How ``--bg`` starts its refusal of a bypass child whose disclaimer
+#: acceptance it cannot see, in both of the sentences it has for that (#822).
+BYPASS_REFUSAL = "--bg with bypassPermissions requires accepting the disclaimer"
+#: The second half of the refusal when the cause is that user settings were
+#: left out of the launch, which ``--full-profile`` puts back in.
+BYPASS_NO_USER_SETTINGS = "which this launch does not read"
+
 #: The contract. Ordered as dispatch meets them: spawn, read back, watch, avoid.
 ASSUMPTIONS: Tuple[Assumption, ...] = (
     Assumption(
@@ -324,10 +332,50 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "`mcp__*` tools at all. `--safe-mode` and `--bare` are rejected as blunter: the "
             "first disables mnemo too, the second additionally forces "
             "ANTHROPIC_API_KEY/apiKeyHelper auth, which an OAuth maintainer's "
-            "child does not have."
+            "child does not have. A child started in bypassPermissions is the "
+            "exception: it needs `user` in the sources too "
+            "(`bg-bypass-needs-user-settings`, #822)."
         ),
         used_by="dispatch.spawn_child via child_profile.lean_args",
         verified=_V,
+    ),
+    Assumption(
+        key="bg-bypass-needs-user-settings",
+        claim=(
+            "`claude --bg --permission-mode bypassPermissions` counts the "
+            "bypass disclaimer as accepted only through settings it reads, and "
+            "a background child counts only user or managed settings "
+            "(`skipDangerousModePermissionPrompt: true`). Under the lean flags "
+            "(`--setting-sources project,local`) on a machine whose user "
+            "settings carry it, `--bg` exits 1 printing \"--bg with "
+            "bypassPermissions requires accepting the disclaimer first. "
+            "Acceptance is kept in your user settings, which this launch does "
+            "not read. Launch again with user settings on.\" It does the same "
+            "with the key in the child's own `--settings` file. With the key "
+            "only in the tree's `.claude/settings.local.json`, it starts, but "
+            "the child runs `default`. With `--setting-sources "
+            "user,project,local` it starts and runs `bypassPermissions`, and an "
+            "`enabledPlugins: {<id>: false}` in `--settings` takes the user's "
+            "plugin back out of the skill listing. A wake (`--bg --resume`) of "
+            "a session saved with bypassPermissions and setting sources "
+            "without `user` is accepted, but the woken turns run `default`. "
+            "Flags passed on that wake start a copy instead (\"keeps its own "
+            "saved options, so the flags you passed started a copy\"). The "
+            "lean shape worked from 2.1.306 to 2.1.312: the job records on the "
+            "maintainer's machine hold 43 such children, the last from "
+            "2026-10-29. Which release changed it was not measured."
+        ),
+        used_by=(
+            "child_profile.lean_args (BYPASS_LEAN_FLAGS), child_mode.choose "
+            "(where the acceptance is looked for), dispatch._bypass_way_out, "
+            "sessions.wake (refuses the old shape)"
+        ),
+        verified="2.1.321 on 2026-11-09",
+        how=(
+            "tools/measure_bypass_lean.py (#822) against the installed binary; "
+            "the refusal and the user-settings arm are re-checked by "
+            "tests/live/test_claude_cli_live.py"
+        ),
     ),
     Assumption(
         key="daemon-spare-pool",
