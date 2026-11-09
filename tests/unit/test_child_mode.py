@@ -14,19 +14,30 @@ from mnemo.core.sessions import inbound_policy
 PARENT = "11111111-2222-3333-4444-555555555555"
 
 
-def _home(tmp_path: Path, mode: str = "bypassPermissions") -> Path:
-    """A config dir holding the parent's transcript, last turn in *mode*."""
+def _home(tmp_path: Path, mode: str = "bypassPermissions", *, consent: bool = True) -> Path:
+    """A config dir holding the parent's transcript, last turn in *mode*.
+
+    With *consent*, its user settings record the bypass disclaimer as accepted,
+    as a machine that ever ran ``--dangerously-skip-permissions`` does (#822).
+    """
     home = tmp_path / "claude-home"
     transcript = home / "projects" / "C--repo" / f"{PARENT}.jsonl"
     transcript.parent.mkdir(parents=True)
     lines = [{"type": "user", "cwd": str(tmp_path), "permissionMode": "auto"},
              {"type": "user", "permissionMode": mode}]
     transcript.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    if consent:
+        # Merged, so a test that wrote this file first keeps what it wrote.
+        settings = home / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+        settings.write_text(json.dumps({**data, child_mode.CONSENT_KEY: True}),
+                            encoding="utf-8")
     return home
 
 
-def _choose(tmp_path: Path, cfg=None, *, env=None, mode="bypassPermissions", managed=()):
-    home = _home(tmp_path, mode)
+def _choose(tmp_path: Path, cfg=None, *, env=None, mode="bypassPermissions", managed=(),
+            consent=True):
+    home = _home(tmp_path, mode, consent=consent)
     tree = tmp_path / "tree"
     tree.mkdir(exist_ok=True)
     env = {"CLAUDE_CODE_SESSION_ID": PARENT} if env is None else env
@@ -115,6 +126,47 @@ def test_bypass_disabled_by_a_setting_falls_back_to_auto_and_says_so(tmp_path, w
     assert got.mode is None
     assert str(path) in got.note
     assert "disableBypassPermissionsMode" in got.note
+
+
+# -- the disclaimer's acceptance (#822) ----------------------------------------------
+
+
+def test_no_recorded_acceptance_falls_back_to_auto_and_says_where_it_looked(tmp_path) -> None:
+    """Measured on 2.1.321: without it ``--bg`` refuses a bypass child, so asking
+    for bypass would spawn nothing at all."""
+    got = _choose(tmp_path, consent=False)
+
+    assert got.mode is None
+    assert child_mode.CONSENT_KEY in got.note
+    assert str(tmp_path / "claude-home" / "settings.json") in got.note
+
+
+def test_acceptance_in_managed_policy_counts(tmp_path) -> None:
+    managed = tmp_path / "managed" / "managed-settings.json"
+    managed.parent.mkdir()
+    managed.write_text(json.dumps({child_mode.CONSENT_KEY: True}), encoding="utf-8")
+
+    assert _choose(tmp_path, consent=False, managed=[managed]).mode == "bypassPermissions"
+
+
+@pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
+def test_acceptance_only_in_the_tree_does_not_count(tmp_path, name) -> None:
+    """Measured: with it only in the tree's local settings the child starts but
+    runs ``default``, and stops at its first prompt with nobody to answer."""
+    path = tmp_path / "tree" / ".claude" / name
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({child_mode.CONSENT_KEY: True}), encoding="utf-8")
+
+    assert _choose(tmp_path, consent=False).mode is None
+
+
+@pytest.mark.parametrize("value", [False, None])
+def test_acceptance_set_to_false_is_not_acceptance(tmp_path, value) -> None:
+    home = _home(tmp_path, consent=False)
+    (home / "settings.json").write_text(json.dumps({child_mode.CONSENT_KEY: value}),
+                                        encoding="utf-8")
+
+    assert child_mode.bypass_accepted_in(home, managed=()) is None
 
 
 def test_bypass_left_enabled_is_not_read_as_disabled(tmp_path) -> None:
@@ -245,6 +297,14 @@ def test_a_woken_child_is_resumed_without_a_mode_flag(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(wake.subprocess, "run", fake_run)
     assert wake._resume(PARENT, "hi", cwd=str(tmp_path), timeout=5, child=None) is None
     assert calls == [["claude", "--bg", "--resume", PARENT, "hi"]]
+
+
+def test_the_profile_and_the_mode_spell_bypass_the_same_way() -> None:
+    """``child_profile`` keeps its own copy so an argv builder need not import a
+    transcript reader; the copies must not drift (#822)."""
+    from mnemo.core import child_profile
+
+    assert child_profile.BYPASS_MODE == child_mode.BYPASS_MODE
 
 
 # -- no forging -------------------------------------------------------------------

@@ -484,6 +484,72 @@ def test_full_profile_child_resolves_the_machine_default(
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
+def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -> None:
+    """``bg-bypass-needs-user-settings``: refused lean, started with user settings.
+
+    Two halves, against the installed binary. The lean flags as dispatch passed
+    them before #822 are refused before anything starts. The flags dispatch
+    passes now start a child that runs ``bypassPermissions``. Both need the
+    disclaimer accepted in user settings, which a machine that never ran bypass
+    has not done, so that machine skips rather than failing for the wrong
+    reason. A plain directory, not a fresh git repo: ``--bg`` does not trust a
+    new repository ("Workspace not trusted"). One haiku child, one word.
+    """
+    from mnemo.core import child_mode
+
+    key = "bg-bypass-needs-user-settings"
+    bypass = child_profile.BYPASS_MODE
+    if child_mode.bypass_accepted_in(real_claude) is None:
+        pytest.skip("the bypass disclaimer was never accepted in user settings here")
+
+    old = tmp_path / "old-shape"
+    old.mkdir()
+    refused = subprocess.run(
+        ["claude", "--bg", "--permission-mode", bypass, *child_profile.LEAN_FLAGS, PROMPT],
+        cwd=old, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60,
+    )
+    said = (refused.stderr or refused.stdout).strip()
+    if refused.returncode == 0:
+        started = claude_cli.short_id_from(refused.stdout)
+        if started:
+            subprocess.run(["claude", "stop", started], capture_output=True, timeout=60)
+            subprocess.run(["claude", "rm", started], capture_output=True, timeout=60)
+    assert refused.returncode != 0 and claude_cli.BYPASS_REFUSAL in said, (
+        f"{key}: the pre-#822 lean shape in bypass was not refused as measured "
+        f"(exit {refused.returncode}: {said[:300]!r}). If the CLI starts it again, "
+        "the user settings a bypass child now loads may no longer be needed"
+    )
+
+    tree = tmp_path / "new-shape"
+    tree.mkdir()
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku",
+                                        permission_mode=bypass)
+        state_path = real_claude / "jobs" / short_id / "state.json"
+        finished = _until(
+            lambda: (lambda d: d if d and d.get("state") in ("done", "stopped")
+                     and d.get("linkScanPath") else None)(_state(state_path)),
+            seconds=180,
+        )
+        assert finished, f"{key}: child never finished: {_state(state_path)}"
+        flags = finished.get("respawnFlags") or []
+        assert "user,project,local" in flags, f"{key}: respawnFlags={flags!r}"
+        from mnemo.core.sessions import inbound_policy
+
+        mode = inbound_policy.last_mode(Path(finished["linkScanPath"]))
+        assert mode == bypass, (
+            f"{key}: a lean child with user settings ran {mode!r}, not {bypass}; "
+            "the acceptance is no longer read from user settings, or a bypass "
+            "child is downgraded for another reason"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+
+
 def _load_user_servers() -> dict:
     """``~/.claude.json``'s ``mcpServers``, or ``{}``. Never raises."""
     try:
