@@ -28,6 +28,16 @@ itself (#813). It is what the doctor check prints in its hint — a command
 that runs as printed, where ``--repos <repo_path>`` asked for a checkout the
 doctor never saw. Called with neither, this is a usage error and exits 2:
 "nothing ran" must not read as "nothing to migrate".
+
+A sync **satellite** may add files but never take a tracked one away, so
+there a move becomes a copy (#821): the next sync publishes the new file and
+restores the old one, and from then on every machine holds both and every
+re-run reports a collision. On a satellite nothing moves — the command says
+which machine the move belongs on and exits 1; ``--dry-run`` still previews.
+The other half is cleaning up after a move that already went wrong: a source
+whose target exists *with the same bytes* is the leftover of an earlier move,
+not a conflict, and is removed with its citations repointed. A source whose
+content differs is still a collision, skipped and reported.
 """
 from __future__ import annotations
 
@@ -40,6 +50,25 @@ from mnemo.cli.commands.doctor_checks.orphan_worktree_briefings import worktree_
 from mnemo.cli.parser import command
 from mnemo.core import agent as agent_mod
 from mnemo.core.migrations import briefing_citations as citations
+from mnemo.core.sync import roles
+from mnemo.core.sync import state as sync_state
+
+
+def primary_label(vault: Path) -> str:
+    """How to name the machine a move belongs on: ``the primary 'mac'``."""
+    try:
+        name = sync_state.primary_of(vault)
+    except Exception:  # noqa: BLE001 — a label must always come back
+        name = None
+    return f"the primary {name!r}" if name else "the primary"
+
+
+def _same_bytes(a: Path, b: Path) -> bool:
+    """Whether two files hold the same content. Unreadable is "no"."""
+    try:
+        return a.is_file() and b.is_file() and a.read_bytes() == b.read_bytes()
+    except OSError:
+        return False
 
 
 @command("migrate-worktree-briefings")
@@ -71,6 +100,9 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
             canonicals.append(name)
 
     moves: list[tuple[Path, Path]] = []
+    #: (source, target) where the target already holds the source's bytes:
+    #: what an earlier move left behind (#821).
+    leftovers: list[tuple[Path, Path]] = []
     collisions: list[Path] = []
     siblings: list[tuple[Path, str]] = []
 
@@ -97,7 +129,9 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
             target_dir = bots_root / canonical / "briefings" / "sessions"
             for src in sorted(sessions.glob("*.md")):
                 target = target_dir / src.name
-                if target.exists():
+                if _same_bytes(src, target):
+                    leftovers.append((src, target))
+                elif target.exists():
                     collisions.append(src)
                 else:
                     moves.append((src, target))
@@ -109,9 +143,25 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
             f"not a worktree of {canonical!r}"
         )
 
-    if not moves and not collisions:
+    if not moves and not leftovers and not collisions:
         print("nothing to migrate")
         return 0
+
+    # A satellite may never take a tracked file away: sync would publish the
+    # new copy and restore the old one (#821). Refuse before touching a file
+    # or a citation; a preview is still a preview.
+    satellite = (moves or leftovers) and roles.is_satellite(vault)
+    if satellite and not dry_run:
+        for src in collisions:
+            print(f"collision: skipped {src} (target with same name already exists)")
+        print(
+            f"error: this machine is a sync satellite, so nothing was moved "
+            f"({len(moves)} to move, {len(leftovers)} leftover(s) to remove): sync "
+            f"restores whatever a satellite removes, which would leave each briefing "
+            f"under both names on every machine. Run this on {primary_label(vault)}.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Hoisted: ensure each unique target parent exists once, not per file.
     if moves and not dry_run:
@@ -126,8 +176,21 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
             shutil.move(str(src), str(target))
             print(f"moved {src.name} -> {target.parent}")
 
+    for src, target in leftovers:
+        if dry_run:
+            print(f"would remove {src} (identical to {target})")
+        else:
+            src.unlink()
+            print(f"removed {src.name} (identical copy already in {target.parent})")
+
     for src in collisions:
         print(f"collision: skipped {src} (target with same name already exists)")
+
+    if satellite:
+        print(
+            f"note: this machine is a sync satellite — without --dry-run nothing "
+            f"moves here; run it on {primary_label(vault)}."
+        )
 
     # The move is the easy half (#228). Everything that cites a briefing by
     # path — rule frontmatter, evidence quotes, wikilinks, the extraction
@@ -135,11 +198,13 @@ def cmd_migrate_worktree_briefings(args: argparse.Namespace) -> int:
     # indexes read the project name out of that path. Repair them in the same
     # breath, and on --dry-run at least report the blast radius so the choice
     # is informed before anything moves.
-    path_map = citations.build_path_map(moves, vault)
+    # A removed leftover is a move whose first half already happened.
+    relocated = moves + leftovers
+    path_map = citations.build_path_map(relocated, vault)
     plan = citations.plan_citations(vault, path_map)
 
     if plan.is_empty():
-        if moves and not dry_run:
+        if relocated and not dry_run:
             _rebuild(vault)
         return 0
 
