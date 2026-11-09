@@ -104,7 +104,12 @@ jobs:
           # PyInstaller cannot cross-compile, so an Intel build needs an Intel
           # runner; there is no arm64 substitute.
           - { os: macos-15-intel, target: darwin-x64 }
-          - { os: ubuntu-latest, target: linux-x64 }
+          # ubuntu-24.04, not ubuntu-latest: a PyInstaller binary runs only on
+          # a glibc at least as new as the one it was built against, and
+          # ubuntu-latest became 26.04 (#816). 1.14.1's Linux binary was built
+          # on 24.04; raising that floor should be a decision, not something
+          # a label change does on its own.
+          - { os: ubuntu-24.04, target: linux-x64 }
           - { os: windows-latest, target: win-x64 }
     runs-on: ${{ matrix.os }}
     steps:

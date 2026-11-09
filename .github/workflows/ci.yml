@@ -21,11 +21,20 @@ jobs:
         # a push to master keeps all five, so a break on a middle version is
         # still caught, one merge later. Ubuntu keeps all five on PRs: Linux
         # runners are not the bottleneck.
-        exclude: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"macos-latest","python-version":"3.9"},{"os":"macos-latest","python-version":"3.10"},{"os":"macos-latest","python-version":"3.11"}]') || fromJSON('[]') }}
-        # 3.13 on Linux only: it moved pathlib's concrete classes into
-        # pathlib._local, which broke a test no job here could see (#729).
-        # One Linux job costs nothing that queues; a macOS one would.
+        #
+        # Linux 3.8 and 3.9 are excluded on both events and run on
+        # ubuntu-24.04 instead, below. By 2026-11-08 ubuntu-latest was Ubuntu
+        # 26.04, for which actions/python-versions publishes neither, and
+        # setup-python failed on both within five seconds (#816).
+        exclude: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"macos-latest","python-version":"3.9"},{"os":"macos-latest","python-version":"3.10"},{"os":"macos-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.8"},{"os":"ubuntu-latest","python-version":"3.9"}]') || fromJSON('[{"os":"ubuntu-latest","python-version":"3.8"},{"os":"ubuntu-latest","python-version":"3.9"}]') }}
         include:
+          - os: ubuntu-24.04
+            python-version: '3.8'
+          - os: ubuntu-24.04
+            python-version: '3.9'
+          # 3.13 on Linux only: it moved pathlib's concrete classes into
+          # pathlib._local, which broke a test no job here could see (#729).
+          # One Linux job costs nothing that queues; a macOS one would.
           - os: ubuntu-latest
             python-version: '3.13'
 
