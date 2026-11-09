@@ -202,6 +202,11 @@ class Dispatched:
     #: The ``--effort`` this child was spawned with, or ``None`` for the
     #: child's default (#351). Same reason as ``model`` for being recorded.
     effort: str | None = None
+    #: The ``--advisor`` this child was spawned with, or ``None`` for none
+    #: (#818). Next to ``model`` because the two together are the arm a
+    #: readout compares; afterwards ``Session.advisor`` reads it back off
+    #: ``respawnFlags``.
+    advisor: str | None = None
     #: What this child may publish without asking, as rendered into its
     #: prompt (#317): ``()`` for nothing, the unchanged default.
     may: tuple[str, ...] = ()
@@ -1065,6 +1070,43 @@ _short_id_from = claude_cli.short_id_from
 #: never intent.
 READ_ONLY_TOOLS = ("Edit", "Write", "NotebookEdit")
 
+#: Said when an advisor meets Grok (#818). Grok Build has no advisor tool, so
+#: the flag would be dropped, and a child the maintainer asked to be advised
+#: would run unadvised without a word.
+GROK_NO_ADVISOR = ("--advisor: Grok children have no advisor — it is a Claude "
+                   "Code tool; dispatch them with --agent claude")
+
+
+def check_advisor(model: str | None, advisor: str | None, *, where: str = "--advisor") -> None:
+    """Refuse an advisor no child could use, before anything exists (#818).
+
+    *advisor* is one token, checked by :data:`contracts.MODEL_RE` exactly as
+    a piece's ``model:`` is — never against a list of known ids, which would
+    refuse a model that works. Then the pairing: Claude Code starts a
+    background child whose advisor ranks below its model **without** the
+    advisor, and nothing tells the spawner (``bg-advisor-flag``), so a pair
+    :func:`claude_cli.advisor_ranks_below` can prove inverted is refused here,
+    the way an unknown effort is. What it cannot prove — a full id, or a
+    child on the machine's default model — passes, and the child's own
+    transcript is where an unused advisor shows (no ``advisor_message``).
+
+    *where* names the flag or field in the message. An empty *advisor* is
+    none, as an empty model or effort is.
+    """
+    if not advisor:
+        return
+    if not contracts.MODEL_RE.match(advisor):
+        raise DispatchError(
+            f"{where}: {advisor!r} is not a model id — it takes one `--advisor` "
+            "value (an alias like `opus`, or a full id), not a sentence"
+        )
+    if claude_cli.advisor_ranks_below(model, advisor):
+        raise DispatchError(
+            f"{where}: {advisor} ranks below the child's model {model}, and Claude "
+            "Code would start the child without it and say nothing; name an "
+            f"advisor at or above {model}"
+        )
+
 
 def spawn_child(
     prompt: str, *, cwd: Path | str, model: str | None = None, lean: bool = True,
@@ -1072,6 +1114,7 @@ def spawn_child(
     settings: Mapping[str, Any] | None = None,
     agent: str = agent_cli.CLAUDE, home: Path | str | None = None,
     permission_mode: str | None = None,
+    advisor: str | None = None,
 ) -> str:
     r"""Start a detached child in *cwd*. Returns its short id, or ``""``.
 
@@ -1210,8 +1253,21 @@ def spawn_child(
     CLI still refuses the mode, the error names mnemo's way out
     (``dispatch.childMode: auto``, or ``--full-profile``) after the CLI's own
     sentence.
+
+    **The advisor (#818).** *advisor* is passed as ``--advisor <model>``
+    right after ``--model``, and omitted when ``None`` — the argv and the
+    settings file are then byte-identical to a dispatch that never heard of
+    it. The flag rather than ``advisorModel`` in the settings file, though
+    both reach a ``--bg`` child: ``respawnFlags`` records the flag, so
+    ``Session.advisor`` reads it back the way it reads the model, and a wake
+    keeps it (``bg-advisor-flag``). Checked by :func:`check_advisor` before
+    anything runs, because Claude Code starts a background child whose
+    advisor ranks below its model *without* the advisor and says nothing.
+    Grok has no advisor: :func:`check_grok` refuses one.
     """
     if agent == agent_cli.GROK:
+        if advisor:
+            raise DispatchError(GROK_NO_ADVISOR)
         return _spawn_grok(prompt, cwd=cwd, model=model, effort=effort,
                            read_only=read_only, home=home)
     if effort and effort not in claude_cli.EFFORT_LEVELS:
@@ -1219,6 +1275,7 @@ def spawn_child(
             f"unknown effort {effort!r}: "
             f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}"
         )
+    check_advisor(model, advisor)
     args = ["claude", "--bg"]
     if permission_mode:
         args += ["--permission-mode", permission_mode]
@@ -1234,6 +1291,8 @@ def spawn_child(
         args += ["--disallowedTools", *READ_ONLY_TOOLS]
     if model:
         args += ["--model", model]
+    if advisor:
+        args += ["--advisor", advisor]
     if effort:
         args += ["--effort", effort]
     from mnemo.core import config
@@ -1402,6 +1461,7 @@ def grok_vocabulary(home: Path | str) -> GrokVocabulary | None:
 def check_grok(
     model: str | None = None, effort: str | None = None, *,
     home: Path | str | None = None, read_only: bool = False,
+    advisor: str | None = None,
 ) -> Path:
     """Refuse what a Grok child cannot be, before any worktree exists.
 
@@ -1410,7 +1470,8 @@ def check_grok(
     :class:`DispatchError` saying what to do when: ``grok`` is not on ``PATH``; the home
     does not exist or holds no login; *effort* is not one Grok parses; or
     the home's own model list (:func:`grok_vocabulary`) has no *model*, or
-    the model it would run does not take *effort*.
+    the model it would run does not take *effort*; or an *advisor* is named
+    at all (#818: :data:`GROK_NO_ADVISOR`).
 
     *read_only* is no reason to refuse (#718): :func:`_spawn_grok` marks the
     session and mnemo's PreToolUse hook closes its editing tools.
@@ -1423,6 +1484,8 @@ def check_grok(
     from mnemo.core.grok import acp
     from mnemo.core.grok import paths as grok_paths
 
+    if advisor:
+        raise DispatchError(GROK_NO_ADVISOR)
     if effort and effort not in acp.EFFORTS:
         raise DispatchError(
             f"--effort: Grok takes no effort {effort!r}; it takes {', '.join(acp.EFFORTS)}"
@@ -1463,7 +1526,7 @@ def check_grok(
 def check_grok_contract(
     contract: contracts.Contract, *, model: str | None = None,
     effort: str | None = None, read_only: bool = False,
-    home: Path | str | None = None,
+    home: Path | str | None = None, advisor: str | None = None,
 ) -> Path:
     """:func:`check_grok` for every piece, as each would be spawned. Before any tree.
 
@@ -1471,17 +1534,35 @@ def check_grok_contract(
     decomposed to be built together, and half of them on the wrong footing
     is the merge the contract exists to prevent.
 
-    The dispatch-wide *model* and *effort* are checked only where a piece
-    takes them: a ``--model`` every piece overrides spawns nothing.
+    The dispatch-wide *model*, *effort* and *advisor* are checked only where
+    a piece takes them: a ``--model`` every piece overrides spawns nothing.
     """
     resolved = check_grok(home=home)
     for piece in contract.pieces:
         try:
             check_grok(piece.model or model, piece.effort or effort, home=resolved,
-                       read_only=piece_read_only(piece, read_only))
+                       read_only=piece_read_only(piece, read_only),
+                       advisor=piece.advisor or advisor)
         except DispatchError as exc:
             raise DispatchError(f"{piece.slug}: {exc}") from exc
     return resolved
+
+
+def check_contract_advisors(
+    contract: contracts.Contract, *, model: str | None = None,
+    advisor: str | None = None,
+) -> None:
+    """:func:`check_advisor` for every piece, as each would be spawned (#818).
+
+    Before any tree, and for the whole contract: one piece whose advisor
+    would be dropped refuses them all, as :func:`check_grok_contract` does.
+    """
+    for piece in contract.pieces:
+        try:
+            check_advisor(piece.model or model, piece.advisor or advisor,
+                          where="advisor" if piece.advisor else "--advisor")
+        except DispatchError as exc:
+            raise DispatchError(f"{piece.slug}: {exc}") from exc
 
 
 def _spawn_grok(
@@ -1580,6 +1661,7 @@ def _spawn_into(
     settings: Mapping[str, Any] | None = None,
     agent: str = agent_cli.CLAUDE,
     home: Path | str | None = None,
+    advisor: str | None = None,
 ) -> Dispatched:
     """Spawn *prompt*'s child in *tree*, rolling the tree back only if none started.
 
@@ -1603,13 +1685,19 @@ def _spawn_into(
     *agent* ``grok`` takes :func:`_spawn_grok_into` instead.
     """
     if agent == agent_cli.GROK:
+        if advisor:
+            remove_worktree(tree, repo_root=repo_root, branch=branch)
+            raise DispatchError(GROK_NO_ADVISOR)
         return _spawn_grok_into(
             target, tree, prompt, repo_root=repo_root, branch=branch, model=model,
             may=may, effort=effort, read_only=read_only, home=home,
         )
     # Only when given, so every other caller hands the chokepoint exactly
-    # the call it always did (#453: nothing changes for non-twin children).
+    # the call it always did (#453: nothing changes for non-twin children,
+    # #818: nor for a child with no advisor).
     extra: Dict[str, Any] = {"settings": settings} if settings else {}
+    if advisor:
+        extra["advisor"] = advisor
     from mnemo.core import child_mode, config
 
     mode = child_mode.choose(config.load_config(), cwd=tree)
@@ -1624,7 +1712,7 @@ def _spawn_into(
         return Dispatched(
             issue=target, worktree=tree, short_id="", warning=str(exc),
             model=model, effort=effort, may=may, read_only=read_only,
-            permission_mode=mode.mode, mode_note=mode.note,
+            permission_mode=mode.mode, mode_note=mode.note, advisor=advisor,
         )
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
@@ -1644,7 +1732,7 @@ def _spawn_into(
     return Dispatched(
         issue=target, worktree=tree, short_id=short_id, warning=warning,
         model=model, effort=effort, may=may, read_only=read_only,
-        permission_mode=mode.mode, mode_note=mode.note,
+        permission_mode=mode.mode, mode_note=mode.note, advisor=advisor,
     )
 
 
@@ -1717,6 +1805,7 @@ def dispatch_issue(
     siblings: Sequence[Issue] = (),
     agent: str = agent_cli.CLAUDE,
     home: Path | str | None = None,
+    advisor: str | None = None,
 ) -> Dispatched:
     """Dispatch one issue: read it, make its tree, spawn its child.
 
@@ -1734,11 +1823,18 @@ def dispatch_issue(
 
     *agent* ``grok`` spawns the child in Grok's leader under *home*; what
     Grok cannot take is refused by :func:`check_grok` before the tree exists.
+
+    *advisor* (#818) is checked by :func:`check_advisor` before the issue is
+    read, and passed only when given.
     """
-    grok = {}
+    grok: Dict[str, Any] = {}
     if agent == agent_cli.GROK:
-        home = check_grok(model, effort, home=home, read_only=read_only)
+        home = check_grok(model, effort, home=home, read_only=read_only,
+                          advisor=advisor)
         grok = {"agent": agent, "home": home}
+    check_advisor(model, advisor)
+    if advisor:
+        grok["advisor"] = advisor
     if details is None:
         details = fetch(issue, repo_root=repo_root)  # before any git state exists
     tree = ensure_worktree(issue, repo_root=repo_root)
@@ -1764,6 +1860,7 @@ def dispatch_all(
     read_only: bool = False,
     agent: str = agent_cli.CLAUDE,
     home: Path | str | None = None,
+    advisor: str | None = None,
 ) -> list[Dispatched]:
     """Dispatch each issue, independently. One failure never strands the rest.
 
@@ -1795,15 +1892,20 @@ def dispatch_all(
     On Grok (*agent*), :func:`check_grok` runs once, first: what it refuses
     — no ``grok``, no login, a model the account does not offer — refuses
     every issue alike, so each is reported failed with its words and no
-    issue is read.
+    issue is read. An *advisor* :func:`check_advisor` refuses (#818) is the
+    same: one model and one advisor for the whole batch, so all or none.
     """
-    grok = {}
-    if agent == agent_cli.GROK:
-        try:
-            home = check_grok(model, effort, home=home, read_only=read_only)
-        except DispatchError as exc:
-            return [Dispatched(issue=issue, error=str(exc), agent=agent) for issue in issues]
-        grok = {"agent": agent, "home": home}
+    grok: Dict[str, Any] = {}
+    try:
+        if agent == agent_cli.GROK:
+            home = check_grok(model, effort, home=home, read_only=read_only,
+                              advisor=advisor)
+            grok = {"agent": agent, "home": home}
+        check_advisor(model, advisor)
+    except DispatchError as exc:
+        return [Dispatched(issue=issue, error=str(exc), agent=agent) for issue in issues]
+    if advisor:
+        grok["advisor"] = advisor
     batch: list[tuple[int, Issue | None, str]] = []
     for issue in issues:
         try:
@@ -1840,6 +1942,7 @@ def dispatch_piece(
     read_only: bool = False,
     agent: str = agent_cli.CLAUDE,
     home: Path | str | None = None,
+    advisor: str | None = None,
 ) -> Dispatched:
     """Dispatch one contract piece: make its tree, spawn its child.
 
@@ -1854,7 +1957,8 @@ def dispatch_piece(
     knowing what each piece is, and the flag is a blanket applied at the
     command line. A blanket that overrode a considered per-piece choice would
     make the field unusable. *effort* resolves the same way, for the same
-    reason (#351).
+    reason (#351), and so does *advisor* (#818): a piece's ``advisor:`` wins
+    over ``--advisor``, exactly as ``model:`` wins over ``--model``.
 
     *may* resolves the same way, with one difference: a piece's ``may: none``
     is ``()``, not absent, and still wins — so a contract can withhold from
@@ -1864,11 +1968,16 @@ def dispatch_piece(
     """
     target = f"c-{piece.slug}"
     granted = piece_grant(piece, may)
-    grok = {}
+    chosen = piece.advisor or advisor
+    grok: Dict[str, Any] = {}
     if agent == agent_cli.GROK:
         home = check_grok(piece.model or model, piece.effort or effort, home=home,
-                          read_only=read_only)
+                          read_only=read_only, advisor=chosen)
         grok = {"agent": agent, "home": home}
+    check_advisor(piece.model or model, chosen,
+                  where="advisor" if piece.advisor else "--advisor")
+    if chosen:
+        grok["advisor"] = chosen
     tree = ensure_worktree(target, repo_root=repo_root, feature=feature)
     return _spawn_into(
         target, tree,
@@ -1900,6 +2009,7 @@ def dispatch_contract(
     read_only: bool = False,
     agent: str = agent_cli.CLAUDE,
     home: Path | str | None = None,
+    advisor: str | None = None,
 ) -> list[Dispatched]:
     """Dispatch every piece of a contract, independently.
 
@@ -1913,23 +2023,27 @@ def dispatch_contract(
     construction (separate trees, separate branches), exactly as in
     :func:`dispatch_all`.
 
-    *model* and *effort* are the defaults for every piece that does not name
-    its own; see :func:`dispatch_piece` for why the piece wins.
+    *model*, *effort* and *advisor* are the defaults for every piece that
+    does not name its own; see :func:`dispatch_piece` for why the piece wins.
 
     On Grok (*agent*), every piece is checked (:func:`check_grok_contract`)
     before the first tree exists, and one piece Grok cannot run raises
-    :class:`DispatchError` for the whole contract.
+    :class:`DispatchError` for the whole contract. Every piece's advisor is
+    checked the same way (:func:`check_contract_advisors`, #818).
     """
     if not contract.is_dispatchable:
         raise DispatchError(
             f"contract verdict is {contract.verdict!r}, not 'parallel' — "
             "this work does not divide; run it in one session"
         )
-    grok = {}
+    grok: Dict[str, Any] = {}
     if agent == agent_cli.GROK:
         home = check_grok_contract(contract, model=model, effort=effort,
-                                   read_only=read_only, home=home)
+                                   read_only=read_only, home=home, advisor=advisor)
         grok = {"agent": agent, "home": home}
+    check_contract_advisors(contract, model=model, advisor=advisor)
+    if advisor:
+        grok["advisor"] = advisor
 
     out: list[Dispatched] = []
     for piece in contract.pieces:

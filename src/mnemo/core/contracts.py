@@ -61,7 +61,7 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]+(?:\[[A-Za-z0-9]+\])?$")
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 _FIELD_RE = re.compile(
-    r"^-\s+\*\*(files|exposes|consumes|model|effort|may|read-only)\:\*\*\s*(.*)$"
+    r"^-\s+\*\*(files|exposes|consumes|model|advisor|effort|may|read-only)\:\*\*\s*(.*)$"
 )
 # "`sig` from owner" — the signature keeps its backticks (it is quoted
 # verbatim so a later diff of the contract is meaningful, and Task 5 quotes it
@@ -127,6 +127,12 @@ verdict: parallel
               the piece takes `mnemo dispatch --model`, or the machine's
               default when that is absent too. A budget, not an approach:
               say what to spend here, never how to build it.
+    advisor:  optional. A stronger model this piece's child may consult
+              mid-turn (Claude Code's advisor tool), as one `--advisor`
+              value: `opus`, `fable`, or a full id. It must rank at or above
+              the piece's model. Omit it and the piece takes
+              `mnemo dispatch --advisor`, or no advisor at all. A budget,
+              like `model`.
     effort:   optional. The `--effort` this piece's child runs at: one of
               low, medium, high, xhigh, max. Omit it and the piece takes
               `mnemo dispatch --effort`, or the child's default. A budget,
@@ -197,6 +203,7 @@ verdict: parallel
 - **exposes:** `literal_signature(arg) -> Type`
 - **consumes:** `other_signature(x) -> T` from other-piece
 - **model:** haiku            # optional; omit to take `mnemo dispatch --model`
+- **advisor:** opus           # optional; omit to take `mnemo dispatch --advisor`
 - **effort:** medium          # optional; omit to take `mnemo dispatch --effort`"""
 
 
@@ -228,6 +235,13 @@ class Piece:
     # and three that are mechanical, and the contract is the artifact where
     # that difference was already written down and reviewed.
     model: str | None = None
+    # The `--advisor` this piece's child may consult (#818): one model token,
+    # checked by `MODEL_RE` like `model`, with the same precedence — `None`
+    # takes `mnemo dispatch --advisor`, else no advisor. A budget too: it
+    # buys a second opinion from a stronger model, it does not say how to
+    # build. Whether it ranks at or above the piece's model is checked at
+    # dispatch, where the model `--model` supplies is known.
+    advisor: str | None = None
     # The `--effort` this piece's child runs at (#351), one of
     # `EFFORT_LEVELS`. Same shape and same precedence as `model`: `None`
     # takes the dispatch-wide flag, else the child's default.
@@ -397,6 +411,12 @@ def _validate(contract: Contract) -> None:
                 "a model id: model takes one `--model` value (an alias like "
                 "`haiku`, or a full id), not a sentence"
             )
+        if piece.advisor is not None and not MODEL_RE.match(piece.advisor):
+            raise ContractError(
+                f"piece {piece.slug!r} names advisor {piece.advisor!r}, which is "
+                "not a model id: advisor takes one `--advisor` value (an alias "
+                "like `opus`, or a full id), not a sentence"
+            )
         if piece.effort is not None and piece.effort not in EFFORT_LEVELS:
             # Refused here rather than passed through: the CLI ignores an
             # unknown level with a warning and runs the default (#351).
@@ -454,6 +474,7 @@ def parse_contract(path: Path | str) -> Contract:
     exposes: list[str] = []
     consumes: list[tuple[str, str]] = []
     model: str | None = None
+    advisor: str | None = None
     effort: str | None = None
     may: tuple[str, ...] | None = None
     read_only: bool | None = None
@@ -471,7 +492,8 @@ def parse_contract(path: Path | str) -> Contract:
             pieces.append(
                 Piece(
                     slug=slug, files=files, exposes=exposes, consumes=consumes,
-                    model=model, effort=effort, may=may, read_only=read_only,
+                    model=model, advisor=advisor, effort=effort, may=may,
+                    read_only=read_only,
                 )
             )
 
@@ -481,7 +503,7 @@ def parse_contract(path: Path | str) -> Contract:
             flush()
             slug = heading.group(1).strip()
             files, exposes, consumes = [], [], []
-            model, effort, may, read_only = None, None, None, None
+            model, advisor, effort, may, read_only = None, None, None, None, None
             continue
         matched = _FIELD_RE.match(line)
         if not matched or slug is None:
@@ -495,6 +517,11 @@ def parse_contract(path: Path | str) -> Contract:
             # line, so it falls back to the dispatch-wide default.
             cleaned = value.strip()
             model = None if _is_empty_list(cleaned) else cleaned
+        elif key == "advisor":
+            # Read like `model`: one value, and `none`/empty is no opinion —
+            # the dispatch-wide `--advisor`, else none.
+            cleaned = value.strip()
+            advisor = None if _is_empty_list(cleaned) else cleaned
         elif key == "effort":
             # Read like `model`; checked against the levels in validation.
             cleaned = value.strip()

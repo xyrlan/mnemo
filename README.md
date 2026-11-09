@@ -371,6 +371,10 @@ you deliver the one you chose. Only a delivered twin writes a briefing: the
 other's work never shipped, so it teaches the vault nothing.
 `tools/measure_child_pairs.py` reads the pairs back, and `--exclude
 human-input` leaves out a pair where you answered one twin and not the other.
+With `--model sonnet --advisor opus` the twins become two arms: one on Sonnet
+consulting an Opus advisor, one on Opus alone. `tools/measure_advisor_pairs.py`
+compares them on quality, cost and speed
+([details](docs/getting-started.md#giving-children-an-advisor)).
 
 When the unit of work is a feature rather than issues, ask any session to
 "decompose this for dispatch": the `decomposing-for-dispatch` skill writes a

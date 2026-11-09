@@ -1009,6 +1009,75 @@ mnemo does not choose the effort for you. Whether effort changes what a child
 delivers has not been measured yet, and a wrong heuristic here costs money on
 every child.
 
+### Giving children an advisor
+
+Claude Code's advisor tool lets a session on one model consult a stronger one
+mid-turn. `--advisor` gives it to every child of a dispatch, and it is off
+unless you name it:
+
+```bash
+mnemo dispatch 255 --model sonnet --advisor opus
+```
+
+What it sends: `--advisor opus` on the child's `claude --bg` command line,
+right after `--model`. Nothing else changes, and leave the flag off and the
+command and the child's settings file are byte for byte what they were. The
+child gets an `advisor` tool and decides itself when to call it; nothing
+forces or caps the calls. Each call sends the child's whole conversation to
+the advisor, uncached, at the advisor's price: a lean child's first call reads
+about 52,000 tokens, and that grows with the session. The advice comes back
+encrypted, so the transcript shows that a call was made and what it cost
+(an `advisor_message` entry under the response's `usage.iterations`), not
+what the advisor said. The advisor is an experimental Claude Code feature
+and Anthropic-API only.
+
+The value is one model token — an alias (`opus`, `fable`, `sonnet`) or a full
+id — and the advisor must rank at or above the child's model. Claude Code
+does not refuse a weaker one: it starts the child without the advisor and
+says nothing. So mnemo refuses the pairs it can prove are inverted, the
+aliases in the wrong order (`--model opus --advisor sonnet`), before anything
+spawns. A full id is not ranked, because the pairing table has exceptions
+(an Opus 4.8 child takes a Sonnet 5.5 advisor; an Opus 5.5 child does not). A
+Grok child has no advisor, so `--advisor` with `--agent grok` is refused.
+
+A contract piece may name its own with `- **advisor:** opus`, which wins over
+the flag the way `model:` does. `--dry-run` shows each child's pairing as
+`[sonnet, advisor opus]`. `mnemo session <short_id>` shows `advisor opus`,
+and `mnemo sessions --json` has an `advisor` field. That field holds what the
+child was given, which is not always what it used: a child whose advisor was
+dropped still lists the flag.
+
+mnemo does not recommend an advisor yet. The case for one is cost: a Sonnet
+child consulting Opus might deliver what an Opus child delivers for less. That
+is measured, not assumed. `--twins` with `--advisor` runs one issue as two
+blind arms with the same prompt: one twin on `--model` consulting the
+advisor, and one on the advisor's model alone.
+
+```bash
+mnemo dispatch 812 --twins --model sonnet --advisor opus
+mnemo twins show <pair>            # read both blind
+mnemo twins prefer <pair> A|B|tie  # then the arms are revealed
+PYTHONPATH=src python3 tools/measure_advisor_pairs.py
+```
+
+The readout prints, per pair and in total, which arm you preferred, each
+arm's tokens and API-price cost (the advisor's calls priced at its own rate),
+its wall-clock time, and how many advisor calls the advised twin made. It
+then gives a verdict against a bar written down before the first pair: the
+advised arm preferred or tied in at least 70% of at least six pairs, then
+better on cost or speed and no more than 15% worse on the other. A pair whose
+advised twin never called its advisor is listed apart, because it measured
+the cheaper model alone. So is a twin that stopped on a rate limit, which is
+left out of the speed figures because that time measures the account.
+
+One thing to keep out of the way while the pairs run: `/advisor` saves your
+choice as `advisorModel` in your user settings, and a child of a session in
+bypass mode reads user settings, because Claude Code requires it for bypass
+(see "A child runs in your session's permission class" below). A twin's own
+`--advisor` wins over that setting, but the twin meant to run alone would
+inherit it. The readout flags such a pair ("the alone twin called an advisor
+too"). Clear the setting with `/advisor off` before dispatching the pairs.
+
 ### Saying up front what a child may publish
 
 Ungranted, a child that finishes stops to ask "may I push / open a PR?", and

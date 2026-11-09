@@ -53,7 +53,13 @@ def _reveal(pair) -> None:
 
     for label, tag in zip(twins.LABELS, pair.order):
         twin = pair.twin(tag)
-        print(f"  {label} was {twin.short_id or '(id unknown)'}  {twin.tree}")
+        arm = ""
+        if pair.has_arms:
+            # Which arm, once the answer is in (#818): the arms are what the
+            # pair was run to tell apart, so they are revealed with the names.
+            model, advisor = pair.arm_of(tag)
+            arm = f"  [{model}{f', advisor {advisor}' if advisor else ''}]"
+        print(f"  {label} was {twin.short_id or '(id unknown)'}  {twin.tree}{arm}")
         # After the answer, like the names: what reached a twin mid-run is
         # for the measurement, not for the judgment (#453).
         found = twins.describe(pair.conditions.get(tag))

@@ -71,6 +71,44 @@ _V = f"{VERIFIED_AGAINST} on {VERIFIED_ON}"
 #: Checked against the installed binary by the ``bg-effort-flag`` live test.
 EFFORT_LEVELS: Tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
+#: The model aliases, lowest rank first, as the advisor pairing orders them
+#: (#818). Claude Code's advisor docs give the pairing as a table of versions
+#: — an Opus 4.8 session takes a Sonnet 5.5 advisor, an Opus 5.5 session does
+#: not — so only the *aliases* are ordered here: each resolves to its
+#: family's built-in default version, and among those the table is a plain
+#: order (Fable 5.2 takes only Fable, Opus 5.5 takes Fable and Opus 5+,
+#: Sonnet 5.5 takes those and Sonnet 5.5). A full id is never ranked: the
+#: table's exceptions live there, and a guess would refuse a pair that works.
+ADVISOR_ALIAS_RANK: Tuple[str, ...] = ("haiku", "sonnet", "opus", "fable")
+
+
+def _alias_rank(model: Optional[str]) -> Optional[int]:
+    """*model*'s place in :data:`ADVISOR_ALIAS_RANK`, or ``None``.
+
+    A context suffix does not change the model: ``opus[1m]`` is ranked as
+    ``opus``. Anything that is not a bare alias is ``None``.
+    """
+    if not model:
+        return None
+    alias = model.split("[", 1)[0].strip().lower()
+    try:
+        return ADVISOR_ALIAS_RANK.index(alias)
+    except ValueError:
+        return None
+
+
+def advisor_ranks_below(model: Optional[str], advisor: Optional[str]) -> bool:
+    """True when *advisor* provably ranks below the session *model* (#818).
+
+    Only for two aliases, the one case the pairing is a plain order
+    (:data:`ADVISOR_ALIAS_RANK`). ``False`` for everything it cannot prove: a
+    full id on either side, or no *model* — a child on the machine's default
+    — whose rank is not known before it starts.
+    """
+    child, adviser = _alias_rank(model), _alias_rank(advisor)
+    return child is not None and adviser is not None and adviser < child
+
+
 #: How ``--bg`` starts its refusal of a bypass child whose disclaimer
 #: acceptance it cannot see, in both of the sentences it has for that (#822).
 BYPASS_REFUSAL = "--bg with bypassPermissions requires accepting the disclaimer"
@@ -151,6 +189,56 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "cli dispatch --effort, sessions.jobs.Session.effort"
         ),
         verified="2.1.273 on 2026-09-16",
+    ),
+    Assumption(
+        key="bg-advisor-flag",
+        claim=(
+            "`claude --bg --model <m> --advisor <a> '<prompt>'` is accepted on "
+            "the lean profile, and `respawnFlags` records `--advisor` followed "
+            "by its value (Claude Code moves it first: `['--advisor', 'opus', "
+            "'--setting-sources', ..., '--model', 'sonnet']`). The advised child "
+            "gets an `advisor` tool and a `# Advisor Tool` section in its "
+            "context; the session decides when to call it. A call is an "
+            "`assistant` record holding a `server_tool_use` block named "
+            "`advisor` with an empty `input`, then an `advisor_tool_result` "
+            "whose content is `advisor_redacted_result` — the advice is "
+            "encrypted, not readable. Its cost is an entry of `message.usage."
+            "iterations` with `type: \"advisor_message\"` and the advisor's "
+            "own `model` (`claude-opus-5-5`), which the record's top-level "
+            "`usage` does **not** include: that is the sum of the `message` "
+            "iterations alone (measured 4 = 2+2 input, 45 = 26+19 output). "
+            "Every assistant record's own `model` stays the child's. The "
+            "advisor reads the child's whole context uncached: 51,631 input, "
+            "0 cache read, 426 output on a lean sonnet child's first turn "
+            "(59,150 on a full-profile one). An advisor ranked below the "
+            "child's model is **dropped without a word**: a lean `--model "
+            "sonnet --advisor claude-haiku-5-5` child exits 0, prints its id, "
+            "keeps `--advisor` in `respawnFlags`, and runs with no advisor "
+            "tool and no call — so `respawnFlags` says what was asked for, "
+            "not what ran, and dispatch refuses what it can prove inverted "
+            "(`advisor_ranks_below`). Not evidence of an advisor: a "
+            "top-level `advisorModel` on assistant records, and an "
+            "`advisor_20260301` tool marked `defer_loading` in "
+            "`api-request-shape`, both seen on a full-profile child spawned "
+            "with no advisor that had none and made no call. The "
+            "`advisorModel` settings key reaches a `--bg` child too (hand "
+            "measurement on the full profile); dispatch passes the flag "
+            "because `respawnFlags` shows it and a wake keeps it."
+        ),
+        used_by=(
+            "dispatch.spawn_child (--advisor), dispatch.check_advisor, "
+            "contracts (advisor:), cli dispatch --advisor, twins arms, "
+            "sessions.jobs.Session.advisor, tools/measure_advisor_pairs.py"
+        ),
+        verified="2.1.321 on 2026-11-09",
+        how=(
+            "hand measurement (#818): three plain `--bg` sonnet children "
+            "(flag, settings, none), then two lean ones through "
+            "`dispatch.spawn_child` (`sonnet` + `opus`, `sonnet` + "
+            "`claude-haiku-5-5`), transcripts and `state.json` read back; "
+            "the live test spawns the cheapest advised child and checks the "
+            "flag, the call and the iteration"
+        ),
     ),
     Assumption(
         key="jobs-state-json",
@@ -620,6 +708,35 @@ def require_short_id(stdout: str) -> str:
         if shown else "`claude --bg` exited 0 and printed nothing on stdout"
     )
     raise ContractBroken("bg-prints-short-id", observed)
+
+
+# --- the advisor in a transcript (`bg-advisor-flag`) --------------------------
+
+#: The ``usage.iterations`` type an advisor's turn is recorded under.
+ADVISOR_ITERATION = "advisor_message"
+
+
+def split_usage(usage: object) -> Tuple[Tuple[dict, ...], Tuple[dict, ...]]:
+    """One response's ``message.usage`` as ``(own, advisor)`` token entries.
+
+    *own* are the child's own model turns, *advisor* the ``advisor_message``
+    iterations, each carrying its ``model``. The top-level counts are the sum
+    of the ``message`` iterations alone, so a usage without ``iterations`` —
+    every response that called no server tool — is its own single entry, and
+    one with them is read iteration by iteration: adding the top level to the
+    advisor's would count nothing twice, but reading the top level alone
+    would lose the advisor's tokens entirely.
+    """
+    if not isinstance(usage, dict):
+        return (), ()
+    iterations = usage.get("iterations")
+    if not isinstance(iterations, list) or not iterations:
+        return (usage,), ()
+    own = tuple(it for it in iterations
+                if isinstance(it, dict) and it.get("type") != ADVISOR_ITERATION)
+    advisor = tuple(it for it in iterations
+                    if isinstance(it, dict) and it.get("type") == ADVISOR_ITERATION)
+    return own, advisor
 
 
 # --- the jobs directory ------------------------------------------------------
