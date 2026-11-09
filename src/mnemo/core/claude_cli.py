@@ -39,9 +39,11 @@ from typing import Optional, Tuple
 
 #: The ``claude --version`` the live test last passed against, and when.
 #: Bump both when it passes on a newer version; the live test warns when the
-#: installed version differs so this does not silently go stale.
-VERIFIED_AGAINST = "2.1.270"
-VERIFIED_ON = "2026-09-14"
+#: installed version differs so this does not silently go stale. Only the
+#: assumptions whose live tests passed in full carry it (``_V``); the others
+#: name their own version.
+VERIFIED_AGAINST = "2.1.321"
+VERIFIED_ON = "2026-11-09"
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,10 @@ BYPASS_REFUSAL = "--bg with bypassPermissions requires accepting the disclaimer"
 #: left out of the launch, which ``--full-profile`` puts back in.
 BYPASS_NO_USER_SETTINGS = "which this launch does not read"
 
+#: How ``--bg`` starts its refusal of a workspace nobody trusted, in all three
+#: of its sentences for that (#826, ``bg-workspace-trust``).
+TRUST_REFUSAL = "Workspace not trusted."
+
 #: The contract. Ordered as dispatch meets them: spawn, read back, watch, avoid.
 ASSUMPTIONS: Tuple[Assumption, ...] = (
     Assumption(
@@ -128,6 +134,47 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         ),
         used_by="dispatch.spawn_child",
         verified=_V,
+    ),
+    Assumption(
+        key="bg-workspace-trust",
+        claim=(
+            "`claude --bg` starts only in a workspace Claude Code trusts. "
+            "Anywhere else it exits 1 and starts no session, printing "
+            "\"Workspace not trusted. Run `claude` in <cwd> once and accept "
+            "the trust prompt, then retry.\" Trust is a `projects.<dir>."
+            "hasTrustDialogAccepted: true` in `~/.claude.json`, and the "
+            "binary's check looks for it in this order (`trusted_by` here). "
+            "Inside a git repository it looks first at the repository's "
+            "canonical root, which for a worktree is its main checkout, "
+            "wherever the worktree lies. Then it looks from the cwd up to "
+            "the repository's own root, never above it. Outside a "
+            "repository it looks at the cwd and every directory above it. "
+            "Accepting the prompt anywhere in a repository saves the entry "
+            "at that canonical root: \"trusting it trusts that whole "
+            "repository\". So a fresh `git init` is refused even inside a "
+            "trusted checkout's worktree, and a worktree of a trusted "
+            "checkout starts both inside the checkout's folder and outside "
+            "it. A plain directory starts only when it or a directory above "
+            "it is trusted. On the measuring machine a plain temp directory "
+            "started only through an old entry for the home directory. This "
+            "version's own refusal for home says it \"is trusted one session "
+            "at a time\", so a newer machine has no such entry (read in the "
+            "binary, not measured). `claude -p` is not "
+            "checked. `CLAUDE_CODE_SANDBOXED` turns the check off; mnemo "
+            "never sets it."
+        ),
+        used_by=(
+            "dispatch._spawn_into: a child's worktree is trusted through the "
+            "checkout dispatch runs from, and on a refusal the tree is removed "
+            "and the hint names that checkout; the live tests' trusted_tree"
+        ),
+        verified="2.1.321 on 2026-11-09",
+        how=(
+            "tools/measure_bg_trust.py (#826), one `--bg` launch per arm, and "
+            "the installed binary's own check, read; the live test is refused "
+            "in a fresh repository inside a trusted worktree and starts in a "
+            "worktree outside its checkout's folder"
+        ),
     ),
     Assumption(
         key="bg-prints-short-id",
@@ -150,12 +197,13 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "compose, the child runs on <id>, and `state.json` records the "
             "flags it was spawned with under `respawnFlags` — a list where "
             "`--model` is followed by its value (measured: a `--model haiku` "
-            "child whose transcript reads claude-haiku-4-5-20251001 on every "
-            "assistant record). When nothing is passed, whether a value "
+            "child whose transcript reads claude-haiku-5-5 on every assistant "
+            "record on 2.1.321, claude-haiku-4-5-20251001 on 2.1.270). When "
+            "nothing is passed, whether a value "
             "appears depends on the profile: a **full-profile** child "
             "resolves the machine default into it (`['--model', "
-            "'opus[1m]']`, and 23 of 23 children measured before the lean "
-            "profile existed), while a **lean** child (#270, the default) "
+            "'opus[1m]']` on 2.1.270, and 23 of 23 children measured before "
+            "the lean profile existed), while a **lean** child (#270, the default) "
             "passes its own `--settings` and so has no user-level default to "
             "resolve — it carries the profile flags and no `--model` at all. "
             "`Session.model` is therefore None for a lean child that named no "
@@ -163,7 +211,7 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "`model` is null on every child of either kind and is not read."
         ),
         used_by="dispatch.spawn_child (--model), sessions.jobs.Session.model",
-        verified=f"{VERIFIED_AGAINST} on 2026-09-14",
+        verified=_V,
     ),
     Assumption(
         key="bg-effort-flag",
@@ -188,7 +236,7 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "dispatch.spawn_child (--effort), contracts (effort:), "
             "cli dispatch --effort, sessions.jobs.Session.effort"
         ),
-        verified="2.1.273 on 2026-09-16",
+        verified=_V,
     ),
     Assumption(
         key="bg-advisor-flag",
@@ -252,7 +300,7 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "uuid, prefixed by the short id) and `intent` (the prompt) are "
             "present from the first write. `linkScanPath` and `cliVersion` "
             "are absent at spawn and filled in later; `needs` and "
-            "`suggestedReply` were not observed on this version at all. "
+            "`suggestedReply` were not observed at spawn on 2.1.270 at all. "
             "`~/.claude/jobs/pins.json` is a file sibling, not a session."
         ),
         used_by="sessions.jobs.read_sessions, delivery.find_worktree, "
@@ -324,7 +372,7 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "`--mcp-config`. Both are accepted alongside `--bg`. Handing "
             "mnemo's own hooks back with `--settings <file>` fires its "
             "SessionStart briefing, and its server with `--mcp-config <file>` "
-            "restores the three `mcp__mnemo__*` tools. Measured over three "
+            "restores the three `mcp__mnemo__*` tools. Measured on 2.1.270 over three "
             "`--bg` children per arm (one-word prompt, empty repo, first-turn "
             "total input read from each transcript): 55,180/58,285/58,287 on "
             "the full profile against 42,293/42,295/42,296 lean — ~16k tokens "
@@ -401,11 +449,13 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
             "mnemo reports it and retires nothing."
         ),
         used_by="doctor background_processes via sessions.residents.census",
-        verified=f"{VERIFIED_AGAINST} on 2026-09-14",
+        verified="2.1.270 on 2026-09-14",
         how=(
             "hand measurement (#280): daemon.log vs roster.json vs `ps`; the "
             "live test checks one idle spare after a spawn and that `stop` "
-            "ends the worker's process"
+            "ends the worker's process. On Windows, where the census does not "
+            "run, it checks only the second; that half passed on 2.1.321 "
+            "(2026-11-09)"
         ),
     ),
     Assumption(
@@ -592,7 +642,8 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         how=("hand measurement (#393) over ~/.claude/projects plus the "
              "installed binary's own switch; the sentences are re-checked "
              "against the binary by tests/live/test_claude_cli_live.py, "
-             "which needs no spawn for that one"),
+             "which needs no spawn for that one, and were still there on "
+             "2.1.321 (2026-11-09)"),
     ),
 )
 
@@ -737,6 +788,93 @@ def split_usage(usage: object) -> Tuple[Tuple[dict, ...], Tuple[dict, ...]]:
     advisor = tuple(it for it in iterations
                     if isinstance(it, dict) and it.get("type") == ADVISOR_ITERATION)
     return own, advisor
+
+
+# --- workspace trust (`bg-workspace-trust`) -----------------------------------
+
+
+def _norm(path: "Path | str") -> str:
+    """*path* as the trust check compares it: real, and case-folded where the
+    filesystem is (Windows keys are written with forward slashes)."""
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
+def _same(a: "Path | str", b: "Path | str") -> bool:
+    return _norm(a) == _norm(b)
+
+
+def git_root(cwd: "Path | str") -> Optional[Path]:
+    """The nearest directory at or above *cwd* holding a ``.git``, or ``None``.
+
+    A file counts as well as a directory: a worktree's ``.git`` is a file.
+    """
+    here = Path(os.path.abspath(cwd))
+    for directory in (here, *here.parents):
+        if (directory / ".git").exists():
+            return directory
+    return None
+
+
+def trust_root(cwd: "Path | str") -> Optional[Path]:
+    """Where Claude Code keeps the trust of *cwd*'s repository, or ``None``.
+
+    The repository's root, except for a worktree: there it is the main
+    checkout, read from the ``.git`` file's ``gitdir``, its ``commondir`` and
+    the ``gitdir`` that points back. A ``.git`` file whose links do not close
+    that loop (a submodule's, a hand-made one) is its own root, as the binary
+    treats it. ``None`` outside any repository.
+    """
+    root = git_root(cwd)
+    if root is None:
+        return None
+    marker = root / ".git"
+    if marker.is_dir():
+        return root
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+        if not text.startswith("gitdir:"):
+            return root
+        admin = Path(os.path.normpath(root / text[len("gitdir:"):].strip()))
+        common = Path(os.path.normpath(
+            admin / (admin / "commondir").read_text(encoding="utf-8").strip()))
+        back = (admin / "gitdir").read_text(encoding="utf-8").strip()
+    except OSError:
+        return root
+    if not _same(admin.parent, common / "worktrees") or not _same(admin / back, marker):
+        return root
+    return common.parent if common.name == ".git" else common
+
+
+def trusted_by(cwd: "Path | str", projects: object) -> Optional[str]:
+    """The ``~/.claude.json`` ``projects`` key that makes *cwd* trusted, or ``None``.
+
+    The rule of ``bg-workspace-trust``, as the 2.1.321 binary checks it before
+    a ``--bg`` launch: in a repository, :func:`trust_root` first, then from
+    *cwd* up to the repository's own root and never above; outside one, *cwd*
+    and every directory above it. *cwd* is taken through ``realpath`` first,
+    as the binary does. Keys are compared as paths, so a Windows key's
+    forward slashes and drive-letter case do not matter. Reads nothing:
+    *projects* is the caller's.
+    """
+    if not isinstance(projects, dict):
+        return None
+    trusted = {_norm(key): key for key, entry in projects.items()
+               if isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True}
+
+    def entry_for(directory: Path) -> Optional[str]:
+        return trusted.get(_norm(directory))
+
+    here = Path(os.path.realpath(cwd))
+    root = git_root(here)
+    if root is not None:
+        found = entry_for(trust_root(here) or root)
+        if found:
+            return found
+    for directory in (here, *here.parents):
+        found = entry_for(directory)
+        if found or (root is not None and _same(directory, root)):
+            return found
+    return None
 
 
 # --- the jobs directory ------------------------------------------------------

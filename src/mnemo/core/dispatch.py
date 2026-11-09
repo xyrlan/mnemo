@@ -1345,6 +1345,21 @@ def _bypass_way_out(said: str, *, lean: bool) -> str:
             f"it (#741, #822); {', or '.join(ways)}")
 
 
+def _trust_way_out(said: str, repo_root: Path | str) -> str:
+    """What to do when the CLI refused the child's worktree as untrusted (#826), or ``""``.
+
+    The CLI says to run ``claude`` in the worktree, which the rollback has just
+    removed. Claude Code trusts a worktree through the checkout it belongs to,
+    and accepting the prompt anywhere in a repository trusts all of it
+    (``bg-workspace-trust``), so the checkout dispatch ran from is the place.
+    """
+    if claude_cli.TRUST_REFUSAL not in said:
+        return ""
+    return (" — mnemo has removed that worktree again. Claude Code trusts a "
+            f"worktree through its checkout: run `claude` once in {repo_root}, "
+            "accept the trust prompt, and dispatch again")
+
+
 # --- grok ------------------------------------------------------------------
 
 #: Seconds Grok's leader gets to take a child's opening turn. Taking it is
@@ -1714,6 +1729,12 @@ def _spawn_into(
             model=model, effort=effort, may=may, read_only=read_only,
             permission_mode=mode.mode, mode_note=mode.note, advisor=advisor,
         )
+    except DispatchError as exc:
+        remove_worktree(tree, repo_root=repo_root, branch=branch)
+        way_out = _trust_way_out(str(exc), repo_root)
+        if way_out:
+            raise DispatchError(f"{exc}{way_out}") from exc
+        raise
     except BaseException:
         remove_worktree(tree, repo_root=repo_root, branch=branch)
         raise
