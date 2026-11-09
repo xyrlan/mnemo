@@ -45,7 +45,7 @@ def test_verified_against_is_a_version_triple() -> None:
 
 def test_the_assumptions_the_code_cites_exist() -> None:
     """A key cited by a failure path must resolve, or the failure itself fails."""
-    for key in ("bg-prints-short-id", "jobs-state-json"):
+    for key in ("bg-prints-short-id", "jobs-state-json", "answer-keeps-blocked-state"):
         assert claude_cli.assumption(key).key == key
     with pytest.raises(KeyError):
         claude_cli.assumption("no-such-assumption")

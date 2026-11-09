@@ -272,6 +272,34 @@ ASSUMPTIONS: Tuple[Assumption, ...] = (
         verified=_V,
     ),
     Assumption(
+        key="answer-keeps-blocked-state",
+        claim=(
+            "A prompt reaching a session rewrites its record as `{...previous, "
+            "detail: <the prompt, whitespace collapsed>, tempo: \"active\", "
+            "inFlight: <fresh>, needs: undefined}`, with no `state` key: "
+            "`state` stays what it was. The mid-turn updater then returns "
+            "early while `state` is `blocked`. So a session that asked "
+            "(`state=blocked, tempo=blocked`) and was answered reads "
+            "`state=blocked, tempo=active` for the whole turn the answer "
+            "starts, until the end-of-turn classifier writes a new pair. Every "
+            "literal `state: \"blocked\", tempo: ...` in the binary has "
+            "`tempo: \"blocked\"` (11 of 11). They include `trailing-q`, the "
+            "turn that ends in a plain-text question, and `blocked-marker`, "
+            "`ask-verb`, `awaiting-user` and `auth-prose`. So a `blocked` "
+            "state with any other tempo has been answered, and only `tempo` "
+            "says a human is needed. The one such record on this machine "
+            "(written by 2.1.303) has its `detail` equal to the maintainer's "
+            "typed prompt, written 0.62s after it "
+            "(`tools/measure_session_states.py`)."
+        ),
+        used_by="sessions.jobs.Session.is_blocked (why it reads `tempo` alone)",
+        verified="2.1.321 on 2026-11-09",
+        how=("hand reading of the installed binary's bundled JavaScript (#737), "
+             "the same shapes found in 2.1.319, the binary it replaced; "
+             "tests/live/test_claude_cli_live.py re-checks the three shapes "
+             "without a spawn"),
+    ),
+    Assumption(
         key="daemon-roster-pid",
         claim=(
             "`~/.claude/daemon/roster.json` has `workers[<short id>].pid`, an "
