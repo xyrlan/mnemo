@@ -245,3 +245,126 @@ def test_agents_refuses_a_path(name: str, tmp_path: Path, capsys, monkeypatch) -
     monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
     assert cli.main(["migrate-worktree-briefings", "--agents", name]) == 2
     assert "agent name" in capsys.readouterr().err
+
+
+# --- #821: a satellite may not move; an identical leftover is not a collision
+
+
+from mnemo.core.sync import roles  # noqa: E402
+from mnemo.core.sync import state as sync_state  # noqa: E402
+
+
+def _synced(vault: Path, machine: str, primary: str = "mac") -> None:
+    """Make ``vault`` a synced one where this machine is ``machine``."""
+    (vault / ".git").mkdir()
+    sync_state.save(vault, {"enabled": True, "machineId": machine})
+    sync_state.write_primary(vault, primary)
+
+
+def _leftover_vault(tmp_path: Path, target_text: str = "myproj-wt-12 briefing") -> Path:
+    """An orphan whose basename already exists under the canonical agent."""
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12")
+    (_sessions(vault, "myproj") / "myproj-wt-12-1.md").write_text(target_text, encoding="utf-8")
+    return vault
+
+
+def test_a_satellite_refuses_the_move_and_names_the_primary(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12")
+    _synced(vault, "win")
+    assert roles.is_satellite(vault)
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+
+    assert cli.main(["migrate-worktree-briefings", "--agents", "myproj"]) == 1
+    captured = capsys.readouterr()
+    assert "satellite" in captured.err and "the primary 'mac'" in captured.err
+    assert "moved" not in captured.out
+    assert (_sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md").exists()
+    assert not (_sessions(vault, "myproj") / "myproj-wt-12-1.md").exists()
+
+
+def test_a_satellite_still_previews_on_dry_run(tmp_path: Path, capsys, monkeypatch) -> None:
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12")
+    _synced(vault, "win")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+
+    assert cli.main(["migrate-worktree-briefings", "--agents", "myproj", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "would move" in out and "myproj-wt-12-1.md" in out
+    assert "the primary 'mac'" in out
+    assert (_sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md").exists()
+
+
+def test_a_satellite_does_not_remove_an_identical_leftover(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    vault = _leftover_vault(tmp_path)
+    _synced(vault, "win")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+
+    assert cli.main(["migrate-worktree-briefings", "--agents", "myproj"]) == 1
+    assert "the primary 'mac'" in capsys.readouterr().err
+    assert (_sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md").exists()
+
+
+def test_the_doctor_hint_on_a_satellite_names_the_primary_and_offers_no_run(
+    tmp_path: Path,
+) -> None:
+    vault, _main = _bare_repo_vault(tmp_path, "myproj", "myproj-wt-12")
+    _synced(vault, "win")
+    findings = check_mod.check_orphan_worktree_briefings(vault)
+    assert findings is not None and len(findings) == 1
+    assert "Run: " not in findings[0]
+    assert "satellite" in findings[0] and "the primary 'mac'" in findings[0]
+
+
+@pytest.mark.parametrize("sync", [False, True], ids=["no-sync", "primary"])
+def test_an_identical_leftover_is_removed_and_the_doctor_goes_silent(
+    sync: bool, tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    vault = _leftover_vault(tmp_path)
+    if sync:
+        _synced(vault, "mac")
+        assert not roles.is_satellite(vault)
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+    source = _sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md"
+    old_rel = source.relative_to(vault).as_posix()
+    new_rel = (_sessions(vault, "myproj") / source.name).relative_to(vault).as_posix()
+    rule = vault / "shared" / "feedback" / "a-rule.md"
+    rule.parent.mkdir(parents=True)
+    rule.write_text(f"---\nsources:\n  - {old_rel}\n---\nbody\n", encoding="utf-8")
+
+    argv = _printed_command(vault)
+    assert cli.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "would remove" in out and "collision" not in out
+    assert source.exists()
+
+    assert cli.main([a for a in argv if a != "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "collision" not in out
+    assert not source.exists()
+    target = _sessions(vault, "myproj") / "myproj-wt-12-1.md"
+    assert target.read_text(encoding="utf-8") == "myproj-wt-12 briefing"
+    text = rule.read_text(encoding="utf-8")
+    assert new_rel in text and old_rel not in text
+
+    assert check_mod.check_orphan_worktree_briefings(vault) is None
+
+
+def test_a_differing_file_at_the_target_is_still_a_collision(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    vault = _leftover_vault(tmp_path, target_text="something else")
+    _synced(vault, "mac")
+    monkeypatch.setattr("mnemo.cli._resolve_vault", lambda: vault)
+
+    assert cli.main(["migrate-worktree-briefings", "--agents", "myproj"]) == 0
+    out = capsys.readouterr().out
+    assert "collision: skipped" in out and "myproj-wt-12-1.md" in out
+    source = _sessions(vault, "myproj-wt-12") / "myproj-wt-12-1.md"
+    assert source.read_text(encoding="utf-8") == "myproj-wt-12 briefing"
+    target = _sessions(vault, "myproj") / "myproj-wt-12-1.md"
+    assert target.read_text(encoding="utf-8") == "something else"
+    assert check_mod.check_orphan_worktree_briefings(vault) is not None
