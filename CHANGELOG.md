@@ -36,6 +36,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   24.04, the image 1.14.1's was built on, so its glibc floor does not rise with
   the label. (#816)
 
+- **The darwin-arm64 release binary is built on macOS 15.** GitHub retired
+  the `macos-14` image, so v1.14.2's first release run cancelled that build
+  and published nothing. (#819)
+
 ## [1.14.1] — 2026-10-28
 
 ### Fixed
