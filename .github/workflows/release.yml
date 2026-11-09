@@ -97,7 +97,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14,      target: darwin-arm64 }
+          # macos-15, not macos-14: GitHub retired the latter, and v1.14.2's
+          # first run had its job cancelled within a second, with "The
+          # configuration 'macos-14-arm64-us-default' is not supported" (#819).
+          - { os: macos-15,      target: darwin-arm64 }
           # macos-15-intel, not macos-13: the latter is on its way out and its
           # runners no longer get picked up — the job sat queued indefinitely
           # on two consecutive releases, blocking the publish jobs behind it.
