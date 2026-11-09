@@ -116,6 +116,11 @@ worktree is created:
   `sonnet`, `opus`) or a full id. A sentence there is refused.
 - `effort` is optional and takes one of `low`, `medium`, `high`, `xhigh`,
   `max`. Anything else is refused.
+- `advisor` is optional and takes one `--advisor` value, a stronger model the
+  piece's child may consult mid-turn (Claude Code's advisor tool). It must rank
+  at or above the piece's model. An advisor written in the wrong order as two
+  aliases (`model: opus` with `advisor: sonnet`) is refused, because Claude
+  Code would silently drop it.
 - `may` is optional and takes `push`, `pr` (push and open the PR) or `none`.
   Omitted, the piece takes `mnemo dispatch --may`, which is `pr` by default.
   `merge` is refused.
@@ -134,6 +139,12 @@ judgement survives a blanket typed at the command line. `effort` is the
 same kind of field and resolves the same way against `mnemo dispatch
 --effort`; leave it off unless the piece plainly needs more or less
 reasoning than the dispatch gives.
+
+`advisor` is a cost field too, and it resolves against `mnemo dispatch
+--advisor` in the same way. Leave it off. No recommendation exists yet:
+whether a cheaper model consulting a stronger one delivers what the stronger
+model delivers alone is being measured (#818,
+`tools/measure_advisor_pairs.py`), and this skill will say so if it does.
 
 `may:` is optional and defaults to `pr` — the piece's child publishes its own
 pull request. Write `may: none` for a piece that should not become a branch

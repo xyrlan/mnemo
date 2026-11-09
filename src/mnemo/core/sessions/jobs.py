@@ -81,6 +81,12 @@ class Session:
     #: ``respawnFlags`` (#351). ``None`` means the default — Claude Code never
     #: resolves one into the flags, on either profile — never a failed read.
     effort: str | None = None
+    #: The ``--advisor`` this session was spawned with, read from
+    #: ``respawnFlags`` (#818). ``None`` means it was given none on its argv
+    #: — not that it has no advisor tool: a user-level ``advisorModel`` would
+    #: not show here. Whether one was *used* is in the transcript
+    #: (``bg-advisor-flag``).
+    advisor: str | None = None
     #: The full id of the session that dispatched this one (#288), or ``None``
     #: for a session nobody dispatched from inside Claude Code. Not in
     #: ``state.json``: mnemo records it at dispatch, and
@@ -263,6 +269,16 @@ def effort_from(data: dict[str, Any]) -> str | None:
     return _flag_value(data, "--effort")
 
 
+def advisor_from(data: dict[str, Any]) -> str | None:
+    """The ``--advisor`` a session was spawned with, out of ``state.json`` (#818).
+
+    The same source as :func:`model_from` and :func:`effort_from`: Claude Code
+    records ``--advisor`` followed by its value in ``respawnFlags``
+    (``bg-advisor-flag``), and a wake keeps it.
+    """
+    return _flag_value(data, "--advisor")
+
+
 def _flag_value(data: dict[str, Any], name: str) -> str | None:
     """The element after *name* in ``respawnFlags``, or ``None``."""
     flags = data.get("respawnFlags")
@@ -292,6 +308,7 @@ def _parse(short_id: str, data: dict[str, Any]) -> Session:
         updated_at=_str_or_none(data.get("updatedAt")),
         model=model_from(data),
         effort=effort_from(data),
+        advisor=advisor_from(data),
         children=tuple(c for c in children if isinstance(c, dict)) if isinstance(children, list) else (),
     )
 

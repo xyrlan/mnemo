@@ -185,6 +185,8 @@ def cmd_session(args: argparse.Namespace) -> int:
     # the default, never a failed read (#351), so nothing is printed for it.
     if session.effort:
         flags.append(f"effort {session.effort}")
+    if session.advisor:
+        flags.append(f"advisor {session.advisor}")
     if session.live is True:
         flags.append("live")
     elif session.live is False:

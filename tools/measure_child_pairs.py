@@ -260,6 +260,10 @@ def rows(pairs: Sequence[Any], *, live: Any = None,
         started = pair.started
         if len(started) != 2:
             continue
+        if getattr(pair, "has_arms", False):
+            # Two arms by design (#818): their difference is the model, not
+            # run-to-run noise. tools/measure_advisor_pairs.py reads them.
+            continue
 
         def _live(tag: str, pair=pair) -> Dict[str, Any]:
             if live is not None:

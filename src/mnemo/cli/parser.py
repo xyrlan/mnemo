@@ -243,6 +243,16 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="model every child of this dispatch runs on "
                                  "(alias like haiku/sonnet/opus, or a full id); "
                                  "a contract piece's own `model:` wins over it")
+    # #818: Claude Code's advisor tool, off unless named. One token, checked
+    # like a piece's `model:` (contracts.MODEL_RE) rather than against a list
+    # of ids; an advisor ranked below the child's model is refused by the
+    # command, because Claude Code would start the child without it, silently.
+    dispatch_p.add_argument("--advisor", metavar="MODEL",
+                            help="a stronger model every child of this dispatch may "
+                                 "consult mid-turn (Claude Code's advisor tool), at or "
+                                 "above its --model; a contract piece's own `advisor:` "
+                                 "wins over it. With --twins: one twin on --model with "
+                                 "this advisor, the other on this model alone")
     # Unlike --model, a closed list: Claude Code's own (`bg-effort-flag`). It
     # ignores an unknown level with a warning, so argparse refuses the typo
     # here, before a child silently runs on the default (#351). No default:

@@ -484,6 +484,177 @@ def test_full_profile_child_resolves_the_machine_default(
         dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
+# --- bg-advisor-flag (#818) ----------------------------------------------------
+
+#: Asks for the one advisor call the assertions read back. The session decides
+#: when to consult it (Claude Code's docs: nothing forces or caps a call), so
+#: the prompt asks outright, as the docs advise.
+ADVISOR_PROMPT = (
+    "Do not read, write or run anything. Call the advisor tool exactly once, "
+    "then reply with exactly the word OK and nothing else."
+)
+
+#: For a child that should have no advisor. Conditional, because told
+#: outright to call a tool it lacks, the 2026-11-09 child blocked and asked
+#: ("no advisor tool in session; awaiting alternative tool choice") rather
+#: than finishing.
+ADVISOR_IF_ANY_PROMPT = (
+    "Do not read, write or run anything. If you have a tool named advisor, "
+    "call it exactly once. Either way, reply with exactly the word OK."
+)
+
+
+def _trusted_tree(name: str) -> tuple:
+    """A detached worktree of the checkout under test, and that checkout.
+
+    Not ``_git_repo(tmp_path)``: on 2.1.321 ``claude --bg`` refuses a
+    workspace nobody accepted the trust prompt for ("Workspace not
+    trusted"), a fresh repo under the temp dir is one, and trust follows a
+    worktree's main checkout — a new repo nested inside a trusted tree is
+    refused too (measured 2026-11-09). The checkout running this suite is
+    the one a maintainer works in. Detached, so no branch is made; removed
+    by :func:`_drop_tree`.
+    """
+    repo = Path(__file__).resolve().parents[2]
+    tree = repo.parent / f"{repo.name}-live-{name}-{os.getpid()}"
+    subprocess.run(["git", "worktree", "add", "--detach", str(tree), "HEAD"],
+                   cwd=repo, check=True, capture_output=True)
+    return repo, tree
+
+
+def _drop_tree(repo: Path, tree: Path) -> None:
+    """Remove :func:`_trusted_tree`'s worktree. Retried: on Windows the
+    stopped child's process holds the directory for a few seconds."""
+    subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
+                   cwd=repo, capture_output=True)
+    _until(lambda: (shutil.rmtree(tree, ignore_errors=True), not tree.exists())[1],
+           seconds=30, every=1)
+    subprocess.run(["git", "worktree", "prune"], cwd=repo, capture_output=True)
+
+
+def _finished_transcript(real_claude: Path, short_id: str) -> tuple:
+    """``(state.json, [records])`` once the child is done, or fail."""
+    state_path = real_claude / "jobs" / short_id / "state.json"
+    finished = _until(
+        lambda: (lambda d: d if d and d.get("state") in ("done", "stopped") else None)(
+            _state(state_path)
+        ),
+        seconds=300,
+    )
+    assert finished, f"child never finished: {_state(state_path)}"
+    transcript = _until(lambda: (_state(state_path) or {}).get("linkScanPath"), seconds=60)
+    assert isinstance(transcript, str) and os.path.isfile(transcript), transcript
+    with open(transcript, encoding="utf-8") as fh:
+        records = [json.loads(line) for line in fh if line.strip()]
+    return finished, records
+
+
+def _advisor_calls(records: list) -> tuple:
+    """``(server_tool_use blocks named advisor, advisor iterations)``.
+
+    Iterations once per response: one response is written as several
+    assistant records sharing ``message.id`` and its ``usage``.
+    """
+    blocks, iterations, seen = 0, [], set()
+    for record in records:
+        if record.get("type") != "assistant":
+            continue
+        message = record.get("message") or {}
+        blocks += sum(1 for b in message.get("content") or []
+                      if isinstance(b, dict) and b.get("type") == "server_tool_use"
+                      and b.get("name") == "advisor")
+        if message.get("id") in seen:
+            continue
+        seen.add(message.get("id"))
+        iterations += claude_cli.split_usage(message.get("usage"))[1]
+    return blocks, iterations
+
+
+def test_bg_and_advisor_compose(real_claude: Path) -> None:
+    """``bg-advisor-flag``: ``--advisor`` reaches a lean ``--bg`` child (#818).
+
+    The real ``spawn_child``, on the lean default, and the cheapest advised
+    pair the advisor docs allow: a Haiku 5.5 child with a Sonnet advisor —
+    the advisor re-reads the whole context at its own rate, so the advisor's
+    model is most of the bill. The transcript is the proof: the flag only
+    says what was asked for, and a child whose advisor is dropped keeps it.
+    """
+    repo, tree = _trusted_tree("advisor")
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(
+            ADVISOR_PROMPT, cwd=tree, model="claude-haiku-5-5", advisor="sonnet",
+        )
+        assert claude_cli.SHORT_ID_RE.match(short_id), short_id
+        finished, records = _finished_transcript(real_claude, short_id)
+
+        session = jobs._parse(short_id, finished)
+        assert session.advisor == "sonnet", (
+            f"bg-advisor-flag: spawned with --advisor sonnet, respawnFlags say "
+            f"{finished.get('respawnFlags')!r}"
+        )
+        assert session.model == "claude-haiku-5-5", finished.get("respawnFlags")
+
+        blocks, iterations = _advisor_calls(records)
+        assert blocks >= 1, (
+            "bg-advisor-flag: asked to call the advisor once, the child wrote no "
+            "`server_tool_use` block named `advisor` — the tool did not reach it"
+        )
+        assert iterations, (
+            "bg-advisor-flag: an advisor call with no `advisor_message` in "
+            "`usage.iterations` — the readout prices advisor calls from there"
+        )
+        assert all("sonnet" in str(it.get("model")) for it in iterations), (
+            f"bg-advisor-flag: the advisor's iterations name {iterations!r}"
+        )
+        own_models = {(r.get("message") or {}).get("model") for r in records
+                      if r.get("type") == "assistant" and not r.get("isApiErrorMessage")}
+        own_models.discard(None)
+        assert own_models and all("haiku" in m for m in own_models), (
+            f"bg-advisor-flag: the child's own records name {sorted(own_models)}"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+        _drop_tree(repo, tree)
+
+
+def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path) -> None:
+    """``bg-advisor-flag``, the half dispatch refuses on: dropped, silently.
+
+    A Sonnet 5.5 child takes no Haiku 5.5 advisor. Claude Code starts it
+    anyway, keeps ``--advisor`` in ``respawnFlags``, and gives it no tool —
+    which is why ``check_advisor`` refuses a pairing it can prove inverted.
+    The full id is used because ``check_advisor`` ranks only aliases and
+    would refuse ``sonnet``/``haiku`` before a child existed. If this starts
+    failing because the child *was* advised, or the spawn now errors, the
+    refusal is the thing to revisit.
+    """
+    repo, tree = _trusted_tree("advisor-below")
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(
+            ADVISOR_IF_ANY_PROMPT, cwd=tree, model="sonnet", advisor="claude-haiku-5-5",
+        )
+        assert claude_cli.SHORT_ID_RE.match(short_id), short_id
+        finished, records = _finished_transcript(real_claude, short_id)
+        assert jobs._parse(short_id, finished).advisor == "claude-haiku-5-5", (
+            f"bg-advisor-flag: respawnFlags={finished.get('respawnFlags')!r}"
+        )
+        blocks, iterations = _advisor_calls(records)
+        assert blocks == 0 and not iterations, (
+            "bg-advisor-flag: a Haiku 5.5 advisor reached a Sonnet 5.5 child "
+            f"({blocks} call(s), {iterations!r}); a pairing below the child's "
+            "rank is no longer dropped, so check_advisor's refusal may be stale"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+        _drop_tree(repo, tree)
+
+
 def _load_user_servers() -> dict:
     """``~/.claude.json``'s ``mcpServers``, or ``{}``. Never raises."""
     try:

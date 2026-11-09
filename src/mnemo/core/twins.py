@@ -136,13 +136,21 @@ class TwinsError(RuntimeError):
 
 @dataclass(frozen=True)
 class Twin:
-    """One of a pair: its tag, where it works, and the session running there."""
+    """One of a pair: its tag, where it works, and the session running there.
+
+    ``model`` and ``advisor`` are set only on a pair of two arms (#818): the
+    twin's own model and advisor, which differ from its sibling's. On an
+    ordinary pair both are ``None`` and the pair's own ``model`` holds for
+    both — :meth:`Pair.arm_of` reads either shape.
+    """
 
     tag: str
     tree: str
     branch: str
     short_id: str = ""
     error: str = ""
+    model: Optional[str] = None
+    advisor: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +184,26 @@ class Pair:
     released: Tuple[str, ...] = ()
     #: ``{tag: conditions_of(...)}`` — what each twin's transcript showed.
     conditions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: The advisor the pair was dispatched with (#818), which makes it a pair
+    #: of two arms: one twin on ``model`` advised by it, one on it alone.
+    #: ``None`` for an ordinary pair, where both twins are the same arm.
+    advisor: Optional[str] = None
+
+    @property
+    def has_arms(self) -> bool:
+        """Whether the twins differ in model by design (#818)."""
+        return self.advisor is not None
+
+    def arm_of(self, tag: str) -> Tuple[Optional[str], Optional[str]]:
+        """``(model, advisor)`` the twin *tag* ran on.
+
+        A twin of an arms pair carries its own; any other twin ran on the
+        pair's ``model`` with no advisor.
+        """
+        twin = self.twin(tag)
+        if self.has_arms and twin is not None:
+            return twin.model, twin.advisor
+        return self.model, None
 
     @property
     def started(self) -> Tuple[Twin, ...]:
@@ -246,7 +274,8 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
         if kind == "pair":
             try:
                 twins = tuple(
-                    Twin(tag=str(t["tag"]), tree=str(t["tree"]), branch=str(t["branch"]))
+                    Twin(tag=str(t["tag"]), tree=str(t["tree"]), branch=str(t["branch"]),
+                         model=t.get("model"), advisor=t.get("advisor"))
                     for t in ev.get("twins") or []
                 )
                 pairs[pid] = Pair(
@@ -255,7 +284,7 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
                     model=ev.get("model"), effort=ev.get("effort"),
                     lean=bool(ev.get("lean", True)), created_at=str(ev.get("at") or ""),
                     settings=ev["settings"] if isinstance(ev.get("settings"), dict) else {},
-                    twins=twins,
+                    twins=twins, advisor=ev.get("advisor"),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -376,12 +405,33 @@ def _fresh_tags(issue: int, *, repo_root: Path | str, count: int,
     raise dispatch.DispatchError("could not draw distinct twin tags")
 
 
+def advisor_arms(model: Optional[str], advisor: str) -> List[Tuple[str, Optional[str]]]:
+    """The two arms of an advisor pair (#818): ``(model, advisor)`` each.
+
+    One twin on *model* consulting *advisor*, one on *advisor* alone — the
+    question the advisor raises is whether the first delivers what the second
+    does for less, so the second is the stronger model run directly. Refused
+    without a *model*: the advised twin would run on the machine's default,
+    and the pair would compare nothing anyone chose. Refused as well where
+    :func:`dispatch.check_advisor` refuses the pairing.
+    """
+    if not model:
+        raise dispatch.DispatchError(
+            "--twins --advisor: name the advised twin's --model — the other twin "
+            f"runs on {advisor} alone, and the pair compares the two"
+        )
+    dispatch.check_advisor(model, advisor)
+    return [(model, advisor), (advisor, None)]
+
+
 def dispatch_twins(
     issue: int, *, repo_root: Path | str,
     fetch: dispatch.Fetcher = dispatch.fetch_issue,
     model: Optional[str] = None, lean: bool = True, effort: Optional[str] = None,
     vault_root: Path | str | None = None,
     draw: Callable[[], str] = dispatch.new_twin_tag,
+    advisor: Optional[str] = None,
+    rng: Optional[Any] = None,
 ) -> Tuple[str, List[dispatch.Dispatched]]:
     """Dispatch *issue* as two blind twins. Returns the pair id and both outcomes.
 
@@ -395,7 +445,19 @@ def dispatch_twins(
     running. It is not stopped: it is doing real work, and a lone twin can
     still be delivered once the maintainer has looked at it — it just is not
     a pair, and ``tools/measure_child_pairs.py`` leaves it out.
+
+    *advisor* makes the pair two arms (#818, :func:`advisor_arms`): the
+    twins differ in model and advisor and in nothing else — same prompt byte
+    for byte, same base, effort, profile and settings. Which tag gets which
+    arm, and so which spawns first, is drawn from *rng* (the system's random
+    source by default); each twin's arm is recorded on the ``pair`` line.
+    Without *advisor* the pair is the one it always was, and its ``pair``
+    line is byte-identical.
     """
+    arms: Optional[List[Tuple[str, Optional[str]]]] = None
+    if advisor:
+        arms = advisor_arms(model, advisor)  # before anything is read or made
+        (rng or secrets.SystemRandom()).shuffle(arms)
     details = fetch(issue, repo_root=repo_root)  # before any git state exists
     base = _head(repo_root)
     vault = default_vault() if vault_root is None else Path(vault_root)
@@ -410,17 +472,24 @@ def dispatch_twins(
             tag=tag,
             tree=str(dispatch.worktree_path(issue, repo_root=repo_root, tag=tag)),
             branch=dispatch.branch_name(issue, tag=tag),
+            model=arms[i][0] if arms else None,
+            advisor=arms[i][1] if arms else None,
         )
-        for tag in tags
+        for i, tag in enumerate(tags)
     ]
+    event: Dict[str, Any] = {
+        "event": "pair", "pair": pair_id, "issue": issue,
+        "repo_root": str(repo_root), "base": base,
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
+        "twins": [{"tag": t.tag, "tree": t.tree, "branch": t.branch} for t in twins],
+    }
+    if arms:
+        event["advisor"] = advisor
+        event["twins"] = [{"tag": t.tag, "tree": t.tree, "branch": t.branch,
+                           "model": t.model, "advisor": t.advisor} for t in twins]
     try:
-        _append(vault, {
-            "event": "pair", "pair": pair_id, "issue": issue,
-            "repo_root": str(repo_root), "base": base,
-            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
-            "twins": [{"tag": t.tag, "tree": t.tree, "branch": t.branch} for t in twins],
-        })
+        _append(vault, event)
     except OSError as exc:
         # Refused, not degraded: a pair nobody can find again is a pilot run
         # whose result cannot be read back, which is the whole of its value.
@@ -428,13 +497,18 @@ def dispatch_twins(
 
     out: List[dispatch.Dispatched] = []
     for twin in twins:
+        own: Dict[str, Any] = {"model": model}
+        if arms:
+            own = {"model": twin.model}
+            if twin.advisor:
+                own["advisor"] = twin.advisor
         try:
             tree = dispatch.ensure_worktree(
                 issue, repo_root=repo_root, tag=twin.tag, base=base,
             )
             result = dispatch._spawn_into(
                 issue, tree, prompt, repo_root=repo_root, branch=twin.branch,
-                model=model, lean=lean, may=(), effort=effort, settings=SETTINGS,
+                lean=lean, may=(), effort=effort, settings=SETTINGS, **own,
             )
         except dispatch.DispatchError as exc:
             result = dispatch.Dispatched(issue=issue, error=str(exc))

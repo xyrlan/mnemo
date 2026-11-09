@@ -157,6 +157,25 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
               f"use one of {', '.join(claude_cli.EFFORT_LEVELS)}")
         return 1
 
+    advisor = getattr(args, "advisor", None) or None
+    if advisor is not None:
+        # Before anything could spawn (#818). Grok has no advisor; a value
+        # that is not one model token, or one ranked below the model every
+        # child runs on, would be dropped by the child without a word.
+        if grok:
+            print(core.GROK_NO_ADVISOR)
+            return 1
+        try:
+            if getattr(args, "twins", False) or getattr(args, "contract", None):
+                # Twins pair it with the advised twin's model, and a contract
+                # with each piece's own: checked where those are known.
+                core.check_advisor(None, advisor)
+            else:
+                core.check_advisor(model, advisor)
+        except core.DispatchError as exc:
+            print(str(exc))
+            return 1
+
     read_only = bool(getattr(args, "read_only", False))
     if read_only and getattr(args, "may", None) is not None:
         # Before anything could spawn, as the grant refusal is. Not a
@@ -208,7 +227,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             return 1
         return _dispatch_twins(
             issues, contract_path=contract_path, root=root, args=args, lean=lean,
-            model=model, effort=effort,
+            model=model, effort=effort, advisor=advisor,
         )
 
     if contract_path:
@@ -217,7 +236,9 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             read_only=read_only, agent=agent,
         )
 
-    on = {}
+    # Only when named, so a dispatch without it calls the core exactly as
+    # before (#818).
+    on: dict = {"advisor": advisor} if advisor else {}
     if grok:
         # Before the dry run as well as the spawn: a plan Grok would refuse is
         # not a plan, and the refusal costs nothing to read.
@@ -226,7 +247,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         except core.DispatchError as exc:
             print(str(exc))
             return 1
-        on = {"agent": agent, "home": home}
+        on.update({"agent": agent, "home": home})
 
     if getattr(args, "dry_run", False):
         # Printable without side effects: the paths and branches are pure
@@ -234,7 +255,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         for issue in issues:
             tree = core.worktree_path(issue, repo_root=root)
             print(f"#{issue}  {core.branch_name(issue)}  {tree}"
-                  f"{_model_suffix(model, effort, agent)}{_may_suffix(may)}")
+                  f"{_model_suffix(model, effort, agent, advisor)}{_may_suffix(may)}")
         return 0
 
     return _report(
@@ -249,6 +270,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 def _dispatch_twins(
     issues: list, *, contract_path: str | None, root: Path,
     args: argparse.Namespace, lean: bool, model: str | None, effort: str | None,
+    advisor: str | None = None,
 ) -> int:
     """One issue as two blind children, for #439's pilot (#449).
 
@@ -256,6 +278,9 @@ def _dispatch_twins(
     choice: nothing, because the maintainer picks one after reading both
     blind — so a typed ``--may`` that grants anything is refused rather than
     quietly dropped, and ``--read-only`` is refused because a twin builds.
+
+    With *advisor* the pair is two arms (#818): one twin on *model* advised
+    by it, the other on *advisor* alone (:func:`twins.advisor_arms`).
     """
     from mnemo.core import dispatch as core
     from mnemo.core import twins
@@ -276,17 +301,28 @@ def _dispatch_twins(
               "after reading both blind, so --may can only be none")
         return 1
 
+    arms = [(model, None)] * len(twins.LABELS)
+    if advisor:
+        try:
+            arms = twins.advisor_arms(model, advisor)
+        except core.DispatchError as exc:
+            print(str(exc))
+            return 1
+
     issue = issues[0]
     if getattr(args, "dry_run", False):
-        for _ in twins.LABELS:
+        # One line per arm. Which tag gets which arm is drawn at spawn, so
+        # the dry run names the arms and not their tags.
+        for arm_model, arm_advisor in arms:
             tree = core.worktree_path(issue, repo_root=root).name + "-<tag>"
             print(f"#{issue}  fix/issue-{issue}-<tag>  {root.parent / tree}"
-                  f"{_model_suffix(model, effort)}")
+                  f"{_model_suffix(arm_model, effort, advisor=arm_advisor)}")
         return 0
 
     try:
         pair_id, results = twins.dispatch_twins(
             issue, repo_root=root, model=model, lean=lean, effort=effort,
+            **({"advisor": advisor} if advisor else {}),
         )
     except core.DispatchError as exc:
         print(f"#{issue}  FAILED: {exc}")
@@ -334,11 +370,14 @@ def _print_example(contract_path: str | None) -> int:
 
 def _model_suffix(
     model: str | None, effort: str | None = None, agent: str | None = None,
+    advisor: str | None = None,
 ) -> str:
     """``"  [haiku]"``, or nothing when no model was chosen (#268).
 
     An effort, when one was chosen, joins the same tag (#351):
     ``"  [haiku, effort high]"``, or ``"  [effort high]"`` without a model.
+    So does an advisor, right after the model it advises (#818):
+    ``"  [sonnet, advisor opus]"``.
 
     Nothing rather than ``[default]``: a dispatch that names no model is the
     unchanged case, and a word in the column would make every line claim a
@@ -355,6 +394,7 @@ def _model_suffix(
     adds nothing.
     """
     parts = [p for p in (agent == "grok" and agent, model,
+                         advisor and f"advisor {advisor}",
                          effort and f"effort {effort}") if p]
     return f"  [{', '.join(parts)}]" if parts else ""
 
@@ -391,16 +431,21 @@ def _dispatch_contract(
 
     model = getattr(args, "model", None) or None
     effort = getattr(args, "effort", None) or None
+    advisor = getattr(args, "advisor", None) or None
 
-    on = {}
-    if agent == "grok":
-        try:
+    on: dict = {"advisor": advisor} if advisor else {}
+    try:
+        if agent == "grok":
             home = core.check_grok_contract(contract, model=model, effort=effort,
-                                            read_only=read_only)
-        except core.DispatchError as exc:
-            print(str(exc))
-            return 1
-        on = {"agent": agent, "home": home}
+                                            read_only=read_only, advisor=advisor)
+            on.update({"agent": agent, "home": home})
+        # Every piece's advisor against its own model, before any tree and
+        # before the dry run, which would otherwise print a plan that spawns
+        # a child its advisor never reaches (#818).
+        core.check_contract_advisors(contract, model=model, advisor=advisor)
+    except core.DispatchError as exc:
+        print(str(exc))
+        return 1
 
     if getattr(args, "dry_run", False):
         for piece in contract.pieces:
@@ -411,7 +456,7 @@ def _dispatch_contract(
             # dry run shows what would actually be spent per child, which is
             # the one question the flag creates.
             print(f"{piece.slug}  {branch}  {tree}"
-                  f"{_model_suffix(piece.model or model, piece.effort or effort, agent)}"
+                  f"{_model_suffix(piece.model or model, piece.effort or effort, agent, piece.advisor or advisor)}"
                   f"{_may_suffix(core.piece_grant(piece, may))}")
         return 0
 
@@ -467,7 +512,7 @@ def _report(results: list, *, lean: bool = True) -> int:
 
     for r in started:
         print(f"{_label(r.issue)}  {r.short_id or '????????'}  {r.worktree}"
-              f"{_model_suffix(getattr(r, 'model', None), getattr(r, 'effort', None), getattr(r, 'agent', None))}"
+              f"{_model_suffix(getattr(r, 'model', None), getattr(r, 'effort', None), getattr(r, 'agent', None), getattr(r, 'advisor', None))}"
               f"{_may_suffix(getattr(r, 'may', ()))}")
         if r.warning:
             # The child is running — the tree was kept for it — but something
