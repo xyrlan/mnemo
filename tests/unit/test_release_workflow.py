@@ -62,6 +62,17 @@ def test_the_matrix_covers_every_platform_the_launcher_asks_for(jobs: dict):
     assert targets == {"darwin-arm64", "darwin-x64", "linux-x64", "win-x64"}
 
 
+def test_the_linux_binary_is_built_on_a_pinned_image(jobs: dict):
+    """A PyInstaller binary needs a glibc at least as new as its build image's.
+
+    On ``ubuntu-latest`` the floor moved whenever GitHub moved the label, as it
+    did to 26.04 (#816). 1.14.1's Linux binary was built on 24.04.
+    """
+    rows = jobs["build-binaries"]["strategy"]["matrix"]["include"]
+    (linux,) = [m for m in rows if m["target"] == "linux-x64"]
+    assert linux["os"] == "ubuntu-24.04"
+
+
 def test_no_platform_is_allowed_to_fail_quietly(jobs: dict):
     """A partial binary set is worse than none: some users get a silent no-op."""
     strategy = jobs["build-binaries"]["strategy"]

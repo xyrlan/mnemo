@@ -29,18 +29,18 @@ def _expand(event: str) -> List[Dict[str, str]]:
     """The `test` job's matrix as GitHub expands it for ``event``.
 
     Only the one expression shape ci.yml uses is understood:
-    ``event == 'pull_request' && fromJSON('<list>') || fromJSON('[]')``.
+    ``event == 'pull_request' && fromJSON('<pr list>') || fromJSON('<push list>')``.
     Anything else fails here rather than being guessed at.
     """
     matrix = _test_job()["strategy"]["matrix"]
     exclude = matrix.get("exclude", [])
     if isinstance(exclude, str):
         m = re.fullmatch(
-            re.escape(PR_GUARD) + r"(.*?)'\) \|\| fromJSON\('\[\]'\) }}",
+            re.escape(PR_GUARD) + r"(.*?)'\) \|\| fromJSON\('(.*?)'\) }}",
             exclude.strip(),
         )
         assert m, f"unrecognised exclude expression: {exclude!r}"
-        exclude = json.loads(m.group(1)) if event == "pull_request" else []
+        exclude = json.loads(m.group(1) if event == "pull_request" else m.group(2))
     rows = [
         {"os": o, "python-version": v}
         for o, v in itertools.product(matrix["os"], matrix["python-version"])
@@ -61,10 +61,15 @@ def test_a_push_to_master_keeps_the_full_macos_matrix():
     assert _versions("push", "macos-latest") == ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
 
-def test_ubuntu_keeps_all_five_versions_and_adds_3_13_on_both_events():
-    """3.13 moved pathlib's classes and broke a test only a dev box ran (#729)."""
+def test_linux_runs_every_version_and_adds_3_13_on_both_events():
+    """3.13 moved pathlib's classes and broke a test only a dev box ran (#729).
+
+    3.8 and 3.9 run on ubuntu-24.04: ubuntu-latest became 26.04, for which
+    setup-python has neither, and both jobs failed before a test ran (#816).
+    """
     for event in ("pull_request", "push"):
-        assert _versions(event, "ubuntu-latest") == ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        assert _versions(event, "ubuntu-24.04") == ["3.8", "3.9"]
+        assert _versions(event, "ubuntu-latest") == ["3.10", "3.11", "3.12", "3.13"]
 
 
 def test_the_ends_of_the_matrix_are_the_supported_range():
