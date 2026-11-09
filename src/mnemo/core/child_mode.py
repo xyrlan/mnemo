@@ -34,6 +34,20 @@ the child does the parent's work; what it may *publish* is still ``--may``'s.
   it cannot be read (MDM, server-managed policy) the child still starts, in
   ``auto``, and ``child-reports.jsonl`` records the mode it really ran.
 
+**The disclaimer's acceptance (#822).** Since Claude Code 2.1.321 a
+background child runs bypass only when the disclaimer's acceptance
+(``skipDangerousModePermissionPrompt: true``) is in user or managed settings.
+Without it, ``--bg`` refuses the child, or, when the acceptance is only in the
+tree's local settings, starts it in ``default``, where it stops at its first
+prompt (``bg-bypass-needs-user-settings``). A parent can run bypass with its
+acceptance somewhere else (``--settings``, its own local settings), so the
+acceptance is looked for in the parent's account settings and in managed
+policy. Where mnemo cannot see it, the child keeps ``auto`` and the dispatch
+says why. The legacy ``bypassPermissionsModeAccepted`` in ``.claude.json`` is
+not read: the CLI moves it into user settings at startup, and the parent is a
+running session of that CLI. A lean child in bypass then loads user settings
+(:mod:`mnemo.core.child_profile`).
+
 ``dispatch.childMode: "auto"`` in the config opts out. Grok children have no
 such mode and are never asked. Nothing here writes ``crossSessionInbound`` or
 attests anything: the attestation stays the child's real mode, read from its
@@ -100,6 +114,33 @@ def bypass_disabled_by(cwd: Path | str, *, home: Optional[Path] = None,
     return next((p for p in paths if _disables_bypass(p)), None)
 
 
+#: Where Claude Code records that the bypass disclaimer was accepted.
+CONSENT_KEY = "skipDangerousModePermissionPrompt"
+
+
+def _consents(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get(CONSENT_KEY) is True
+
+
+def bypass_accepted_in(home: Optional[Path], *,
+                       managed: Optional[Iterable[Path]] = None) -> Optional[Path]:
+    """The file that records the bypass disclaimer as accepted, or None (#822).
+
+    Only where a background child counts it: managed policy and the user's
+    settings in the account's config dir *home*. The tree's local settings and
+    ``--settings`` are not looked at, because a child whose acceptance is only
+    there is refused or runs ``default``.
+    """
+    paths = list(inbound_policy.managed_settings_paths() if managed is None else managed)
+    if home is not None:
+        paths.append(Path(home) / "settings.json")
+    return next((p for p in paths if _consents(p)), None)
+
+
 def choose(cfg: Optional[Mapping[str, Any]], *, cwd: Path | str,
            env: Optional[Mapping[str, str]] = None,
            homes: Optional[Iterable[Path]] = None,
@@ -130,6 +171,12 @@ def choose(cfg: Optional[Mapping[str, Any]], *, cwd: Path | str,
         if blocker is not None:
             return Choice(note=f"auto, not bypassPermissions like this session: {blocker} "
                                "sets permissions.disableBypassPermissionsMode")
+        if bypass_accepted_in(home, managed=managed) is None:
+            return Choice(note=f"auto, not bypassPermissions like this session: "
+                               f"{Path(home) / 'settings.json'} does not record the "
+                               f"bypass disclaimer as accepted ({CONSENT_KEY}), and "
+                               "Claude Code runs a background child in bypass only "
+                               "when user or managed settings do")
         return Choice(BYPASS_MODE, "bypassPermissions, like this session "
                                    "(dispatch.childMode: auto opts out)")
     except Exception:  # noqa: BLE001 — never raises: auto is today's behaviour

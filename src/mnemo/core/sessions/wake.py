@@ -30,6 +30,17 @@ children woken that way would be six copies racing six originals over six
 trees. :func:`wake` therefore refuses anything that is not a full id, and
 checks the output for the copy note afterwards.
 
+**Options the CLI no longer honours (#822).** The restored options are the
+ones saved at spawn, and Claude Code 2.1.321 does not run every saved shape the
+way it ran it before. A lean child in ``bypassPermissions`` dispatched before
+#822 was saved with ``--setting-sources project,local``. Woken now, the wake is
+accepted, but the woken turns run ``default`` (measured), because the bypass
+disclaimer's acceptance lives in the user settings those sources leave out.
+Unattended, it would stop at its first prompt. Passing better flags with the
+wake does not help: the CLI then starts a copy. :func:`wake` refuses that shape
+before running anything (:func:`wakes_into_default`) and says so. Children
+dispatched since #822 load user settings and wake in bypass.
+
 **What may ride this channel.** Nothing. A ``--bg --resume`` prompt lands in
 the transcript as ``origin.kind: "human"``, ``promptSource: "typed"`` —
 byte-for-byte the shape of the opening prompt, and so indistinguishable from
@@ -53,11 +64,12 @@ child — inflating the unblock population with edges no person was at.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import textwrap
-from typing import Any, Optional
+from typing import Any, List, Optional, Sequence
 
-from mnemo.core import agent_cli
+from mnemo.core import agent_cli, child_profile
 from mnemo.core.sessions import grok_verbs
 
 #: :func:`_resume`'s "not looked up yet", since ``None`` means "not Grok".
@@ -102,6 +114,45 @@ def is_full_session_id(value: Optional[str]) -> bool:
     if [i for i, c in enumerate(value) if c == "-"] != [8, 13, 18, 23]:
         return False
     return all(c in "0123456789abcdef-" for c in value)
+
+
+def saved_flags(session_id: str) -> List[str]:
+    """The options *session_id* was spawned with (``respawnFlags``), or ``[]``.
+
+    A wake restores exactly these, so they say what the woken session will run
+    as. Read from the first account whose jobs dir has the session.
+    """
+    from mnemo.core.sessions import accounts
+
+    for path in accounts.state_paths(session_id[:8]):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        flags = data.get("respawnFlags") if isinstance(data, dict) else None
+        if isinstance(flags, list):
+            return [str(flag) for flag in flags]
+    return []
+
+
+def wakes_into_default(flags: Sequence[str]) -> bool:
+    """True for saved options that Claude Code 2.1.321 wakes in ``default`` (#822).
+
+    Those are ``--permission-mode bypassPermissions`` with ``--setting-sources``
+    that leave out ``user``: the lean bypass child dispatched before #822. A
+    full-profile child has no ``--setting-sources`` and loads user settings, so
+    it is not this shape.
+    """
+    def value(name: str) -> Optional[str]:
+        try:
+            return flags[list(flags).index(name) + 1]
+        except (ValueError, IndexError):
+            return None
+
+    if value("--permission-mode") != child_profile.BYPASS_MODE:
+        return False
+    sources = value("--setting-sources")
+    return sources is not None and "user" not in [s.strip() for s in sources.split(",")]
 
 
 def wake(session_id: str, *, cwd: str, timeout: float = 120.0) -> Optional[str]:
@@ -247,6 +298,15 @@ def _resume(session_id: str, text: str, *, cwd: str, timeout: float,
             f"{session_id!r} is not a full session id; `claude --bg --resume` "
             "would start a *copy* of the conversation in the same worktree "
             "rather than waking it (claude_cli assumption `resume-under-own-id`)"
+        )
+    if wakes_into_default(saved_flags(session_id)):
+        return (
+            f"{session_id[:8]} was started in bypassPermissions on the lean profile "
+            "without user settings, as children were before #822. Claude Code "
+            "2.1.321 wakes such a session in `default` mode, where it stops at its "
+            "first prompt, and flags passed with the wake start a copy instead "
+            "(claude_cli assumption `bg-bypass-needs-user-settings`). Not woken: "
+            "dispatch its work again for a child that runs bypassPermissions"
         )
     try:
         result = subprocess.run(

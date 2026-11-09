@@ -80,6 +80,78 @@ def test_a_missing_cli_is_a_message_too(monkeypatch) -> None:
     assert "claude" in (wake.wake(FULL, cwd="/tmp") or "")
 
 
+# --- saved options the CLI no longer honours (#822) -------------------------
+
+OLD_LEAN_BYPASS = ["--permission-mode", "bypassPermissions", "--setting-sources",
+                   "project,local", "--strict-mcp-config", "--mcp-config", "m.json",
+                   "--settings", "s.json", "--model", "opus"]
+
+
+@pytest.mark.parametrize("flags, expected", [
+    (OLD_LEAN_BYPASS, True),
+    (["--setting-sources", "project", "--permission-mode", "bypassPermissions"], True),
+    (["--permission-mode", "bypassPermissions", "--setting-sources", "user,project,local",
+      "--strict-mcp-config"], False),
+    (["--permission-mode", "bypassPermissions", "--setting-sources", "project, user"], False),
+    (["--permission-mode", "bypassPermissions", "--model", "opus"], False),
+    (["--setting-sources", "project,local", "--strict-mcp-config"], False),
+    (["--permission-mode", "auto", "--setting-sources", "project,local"], False),
+    (["--setting-sources", "project,local", "--permission-mode"], False),
+    ([], False),
+], ids=["pre-822-lean-bypass", "order", "822-lean-bypass", "spaced", "full-bypass",
+        "lean-auto", "lean-explicit-auto", "dangling-flag", "nothing"])
+def test_which_saved_options_wake_into_default(flags, expected) -> None:
+    assert wake.wakes_into_default(flags) is expected
+
+
+def test_a_pre_822_lean_bypass_child_is_not_woken(monkeypatch) -> None:
+    """Measured on 2.1.321: woken, it runs ``default`` and stops at its first
+    prompt; flags passed with the wake start a copy. So nothing is run."""
+    run = _Run(stdout=WOKE)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(wake, "saved_flags", lambda session_id: OLD_LEAN_BYPASS)
+
+    why = wake.wake(FULL, cwd="/tmp/tree")
+
+    assert why and SHORT in why and "bg-bypass-needs-user-settings" in why
+    assert "default" in why and "dispatch" in why
+    assert run.calls == []
+
+
+def test_a_child_dispatched_since_822_is_woken_as_before(monkeypatch) -> None:
+    run = _Run(stdout=WOKE)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(wake, "saved_flags", lambda session_id: [
+        "--permission-mode", "bypassPermissions", "--setting-sources", "user,project,local"])
+
+    assert wake.wake(FULL, cwd="/tmp/tree") is None
+    assert run.calls == [["claude", "--bg", "--resume", FULL, wake.NUDGE]]
+
+
+def test_saved_flags_come_from_the_first_account_that_has_the_session(monkeypatch, tmp_path) -> None:
+    from mnemo.core.sessions import accounts
+
+    missing = tmp_path / "a" / "state.json"
+    broken = tmp_path / "b" / "state.json"
+    broken.parent.mkdir()
+    broken.write_text("{not json", encoding="utf-8")
+    good = tmp_path / "c" / "state.json"
+    good.parent.mkdir()
+    good.write_text('{"respawnFlags": ["--model", "haiku"]}', encoding="utf-8")
+    asked = []
+
+    def paths(short_id):
+        asked.append(short_id)
+        return [missing, broken, good]
+
+    monkeypatch.setattr(accounts, "state_paths", paths)
+    assert wake.saved_flags(FULL) == ["--model", "haiku"]
+    assert asked == [SHORT]
+
+    monkeypatch.setattr(accounts, "state_paths", lambda short_id: [missing, broken])
+    assert wake.saved_flags(FULL) == []
+
+
 # --- what the woken child is told ------------------------------------------
 
 
