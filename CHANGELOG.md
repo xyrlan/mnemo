@@ -5,6 +5,37 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.14.2] — 2026-11-09
+
+### Fixed
+
+- **`mnemo procedures` proposes a `-m` shape as the command children typed.**
+  Runs of `python -m pytest` group under the shape `python pytest` and the key
+  `python-pytest`, and the proposed `CLAUDE.md` block used to print that shape
+  as the command — which runs a file called `pytest`, not pytest. The block,
+  its heading and `--show` now read `python -m pytest`; the key and the
+  grouping are unchanged. (#811)
+
+- **`mnemo doctor`'s orphan-worktree-briefings hint now runs as printed.** It
+  used to end with `--repos <repo_path> --dry-run`, a path the doctor never
+  printed and the command only used to work out an agent name. The new
+  `--agents NAME` option takes that name directly. The doctor now prints
+  `mnemo migrate-worktree-briefings --agents <canonical> --dry-run`, which
+  previews the moves for exactly the dirs it flagged. Sibling checkouts that
+  share a prefix are still never moved. `migrate-worktree-briefings` called
+  with neither `--agents` nor `--repos` now exits 2 with the usage line on
+  stderr, where it used to exit 0, so "nothing ran" no longer looks like
+  "nothing to migrate". (#813)
+
+### Internal
+
+- **CI's Linux py3.8 and py3.9 jobs run on Ubuntu 24.04, and so does the Linux
+  release build.** `ubuntu-latest` became Ubuntu 26.04, which has no Python 3.8
+  or 3.9 for `setup-python`, so both jobs failed before running a test. The
+  newer versions stay on `ubuntu-latest`. The `linux-x64` binary is pinned to
+  24.04, the image 1.14.1's was built on, so its glibc floor does not rise with
+  the label. (#816)
+
 ## [1.14.1] — 2026-10-28
 
 ### Fixed
