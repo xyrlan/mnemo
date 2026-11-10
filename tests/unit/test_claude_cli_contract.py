@@ -196,3 +196,147 @@ def test_an_unusable_state_file_says_what_is_wrong_with_it(
     message = claude_cli.verify_registered("a1b2c3d4", cwd=tmp_path)
     assert message is not None
     assert fragment in message
+
+
+# --- workspace trust (`bg-workspace-trust`, #826) -----------------------------
+#
+# The layouts below are git's own: a checkout's `.git` directory, and a
+# worktree whose `.git` file points into `<checkout>/.git/worktrees/<name>`,
+# which holds `commondir` and a `gitdir` pointing back. One test builds them
+# with real git so the fakes cannot drift from it.
+
+
+def _checkout(path: Path) -> Path:
+    (path / ".git" / "worktrees").mkdir(parents=True)
+    return path
+
+
+def _worktree(checkout: Path, tree: Path, *, name: str = "wt") -> Path:
+    admin = checkout / ".git" / "worktrees" / name
+    admin.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    (tree / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+    (admin / "commondir").write_text("../..\n", encoding="utf-8")
+    (admin / "gitdir").write_text(f"{tree / '.git'}\n", encoding="utf-8")
+    return tree
+
+
+def _trusted(*paths: Path, accepted: bool = True) -> dict:
+    """``projects`` as Claude Code writes it on Windows: forward slashes."""
+    return {path.as_posix(): {"hasTrustDialogAccepted": accepted} for path in paths}
+
+
+def test_git_root_is_where_a_git_entry_is_dir_or_file(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path / "proj")
+    (checkout / "src" / "pkg").mkdir(parents=True)
+    tree = _worktree(checkout, tmp_path / "proj-wt-1")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    assert claude_cli.git_root(checkout / "src" / "pkg") == checkout
+    assert claude_cli.git_root(tree) == tree
+    assert claude_cli.git_root(plain) is None
+
+
+def test_a_worktree_is_trusted_at_its_checkout_wherever_it_lies(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path / "proj")
+    beside = _worktree(checkout, tmp_path / "proj-wt-1", name="a")
+    inside = _worktree(checkout, checkout / ".claude" / "worktrees" / "b", name="b")
+    far = _worktree(checkout, tmp_path / "elsewhere" / "deep" / "tree", name="c")
+
+    for tree in (beside, inside, far):
+        assert claude_cli.trust_root(tree) == checkout
+        assert claude_cli.trusted_by(tree, _trusted(checkout)) == checkout.as_posix()
+
+
+def test_a_git_file_that_does_not_close_the_loop_is_its_own_root(tmp_path: Path) -> None:
+    """A submodule's ``.git`` file has no ``commondir``; a forged one no back-pointer."""
+    checkout = _checkout(tmp_path / "proj")
+    sub = tmp_path / "sub"
+    (checkout / ".git" / "modules" / "sub").mkdir(parents=True)
+    sub.mkdir()
+    (sub / ".git").write_text(f"gitdir: {checkout / '.git' / 'modules' / 'sub'}\n",
+                              encoding="utf-8")
+    forged = _worktree(checkout, tmp_path / "forged")
+    (checkout / ".git" / "worktrees" / "wt" / "gitdir").write_text(
+        f"{tmp_path / 'somewhere-else' / '.git'}\n", encoding="utf-8")
+
+    assert claude_cli.trust_root(sub) == sub
+    assert claude_cli.trust_root(forged) == forged
+    assert claude_cli.trusted_by(forged, _trusted(checkout)) is None
+
+
+def test_a_bare_repositorys_worktree_is_trusted_at_the_bare_directory(tmp_path: Path) -> None:
+    bare = tmp_path / "proj.git"
+    (bare / "worktrees" / "wt").mkdir(parents=True)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / ".git").write_text(f"gitdir: {bare / 'worktrees' / 'wt'}\n", encoding="utf-8")
+    (bare / "worktrees" / "wt" / "commondir").write_text("../..\n", encoding="utf-8")
+    (bare / "worktrees" / "wt" / "gitdir").write_text(f"{tree / '.git'}\n", encoding="utf-8")
+
+    assert claude_cli.trust_root(tree) == bare
+
+
+def test_trust_above_a_repository_does_not_reach_into_it(tmp_path: Path) -> None:
+    """A fresh repo under a trusted folder, or nested in a trusted checkout's tree."""
+    home = tmp_path / "home"
+    fresh = _checkout(home / "tmp" / "repo")
+    checkout = _checkout(tmp_path / "proj")
+    tree = _worktree(checkout, tmp_path / "tree")
+    nested = _checkout(tree / "nested")
+    entries = _trusted(home, checkout)
+
+    assert claude_cli.trusted_by(fresh, entries) is None
+    assert claude_cli.trusted_by(nested, entries) is None
+    assert claude_cli.trusted_by(tree, entries) == checkout.as_posix()
+
+
+def test_inside_a_repository_trust_is_looked_for_up_to_its_root(tmp_path: Path) -> None:
+    checkout = _checkout(tmp_path / "proj")
+    deep = checkout / "a" / "b"
+    deep.mkdir(parents=True)
+
+    assert claude_cli.trusted_by(deep, _trusted(checkout)) == checkout.as_posix()
+    assert claude_cli.trusted_by(deep, _trusted(checkout / "a")) == (checkout / "a").as_posix()
+    assert claude_cli.trusted_by(checkout, _trusted(deep)) is None
+
+
+def test_outside_a_repository_any_directory_above_trusts(tmp_path: Path) -> None:
+    plain = tmp_path / "home" / "tmp" / "plain"
+    plain.mkdir(parents=True)
+
+    assert claude_cli.trusted_by(plain, _trusted(tmp_path / "home")) == (
+        tmp_path / "home").as_posix()
+    assert claude_cli.trusted_by(plain, _trusted(tmp_path / "elsewhere")) is None
+
+
+@pytest.mark.parametrize("projects", [
+    pytest.param(None, id="none"),
+    pytest.param([], id="list"),
+    pytest.param({"x": "not an entry"}, id="junk-entry"),
+])
+def test_unusable_projects_trust_nothing(tmp_path: Path, projects) -> None:
+    assert claude_cli.trusted_by(tmp_path, projects) is None
+
+
+def test_an_entry_not_accepted_trusts_nothing(tmp_path: Path) -> None:
+    assert claude_cli.trusted_by(tmp_path, _trusted(tmp_path, accepted=False)) is None
+    assert claude_cli.trusted_by(tmp_path, {str(tmp_path): {"hasTrustDialogAccepted": 1}}) is None
+
+
+def test_a_real_git_worktree_is_trusted_at_its_checkout(tmp_path: Path) -> None:
+    """The fakes above against what git itself writes, paths and all."""
+    checkout = tmp_path / "proj"
+    checkout.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": __import__("os").environ.get("PATH", ""), "HOME": str(tmp_path)}
+    for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"],
+                 ["worktree", "add", "-q", "--detach", "--no-checkout",
+                  str(tmp_path / "far" / "tree")]):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True, env=env)
+
+    root = claude_cli.trust_root(tmp_path / "far" / "tree")
+    assert root is not None and root.resolve() == checkout.resolve()
+    assert claude_cli.trusted_by(tmp_path / "far" / "tree", _trusted(checkout.resolve()))

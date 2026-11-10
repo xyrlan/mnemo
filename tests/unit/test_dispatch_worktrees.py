@@ -642,6 +642,50 @@ def test_an_issue_rollback_also_deletes_its_branch(repo: Path, monkeypatch) -> N
     assert "fix/issue-197" not in _branches(repo)
 
 
+# What `claude --bg` 2.1.321 printed for a worktree of a checkout nobody
+# trusted (tools/measure_bg_trust.py, #826), with the tree's path left out.
+UNTRUSTED = ("Workspace not trusted. Run `claude` in {tree} once and accept the "
+             "trust prompt, then retry.")
+
+
+def _untrusted(prompt, *, cwd, model=None, lean=True, effort=None, read_only=False):
+    raise dispatch.DispatchError(f"claude --bg failed: {UNTRUSTED.format(tree=cwd)}")
+
+
+def test_an_untrusted_checkout_is_named_where_the_removed_tree_was(
+    repo: Path, monkeypatch
+) -> None:
+    """The CLI says to run ``claude`` in the worktree, which the rollback removes.
+
+    Claude Code trusts a worktree through its checkout (``bg-workspace-trust``),
+    so the hint names the checkout. The CLI's own sentence is kept.
+    """
+    monkeypatch.setattr(dispatch, "spawn_child", _untrusted)
+    tree = dispatch.worktree_path(197, repo_root=repo)
+
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.dispatch_issue(197, repo_root=repo, fetch=_fake_fetch)
+
+    said = str(caught.value)
+    assert UNTRUSTED.format(tree=tree) in said
+    assert f"run `claude` once in {repo}," in said
+    assert not tree.exists()
+    assert "fix/issue-197" not in _branches(repo)
+
+
+def test_a_contract_piece_carries_the_same_hint(repo: Path, monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "spawn_child", _untrusted)
+    results = dispatch.dispatch_contract(_contract(repo), repo_root=repo)
+    assert all(f"run `claude` once in {repo}," in (r.error or "") for r in results), results
+
+
+def test_any_other_spawn_failure_gets_no_trust_hint(repo: Path, monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "spawn_child", _boom)
+    with pytest.raises(dispatch.DispatchError) as caught:
+        dispatch.dispatch_issue(197, repo_root=repo, fetch=_fake_fetch)
+    assert str(caught.value) == "boom"
+
+
 def test_rollback_never_deletes_a_branch_it_did_not_create(repo: Path) -> None:
     """``worktree add`` most often refuses *because* the branch already exists.
 

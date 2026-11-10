@@ -10,6 +10,12 @@ one fails, the procedure is: read what the binary actually did, update the
 assumption (and the code that implements it), bump ``VERIFIED_AGAINST``.
 Fixtures elsewhere in the suite mirror the last observed output; this is the
 only test that can tell when "last observed" has gone stale.
+
+Every ``--bg`` child here starts in ``trusted_tree``: an empty worktree of
+the checkout the suite runs from, which ``--bg`` trusts through that checkout
+(``bg-workspace-trust``, #826). Claude Code's trust state is read, never
+written. Running the suite therefore needs a checkout you have opened Claude
+Code in at least once.
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import warnings
 from pathlib import Path
@@ -84,6 +91,75 @@ def real_claude(real_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return claude_home
 
 
+#: The checkout these tests run from: a trusted tree is borrowed from it.
+CHECKOUT = Path(__file__).resolve().parents[2]
+
+
+def _trust_entries() -> dict:
+    """``~/.claude.json``'s ``projects``, read and never written, or ``{}``."""
+    try:
+        data = json.loads(child_profile.user_claude_json_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    projects = data.get("projects") if isinstance(data, dict) else None
+    return projects if isinstance(projects, dict) else {}
+
+
+@pytest.fixture()
+def trusted_tree(real_claude: Path, tmp_path: Path):
+    """An empty, detached worktree of the checkout under test, in ``tmp_path`` (#826).
+
+    ``claude --bg`` refuses a workspace nobody trusted (``bg-workspace-trust``),
+    and a fresh ``git init`` is one. Claude Code trusts a worktree through the
+    checkout it belongs to, wherever the worktree lies, and whoever runs this
+    suite has trusted their checkout by running Claude Code in it. A
+    ``mnemo dispatch`` child starts on that same trust, in a sibling worktree,
+    so the tree is borrowed from there, and nothing is written to Claude
+    Code's trust state.
+
+    ``--no-checkout`` keeps the tree as empty as the fresh repository was: the
+    child sees no CLAUDE.md and no project settings. ``--detach`` makes no
+    branch in the maintainer's repository. The tree is removed afterwards.
+
+    Not a plain directory under the temp folder: one there is trusted only
+    when a directory above it is. On the measuring machine that is the home
+    directory, through an old entry; 2.1.321 says home "is trusted one session
+    at a time", so a newer machine has none. On macOS the temp folder is not
+    under home at all.
+
+    Skipped, not failed, when the checkout itself is not trusted here, or is
+    not a git checkout: those are machine states, not broken assumptions.
+    """
+    if claude_cli.git_root(CHECKOUT) is None:
+        pytest.skip(f"{CHECKOUT} is not a git checkout; there is no trusted tree to borrow")
+    if not claude_cli.trusted_by(CHECKOUT, _trust_entries()):
+        pytest.skip(
+            f"Claude Code does not trust {claude_cli.trust_root(CHECKOUT)} on this "
+            "machine: run `claude` there once and accept the trust prompt"
+        )
+    tree = tmp_path / "tree"
+    subprocess.run(["git", "worktree", "add", "--detach", "--no-checkout", str(tree)],
+                   cwd=CHECKOUT, check=True, capture_output=True)
+    try:
+        yield tree
+    finally:
+        said = ""
+        for _ in range(10):
+            run = subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
+                                 cwd=CHECKOUT, capture_output=True, text=True)
+            said = run.stderr.strip()
+            # On Windows a child just stopped can still hold the folder: git
+            # drops the registration, keeps the folder, and every retry then
+            # says "is not a working tree". pytest's temp folder takes the rest.
+            if run.returncode == 0 or not tree.exists() or "is not a working tree" in said:
+                break
+            time.sleep(1)
+        else:
+            warnings.warn(f"could not remove the borrowed worktree {tree}: {said}; "
+                          f"`git worktree remove --force {tree.as_posix()}` does",
+                          stacklevel=1)
+
+
 def test_installed_version_is_readable(real_claude: Path) -> None:
     version = claude_cli.claude_version()
     assert version, "`claude --version` printed no x.y.z; parse_version needs updating"
@@ -105,10 +181,16 @@ def test_agents_refuses_a_pipe(real_claude: Path) -> None:
     )
 
 
-def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> None:
-    """One real spawn, every assumption dispatch meets on the way, in order."""
-    repo = _git_repo(tmp_path / "live")
-    tree = dispatch.ensure_worktree(1, repo_root=repo)
+def test_bg_spawn_read_back_and_teardown(real_claude: Path, trusted_tree: Path) -> None:
+    """One real spawn, every assumption dispatch meets on the way, in order.
+
+    In a worktree outside its checkout's folder, trusted through that
+    checkout: the tree a dispatch child gets. The worktree is git's own, not
+    ``dispatch.ensure_worktree``'s. Made against the maintainer's checkout,
+    that would create a ``fix/issue-<n>`` branch there, and it has unit tests
+    of its own.
+    """
+    tree = trusted_tree
     short_id = ""
     try:
         # bg-positional-prompt + bg-prints-short-id: the real spawn_child, no
@@ -159,14 +241,25 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
             return residents.census(residents.parse_ps(table),
                                     residents.read_roster_raw(real_claude), states)
 
-        pool = _until(lambda: (lambda c: c if len(c.spares) == 1 else None)(_census()), seconds=15)
-        assert pool, f"daemon-spare-pool: expected one idle spare after a spawn, got {_census().spares}"
-        assert worker_pid in {w.pid for w in pool.workers}, (
-            f"daemon-spare-pool: worker pid {worker_pid} not filed as a worker"
-        )
-        assert worker_pid not in {s.pid for s in pool.spares}, (
-            "daemon-spare-pool: a claimed spare was counted as idle"
-        )
+        if sys.platform == "win32":
+            # The census is POSIX-only (`residents.read_ps`: no `ps`, and the
+            # daemon's process shape on Windows was never measured), so the
+            # doctor reads no pool here and there is none to hold it to. Said
+            # rather than skipped: the rest of this test still runs (#826).
+            warnings.warn("daemon-spare-pool: the spare census is not checked on "
+                          "Windows; only `stop` ending the worker is", stacklevel=1)
+        else:
+            pool = _until(lambda: (lambda c: c if len(c.spares) == 1 else None)(_census()),
+                          seconds=15)
+            assert pool, (
+                f"daemon-spare-pool: expected one idle spare after a spawn, got {_census().spares}"
+            )
+            assert worker_pid in {w.pid for w in pool.workers}, (
+                f"daemon-spare-pool: worker pid {worker_pid} not filed as a worker"
+            )
+            assert worker_pid not in {s.pid for s in pool.spares}, (
+                "daemon-spare-pool: a claimed spare was counted as idle"
+            )
 
         # Let the one-word child finish, then check the terminal vocabulary
         # and the transcript it leaves behind.
@@ -248,10 +341,63 @@ def test_bg_spawn_read_back_and_teardown(real_claude: Path, tmp_path: Path) -> N
             assert not (real_claude / "jobs" / short_id).exists(), (
                 "stop-rm-noninteractive: `claude rm` left the jobs entry behind"
             )
-        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(1))
 
 
-def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
+def test_bg_trusts_a_worktree_through_its_checkout_and_nothing_nested(
+    real_claude: Path, trusted_tree: Path
+) -> None:
+    """``bg-workspace-trust``: both sides of the refusal, one haiku child (#826).
+
+    A fresh repository nested in ``trusted_tree`` is refused. Trust above a
+    repository's own root does not reach it, even when what is above is a
+    trusted checkout's worktree, so the refusal is certain on any machine.
+    ``trusted_tree`` itself, a worktree outside its checkout's folder,
+    starts: the trust it borrows is the checkout's, the same trust every
+    dispatch child starts on. The rule as code (``trusted_by``) is held to
+    both outcomes too, since the fixture's skip relies on it.
+    """
+    key = "bg-workspace-trust"
+    entries = _trust_entries()
+    nested = _git_repo(trusted_tree / "nested")
+    assert claude_cli.trusted_by(nested, entries) is None, (
+        f"{key}: the rule as code finds trust for a fresh repository: "
+        f"{claude_cli.trusted_by(nested, entries)!r}"
+    )
+    refused = subprocess.run(
+        ["claude", "--bg", "--model", "haiku", PROMPT],
+        cwd=nested, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60,
+    )
+    said = (refused.stderr or refused.stdout).strip()
+    started = claude_cli.short_id_from(refused.stdout) if refused.returncode == 0 else ""
+    if started:
+        subprocess.run(["claude", "stop", started], capture_output=True, timeout=60)
+        subprocess.run(["claude", "rm", started], capture_output=True, timeout=60)
+    assert refused.returncode != 0 and claude_cli.TRUST_REFUSAL in said, (
+        f"{key}: a fresh repository inside a trusted worktree was not refused as "
+        f"measured (exit {refused.returncode}: {said[:300]!r}). If `--bg` starts "
+        "there now, the trust it reads no longer stops at the repository's root"
+    )
+
+    assert claude_cli.trusted_by(trusted_tree, entries), trusted_tree
+    short_id = ""
+    try:
+        short_id = dispatch.spawn_child(PROMPT, cwd=trusted_tree, model="haiku")
+    except dispatch.DispatchError as exc:
+        pytest.fail(
+            f"{key}: a worktree of the trusted checkout "
+            f"{claude_cli.trust_root(trusted_tree)}, outside its folder, was refused: "
+            f"{exc}. `--bg` no longer trusts a worktree through its checkout, and "
+            "every `mnemo dispatch` child runs in such a worktree"
+        )
+    finally:
+        if short_id:
+            subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
+            subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
+    assert claude_cli.SHORT_ID_RE.match(short_id), short_id
+
+
+def test_bg_and_model_compose(real_claude: Path, trusted_tree: Path) -> None:
     """``bg-model-flag``: ``--bg --model <id>`` is accepted and honoured (#268).
 
     A second real spawn, and it earns its ~6s: the whole of ``mnemo dispatch
@@ -263,12 +409,14 @@ def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
     The transcript is the proof rather than ``respawnFlags``: the flags only
     say what was *asked for*, and the question this assumption answers is what
     the child actually ran on.
+
+    Needs a directory, not a repository: nothing here is about git. The
+    directory is ``trusted_tree`` because that is one ``--bg`` trusts on any
+    machine whose checkout is trusted (#826).
     """
-    repo = _git_repo(tmp_path / "live-model")
-    tree = dispatch.ensure_worktree(2, repo_root=repo)
     short_id = ""
     try:
-        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku")
+        short_id = dispatch.spawn_child(PROMPT, cwd=trusted_tree, model="haiku")
         assert claude_cli.SHORT_ID_RE.match(short_id), (
             f"bg-model-flag: `--bg --model haiku` printed no id: {short_id!r}"
         )
@@ -307,7 +455,6 @@ def test_bg_and_model_compose(real_claude: Path, tmp_path: Path) -> None:
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
-        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(2))
 
 
 def test_effort_levels_match_the_cli(real_claude: Path) -> None:
@@ -330,19 +477,18 @@ def test_effort_levels_match_the_cli(real_claude: Path) -> None:
     )
 
 
-def test_bg_and_effort_compose(real_claude: Path, tmp_path: Path) -> None:
+def test_bg_and_effort_compose(real_claude: Path, trusted_tree: Path) -> None:
     """``bg-effort-flag``, half two: ``--effort`` survives ``--bg`` (#351).
 
     On the lean default, where no other flag would put a value there, and on
     haiku at ``low`` so the proof is the cheapest spawn available. What is
     checked is what was *recorded*: nothing observable says how hard a child
-    actually reasoned.
+    actually reasoned. A directory is all it needs; ``trusted_tree`` is one
+    ``--bg`` trusts (#826).
     """
-    repo = _git_repo(tmp_path / "live-effort")
-    tree = dispatch.ensure_worktree(3, repo_root=repo)
     short_id = ""
     try:
-        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku", effort="low")
+        short_id = dispatch.spawn_child(PROMPT, cwd=trusted_tree, model="haiku", effort="low")
         assert claude_cli.SHORT_ID_RE.match(short_id), (
             f"bg-effort-flag: `--bg --effort low` printed no id: {short_id!r}"
         )
@@ -357,7 +503,6 @@ def test_bg_and_effort_compose(real_claude: Path, tmp_path: Path) -> None:
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
-        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
 def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
@@ -373,6 +518,10 @@ def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
     Skipped rather than failed when mnemo is not installed in this HOME: the
     hand-back has nothing to hand back, which is a machine state, not a broken
     assumption.
+
+    Still a fresh repository: ``-p`` is not subject to ``--bg``'s trust check
+    (``bg-workspace-trust``, measured by ``tools/measure_bg_trust.py``), and
+    the repo is what makes the CLAUDE.md below the project's own.
     """
     key = "lean-child-profile"
     if not claude_cli.assumption(key):  # pragma: no cover - typo guard
@@ -433,7 +582,7 @@ def test_lean_child_profile(real_claude: Path, tmp_path: Path) -> None:
 
 
 def test_full_profile_child_resolves_the_machine_default(
-    real_claude: Path, tmp_path: Path
+    real_claude: Path, trusted_tree: Path
 ) -> None:
     """``bg-model-flag``, resolution half: only a full-profile child shows it.
 
@@ -450,13 +599,12 @@ def test_full_profile_child_resolves_the_machine_default(
     Which makes this the only arm that can still exercise the claim, and the
     reason it is asserted here rather than in the default-path spawn test.
     Spending the machine default for one word is the price of the only
-    measurement that can catch the resolution going away.
+    measurement that can catch the resolution going away. A directory is all
+    it needs; ``trusted_tree`` is one ``--bg`` trusts (#826).
     """
-    repo = _git_repo(tmp_path / "live-full")
-    tree = dispatch.ensure_worktree(3, repo_root=repo)
     short_id = ""
     try:
-        short_id = dispatch.spawn_child(PROMPT, cwd=tree, lean=False)
+        short_id = dispatch.spawn_child(PROMPT, cwd=trusted_tree, lean=False)
         assert claude_cli.SHORT_ID_RE.match(short_id), short_id
 
         state_path = real_claude / "jobs" / short_id / "state.json"
@@ -482,10 +630,9 @@ def test_full_profile_child_resolves_the_machine_default(
         if short_id:
             subprocess.run(["claude", "stop", short_id], capture_output=True, text=True, timeout=60)
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
-        dispatch.remove_worktree(tree, repo_root=repo, branch=dispatch.branch_name(3))
 
 
-def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -> None:
+def test_a_bypass_child_needs_user_settings(real_claude: Path, trusted_tree: Path) -> None:
     """``bg-bypass-needs-user-settings``: refused lean, started with user settings.
 
     Two halves, against the installed binary. The lean flags as dispatch passed
@@ -493,8 +640,9 @@ def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -
     passes now start a child that runs ``bypassPermissions``. Both need the
     disclaimer accepted in user settings, which a machine that never ran bypass
     has not done, so that machine skips rather than failing for the wrong
-    reason. A plain directory, not a fresh git repo: ``--bg`` does not trust a
-    new repository ("Workspace not trusted"). One haiku child, one word.
+    reason. Both halves in ``trusted_tree``: ``--bg`` refuses a fresh
+    repository as untrusted, and a plain temp directory is trusted only where
+    a directory above it is (#826). One haiku child, one word.
     """
     from mnemo.core import child_mode
 
@@ -503,7 +651,7 @@ def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -
     if child_mode.bypass_accepted_in(real_claude) is None:
         pytest.skip("the bypass disclaimer was never accepted in user settings here")
 
-    old = tmp_path / "old-shape"
+    old = trusted_tree / "old-shape"
     old.mkdir()
     refused = subprocess.run(
         ["claude", "--bg", "--permission-mode", bypass, *child_profile.LEAN_FLAGS, PROMPT],
@@ -522,11 +670,9 @@ def test_a_bypass_child_needs_user_settings(real_claude: Path, tmp_path: Path) -
         "the user settings a bypass child now loads may no longer be needed"
     )
 
-    tree = tmp_path / "new-shape"
-    tree.mkdir()
     short_id = ""
     try:
-        short_id = dispatch.spawn_child(PROMPT, cwd=tree, model="haiku",
+        short_id = dispatch.spawn_child(PROMPT, cwd=trusted_tree, model="haiku",
                                         permission_mode=bypass)
         state_path = real_claude / "jobs" / short_id / "state.json"
         finished = _until(
@@ -609,7 +755,7 @@ def _advisor_calls(records: list) -> tuple:
     return blocks, iterations
 
 
-def test_bg_and_advisor_compose(real_claude: Path, tmp_path: Path) -> None:
+def test_bg_and_advisor_compose(real_claude: Path, trusted_tree: Path) -> None:
     """``bg-advisor-flag``: ``--advisor`` reaches a lean ``--bg`` child (#818).
 
     The real ``spawn_child``, on the lean default, and the cheapest advised
@@ -618,14 +764,10 @@ def test_bg_and_advisor_compose(real_claude: Path, tmp_path: Path) -> None:
     model is most of the bill. The transcript is the proof: the flag only
     says what was asked for, and a child whose advisor is dropped keeps it.
     """
-    # A plain directory, as for the bypass test above: `--bg` refuses a
-    # fresh git repository as untrusted ("Workspace not trusted").
-    tree = tmp_path / "advisor"
-    tree.mkdir()
     short_id = ""
     try:
         short_id = dispatch.spawn_child(
-            ADVISOR_PROMPT, cwd=tree, model="claude-haiku-5-5", advisor="sonnet",
+            ADVISOR_PROMPT, cwd=trusted_tree, model="claude-haiku-5-5", advisor="sonnet",
         )
         assert claude_cli.SHORT_ID_RE.match(short_id), short_id
         finished, records = _finished_transcript(real_claude, short_id)
@@ -661,7 +803,7 @@ def test_bg_and_advisor_compose(real_claude: Path, tmp_path: Path) -> None:
             subprocess.run(["claude", "rm", short_id], capture_output=True, text=True, timeout=60)
 
 
-def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path, tmp_path: Path) -> None:
+def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path, trusted_tree: Path) -> None:
     """``bg-advisor-flag``, the half dispatch refuses on: dropped, silently.
 
     A Sonnet 5.5 child takes no Haiku 5.5 advisor. Claude Code starts it
@@ -672,14 +814,10 @@ def test_advisor_ranked_below_the_child_is_dropped(real_claude: Path, tmp_path: 
     failing because the child *was* advised, or the spawn now errors, the
     refusal is the thing to revisit.
     """
-    # A plain directory, as for the bypass test above: `--bg` refuses a
-    # fresh git repository as untrusted ("Workspace not trusted").
-    tree = tmp_path / "advisor-below"
-    tree.mkdir()
     short_id = ""
     try:
         short_id = dispatch.spawn_child(
-            ADVISOR_IF_ANY_PROMPT, cwd=tree, model="sonnet", advisor="claude-haiku-5-5",
+            ADVISOR_IF_ANY_PROMPT, cwd=trusted_tree, model="sonnet", advisor="claude-haiku-5-5",
         )
         assert claude_cli.SHORT_ID_RE.match(short_id), short_id
         finished, records = _finished_transcript(real_claude, short_id)
