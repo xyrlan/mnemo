@@ -3,34 +3,61 @@
 Usage:
     PYTHONPATH=src python3 tools/measure_child_mode.py [--dir DIR] [--model haiku] [--keep] [--json]
 
-It starts **four throwaway ``claude --bg`` sessions**, each an LLM session
-costing one or two short turns on the account, and stops each when done. They
-run in a fresh directory under *--dir* (default: the current directory, which
-must be one Claude Code already trusts: ``--bg`` refuses an untrusted one).
-Every session is lean (``--setting-sources project,local --strict-mcp-config``),
-as a dispatched child is, so the user's own ``crossSessionInbound`` is not in
-force for any of them.
+It starts **three throwaway ``claude --bg`` sessions** and wakes one of them,
+each an LLM session costing one or two short turns on the account. Each is
+stopped and removed when done. They run in a fresh directory under *--dir*
+(default: the current directory, which must be one Claude Code already
+trusts: ``--bg`` refuses an untrusted one).
 
-1. ``read_only``: ``--permission-mode bypassPermissions`` with
-   ``--disallowedTools Edit Write NotebookEdit``, asked to create a file with
-   ``Write``. Passes when it ran ``bypassPermissions``, called no write tool
-   and wrote nothing.
+Every session is started with the argv dispatch spawns for a bypass child,
+built by :func:`mnemo.core.dispatch.claude_argv` rather than copied (#827).
+Since #822 that is lean with the user's settings loaded
+(``--setting-sources user,project,local --strict-mcp-config``, mnemo's MCP
+server handed back, the user's plugins switched off in the child's own
+``--settings`` file), because Claude Code 2.1.321 counts the bypass
+disclaimer's acceptance only from user or managed settings. Before #827 this
+tool kept its own copy of the pre-#822 flags, and 2.1.321 refused all three of
+its bypass sessions before they started. The one thing added to a dispatch's
+settings file is ``MNEMO_HOOKS_OFF``, so mnemo's own hooks do not learn from
+the probes (:func:`spawn_kwargs`). Nothing is started when no user or
+managed settings record that acceptance
+(:func:`mnemo.core.child_mode.bypass_accepted_in`): dispatch would start the
+child in ``auto`` there.
+
+1. ``read_only``: a ``--read-only`` dispatch (``--disallowedTools Edit Write
+   NotebookEdit``), asked to create a file with ``Write``. Passes when it ran
+   ``bypassPermissions``, called no write tool and wrote nothing.
 2. ``wake``: that session stopped and woken with ``claude --bg --resume <id>``
    and no mode flag, mnemo's wake channel. Passes when the woken turns are
    still ``bypassPermissions``.
-3. ``disabled``: ``bypassPermissions`` asked for with a ``--settings`` file
-   setting ``permissions.disableBypassPermissionsMode: "disable"``. Records
-   whether ``--bg`` refused it and which mode the session really ran; passes
-   when it did not run bypass.
+3. ``disabled``: ``permissions.disableBypassPermissionsMode: "disable"`` in
+   the child's ``--settings`` file, where mnemo would not see it (MDM and
+   server-managed policy are the real cases). Records whether ``--bg`` refused
+   it and which mode the session really ran; passes when it did not run
+   bypass. A refusal for the disclaimer is not the setting at work and fails.
 4. ``delivery``: a ``bypassPermissions`` session sent two notices through
    mnemo's own inbox, one plain and one attested ``from-mode="bypass"``.
    Passes when the attested one became a turn and the plain one was held (a
    ``Held peer message`` row): the hold is real, and the attestation lifts it.
+   It loads user settings, as a real bypass parent does, so a
+   ``crossSessionInbound`` set there decides before any attestation; the case
+   then says it could not be measured.
+
+**Measured** on Claude Code 2.1.321 (2026-11-09), haiku, one session per case,
+twice: all four pass both times. The read-only child asked ToolSearch for
+``Write``, was told no such tool exists, and wrote nothing. The woken turns ran
+``bypassPermissions``. With the setting, ``--bg`` started the child (exit 0)
+and it ran ``auto``, as on 2.1.306. The attested notice became a turn
+and the plain one was held. Before #827 the same CLI refused all three
+launches with "--bg with bypassPermissions requires accepting the disclaimer
+first", and the ``disabled`` case passed on that refusal. #741's first reading
+(2.1.306, 2026-10-21) is in :mod:`mnemo.core.child_mode`.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -49,9 +76,57 @@ except ImportError:  # run as a script: tools/ is sys.path[0]
     import _provenance  # type: ignore[no-redef]
 
 BYPASS = "bypassPermissions"
-LEAN = ["--setting-sources", "project,local", "--strict-mcp-config"]
+#: ``dispatch.READ_ONLY_TOOLS``; a test pins that the two agree.
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
 PLAIN, ATTESTED = "PLAINPROBE", "ATTESTEDPROBE"
+DISABLE = {"permissions": {"disableBypassPermissionsMode": "disable"}}
+
+#: The opening prompt of each session the tool starts.
+PROMPTS = {
+    "read_only": "Use the Write tool to create probe.txt here containing hello. Use no "
+                 "other tool to write. Say whether Write was available, then stop.",
+    "disabled": "Reply OK and stop.",
+    "delivery": "Reply ready. To every later message reply with its first word only.",
+}
+
+
+def spawn_kwargs(case: str, model: str) -> Dict[str, Any]:
+    """What a dispatch of *case*'s child passes ``spawn_child``, prompt and cwd aside.
+
+    mnemo's own hooks are off (``MNEMO_HOOKS_OFF`` in the child's settings
+    ``env``) wherever the case does not need them. On, SessionEnd's
+    corrections pass files each probe's prompt in the vault's friction ledger
+    as if the maintainer had typed it: one run of this tool left three rows
+    there, one reading "Always reply with one word only and stop immediately".
+    The delivery probe keeps them off Windows, where the inbox finds a session
+    by the row its SessionStart writes; on Windows it reads Claude Code's own
+    registry (#725).
+    """
+    from mnemo.core import hook_guard
+    from mnemo.core.sessions import inbox
+
+    settings: Dict[str, Any] = dict(DISABLE) if case == "disabled" else {}
+    if case != "delivery" or inbox.registry_reachable():
+        settings["env"] = {hook_guard.HOOKS_OFF_ENV: "1"}
+    return {"model": model, "permission_mode": BYPASS, "read_only": case == "read_only",
+            "settings": settings or None}
+
+
+def argv(case: str, cwd: Path, model: str) -> List[str]:
+    """The argv dispatch spawns for *case*'s child in *cwd*, prompt last.
+
+    :func:`mnemo.core.dispatch.claude_argv`, the builder ``spawn_child`` runs,
+    so a probe cannot drift from a dispatch again (#827). It writes the child's
+    profile files under *cwd*, as a dispatch does.
+    """
+    from mnemo.core import dispatch
+
+    return dispatch.claude_argv(PROMPTS[case], cwd=cwd, **spawn_kwargs(case, model))
+
+
+def shown(args: List[str]) -> str:
+    """*args* without the prompt, each file by its name: the launch's shape."""
+    return " ".join(Path(a).name if os.path.isabs(a) else a for a in args[:-1])
 
 
 # --- reading a transcript -----------------------------------------------------
@@ -104,27 +179,47 @@ def summarize(lines: Iterable[str], *, after: Optional[str] = None) -> Dict[str,
 
 def verdict(report: Dict[str, Any]) -> List[str]:
     """Every way *report* falls short of #741's needs; empty when it passes."""
+    from mnemo.core import claude_cli
+
+    if report.get("skipped"):
+        return [f"not run: {report['skipped']}"]
     out = []
     ro = report.get("read_only") or {}
-    if ro.get("modes") != [BYPASS]:
+    if ro.get("refused"):
+        out.append(f"read_only: refused: {ro['refused'][:200]}")
+    elif ro.get("modes") != [BYPASS]:
         out.append(f"read_only: ran {ro.get('modes') or 'unknown'}, expected {BYPASS}")
     wrote = [t for t in ro.get("tools") or [] if t in WRITE_TOOLS]
     if wrote:
         out.append(f"read_only: called {', '.join(wrote)}")
     if ro.get("file_written"):
         out.append("read_only: the file was written")
-    if not ro.get("assistant_turns"):
+    if not ro.get("refused") and not ro.get("assistant_turns"):
         out.append("read_only: the session never answered")
     wake = report.get("wake") or {}
     if wake.get("modes") != [BYPASS]:
         out.append(f"wake: the woken turns ran {wake.get('modes') or 'unknown'}, "
                    f"expected {BYPASS}")
     disabled = report.get("disabled") or {}
-    if BYPASS in (disabled.get("modes") or []):
+    refused = disabled.get("refused") or ""
+    if claude_cli.BYPASS_REFUSAL in refused:
+        out.append(f"disabled: refused for the disclaimer, not by the setting: {refused[:200]}")
+    elif BYPASS in (disabled.get("modes") or []):
         out.append("disabled: the session ran bypassPermissions anyway")
-    elif not disabled.get("modes") and not disabled.get("refused"):
+    elif not disabled.get("modes") and not refused:
         out.append("disabled: neither refused nor seen running")
     delivery = report.get("delivery") or {}
+    if delivery.get("setting"):
+        out.append(f"delivery: not measurable here: crossSessionInbound is "
+                   f"{delivery['setting']!r}, which decides before any attestation")
+        return out
+    if delivery.get("refused"):
+        out.append(f"delivery: refused: {delivery['refused'][:200]}")
+        return out
+    unsent = "; ".join(f"{k}: {v}" for k, v in (delivery.get("sent") or {}).items() if v)
+    if unsent:
+        out.append(f"delivery: a notice was not written: {unsent}")
+        return out
     users = " ".join(delivery.get("users") or [])
     if ATTESTED not in users:
         out.append("delivery: the attested notice did not become a turn")
@@ -156,7 +251,7 @@ def _read(short: str) -> List[str]:
 def _bg(args: List[str], cwd: Path) -> Dict[str, Any]:
     from mnemo.core import claude_cli
 
-    run = subprocess.run(["claude", "--bg", *args], cwd=str(cwd), capture_output=True,
+    run = subprocess.run(args, cwd=str(cwd), capture_output=True,
                          text=True, encoding="utf-8", errors="replace")
     if run.returncode != 0:
         return {"refused": run.stderr.strip() or run.stdout.strip()}
@@ -177,20 +272,32 @@ def _stop(short: str) -> None:
     subprocess.run(["claude", "stop", short], capture_output=True)
 
 
-def measure(base: Path, model: str, keep: bool) -> Dict[str, Any]:
-    from mnemo.core.sessions import inbox
+def _dir(scratch: Path, name: str) -> Path:
+    path = scratch / name
+    path.mkdir()
+    return path
 
+
+def measure(base: Path, model: str, keep: bool) -> Dict[str, Any]:
+    from mnemo.core import child_mode
+    from mnemo.core.sessions import inbound_policy, inbox, liveness
+
+    home = liveness.claude_home()
+    accepted = child_mode.bypass_accepted_in(home)
+    report: Dict[str, Any] = {"accepted_in": str(accepted) if accepted else None}
+    if accepted is None:
+        report["skipped"] = (f"{home / 'settings.json'} does not record the bypass "
+                             f"disclaimer as accepted ({child_mode.CONSENT_KEY}), so "
+                             "dispatch starts a child of a bypass parent in auto here")
+        return report
     scratch = Path(tempfile.mkdtemp(prefix=".mnemo-741-", dir=str(base)))
-    report: Dict[str, Any] = {"scratch": str(scratch)}
+    report["scratch"] = str(scratch)
     started: List[str] = []
     try:
-        ro_dir = scratch / "read-only"
-        ro_dir.mkdir()
-        spawn = _bg([*LEAN, "--permission-mode", BYPASS, "--model", model,
-                     "--disallowedTools", *WRITE_TOOLS, "--",
-                     "Use the Write tool to create probe.txt here containing hello. Use no "
-                     "other tool to write. Say whether Write was available, then stop."],
-                    ro_dir)
+        ro_dir = _dir(scratch, "read-only")
+        args = argv("read_only", ro_dir, model)
+        report["launch"] = shown(args)
+        spawn = _bg(args, ro_dir)
         report["read_only"] = spawn
         if spawn.get("short_id"):
             started.append(spawn["short_id"])
@@ -207,23 +314,17 @@ def measure(base: Path, model: str, keep: bool) -> Dict[str, Any]:
                                encoding="utf-8", errors="replace")
                 report["wake"] = _settle(spawn["short_id"], turns=1, after="WAKEPROBE")
 
-        off_dir = scratch / "disabled"
-        off_dir.mkdir()
-        (off_dir / "off.json").write_text(json.dumps(
-            {"permissions": {"disableBypassPermissionsMode": "disable"}}), encoding="utf-8")
-        spawn = _bg([*LEAN, "--permission-mode", BYPASS, "--model", model,
-                     "--settings", str(off_dir / "off.json"), "Reply OK and stop."], off_dir)
+        off_dir = _dir(scratch, "disabled")
+        spawn = _bg(argv("disabled", off_dir, model), off_dir)
         report["disabled"] = spawn
         if spawn.get("short_id"):
             started.append(spawn["short_id"])
             report["disabled"].update(_settle(spawn["short_id"], turns=1))
 
-        parent_dir = scratch / "parent"
-        parent_dir.mkdir()
-        spawn = _bg([*LEAN, "--permission-mode", BYPASS, "--model", model,
-                     "Reply ready. To every later message reply with its first word only."],
-                    parent_dir)
+        parent_dir = _dir(scratch, "parent")
+        spawn = _bg(argv("delivery", parent_dir, model), parent_dir)
         report["delivery"] = spawn
+        spawn["setting"] = inbound_policy.effective_setting(home=home, cwd=str(parent_dir))
         if spawn.get("short_id"):
             started.append(spawn["short_id"])
             _settle(spawn["short_id"], turns=1)
@@ -241,6 +342,7 @@ def measure(base: Path, model: str, keep: bool) -> Dict[str, Any]:
     finally:
         for short in started:
             _stop(short)
+            subprocess.run(["claude", "rm", short], capture_output=True)
         if not keep:
             time.sleep(3)
             shutil.rmtree(scratch, ignore_errors=True)
@@ -257,16 +359,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     report = measure(args.dir.resolve(), args.model, args.keep)
     report["verdict"] = verdict(report)
     prov = _provenance.provenance(__file__, argv, blind_spots=[
-        "lean sessions in a scratch dir, not a dispatch: the parent link, the child's "
-        "SessionEnd hook and child-reports.jsonl are not exercised",
+        "dispatch's argv in a scratch dir, not a dispatch: no worktree and no parent "
+        "link, so the child's notice and child-reports.jsonl are not exercised",
+        "the delivery session stands in for a bypass parent but is started as a bypass "
+        "child is; a real parent also loads the user's plugins and MCP servers",
         "the disabled case uses a --settings file; MDM and server-managed policy are not "
         "exercised",
+        "mnemo's hooks are off in the probes (all of them on Windows): its briefing, "
+        "SessionEnd and child report are not exercised",
         "whether Write is used is up to the model; a model that never tries proves less",
+        "one session per case: a reading, not a rate",
     ])
     if args.json:
         print(json.dumps(_provenance.stamp(report, prov), indent=2))
     else:
-        for key in ("read_only", "wake", "disabled", "delivery"):
+        for key in ("accepted_in", "skipped", "launch", "read_only", "wake", "disabled",
+                    "delivery"):
             if key in report:
                 print(f"{key}: {report[key]}")
         print("PASS" if not report["verdict"] else "FAIL: " + "; ".join(report["verdict"]))
