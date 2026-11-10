@@ -171,20 +171,24 @@ def test_quality_is_a_gate_and_six_pairs_are_its_floor() -> None:
 
 
 def _arms_pair(vault: Path, pid: str, *, choice_arm: str = "", wall=(600, 600),
-               shown: bool = True) -> Dict[str, str]:
+               shown: bool = True, checkpoints: bool = False) -> Dict[str, str]:
     """An arms pair: tag ``<pid>a`` advised (sonnet + opus), ``<pid>b`` alone (opus).
 
     The order shown is B then A, so a label is never the arm's initial.
+    *checkpoints* writes the pair line as #832 does: each arm's prompt sha256,
+    the advised one's different; without it, the line #818's pairs carry.
     """
     advised, alone = f"{pid[:5]}a", f"{pid[:5]}b"
+    shas = ({"prompt_sha256": "a" * 64}, {"prompt_sha256": "b" * 64}) if checkpoints \
+        else ({}, {})
     twins._append(vault, {
         "event": "pair", "pair": pid, "issue": 7, "repo_root": "/r", "base": "0" * 40,
-        "model": "sonnet", "advisor": "opus",
+        "model": "sonnet", "advisor": "opus", "prompt_sha256": "b" * 64,
         "twins": [
             {"tag": advised, "tree": f"/r-wt-7-{advised}", "branch": f"fix/issue-7-{advised}",
-             "model": "sonnet", "advisor": "opus"},
+             "model": "sonnet", "advisor": "opus", **shas[0]},
             {"tag": alone, "tree": f"/r-wt-7-{alone}", "branch": f"fix/issue-7-{alone}",
-             "model": "opus", "advisor": None},
+             "model": "opus", "advisor": None, **shas[1]},
         ],
     })
     for n, tag in enumerate((advised, alone)):
@@ -308,6 +312,69 @@ def test_a_report_that_names_the_advisor_is_flagged(tmp_path: Path) -> None:
     assert rows[0]["arms"]["advised"]["report_names_advisor"] is True
     assert report["report_names_advisor"] == 1
     assert "may not have been blind" in tool.format_report(report, rows)
+
+
+def test_from_832_a_report_naming_the_advisor_is_expected_not_flagged(tmp_path: Path) -> None:
+    """The checkpoints ask for the account, and the blind view cut it from
+    both reports (`twins.blind_report`): that read was blind."""
+    vault = tmp_path / "v"
+    tags = _arms_pair(vault, "kkkkkk", choice_arm="tie", checkpoints=True)
+    a, b = _advised(tmp_path / "a.jsonl"), _alone(tmp_path / "b.jsonl")
+    rows = _rows(vault, {tags["advised"]: a, tags["alone"]: b},
+                 reports={str(a): "Advisor: consulted once; no change."})
+    report = tool.measure(rows)
+    assert rows[0]["checkpoints"] is True
+    assert rows[0]["arms"]["advised"]["report_names_advisor"] is True
+    assert report["report_names_advisor"] == 0
+    text = tool.format_report(report, rows)
+    assert "may not have been blind" not in text and "its report names" not in text
+
+
+def test_the_readout_says_how_the_arms_differ_and_marks_pairs_from_before(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "v"
+    paths: Dict[str, Path] = {}
+    old = _arms_pair(vault, "llllll", choice_arm="alone")
+    new = _arms_pair(vault, "mmmmmm", choice_arm="tie", checkpoints=True)
+    for n, tags in enumerate((old, new)):
+        paths[tags["advised"]] = _advised(tmp_path / f"{n}a.jsonl", calls=n)
+        paths[tags["alone"]] = _alone(tmp_path / f"{n}b.jsonl")
+
+    rows = _rows(vault, paths)
+    report = tool.measure(rows)
+    assert [r["checkpoints"] for r in rows] == [False, True]
+    assert report["checkpoints"] == 1
+    text = tool.format_report(report, rows)
+    assert ("they differ by model, by advisor, and by the advisor's checkpoints in the "
+            "advised twin's prompt (#832) — 1 of 2 pair(s)") in text
+    old_line = next(l for l in text.splitlines() if l.startswith("  llllll"))
+    new_line = next(l for l in text.splitlines() if l.startswith("  mmmmmm"))
+    assert old_line.endswith("(before #832: one prompt, no checkpoints)")
+    assert "before #832" not in new_line
+    # The pair from before never called: apart, where #818's four stay.
+    assert text.index("never called the advisor") < text.index("llllll")
+    assert text.index("mmmmmm") < text.index("never called the advisor")
+
+
+def test_each_advised_twin_s_calls_carry_their_share_of_its_cost(tmp_path: Path) -> None:
+    """Each call re-reads the conversation at the advisor's price (#832)."""
+    vault = tmp_path / "v"
+    tags = _arms_pair(vault, "nnnnnn", choice_arm="tie", checkpoints=True)
+    a = _advised(tmp_path / "a.jsonl", calls=2)
+    rows = _rows(vault, {tags["advised"]: a, tags["alone"]: _alone(tmp_path / "b.jsonl")})
+    report = tool.measure(rows)
+
+    # Two probe responses: advisor $0.24502 each; own $0.1018243 each plus
+    # the plain turn's 1M Sonnet reads ($0.10) and 1k output ($0.01).
+    advisor, own = 2 * 0.24502, 2 * 0.1018243 + 0.11
+    share = rows[0]["arms"]["advised"]["advisor_share"]
+    assert share == pytest.approx(advisor / (advisor + own))
+    assert report["advisor_share_median"] == pytest.approx(share)
+    text = tool.format_report(report, rows)
+    assert f"2 advisor call(s) = {share:.0%} of its cost" in text
+    assert f"median share of the advised twin's cost {share:.0%}" in text
+    assert tool.advisor_share(None) is None
 
 
 def test_nothing_read_yet_is_pending_and_says_so(tmp_path: Path) -> None:

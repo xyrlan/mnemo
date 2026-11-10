@@ -124,11 +124,13 @@ def test_prompt_never_prescribes_an_approach() -> None:
     # same run started, rendered as their own numbers and titles — a fact
     # about which children are live, and the only new parameter here that a
     # caller does not write. `blind` is one bit too (#449): whether the branch
-    # is named, so two twins can share one prompt. A summary of the parent's
-    # reasoning would be an approach with a citation attached, and there is
-    # still no way to pass one.
+    # is named, so two twins can share one prompt. `advised` is one bit
+    # (#832): the child has an advisor, so a fixed clause says when to consult
+    # it — the same words for every advised child, never a caller's. A summary
+    # of the parent's reasoning would be an approach with a citation attached,
+    # and there is still no way to pass one.
     assert params == {"issue", "title", "body", "repo_root", "may", "read_only",
-                      "siblings", "blind"}
+                      "siblings", "blind", "advised"}
 
 
 def test_prompt_tolerates_an_empty_body() -> None:

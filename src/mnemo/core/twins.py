@@ -19,6 +19,11 @@ checkable claim, not a promise. Their trees are ``<repo>-wt-<n>-<tag>`` on
 twin that runs ``git worktree list`` can still see the other tree; nothing
 short of two clones hides that, and nothing in its prompt points there.
 
+A pair of two arms (#818) is the one exception, by design: the advised twin's
+prompt also says when to consult its advisor (#832), because an advisor no
+twin is told to call is never called — 0 of #818's first 4. So each arm's
+prompt sha256 is recorded on its own.
+
 **What a twin can still learn, and what the pair records of it (#453).** The
 six-pair pilot of #439 showed the pair is not sealed. Three of its twelve
 twins named their sibling's tree or branch — from ``ps`` (the other tree's
@@ -60,7 +65,10 @@ sign its work. Under each diff is that twin's closing report — the last text
 it wrote, which its prompt tells it to write as "the only copy" — scrubbed
 the same way: a twin that delivers nothing on purpose (the issue had already
 shipped, or it stopped for approval) says why only there, and a bare "no
-commits" cannot be judged next to a diff. ``mnemo twins prefer <pair> A|B|tie`` records the answer and
+commits" cannot be judged next to a diff. On a pair of two arms both reports
+also lose what names the advisor (:func:`blind_report`), since the advised
+twin is told to end on an account of its consultations — which would name
+its arm. ``mnemo twins prefer <pair> A|B|tie`` records the answer and
 only then says which twin was which. One answer per pair: an answer changed
 after the labels are known is no longer blind. ``show`` refuses while either
 twin is still working, because a half-finished diff is not what is being
@@ -142,6 +150,12 @@ class Twin:
     twin's own model and advisor, which differ from its sibling's. On an
     ordinary pair both are ``None`` and the pair's own ``model`` holds for
     both — :meth:`Pair.arm_of` reads either shape.
+
+    ``prompt_sha256`` likewise, from #832 on: the advised twin's prompt
+    carries the advisor's checkpoints and its sibling's does not, so each
+    arm's prompt is recorded on its own. ``None`` on an ordinary pair, and on
+    an arms pair dispatched before #832, where both twins had the pair's one
+    prompt.
     """
 
     tag: str
@@ -151,6 +165,7 @@ class Twin:
     error: str = ""
     model: Optional[str] = None
     advisor: Optional[str] = None
+    prompt_sha256: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +250,10 @@ def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _append(vault_root: Path | str, event: Dict[str, Any]) -> None:
     """Append one event. Raises ``OSError`` — callers decide if that is fatal."""
     path = log_path(vault_root)
@@ -275,7 +294,8 @@ def read_pairs(vault_root: Path | str) -> Dict[str, Pair]:
             try:
                 twins = tuple(
                     Twin(tag=str(t["tag"]), tree=str(t["tree"]), branch=str(t["branch"]),
-                         model=t.get("model"), advisor=t.get("advisor"))
+                         model=t.get("model"), advisor=t.get("advisor"),
+                         prompt_sha256=t.get("prompt_sha256"))
                     for t in ev.get("twins") or []
                 )
                 pairs[pid] = Pair(
@@ -447,12 +467,15 @@ def dispatch_twins(
     a pair, and ``tools/measure_child_pairs.py`` leaves it out.
 
     *advisor* makes the pair two arms (#818, :func:`advisor_arms`): the
-    twins differ in model and advisor and in nothing else — same prompt byte
-    for byte, same base, effort, profile and settings. Which tag gets which
-    arm, and so which spawns first, is drawn from *rng* (the system's random
-    source by default); each twin's arm is recorded on the ``pair`` line.
-    Without *advisor* the pair is the one it always was, and its ``pair``
-    line is byte-identical.
+    twins differ in model, in advisor, and in the advisor's checkpoints the
+    advised twin's prompt carries (#832) — and in nothing else: same issue
+    text, base, effort, profile and settings. Each twin's prompt sha256 is
+    recorded with its arm, so that difference is checkable too; the pair's
+    own ``prompt_sha256`` stays the prompt without the checkpoints, the alone
+    arm's. Which tag gets which arm, and so which spawns first, is drawn from
+    *rng* (the system's random source by default); each twin's arm is
+    recorded on the ``pair`` line. Without *advisor* the pair is the one it
+    always was, and its ``pair`` line is byte-identical.
     """
     arms: Optional[List[Tuple[str, Optional[str]]]] = None
     if advisor:
@@ -461,10 +484,14 @@ def dispatch_twins(
     details = fetch(issue, repo_root=repo_root)  # before any git state exists
     base = _head(repo_root)
     vault = default_vault() if vault_root is None else Path(vault_root)
-    prompt = dispatch.build_prompt(
-        issue, title=details.title, body=details.body, repo_root=repo_root,
-        blind=True,
-    )
+    prompts = {
+        advised: dispatch.build_prompt(
+            issue, title=details.title, body=details.body, repo_root=repo_root,
+            blind=True, advised=advised,
+        )
+        for advised in ((False, True) if arms else (False,))
+    }
+    prompt = prompts[False]
     tags = _fresh_tags(issue, repo_root=repo_root, count=len(LABELS), draw=draw)
     pair_id = secrets.token_hex(3)
     twins = [
@@ -474,20 +501,22 @@ def dispatch_twins(
             branch=dispatch.branch_name(issue, tag=tag),
             model=arms[i][0] if arms else None,
             advisor=arms[i][1] if arms else None,
+            prompt_sha256=_sha256(prompts[bool(arms[i][1])]) if arms else None,
         )
         for i, tag in enumerate(tags)
     ]
     event: Dict[str, Any] = {
         "event": "pair", "pair": pair_id, "issue": issue,
         "repo_root": str(repo_root), "base": base,
-        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "prompt_sha256": _sha256(prompt),
         "model": model, "effort": effort, "lean": lean, "settings": SETTINGS,
         "twins": [{"tag": t.tag, "tree": t.tree, "branch": t.branch} for t in twins],
     }
     if arms:
         event["advisor"] = advisor
         event["twins"] = [{"tag": t.tag, "tree": t.tree, "branch": t.branch,
-                           "model": t.model, "advisor": t.advisor} for t in twins]
+                           "model": t.model, "advisor": t.advisor,
+                           "prompt_sha256": t.prompt_sha256} for t in twins]
     try:
         _append(vault, event)
     except OSError as exc:
@@ -507,8 +536,9 @@ def dispatch_twins(
                 issue, repo_root=repo_root, tag=twin.tag, base=base,
             )
             result = dispatch._spawn_into(
-                issue, tree, prompt, repo_root=repo_root, branch=twin.branch,
-                lean=lean, may=(), effort=effort, settings=SETTINGS, **own,
+                issue, tree, prompts[bool(twin.advisor)], repo_root=repo_root,
+                branch=twin.branch, lean=lean, may=(), effort=effort,
+                settings=SETTINGS, **own,
             )
         except dispatch.DispatchError as exc:
             result = dispatch.Dispatched(issue=issue, error=str(exc))
@@ -749,12 +779,113 @@ def _record_conditions(
             pass
 
 
+#: A word that tells a blind reader the twin had an advisor (#832): advisor,
+#: adviser, advise(d), advisory, advice.
+_ADVISOR_WORD = re.compile(r"\badvi(?:s\w*|ce)\b", re.IGNORECASE)
+_HEADING_LINE = re.compile(r"^ {0,3}(#{1,6})\s")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+#: A line that only names the account — ``Advisor:``, ``**Advisor calls**``,
+#: ``## Advisor`` — with its body in the block after it.
+_ACCOUNT_LABEL = re.compile(r"^advi(?:s\w*|ce)[a-z ]*[*_: ]*$", re.IGNORECASE)
+
+
+def _account_opener(line: str) -> Optional[str]:
+    """How *line* opens an advisor account: ``"heading"``, ``"label"``,
+    ``"paragraph"``, or ``None`` when it opens none.
+
+    A list item never opens one — it is one line of a list, dropped alone if
+    it names the advisor, not the start of a block.
+    """
+    if _LIST_ITEM.match(line):
+        return None
+    bare = re.sub(r"^[\s#>]*[*_]*", "", line)
+    if not re.match(r"advi(?:s\w*|ce)\b", bare, re.IGNORECASE):
+        return None
+    if _HEADING_LINE.match(line):
+        return "heading"
+    return "label" if _ACCOUNT_LABEL.match(bare.strip()) else "paragraph"
+
+
+def blind_report(text: str) -> str:
+    """*text* without what tells a blind reader its twin had an advisor (#832).
+
+    An advised twin is told to end its closing report on how many times it
+    consulted the advisor and what changed (:data:`dispatch._ADVISOR_OPENING`),
+    and a report that says so names its arm in the first word. Cut, for both
+    twins of an arms pair alike, so the cut itself says nothing:
+
+    - the account: a paragraph that opens on the word (``Advisor: ...``,
+      ``**Advisor:** ...``), with the block after it when the line is a bare
+      label, or the whole section under a heading that names it;
+    - any other line that names the advisor — a sentence about its advice in
+      the middle of the report — whichever twin wrote it.
+
+    Lines, not paragraphs, outside the account: a report on an issue *about*
+    the advisor names it in a table row or a bullet, and only that row goes.
+    Nothing marks a cut, because a marker under one diff would be the tell.
+    Measured on 2026-11-09 over the 230 closing reports of this machine's
+    dispatched children: none names its own model or quotes a commit
+    trailer, so the advisor is the one tell a report carries. The diff is
+    not touched — it is what would be delivered, and an advisor's advice
+    reaches it only as code.
+    """
+    out: List[str] = []
+    skip: Optional[str] = None     # "paragraph", "label", "body" or "heading"
+    level = 0                      # the heading's level, for "heading"
+    fenced = False                 # inside a ``` block: lines, never openers
+    for line in text.split("\n"):
+        blank = not line.strip()
+        heading = _HEADING_LINE.match(line)
+        fence = line.lstrip().startswith(("```", "~~~"))
+        if skip is None and (fenced or fence):
+            fenced = fenced != fence
+            if not _ADVISOR_WORD.search(line):
+                out.append(line)
+            continue
+        if skip == "heading":
+            if heading and len(heading.group(1)) <= level:
+                skip = None
+            else:
+                continue
+        elif skip in ("paragraph", "label"):
+            if not blank:
+                # A label with its body right under it is one paragraph.
+                skip = "paragraph"
+                continue
+            # A bare label's body is the block after it: skip through that.
+            skip = "body" if skip == "label" else None
+            out.append(line)
+            continue
+        elif skip == "body":
+            if blank:
+                out.append(line)
+                continue
+            if heading:
+                skip = None    # no body after all: the next section starts
+            else:
+                skip = "paragraph"
+                continue
+        opener = _account_opener(line)
+        if opener is not None:
+            skip = opener
+            level = len(heading.group(1)) if heading else 0
+            continue
+        if not _ADVISOR_WORD.search(line):
+            out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip("\n")
+
+
 def _report(pair: Pair, twin: Twin,
             state: Callable[[str], Optional[Dict[str, Any]]]) -> str:
-    """*twin*'s closing report, framed for the blind read (not yet scrubbed)."""
+    """*twin*'s closing report, framed for the blind read (not yet scrubbed).
+
+    On an arms pair, through :func:`blind_report` — both twins' alike.
+    """
     from mnemo.core.sessions.report_card import closing_report
 
     text = closing_report(transcript_of(pair, twin, state=state))
+    if text and pair.has_arms:
+        text = blind_report(text)
     body = text.rstrip() + "\n" if text else \
         "(no closing report — its transcript is gone or holds no text)\n"
     return f"\n{'-' * 24} closing report {'-' * 24}\n{body}"

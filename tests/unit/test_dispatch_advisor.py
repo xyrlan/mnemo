@@ -429,7 +429,7 @@ class _Swap:
         items.reverse()
 
 
-def test_twins_with_an_advisor_are_two_arms_on_one_prompt(repo, tmp_path, spawned) -> None:
+def test_twins_with_an_advisor_are_two_arms_on_one_issue_prompt(repo, tmp_path, spawned) -> None:
     vault = tmp_path / "vault"
     pair_id, results = twins.dispatch_twins(
         818, repo_root=repo, fetch=_fetch, vault_root=vault, draw=_tags("aaaaaa", "bbbbbb"),
@@ -438,7 +438,12 @@ def test_twins_with_an_advisor_are_two_arms_on_one_prompt(repo, tmp_path, spawne
     a, b = spawned.calls
     assert (a["model"], a["advisor"]) == ("sonnet", "opus")
     assert (b["model"], b["advisor"]) == ("opus", None)
-    assert a["prompt"] == b["prompt"] and a["effort"] == b["effort"] == "high"
+    # One issue prompt; the advised arm's also says when to consult (#832).
+    assert a["prompt"] == dispatch.build_prompt(818, title="t", body="b", repo_root=repo,
+                                                blind=True, advised=True)
+    assert b["prompt"] == dispatch.build_prompt(818, title="t", body="b", repo_root=repo,
+                                                blind=True)
+    assert a["effort"] == b["effort"] == "high"
     assert a["settings"] == b["settings"] == twins.SETTINGS
     assert [(r.model, r.advisor) for r in results] == [("sonnet", "opus"), ("opus", None)]
 
@@ -467,6 +472,7 @@ def test_twins_without_an_advisor_write_the_pair_line_they_always_did(
     line = json.loads(twins.log_path(vault).read_text(encoding="utf-8").splitlines()[0])
     assert "advisor" not in line
     assert all(set(t) == {"tag", "tree", "branch"} for t in line["twins"])
+    assert spawned.calls[0]["prompt"] == spawned.calls[1]["prompt"]
     pair = twins.read_pairs(vault)[pair_id]
     assert not pair.has_arms and pair.arm_of("aaaaaa") == ("opus", None)
     assert [c["advisor"] for c in spawned.calls] == [None, None]

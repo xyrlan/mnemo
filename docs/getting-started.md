@@ -1020,16 +1020,42 @@ mnemo dispatch 255 --model sonnet --advisor opus
 ```
 
 What it sends: `--advisor opus` on the child's `claude --bg` command line,
-right after `--model`. Nothing else changes, and leave the flag off and the
-command and the child's settings file are byte for byte what they were. The
-child gets an `advisor` tool and decides itself when to call it; nothing
-forces or caps the calls. Each call sends the child's whole conversation to
-the advisor, uncached, at the advisor's price: a lean child's first call reads
-about 52,000 tokens, and that grows with the session. The advice comes back
-encrypted, so the transcript shows that a call was made and what it cost
-(an `advisor_message` entry under the response's `usage.iterations`), not
-what the advisor said. The advisor is an experimental Claude Code feature
-and Anthropic-API only.
+right after `--model`, and a paragraph in the child's prompt that says when
+to consult it. Leave the flag off and the command, the child's settings file
+and its prompt are byte for byte what they were.
+
+The paragraph is there because a child left to decide does not call: the
+first four advised children (#818) had the tool and Claude Code's own advice
+on it, and none of them made a single call. So the prompt names three
+checkpoints:
+
+- before settling its plan: after exploring, before its first edit;
+- after hitting the same error twice;
+- before declaring the work done: on the finished diff, once committed, before
+  its closing report.
+
+The call takes no input — the advisor reads the whole conversation — so the
+child is told to write out first what it decided and why, what it ruled out,
+and the evidence. If the advisor disagrees, the child resolves that before
+going on. Its closing report ends on a paragraph starting `Advisor:` that
+says how many times it consulted and what changed because of it: the advice
+itself comes back encrypted, so the transcript shows that a call was made and
+what it cost (an `advisor_message` entry under the response's
+`usage.iterations`), never what the advisor said. A read-only child is given
+the same checkpoints for a finding.
+
+What it costs: each call sends the child's whole conversation to the
+advisor, uncached, at the advisor's price. A lean child's first call reads
+about 52,000 tokens, and each later call reads everything since, so a call
+late in a long session costs more than an early one. Measured on #832's
+check: a Sonnet child with an Opus advisor on a small issue (13 minutes)
+consulted once, on its finished diff. That call read 65,752 tokens and wrote
+8,670, which is $0.44 at list price and 53% of the child's $0.83. The
+paragraph asks for calls but cannot force one. That child skipped the
+checkpoint before its first edit, and said so in its `Advisor:` paragraph.
+Nothing caps the calls; the paragraph asks for these points and "not after
+every step". The advisor is an experimental Claude Code feature and
+Anthropic-API only.
 
 The value is one model token — an alias (`opus`, `fable`, `sonnet`) or a full
 id — and the advisor must rank at or above the child's model. Claude Code
@@ -1050,8 +1076,13 @@ dropped still lists the flag.
 mnemo does not recommend an advisor yet. The case for one is cost: a Sonnet
 child consulting Opus might deliver what an Opus child delivers for less. That
 is measured, not assumed. `--twins` with `--advisor` runs one issue as two
-blind arms with the same prompt: one twin on `--model` consulting the
-advisor, and one on the advisor's model alone.
+blind arms: one twin on `--model` consulting the advisor, and one on the
+advisor's model alone. Their prompts differ by the advisor's paragraph and
+by nothing else, and each arm's prompt sha256 is recorded with the pair. So
+the arms differ by model, advisor and that paragraph. `mnemo twins show` cuts
+the `Advisor:` account, and any other line that names the advisor, from both
+twins' closing reports alike, since it would tell you which arm you are
+reading; the diffs are shown as they are.
 
 ```bash
 mnemo dispatch 812 --twins --model sonnet --advisor opus
@@ -1062,13 +1093,15 @@ PYTHONPATH=src python3 tools/measure_advisor_pairs.py
 
 The readout prints, per pair and in total, which arm you preferred, each
 arm's tokens and API-price cost (the advisor's calls priced at its own rate),
-its wall-clock time, and how many advisor calls the advised twin made. It
-then gives a verdict against a bar written down before the first pair: the
-advised arm preferred or tied in at least 70% of at least six pairs, then
-better on cost or speed and no more than 15% worse on the other. A pair whose
-advised twin never called its advisor is listed apart, because it measured
-the cheaper model alone. So is a twin that stopped on a rate limit, which is
-left out of the speed figures because that time measures the account.
+its wall-clock time, how many advisor calls the advised twin made, and what
+share of that twin's cost they were. It then gives a verdict against a bar
+written down before the first pair: the advised arm preferred or tied in at
+least 70% of at least six pairs, then better on cost or speed and no more
+than 15% worse on the other. A pair whose advised twin never called its
+advisor is listed apart, because it measured the cheaper model alone; #818's
+first four pairs are there, marked as dispatched before the paragraph
+existed. So is a twin that stopped on a rate limit, which is left out of the
+speed figures because that time measures the account.
 
 One thing to keep out of the way while the pairs run: `/advisor` saves your
 choice as `advisorModel` in your user settings, and a child of a session in
