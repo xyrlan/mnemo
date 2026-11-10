@@ -379,7 +379,7 @@ evidence in the repo. If the issue proposes a fix that the code shows to be
 wrong, say so and refuse it — a measured refusal is a better outcome than a
 faithful implementation of a bad plan, and reporting that is finishing the
 job, not failing it.
-{closing}"""
+{advisor}{closing}"""
 
 
 #: The read-only posture's opening prompt. Deliberately parallel to `_PROMPT`:
@@ -410,7 +410,7 @@ No approach is prescribed. Decide what the issue actually calls for from the
 evidence in the repo. If the issue rests on a premise the code shows to be
 wrong, say so and show the evidence — a measured correction is the most
 valuable thing you can return.
-{closing}"""
+{advisor}{closing}"""
 
 
 _CHANGELOG_PROMPT = """
@@ -695,6 +695,77 @@ def _wrap(text: str, **indent: str) -> str:
     )
 
 
+#: When an advised child consults its advisor (#832), said in the one message
+#: it reads as the maintainer's own.
+#:
+#: **Why it is said at all.** #818's first four pairs gave a Sonnet child an
+#: Opus advisor, and none of the four called it: 0 ``server_tool_use`` named
+#: ``advisor``, 0 ``advisor_message`` iterations. Each had the tool and Claude
+#: Code's own "# Advisor Tool" section, which already says to call it before
+#: substantive work and before declaring done — as a system reminder. An
+#: unattended child weighs that below its task, and the pilot measured Sonnet
+#: alone against Opus. So the checkpoints move into the task.
+#:
+#: **What it says.** Three checkpoints, and no more: each call sends the
+#: whole conversation to the advisor uncached at the advisor's price
+#: (``bg-advisor-flag``), so "consult often" is a cost nobody chose. The call
+#: takes no input, so what the advisor should weigh — the decision and why,
+#: what was ruled out, the evidence — has to be on the page before it.
+#: The last checkpoint comes *after* the commit, not before it as #832
+#: first wrote it: Claude Code's own section tells the session to make its
+#: deliverable durable before the done-call, and two orders about one call
+#: leave the child to pick one. A change the advice brings is one more commit.
+#: The account the closing report ends on is what a reader of the child
+#: learns the advice from: the advice itself comes back encrypted. It opens
+#: on ``Advisor:`` so the blind view of a pair (:func:`twins.blind_report`)
+#: can cut it — it names the arm.
+#:
+#: Held as unwrapped sentences and wrapped at render, as the closing is.
+_ADVISOR_OPENING = (
+    "You have an advisor: the `advisor` tool hands this whole conversation to "
+    "a stronger model and brings back its advice. It takes no input, so right "
+    "before each call write out what you decided and why, what you ruled out, "
+    "and the evidence — the advisor weighs what is on the page. Consult it:"
+)
+_ADVISOR_POINTS = (
+    "before settling your plan: after exploring, before your first edit;",
+    "after you hit the same error twice;",
+    "before declaring the work done: on the finished diff, committed, before "
+    "your closing report.",
+)
+#: The read-only posture's checkpoints: the same three, for a finding.
+_ADVISOR_READ_ONLY_POINTS = (
+    "before settling your answer: after exploring, before you draw a "
+    "conclusion;",
+    _ADVISOR_POINTS[1],
+    "before declaring the work done: on your finished finding, before you "
+    "post it and write your closing report.",
+)
+_ADVISOR_AFTER = (
+    "Each call re-reads the whole conversation at the advisor's price, so "
+    "call it at these points and not after every step. If it disagrees with "
+    "you, resolve that before you go on: follow it, or show it your evidence "
+    "against it in one more call. End your closing report with a "
+    "paragraph that starts `Advisor:` and says how many times you consulted "
+    "it and what changed because of it."
+)
+
+
+def _advisor_clause(advised: bool, *, read_only: bool = False) -> str:
+    """The advisor's checkpoints (:data:`_ADVISOR_OPENING`), or ``""``.
+
+    Empty is load-bearing, as the roster's is: a child with no advisor must
+    be given the prompt it was given before #832, byte for byte.
+    """
+    if not advised:
+        return ""
+    points = _ADVISOR_READ_ONLY_POINTS if read_only else _ADVISOR_POINTS
+    bullets = "\n".join(
+        _wrap(point, initial_indent="- ", subsequent_indent="  ") for point in points
+    )
+    return f"\n{_wrap(_ADVISOR_OPENING)}\n{bullets}\n{_wrap(_ADVISOR_AFTER)}\n"
+
+
 #: Where a blind twin is told it works (#449), in place of its branch's name.
 #: The one sentence of the issue prompt that names something only one child
 #: has: two twins cannot share a branch, so the name would make their prompts
@@ -707,6 +778,7 @@ def build_prompt(
     may: grants.Grant = (), read_only: bool = False,
     siblings: Sequence[Issue] = (),
     blind: bool = False,
+    advised: bool = False,
 ) -> str:
     """The child's opening prompt: the issue, a worktree, and scope limits.
 
@@ -738,6 +810,12 @@ def build_prompt(
     changes, and nothing says another run exists. Without it the prompt is
     the one every issue child was given before twins existed.
 
+    *advised* is one bit as well (#832): the child was spawned with an
+    advisor, so it is told when to consult it (:data:`_ADVISOR_OPENING`),
+    right before the closing. Fixed text, so it carries no approach; without
+    it the prompt is byte-identical to before. Only a Claude child is ever
+    advised — :func:`check_grok` refuses an advisor before a prompt exists.
+
     A Grok child's prompt is this one with its closing swapped
     (:func:`for_agent`) — deliberately not a parameter here, so the set of
     things a caller can pass stays the set ``test_dispatch_plan`` pins.
@@ -754,6 +832,7 @@ def build_prompt(
             body=(body or "").strip() or "(empty — read it with gh)",
             branch=branch,
             siblings=roster,
+            advisor=_advisor_clause(advised, read_only=True),
             closing=_closing_clause(read_only=True, issue=issue),
         )
     return _PROMPT.format(
@@ -768,6 +847,7 @@ def build_prompt(
             _publish_clause(may, branch=branch, issue=issue),
             initial_indent="- ", subsequent_indent="  ",
         ),
+        advisor=_advisor_clause(advised),
         closing=_closing_clause(may),
     )
 
@@ -828,7 +908,7 @@ before you stop. Say in your report which mutations you ran and which test
 caught each.
 {changelog}
 {publish}
-{closing}"""
+{advisor}{closing}"""
 
 #: Said after a granted piece's publish clause (#771). The closing's step 2
 #: already says to push, and #616's child still ran ``git commit … ; claude
@@ -850,7 +930,7 @@ do not implement them yourself:
 
 def build_piece_prompt(
     piece: contracts.Piece, *, feature: str, repo_root: Path | str | None = None,
-    may: grants.Grant = (),
+    may: grants.Grant = (), advised: bool = False,
 ) -> str:
     """A contract piece's opening prompt: its boundary and its interfaces.
 
@@ -863,6 +943,8 @@ def build_piece_prompt(
 
     *may* is what this child was granted, already resolved — the piece's own
     ``may:`` over the dispatch's ``--may`` — by :func:`dispatch_piece`.
+    *advised* likewise: the piece's ``advisor:`` or ``--advisor`` named one,
+    and the child is told when to consult it, as in :func:`build_prompt`.
 
     **A roster of the other pieces was measured and declined** (#384). Issue
     children get one, because they are told nothing about each other and 3 of
@@ -905,6 +987,7 @@ def build_piece_prompt(
             else _wrap("Run the full test suite before you finish. "
                        + _publish_clause(may, branch=branch) + PIECE_PUSH)
         ),
+        advisor=_advisor_clause(advised),
         closing=_closing_clause(may),
     )
 
@@ -1825,7 +1908,8 @@ def dispatch_issue(
     Grok cannot take is refused by :func:`check_grok` before the tree exists.
 
     *advisor* (#818) is checked by :func:`check_advisor` before the issue is
-    read, and passed only when given.
+    read, and passed only when given. The prompt says when to consult it
+    (#832) exactly when it is passed.
     """
     grok: Dict[str, Any] = {}
     if agent == agent_cli.GROK:
@@ -1843,7 +1927,7 @@ def dispatch_issue(
         for_agent(
             build_prompt(issue, title=details.title, body=details.body,
                          repo_root=repo_root, may=may, read_only=read_only,
-                         siblings=siblings),
+                         siblings=siblings, advised=bool(advisor)),
             agent, may=may, read_only=read_only, issue=issue,
         ),
         repo_root=repo_root, branch=branch_name(issue), model=model, lean=lean,
@@ -1982,7 +2066,8 @@ def dispatch_piece(
     return _spawn_into(
         target, tree,
         for_agent(
-            build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted),
+            build_piece_prompt(piece, feature=feature, repo_root=repo_root, may=granted,
+                               advised=bool(chosen)),
             agent, may=granted,
         ),
         repo_root=repo_root, branch=branch_name(target, feature=feature),

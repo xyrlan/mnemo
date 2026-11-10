@@ -7,11 +7,15 @@ Usage:
 Read-only: no LLM calls, no network, no writes.
 
 ``mnemo dispatch <n> --twins --model sonnet --advisor opus`` runs one issue as
-two blind twins that differ in model only: one on ``sonnet`` consulting an
-``opus`` advisor (the **advised** arm), one on ``opus`` alone (the **alone**
-arm), the same prompt byte for byte. ``mnemo twins show`` reads them blind and
-``mnemo twins prefer`` records which the maintainer would merge. This prints,
-per pair and in total, what the decision rests on:
+two blind twins: one on ``sonnet`` consulting an ``opus`` advisor (the
+**advised** arm), one on ``opus`` alone (the **alone** arm). From #832 they
+differ in model, advisor, and the advisor's checkpoints in the advised twin's
+prompt — the one place the two prompts differ, each arm's sha256 recorded on
+the pair. #818's first four pairs had one prompt for both and no checkpoints,
+and no advised twin called its advisor; a pair from before #832 is marked so.
+``mnemo twins show`` reads them blind and ``mnemo twins prefer`` records which
+the maintainer would merge. This prints, per pair and in total, what the
+decision rests on:
 
 - **Quality**: which arm was preferred, or a tie.
 - **Cost**: tokens and API-price cost per arm, from each twin's transcript
@@ -25,9 +29,11 @@ per pair and in total, what the decision rests on:
   an overload) is flagged and its pair left out of the speed figures — that
   time measures the account, not the arm.
 
-And how many advisor calls the advised arm made. A pair whose advised twin
-never called its advisor measured the cheaper model alone, so it is reported
-apart and kept out of every figure the verdict reads.
+And how many advisor calls the advised arm made, and their share of its cost:
+each call re-reads the whole conversation at the advisor's price, so three
+checkpoints are a known multiple of one. A pair whose advised twin never
+called its advisor measured the cheaper model alone, so it is reported apart
+and kept out of every figure the verdict reads.
 
 **The bar** (:data:`MIN_READ`, :data:`QUALITY_BAR`, :data:`MARGIN`) is #818's
 proposal, written down before the first pair was dispatched, and deliberately
@@ -266,6 +272,25 @@ def names_advisor(text: str) -> bool:
     return "advisor" in (text or "").lower()
 
 
+def advisor_share(measured: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The advisor's calls as a share of one twin's cost, or ``None`` unpriced."""
+    if not measured or measured.get("usd") is None or measured["usd"] <= 0:
+        return None
+    return measured["advisor"]["usd"] / measured["usd"]
+
+
+def with_checkpoints(pair: Any) -> bool:
+    """Whether the advised twin's prompt carried the advisor's checkpoints (#832).
+
+    Read off the pair line: from #832 each arm's prompt sha256 is recorded,
+    and the advised arm's differs by the checkpoints. A pair from before has
+    no per-arm sha256 — both twins had the pair's one prompt.
+    """
+    shas = {pair.arm_of(t.tag)[1] is not None: getattr(t, "prompt_sha256", None)
+            for t in pair.started}
+    return bool(shas.get(True)) and bool(shas.get(False)) and shas[True] != shas[False]
+
+
 # --- the pairs ----------------------------------------------------------------
 
 
@@ -321,9 +346,11 @@ def rows(pairs: Sequence[Any], *, transcript: Any = None, report: Any = None,
         elif pair.preferred:
             preferred = ADVISED if arms[ADVISED]["tag"] == pair.preferred else ALONE
         calls = (arms[ADVISED]["measured"] or {}).get("advisor_calls")
+        arms[ADVISED]["advisor_share"] = advisor_share(arms[ADVISED]["measured"])
         out.append({
             "pair": pair.pair, "issue": pair.issue, "answer": preferred,
             "arms": arms, "advisor_calls": calls,
+            "checkpoints": with_checkpoints(pair),
             "never_called": calls == 0,
             "alone_called": bool((arms[ALONE]["measured"] or {}).get("advisor_calls")),
         })
@@ -398,9 +425,16 @@ def measure(pair_rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "wall_median_seconds": {arm: _median([r["arms"][arm]["wall_seconds"] for r in timed])
                                 for arm in (ADVISED, ALONE)},
         "advisor_calls": {"total": sum(calls), "median": _median(calls)},
+        # Each call re-reads the conversation at the advisor's price (#832).
+        "advisor_share_median": _median([r["arms"][ADVISED]["advisor_share"] for r in used]),
+        "checkpoints": sum(1 for r in pair_rows if r["checkpoints"]),
         "alone_called": sum(1 for r in pair_rows if r["alone_called"]),
+        # Only where the blind view had nothing to cut it with: from #832 on,
+        # `twins.blind_report` takes the account out of both reports, and an
+        # advised report is asked to give one.
         "report_names_advisor": sum(1 for r in pair_rows
-                                    if r["arms"][ADVISED]["report_names_advisor"]),
+                                    if r["arms"][ADVISED]["report_names_advisor"]
+                                    and not r["checkpoints"]),
         "bar": {"min_read": MIN_READ, "quality": QUALITY_BAR, "margin": MARGIN},
         "verdict": word, "why": why,
     }
@@ -427,7 +461,7 @@ def _pct(ratio: Optional[float]) -> str:
     return f"{ratio:.2f} ({'+' if change >= 0 else '−'}{abs(change):.0%})"
 
 
-def _arm_line(name: str, arm: Dict[str, Any]) -> str:
+def _arm_line(name: str, arm: Dict[str, Any], *, checkpoints: bool = False) -> str:
     m = arm["measured"]
     if m is None:
         body = "transcript gone"
@@ -439,10 +473,13 @@ def _arm_line(name: str, arm: Dict[str, Any]) -> str:
         body = f"{cost}  {m['tokens']:,} tokens"
         if arm["advisor"] or m["advisor_calls"]:
             body += f"  {m['advisor_calls']} advisor call(s)"
+            share = advisor_share(m)
+            if m["advisor_calls"] and share is not None:
+                body += f" = {share:.0%} of its cost"
     flags = []
     if arm["stalled"]:
         flags.append("stalled: " + ", ".join(sorted(set(m["api_errors"]))))
-    if arm["advisor"] and arm["report_names_advisor"]:
+    if arm["advisor"] and arm["report_names_advisor"] and not checkpoints:
         flags.append("its report names the advisor")
     tail = f"  [{'; '.join(flags)}]" if flags else ""
     return f"    {name:<8} {arm['label']:<28} {body}  wall {_wall(arm['wall_seconds'])}{tail}"
@@ -451,9 +488,10 @@ def _arm_line(name: str, arm: Dict[str, Any]) -> str:
 def _pair_lines(r: Dict[str, Any]) -> List[str]:
     answer = {ADVISED: "preferred: advised", ALONE: "preferred: alone",
               "tie": "tie", "": "not read yet"}[r["answer"]]
-    lines = [f"  {r['pair']}  #{r['issue']}  {answer}"]
+    before = "" if r["checkpoints"] else "  (before #832: one prompt, no checkpoints)"
+    lines = [f"  {r['pair']}  #{r['issue']}  {answer}{before}"]
     for name in (ADVISED, ALONE):
-        lines.append(_arm_line(name, r["arms"][name]))
+        lines.append(_arm_line(name, r["arms"][name], checkpoints=r["checkpoints"]))
     if r["alone_called"]:
         lines.append("    the alone twin called an advisor too — its arm was not alone")
     return lines
@@ -467,6 +505,9 @@ def format_report(report: Dict[str, Any], pair_rows: Sequence[Dict[str, Any]]) -
         f"preferred-or-tied over at least {MIN_READ} read; cost and speed on the median "
         f"advised/alone ratio, positive when better on one and no more than "
         f"{MARGIN:.0%} worse on the other",
+        "arms: they differ by model, by advisor, and by the advisor's checkpoints "
+        f"in the advised twin's prompt (#832) — {report['checkpoints']} of "
+        f"{report['pairs']} pair(s) dispatched with them",
         "",
     ]
     used = [r for r in pair_rows if not r["never_called"]]
@@ -491,7 +532,10 @@ def format_report(report: Dict[str, Any], pair_rows: Sequence[Dict[str, Any]]) -
         + f" — {axis(report['speed_ratio'])}",
         f"advisor calls (advised arm): {report['advisor_calls']['total']} in all, median "
         + ("—" if report["advisor_calls"]["median"] is None
-           else f"{report['advisor_calls']['median']:g}") + " per pair",
+           else f"{report['advisor_calls']['median']:g}") + " per pair; median share of "
+        "the advised twin's cost "
+        + ("—" if report["advisor_share_median"] is None
+           else f"{report['advisor_share_median']:.0%}"),
     ]
     if report["alone_called"]:
         lines.append(f"  {report['alone_called']} pair(s) whose alone twin called an advisor")
