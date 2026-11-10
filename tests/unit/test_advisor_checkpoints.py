@@ -255,7 +255,7 @@ def test_an_ordinary_pair_records_one_prompt_as_it_always_did(
     "## Done\nFixed the flaky test.\n\n## Advisor\n\nConsulted 3 times.\n\n"
     "- plan: the clock\n- done: no change\n\n## Refused\nNothing.",
     # A bare label, its body in the block after it, or right under it.
-    "Fixed the flaky test.\n\n**Advisor calls**\n\nThree: plan, error, done.\n\n"
+    "Fixed the flaky test.\n\n**Advisor calls**\n\nConsulted three: plan, error, done.\n\n"
     "Refused: nothing.",
     "Fixed the flaky test.\n\nAdvisor calls:\n- plan: the clock\n- done: no change\n\n"
     "Refused: nothing.",
