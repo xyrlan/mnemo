@@ -1,0 +1,12 @@
+# The Rust oracle for tools/measure_owner_members.py (#675): what `syn`, the
+# parser Rust's own macros use, says each type in a file declares.
+# Build it outside the checkout:
+#   cargo build --release --manifest-path tools/owner_oracles/syn/Cargo.toml --target-dir DIR
+[package]
+name = "owner-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit"] }
