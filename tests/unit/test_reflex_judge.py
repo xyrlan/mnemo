@@ -379,25 +379,34 @@ def test_a_page_read_that_outlives_the_wall_is_a_timeout(tmp_path):
 
 def test_reads_and_the_call_share_one_budget(tmp_path):
     """Each part under the wall, the two together over it: the budget is the
-    stage's, not one per part."""
+    stage's, not one per part.
+
+    The two parts add up to 1.8 walls, so the wall falls 0.8 wall before the
+    worker could finish. That slack is what a late-scheduled caller thread has
+    to eat (#734): ``within`` joins with a timeout, and a join that wakes after
+    the worker is done returns its picks. At 0.75 + 0.75 of a 0.2 s wall the
+    slack was 100 ms, which a loaded macOS runner exceeded once.
+    """
+    wall = 0.5
+    part = wall * 0.9
     stuck = threading.Event()
 
     def read_most_of_it(slug):
-        stuck.wait(WALL * 0.75)
+        stuck.wait(part)
         return _read(slug)
 
     def call_the_rest(state, questions):
-        stuck.wait(WALL * 0.75)
+        stuck.wait(part)
         return Judge({"Commit a script": 0.8})(state, questions)
 
     try:
         picks, info = judge.ask(tmp_path, prompt="how do I deploy", slugs=["a"],
-                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=WALL),
+                                chosen_settings=dict(judge.settings(ON), timeoutSeconds=wall),
                                 client=call_the_rest, read_text=read_most_of_it)
     finally:
         stuck.set()
     assert picks is None and info["status"] == "timeout"
-    assert info["ms"] <= WALL * 1000 + EPSILON_MS
+    assert info["ms"] <= wall * 1000 + EPSILON_MS
 
 
 def test_a_key_lookup_that_outlives_the_wall_is_a_timeout(tmp_path, monkeypatch):
