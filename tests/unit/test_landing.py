@@ -124,6 +124,12 @@ def test_order_refuses_a_cycle_by_name() -> None:
         ("`mnemo dispatch --contract <path>`", None),
         ("`--json`", None),
         ("nothing", None),
+        # #675: a Rust field, and a TS optional member with its `?`.
+        ("`ChildSession.notice: Option<String>`", "notice"),
+        ("`ChildSession.notice?: 'held' | 'delivered' | null`", "notice"),
+        ("`Store.load?(key)`", "load"),
+        ("`ready?`", None),
+        ('`"held" | "delivered" | null`', None),
     ],
 )
 def test_signature_name(signature: str, name) -> None:
@@ -304,6 +310,293 @@ def test_an_unparseable_file_falls_back_to_the_name_lookup(repo: Path) -> None:
     source = "class Store:\n    def path(self):\n        return 1\n    def broken(:\n"
 
     assert _present_in(repo, "`Store.path`", source) is True
+
+
+# --- a Rust or TypeScript owner's members (#675) ----------------------------
+
+# The shape of the `notice` piece mnemo-desktop's Nexus round could not land:
+# a field added to a shared struct, with doc comments, attributes and generics
+# around it, and the same name in a struct expression and an assignment —
+# none of which the bare-name lookup counts, which is why it read ✗.
+MISSION_RS = '''\
+use std::collections::HashMap;
+
+/// One child session as the board shows it. Braces in prose: `{ … }`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChildSession {
+    pub id: String,
+    pub tokens: u64,
+    /// Why it waits; `None` while it runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
+    pub labels: HashMap<String, Vec<&'static str>>,
+    pub pr: Option<Pr>,
+    /// Whether the parent has this child's finish notice: `held`, `delivered`.
+    pub notice: Option<String>,
+}
+
+pub struct Pr {
+    pub number: u64,
+    pub failing: Vec<String>,
+}
+
+pub fn parse_sessions(json: &str) -> Result<Vec<ChildSession>, String> {
+    let pr = Pr { number: 1, failing: vec!["}".to_string()] };
+    Ok(vec![ChildSession { id: json.into(), tokens: 0, waiting_for: None,
+                           labels: HashMap::new(), pr: Some(pr), notice: None }])
+}
+
+pub fn apply_notices(children: &mut [ChildSession], notices: &HashMap<String, String>) {
+    for c in children.iter_mut() {
+        c.notice = notices.get(&c.id).cloned();
+    }
+}
+'''
+
+
+def test_a_rust_struct_field_is_present(repo: Path) -> None:
+    """The issue as filed: the field was delivered, and `land` said ✗."""
+    signature = "`ChildSession.notice: Option<String>`"
+
+    assert _defined_in(repo, "src-tauri/src/mission.rs", MISSION_RS, signature) is True
+
+
+def test_inspect_lands_a_piece_that_exposes_a_struct_field(repo: Path, gh_prs) -> None:
+    """`CANNOT LAND (1): notice` was the whole report; the piece is landable."""
+    gh_prs["feat/f/notice"] = (1, "OPEN")
+    exposes = ["`ChildSession.notice: Option<String>`", '`"held" | "delivered" | null`']
+    piece = Piece("notice", files=["src-tauri/src/mission.rs"], exposes=exposes)
+    _branch(repo, "feat/f/notice", {"src-tauri/src/mission.rs": MISSION_RS})
+
+    (state,) = landing.inspect(_contract(piece), repo_root=repo)
+
+    assert state.exposes == [(exposes[0], True), (exposes[1], None)]
+    assert state.landable, state.reason
+
+
+@pytest.mark.parametrize("signature, source", [
+    ("`Pr.failing: Vec<String>`", MISSION_RS),
+    ("`ChildSession.labels`", MISSION_RS),
+    ("`Lens.map`", "pub struct Lens<'a, T: Clone> where T: Fn(u8) -> u8 {\n"
+                   "    pub(crate) root: &'a str,\n    map: HashMap<String, T>,\n}\n"),
+    ("`Query.type`", "pub struct Query {\n    pub r#type: String,\n}\n"),
+    ("`Notice.Delivered`", "pub enum Notice {\n    Held,\n    Delivered(String),\n"
+                           "    Gone { at: u64 },\n}\n"),
+    ("`Store.load(key)`", "pub struct Store;\n\nimpl Store {\n"
+                          "    pub fn load(&self, key: &str) -> Option<String> {\n"
+                          "        if key == \"{\" { return None; }\n        None\n    }\n}\n"),
+    ("`Lens.from`", "impl<T: Into<String>> From<T> for crate::lens::Lens<'_> {\n"
+                    "    fn from(t: T) -> Self { todo!() }\n}\n"),
+    ("`Source.read`", "pub trait Source {\n    const KIND: &'static str;\n"
+                      "    fn read(&self) -> String;\n}\n"),
+    ("`Source.KIND`", "pub trait Source {\n    const KIND: &'static str;\n}\n"),
+])
+def test_a_rust_owner_declares_fields_variants_and_impl_items(
+    repo: Path, signature: str, source: str,
+) -> None:
+    assert _defined_in(repo, "src-tauri/src/lib.rs", source, signature) is True
+
+
+def test_a_method_in_another_files_impl_block_counts(repo: Path) -> None:
+    """A struct in one file and its `impl` in another, both in the boundary."""
+    _branch(repo, "feat/f/split", {
+        "src-tauri/src/model.rs": "pub struct Store {\n    pub root: String,\n}\n",
+        "src-tauri/src/store.rs": "use crate::model::Store;\n\nimpl Store {\n"
+                                  "    pub fn notice(&self) -> u8 { 0 }\n}\n",
+    })
+    piece = Piece("split", files=["src-tauri/src/model.rs", "src-tauri/src/store.rs"])
+
+    assert landing.present("`Store.notice()`", piece=piece, ref="feat/f/split",
+                           repo_root=repo) is True
+
+
+@pytest.mark.parametrize("signature, source", [
+    # A field of another struct in the same file.
+    ("`Pr.notice`", MISSION_RS),
+    # A free function: bare-name lookup found it before, and it is no member.
+    ("`ChildSession.apply_notices`", MISSION_RS),
+    # A local, and a field in a struct expression, are not declarations.
+    ("`ChildSession.notice`", "pub struct ChildSession {\n    pub id: String,\n}\n\n"
+                              "fn make() -> Other {\n    let notice = 1;\n"
+                              "    Other { notice }\n}\n"),
+    # Comments and literals say nothing, and a `}` in one closes nothing.
+    ("`ChildSession.notice`", "pub struct ChildSession {\n    /// Closed by `}`, not here.\n"
+                              "    pub id: String,\n    // pub notice: Option<String>,\n"
+                              "    /* pub notice: Option<String>, */\n}\n"
+                              "const SHAPE: &str = \"struct ChildSession { notice: String }\";\n"
+                              "const RAW: &str = r#\"pub notice: \"x\"\"#;\n"),
+    # `impl Holder<ChildSession>` is Holder's impl.
+    ("`ChildSession.notice`", "pub struct ChildSession {\n    pub id: String,\n}\n\n"
+                              "impl Holder<ChildSession> {\n    pub fn notice(&self) {}\n}\n"),
+])
+def test_a_rust_member_is_looked_up_on_its_owner_only(
+    repo: Path, signature: str, source: str,
+) -> None:
+    assert _defined_in(repo, "src-tauri/src/mission.rs", source, signature) is False
+
+
+def test_a_doc_comment_brace_does_not_close_the_struct(repo: Path) -> None:
+    source = ("pub struct ChildSession {\n    /// Closed by `}`, not here.\n"
+              "    pub id: String,\n    pub notice: u8,\n}\n")
+
+    assert _defined_in(repo, "src-tauri/src/m.rs", source, "`ChildSession.notice`") is True
+
+
+def test_a_rust_module_qualifier_still_finds_the_function(repo: Path) -> None:
+    """`mission` is no type there, so the bare-name lookup answers, as for Python."""
+    signature = "`mission.apply_notices(children, notices)`"
+
+    assert _defined_in(repo, "src-tauri/src/mission.rs", MISSION_RS, signature) is True
+
+
+def test_an_unreadable_rust_file_falls_back_to_the_name_lookup(repo: Path) -> None:
+    """A block comment that never closes: no owner is read, `pub fn` still counts."""
+    source = "pub struct S;\n\nimpl S {\n    pub fn load(&self) {}\n}\n/* never closed\n"
+
+    assert landing._owner_members("a.rs", source, "S") is None
+    assert _defined_in(repo, "src-tauri/src/s.rs", source, "`S.load()`") is True
+
+
+CHILD_TS = """\
+import type { Base } from './base'
+
+/** One child session. Braces in prose: `{`. */
+export type ChildSession = {
+  id: string
+  // `held` while it waits for the parent's next prompt
+  notice?: 'held' | 'delivered' | null
+  pr: { number: number; url: string } | null
+}
+
+export type Pr = { number: number; failing: string[] }
+"""
+
+
+@pytest.mark.parametrize("signature, source", [
+    ("`ChildSession.notice?: 'held' | 'delivered' | null`", CHILD_TS),
+    ("`ChildSession.notice: string | null`", CHILD_TS),
+    ("`ChildSession.pr`", CHILD_TS),
+    ("`ChildSession.map(f)`", "export interface ChildSession extends Base<{ x: 1 }> {\n"
+                              "  readonly id: string;\n  notice?: string,\n"
+                              "  load(key: string): Promise<void>\n"
+                              "  map<T>(f: (c: ChildSession) => T): T[]\n}\n"),
+    ("`ChildSession.load(key)`", "export interface ChildSession {\n"
+                                 "  load(key: string): Promise<void>\n}\n"),
+    ("`ChildSession.notice`", "type ChildSession<T extends { id: string }> = Base<T> & {\n"
+                              "  notice?: string\n}\n"),
+    ("`Event.notice`", "type Event =\n  | { kind: 'held'; notice: string }\n"
+                       "  | { kind: 'gone' }\n"),
+    ("`Notice.Delivered`", "export enum Notice {\n  Held = 'held',\n"
+                           "  Delivered = 'delivered',\n}\n"),
+])
+def test_a_typescript_type_declares_its_members(
+    repo: Path, signature: str, source: str,
+) -> None:
+    assert _defined_in(repo, "src/mission/types.ts", source, signature) is True
+
+
+CHILD_CLASS_TS = """\
+export class ChildSession {
+  private cache = new Map<string, number>()
+  constructor(private readonly root: string, count: number) {}
+  @observable notice: string | null = null
+  get size(): number { return this.cache.size }
+  async load(key: string): Promise<void> {
+    const local = key.replace(/[{]/g, '')
+    this.cache.set(local, 1)
+  }
+}
+"""
+
+
+@pytest.mark.parametrize("member, declared", [
+    ("notice", True), ("cache", True), ("root", True), ("size", True), ("load", True),
+    ("count", False),  # a constructor parameter, not a parameter property
+    ("local", False),  # a method's local
+])
+def test_a_typescript_class_declares_its_members(repo: Path, member: str, declared: bool) -> None:
+    signature = f"`ChildSession.{member}`"
+
+    assert _defined_in(repo, "src/session.ts", CHILD_CLASS_TS, signature) is declared
+
+
+@pytest.mark.parametrize("signature, source", [
+    # A member of another type in the same file.
+    ("`ChildSession.failing`", CHILD_TS),
+    # A one-line alias ends at its line: the call after it declares nothing.
+    ("`Fs.expect`", "type Fs = { readFileSync(path: string): string }\n\n"
+                    "test('reads', () => {\n  expect(1).toBe(1)\n})\n"),
+    # An object value and a parameter are not the type's members.
+    ("`ChildSession.notice`", "export type ChildSession = { id: string }\n"
+                              "const x = { notice: 1 }\n"
+                              "export function f(notice: string) {}\n"),
+    # Comments and strings say nothing.
+    ("`ChildSession.notice`", "export interface ChildSession {\n  id: string\n"
+                              "  // notice?: string\n}\n"
+                              "const s = 'interface ChildSession { notice: string }'\n"),
+])
+def test_a_typescript_member_is_looked_up_on_its_owner_only(
+    repo: Path, signature: str, source: str,
+) -> None:
+    assert _defined_in(repo, "src/mission/types.ts", source, signature) is False
+
+
+@pytest.mark.parametrize("source, owner, member, declared", [
+    # A decorator alone on its line is not `@IsArra` and a member `y`.
+    ("export class AssignDto {\n  @ApiProperty({\n    example: ['a', 'b'],\n  })\n"
+     "  @IsArray()\n  ids: string[];\n}\n", "AssignDto", "ids", True),
+    ("export class AssignDto {\n  @IsArray()\n  ids: string[];\n}\n", "AssignDto", "y", False),
+    # A generic method whose bound holds a brace, and one whose list is long.
+    ("export class S {\n  private async resolve<T extends { id?: string }>(d: T): Promise<T> {\n"
+     "    return d\n  }\n}\n", "S", "resolve", True),
+    ("export class S {\n  map<\n    T extends object,\n  >(f: () => T): T {\n    return f()\n"
+     "  }\n}\n", "S", "map", True),
+    # A line that continues a return type declares nothing.
+    ("export class S {\n  rows(): Promise<\n    Array<{ id: string }>\n  > {\n    return x\n"
+     "  }\n}\n", "S", "Array", False),
+    # `new (…)` is a construct signature; `constructor` is no member.
+    ("type Ctrl = { new (...args: any[]): any; prototype: any }\n", "Ctrl", "new", False),
+    ("type Ctrl = { new (...args: any[]): any; prototype: any }\n", "Ctrl", "prototype", True),
+    (CHILD_CLASS_TS, "ChildSession", "constructor", False),
+])
+def test_typescript_corners_the_parser_comparison_found(
+    source: str, owner: str, member: str, declared: bool,
+) -> None:
+    """Each disagreed with `tsc` on a real codebase (tools/measure_owner_members.py)."""
+    members = landing._owner_members("src/s.ts", source, owner)
+
+    assert members is not None and (member in members) is declared
+
+
+def test_an_anonymous_class_is_no_type_named_extends() -> None:
+    source = "const Fake = class extends Base {\n  run() {}\n}\n"
+
+    assert landing._owner_members("a.test.ts", source, "extends") is None
+
+
+def test_a_tsx_closing_tag_is_not_a_regex(repo: Path) -> None:
+    """Read as `/p>{this.b ? <i/`, `</p>` would swallow a `{` and close the class early."""
+    source = ("export class View extends Component<Props> {\n  render() {\n"
+              "    return <div><p>{this.a}</p>{this.b ? <i/> : null}</div>\n  }\n"
+              "  notice = 1\n}\n")
+
+    assert _defined_in(repo, "src/View.tsx", source, "`View.notice`") is True
+
+
+def test_an_alias_with_no_literal_is_no_readable_owner() -> None:
+    """What `InstanceType<…>` declares lives elsewhere; the name lookup answers."""
+    source = ("type ChildSession = InstanceType<typeof Base>\n\n"
+              "vi.mock('x', () => ({ notice: 1 }))\n")
+
+    assert landing._owner_members("a.ts", source, "ChildSession") is None
+
+
+def test_crlf_sources_read_the_same() -> None:
+    for path, source in (("a.rs", MISSION_RS), ("a.ts", CHILD_TS)):
+        lf = landing._owner_members(path, source, "ChildSession")
+        crlf = landing._owner_members(path, source.replace("\n", "\r\n"), "ChildSession")
+        assert lf and "notice" in lf
+        assert crlf == lf
 
 
 def test_a_signature_without_an_identifier_is_unverifiable(repo: Path) -> None:

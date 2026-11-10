@@ -89,15 +89,17 @@ def order(contract: contracts.Contract) -> list[contracts.Piece]:
 
 # The leading identifier of a signature, after an optional `class`/`def`
 # keyword and any dotted owner (`Readiness.ready` is looked up as `ready`,
-# inside `Readiness` when that is a class — see `_class_members`).
+# inside `Readiness` when that is a class — see `_owner_members`).
 # What follows must be a call, an annotation, a subscript, a return arrow
 # or nothing — a second bare word (`mnemo dispatch --contract`) is a CLI
 # shape, not a Python name, and is reported as unverifiable rather than
-# looked up as `mnemo` and found missing.
+# looked up as `mnemo` and found missing. TypeScript's optional marker may
+# sit between the name and its annotation or call (`ChildSession.notice?:
+# string`, #675); a `?` followed by anything else is still no name.
 _NAME_RE = re.compile(
     r"^(?:(?:async\s+)?def\s+|class\s+)?"
     r"((?:[A-Za-z_][A-Za-z0-9_]*\.)*)([A-Za-z_][A-Za-z0-9_]*)"
-    r"\s*(?:$|[(:\[]|->)"
+    r"(?:\?(?=\s*[:(]))?\s*(?:$|[(:\[]|->)"
 )
 
 
@@ -140,7 +142,9 @@ def _definition_re(name: str) -> re.Pattern:
     # consumer calls. Assignments are top-level only, because an indented
     # `name = ...` is a local, not a boundary anyone can import. A class
     # attribute is indented too, and is a boundary — that case is answered
-    # by `_class_members`, which can tell the two apart; this regex cannot.
+    # by `_owner_members`, which can tell the two apart; this regex cannot.
+    # Nor can it see a Rust field or a TS member, `name: Type` with no
+    # keyword before it (#675): those are found through their owner too.
     #
     # Contracts land TypeScript and Rust too (mnemo-desktop), so their
     # declaration keywords count as well (#446): `export function`,
@@ -214,6 +218,507 @@ def _class_members(source: str, owner: str) -> set[str] | None:
                 elif isinstance(node, ast.AnnAssign):
                     members.update(bound(node.target, params[0].arg))
     return members
+
+
+# --- members of a Rust or TypeScript owner (#675) ---------------------------
+#
+# The same question `_class_members` answers for Python, for the two braced
+# languages contracts also land (mnemo-desktop): what does the type called
+# *owner* declare? There is no parser for them in the standard library, so
+# the source is read in three passes, each simple enough to be right:
+#
+# 1. `_code_only` blanks every comment and the inside of every literal, so a
+#    brace in a string or a doc comment cannot unbalance anything after it.
+# 2. The owner's body is found from its declaration keyword and cut out by
+#    bracket matching (`_body_after`, `_close`).
+# 3. `_flat` drops everything nested inside that body — method bodies, call
+#    arguments, generic arguments — so what is left is the body's own
+#    declarations, each read by its leading identifier.
+#
+# Wherever a step cannot follow the source, the answer is `None` and the
+# caller falls back to the bare-name lookup, as it does for a Python file
+# that does not parse: an unreadable owner never fails a landing on its own.
+
+_RUST_SUFFIXES = (".rs",)
+_TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+
+_RUST_RAW = re.compile(r'b?r(#*)"')
+_RUST_CHAR = re.compile(
+    r"b?'(?:[^\\'\n]|\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]{1,6}\}|[^\n]))'")
+# After one of these a TS `/` opens a regular expression rather than divides.
+# Not `<`: in TSX that is `</div>`, a closing tag.
+_TS_REGEX_AFTER = frozenset("(,=:[!&|?{};+-*%>~^")
+_TS_REGEX_WORDS = frozenset(
+    "return typeof case do else in of new delete void throw yield await".split())
+_PAIRS = {"{": "}", "(": ")", "[": "]", "<": ">"}
+
+
+def _blank(out: list[str], start: int, end: int) -> None:
+    for k in range(start, end):
+        if out[k] != "\n":
+            out[k] = " "
+
+
+def _ident_char(ch: str) -> bool:
+    return ch.isalnum() or ch in "_$"
+
+
+def _scan_code(src: str, i: int, out: list[str], *, rust: bool,
+               nested: bool) -> int | None:
+    """Blank comments and literal contents from *i* on; the index scanning ended at.
+
+    With *nested*, *i* is inside a TS template's `${…}`, and the scan ends
+    after the `}` that closes it. ``None`` when a block comment, a Rust
+    string or a TS template never closes.
+    """
+    n = len(src)
+    depth = 0
+    while i < n:
+        c, two = src[i], src[i:i + 2]
+        if two == "//":
+            end = src.find("\n", i)
+            end = n if end < 0 else end
+            _blank(out, i, end)
+            i = end
+            continue
+        if two == "/*":
+            j, level = i + 2, 1
+            while level:
+                if j >= n:
+                    return None
+                if src.startswith("*/", j):
+                    level, j = level - 1, j + 2
+                elif rust and src.startswith("/*", j):  # Rust nests them
+                    level, j = level + 1, j + 2
+                else:
+                    j += 1
+            _blank(out, i, j)
+            i = j
+            continue
+        after_ident = i > 0 and _ident_char(src[i - 1])
+        if rust and c in "br" and not after_ident:
+            raw = _RUST_RAW.match(src, i)
+            if raw:
+                close = '"' + raw.group(1)
+                end = src.find(close, raw.end())
+                if end < 0:
+                    return None
+                _blank(out, raw.end(), end)
+                i = end + len(close)
+                continue
+        if rust and (c == "'" or (c == "b" and src[i + 1:i + 2] == "'" and not after_ident)):
+            char = _RUST_CHAR.match(src, i)
+            if char:  # otherwise a lifetime, `'a`, which is code
+                _blank(out, src.index("'", i) + 1, char.end() - 1)
+                i = char.end()
+                continue
+            i += 1
+            continue
+        if c == '"' or (c == "'" and not rust):
+            j = i + 1
+            while j < n and src[j] != c and (rust or src[j] != "\n"):
+                j += 2 if src[j] == "\\" else 1
+            if j >= n or src[j] != c:
+                if rust:
+                    return None
+                i += 1  # a TS string never spans a line: a stray quote (JSX text)
+                continue
+            _blank(out, i + 1, j)
+            i = j + 1
+            continue
+        if not rust and c == "`":
+            j = i + 1
+            while True:
+                if j >= n:
+                    return None
+                if src[j] == "\\":
+                    j += 2
+                elif src[j] == "`":
+                    break
+                elif src.startswith("${", j):
+                    j = _scan_code(src, j + 2, out, rust=False, nested=True)
+                    if j is None:
+                        return None
+                else:
+                    j += 1
+            _blank(out, i + 1, j)
+            i = j + 1
+            continue
+        if not rust and c == "/" and _regex_may_start(out, i):
+            j, in_class = i + 1, False
+            while j < n and src[j] != "\n" and (in_class or src[j] != "/"):
+                if src[j] == "\\":
+                    j += 1
+                elif src[j] == "[":
+                    in_class = True
+                elif src[j] == "]":
+                    in_class = False
+                j += 1
+            if j < n and src[j] == "/":
+                _blank(out, i + 1, j)
+                i = j + 1
+                continue
+        if nested:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                if not depth:
+                    return i + 1
+                depth -= 1
+        i += 1
+    return None if nested else n
+
+
+def _regex_may_start(out: list[str], i: int) -> bool:
+    k = i - 1
+    while k >= 0 and out[k].isspace():
+        k -= 1
+    if k < 0 or out[k] in _TS_REGEX_AFTER:
+        return True
+    start = k
+    while start > 0 and _ident_char(out[start - 1]):
+        start -= 1
+    return "".join(out[start:k + 1]) in _TS_REGEX_WORDS
+
+
+def _code_only(source: str, *, rust: bool) -> str | None:
+    """*source* with comments blanked and literals emptied, or ``None``.
+
+    Line breaks and every other offset are kept; a literal keeps its quotes,
+    so `"a" / 2` still reads as a division. ``None`` when a comment or a
+    literal never closes — the file is then not read for members at all.
+    """
+    out = list(source)
+    if _scan_code(source, 0, out, rust=rust, nested=False) is None:
+        return None
+    return "".join(out)
+
+
+def _skip_angles(code: str, i: int) -> int | None:
+    """Past the `>` that closes the `<` at *i*; `->` and `=>` close nothing.
+
+    Brackets inside are stepped over whole: `<T extends { id: string }>`.
+    """
+    angles = brackets = 0
+    for j in range(i, len(code)):
+        ch = code[j]
+        if ch in "{([":
+            brackets += 1
+        elif ch in "})]":
+            if not brackets:
+                return None
+            brackets -= 1
+        elif brackets:
+            continue
+        elif ch == "<":
+            angles += 1
+        elif ch == ">" and code[j - 1] not in "-=":
+            angles -= 1
+            if not angles:
+                return j + 1
+        elif ch == ";":
+            return None
+    return None
+
+
+def _body_after(code: str, i: int) -> int | None:
+    """The `{` opening the body of the declaration whose header starts at *i*.
+
+    The header may carry generics, bounds, `extends`, a `where` clause:
+    the body is the first `{` outside all of them. ``None`` when a `;` or
+    an enclosing `}` ends the declaration first — a unit struct, say.
+    """
+    angles = parens = 0
+    for j in range(i, len(code)):
+        ch = code[j]
+        if ch in "([":
+            parens += 1
+        elif ch in ")]":
+            parens -= 1
+        elif parens:
+            continue
+        elif ch == "<":
+            angles += 1
+        elif ch == ">" and code[j - 1] not in "-=":
+            angles -= 1
+        elif angles:
+            continue
+        elif ch == "{":
+            return j
+        elif ch in ";}":
+            return None
+    return None
+
+
+def _close(code: str, i: int) -> int | None:
+    """The index of the bracket closing the one at *i*, or ``None``."""
+    want, depth = _PAIRS[code[i]], 0
+    for j in range(i, len(code)):
+        if code[j] == code[i]:
+            depth += 1
+        elif code[j] == want:
+            depth -= 1
+            if not depth:
+                return j
+    return None
+
+
+def _flat(body: str, *, angles: bool) -> str | None:
+    """*body* with the inside of every bracket pair in it removed.
+
+    `fn load(&self, k: &str) -> R { … }` becomes `fn load() -> R {}`, so
+    what is left is the body's own declarations, one level deep. With
+    *angles*, generic arguments go too, which a type's members need (the
+    comma in `HashMap<K, V>` separates no fields) and code bodies cannot
+    afford (`1 << 4` is no bracket). ``None`` on a bracket that does not
+    match.
+    """
+    out: list[str] = []
+    stack: list[str] = []
+    for j, ch in enumerate(body):
+        opens = ch in "{([" or (angles and ch == "<")
+        closes = ch in "})]" or (angles and ch == ">" and body[j - 1:j] not in ("-", "="))
+        if opens:
+            if not stack:
+                out.append(ch)
+            stack.append(ch)
+        elif closes:
+            if not stack or _PAIRS[stack.pop()] != ch:
+                return None
+            if not stack:
+                out.append(ch)
+        elif not stack:
+            out.append(ch)
+    return None if stack else "".join(out)
+
+
+_RUST_FIELD = re.compile(
+    r"^\s*(?:#\[\]\s*)*(?:pub(?:\(\))?\s+)?(?:r#)?([A-Za-z_]\w*)\s*:(?!:)")
+_RUST_VARIANT = re.compile(r"^\s*(?:#\[\]\s*)*([A-Za-z_]\w*)\s*(?:[({=]|$)")
+_RUST_ITEM = re.compile(
+    r"\bfn\s+(?:r#)?([A-Za-z_]\w*)"
+    r"|(?:^|[;}\]\n])\s*(?:pub(?:\(\))?\s+)?(?:const|static)\s+([A-Za-z_]\w*)\s*:"
+    r"|\btype\s+([A-Za-z_]\w*)")
+_RUST_IMPL_SELF = re.compile(
+    r"\s*(?:&\s*(?:'\w+\s+)?(?:mut\s+)?)?(?:dyn\s+)?"
+    r"(?:(?:::)?\s*[A-Za-z_]\w*\s*::\s*)*([A-Za-z_]\w*)")
+
+
+def _rust_impl_self(header: str) -> str | None:
+    """The type an `impl` header implements for: `impl<T> Tr for a::Owner<T>` -> `Owner`."""
+    head = header.strip()
+    if head.startswith("<"):
+        past = _skip_angles(head, 0)
+        if past is None:
+            return None
+        head = head[past:]
+    head = re.split(r"\bwhere\b", head)[0]
+    head = re.split(r"\bfor\b(?!\s*<)", head)[-1]
+    match = _RUST_IMPL_SELF.match(head)
+    return match.group(1) if match else None
+
+
+def _rust_members(source: str, owner: str) -> set[str] | None:
+    """What a Rust type called *owner* declares: fields, variants, and the
+    `fn`/`const`/`type` items of its `impl` and `trait` blocks."""
+    code = _code_only(source, rust=True)
+    if code is None:
+        return None
+    o = re.escape(owner)
+    members: set[str] = set()
+    found = False
+    for match in re.finditer(rf"\b(struct|union|enum|trait)\s+{o}\b", code):
+        found = True
+        rest = match.end()
+        if code[rest:].lstrip().startswith("<"):
+            rest = _skip_angles(code, code.index("<", rest)) or rest
+        if match.group(1) != "enum" and code[rest:].lstrip().startswith("("):
+            continue  # a tuple struct: its fields are `.0`, which no contract names
+        open_ = _body_after(code, rest)
+        if open_ is None:
+            continue  # a unit struct
+        close = _close(code, open_)
+        flat = None if close is None else _flat(
+            code[open_ + 1:close], angles=match.group(1) in ("struct", "union"))
+        if flat is None:
+            return None
+        if match.group(1) == "trait":
+            members.update(n for m in _RUST_ITEM.finditer(flat) for n in m.groups() if n)
+        else:
+            shape = _RUST_VARIANT if match.group(1) == "enum" else _RUST_FIELD
+            members.update(m.group(1) for m in map(shape.match, flat.split(",")) if m)
+    # At an item's start only: in `fn f() -> impl Iterator {` it is a return type.
+    for match in re.finditer(r"(?:^|[;{}\]])\s*(?:unsafe\s+)?impl\b", code):
+        open_ = _body_after(code, match.end())
+        if open_ is None or _rust_impl_self(code[match.end():open_]) != owner:
+            continue
+        found = True
+        close = _close(code, open_)
+        flat = None if close is None else _flat(code[open_ + 1:close], angles=False)
+        if flat is None:
+            return None
+        members.update(n for m in _RUST_ITEM.finditer(flat) for n in m.groups() if n)
+    return members if found else None
+
+
+_TS_MEMBER = re.compile(  # interface / object type: `a?: T`, `m(x): T`, `m<T>(x)`
+    r"^\s*(?:readonly\s+)?(?:[gs]et\s+(?=[A-Za-z_$]))?"
+    r"(?!new\s*[(<])"  # `new (…): T` is a construct signature, not a member
+    r"([A-Za-z_$][\w$]*)\s*\??\s*(?:[:(]|<>\s*\()")
+# Decorators, `@ApiProperty()`: the lookahead keeps the name whole, or
+# `@IsArray()` alone on its line would read as `@IsArra` and a member `y`.
+_TS_DECORATORS = r"(?:@[\w$.]+(?![\w$.])\s*(?:\(\))?\s*)*"
+_TS_CLASS_MEMBER = re.compile(
+    r"^\s*" + _TS_DECORATORS +
+    r"(?:(?:public|private|protected|readonly|static|abstract|override|declare|"
+    r"async|accessor)\s+)*(?:[gs]et\s+(?=[#A-Za-z_$]))?\*?\s*"
+    # A generic method is `m<…>(` on its line, or a line ending in `m<` that
+    # opens a long parameter list; a line `Array<{…}>` continues a type.
+    r"#?([A-Za-z_$][\w$]*)\s*[?!]?\s*(?:[:(=;]|<(?:.*?>\s*\(|\s*$)|$)")
+_TS_PARAMETER_PROPERTY = re.compile(
+    r"^\s*" + _TS_DECORATORS + r"(?:public|private|protected|readonly|override)\s+"
+    r"(?:readonly\s+)?([A-Za-z_$][\w$]*)")
+_TS_ENUM_MEMBER = re.compile(r"^\s*([A-Za-z_$][\w$]*)\s*(?:=|$)")
+# A type alias written without a semicolon goes on past a line break only
+# when the type so far is unfinished — it ends in an operator or a keyword
+# that wants an operand — or the next line opens with an operator.
+_TS_TYPE_GOES_ON = re.compile(
+    r"(?:[=|&?:,]|=>|\b(?:extends|keyof|typeof|infer|is|readonly|unique|new|asserts))\s*$")
+_TS_TYPE_CONTINUES = re.compile(r"\s*(?:[|&?:.]|=>|extends\b)")
+
+
+def _ts_object_members(body: str) -> set[str] | None:
+    flat = _flat(body, angles=True)
+    if flat is None:
+        return None
+    return {m.group(1) for m in map(_TS_MEMBER.match, re.split(r"[;,\n]", flat)) if m}
+
+
+def _ts_alias_members(code: str, i: int) -> set[str] | None:
+    """Members of every object literal on the right of a `type X =` at *i*.
+
+    `{ a } & Base` declares `a`; `{ kind: 'x'; a } | { kind: 'y'; b }`
+    declares `a` and `b`. ``None`` for an alias with no literal in it
+    (`type X = Base & Extra`): what it declares lives elsewhere.
+    """
+    end = len(code)
+    depth = 0
+    line_start = i
+    for j in range(i, len(code)):
+        ch = code[j]
+        if ch in "{([<":
+            depth += 1
+        elif ch in "})]" or (ch == ">" and code[j - 1] != "="):
+            if not depth:
+                end = j
+                break
+            depth -= 1
+        elif depth:
+            continue
+        elif ch == ";":
+            end = j
+            break
+        elif ch == "\n":
+            if code[line_start:j].strip() and not _TS_TYPE_GOES_ON.search(
+                    code, line_start, j) and not _TS_TYPE_CONTINUES.match(code, j):
+                end = j
+                break
+            if code[line_start:j].strip():
+                line_start = j
+    members: set[str] = set()
+    literal = False
+    j = i
+    while j < end:
+        if code[j] == "{":
+            close = _close(code, j)
+            got = None if close is None else _ts_object_members(code[j + 1:close])
+            if got is None:
+                return None
+            members |= got
+            literal = True
+            j = close
+        j += 1
+    return members if literal else None
+
+
+def _ts_members(source: str, owner: str) -> set[str] | None:
+    """What a TS/JS `interface`, `type`, `class` or `enum` called *owner* declares."""
+    if owner in ("extends", "implements"):
+        return None  # `class extends Base {` is an anonymous class, not one named so
+    code = _code_only(source, rust=False)
+    if code is None:
+        return None
+    o = re.escape(owner)
+    members: set[str] = set()
+    found = False
+    for match in re.finditer(rf"\b(interface|class|enum|type)\s+{o}(?![\w$])", code):
+        kind, rest = match.group(1), match.end()
+        if kind == "type":
+            after = code[rest:].lstrip()
+            if after.startswith("<"):
+                past = _skip_angles(code, code.index("<", rest))
+                after = code[past:].lstrip() if past else ""
+            if not after.startswith("=") or after.startswith("=="):
+                continue  # `import type Owner from …`
+            got = _ts_alias_members(code, len(code) - len(after) + 1)
+            if got is not None:
+                found = True
+                members |= got
+            continue
+        open_ = _body_after(code, rest)
+        close = None if open_ is None else _close(code, open_)
+        if close is None:
+            return None
+        found = True
+        body = code[open_ + 1:close]
+        if kind == "interface":
+            got = _ts_object_members(body)
+        elif kind == "enum":
+            flat = _flat(body, angles=False)
+            got = None if flat is None else {
+                m.group(1) for m in map(_TS_ENUM_MEMBER.match, flat.split(",")) if m}
+        else:
+            got = _ts_class_members(body)
+        if got is None:
+            return None
+        members |= got
+    return members if found else None
+
+
+def _ts_class_members(body: str) -> set[str] | None:
+    """Fields, methods and accessors of a class body, and its parameter properties."""
+    flat = _flat(body, angles=False)
+    if flat is None:
+        return None
+    # A member ends at `;`, a line break, or a body's `}` with another member
+    # after it on the line — not the `}` of `m<T extends {}>()`.
+    pieces = re.split(r"[;\n]|(?<=\})(?=[ \t]*[@#*A-Za-z_$])", flat)
+    members = {m.group(1) for m in map(_TS_CLASS_MEMBER.match, pieces) if m}
+    members.discard("constructor")
+    ctor = re.search(r"\bconstructor\s*\(", body)
+    if ctor:
+        close = _close(body, ctor.end() - 1)
+        params = None if close is None else _flat(body[ctor.end():close], angles=False)
+        if params is not None:
+            members.update(m.group(1) for m in map(_TS_PARAMETER_PROPERTY.match,
+                                                   params.split(",")) if m)
+    return members
+
+
+def _owner_members(path: str, source: str, owner: str) -> set[str] | None:
+    """What the type called *owner* declares in the file at *path*, or ``None``.
+
+    Read by the file's language: a Rust `struct`/`enum`/`trait` and its
+    `impl` blocks, a TS `interface`/`type`/`class`/`enum`, a Python class
+    (#305) for anything else. ``None`` when the file declares no such type
+    or cannot be read, so the caller falls back to the bare-name lookup.
+    """
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix in _RUST_SUFFIXES:
+        return _rust_members(source, owner)
+    if suffix in _TS_SUFFIXES:
+        return _ts_members(source, owner)
+    return _class_members(source, owner)
 
 
 def _git(args: Sequence[str], *, cwd: Path | str):
@@ -323,11 +828,13 @@ def present(
     delivers it *there*, and a same-named function elsewhere is someone
     else's.
 
-    A dotted signature whose owner is a class in the boundary is looked up
-    among that class's members only: `ConsumeReport.retired` is found as a
+    A dotted signature whose owner is a type in the boundary is looked up
+    among that type's members only: `ConsumeReport.retired` is found as a
     dataclass field, and is not satisfied by a `retired` bound anywhere else
-    (#305). An owner that is no class there — a module qualifier — falls
-    back to the bare-name lookup.
+    (#305). The type may be a Python class, a Rust `struct`/`enum`/`trait`
+    with its `impl` blocks, or a TS `interface`/`type`/`class`/`enum` —
+    `ChildSession.notice` is a struct field (#675). An owner that is no type
+    there — a module qualifier — falls back to the bare-name lookup.
     """
     parts = _signature_parts(signature)
     if parts is None:
@@ -337,14 +844,14 @@ def present(
     for path in _boundary_files(piece, ref=ref, repo_root=repo_root):
         shown = _git(["show", f"{ref}:{path}"], cwd=repo_root)
         if shown.returncode == 0:
-            sources.append(shown.stdout)
+            sources.append((path, shown.stdout))
     if owner is not None:
-        found = [m for m in (_class_members(src, owner) for src in sources)
+        found = [m for m in (_owner_members(path, src, owner) for path, src in sources)
                  if m is not None]
         if found:
             return any(name in members for members in found)
     pattern = _definition_re(name)
-    return any(pattern.search(src) for src in sources)
+    return any(pattern.search(src) for _path, src in sources)
 
 
 # --- inspect: the read-only view --------------------------------------------
