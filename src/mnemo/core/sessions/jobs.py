@@ -17,17 +17,39 @@ it sounds: the two vocabularies **overlap**. ``state`` carries its own
 reads ``state=blocked, tempo=blocked``; branching on ``state`` files it under
 a phase and the queue stops surfacing the only sessions it exists to surface.
 
+The overlap cuts the other way too, which is why ``state`` is not a second
+signal for "a human is needed" (#737). When a prompt reaches a session,
+Claude Code writes ``tempo=active`` with the prompt itself as ``detail`` and
+leaves ``state`` as it was. Its mid-turn updater then skips a record whose
+``state`` is ``blocked``. So a session that asked and was answered reads
+``state=blocked, tempo=active`` for the whole turn the answer starts
+(``answer-keeps-blocked-state`` in :mod:`mnemo.core.claude_cli`). That pair is
+a session working on what the maintainer just told it. Counted as blocked, it
+would sit under WAITING ON YOU until that turn ended. Every write that means
+"asking" sets ``tempo=blocked`` itself, a turn ending in a plain-text question
+included.
+
 The enumerations above are measured, not assumed — nine real sessions,
 2026-09-13::
 
     state: {'done': 4, 'blocked': 2, 'stopped': 2, 'working': 1}
     tempo: {'idle': 6, 'blocked': 2, 'active': 1}
 
+and 228 job records on 2026-11-09, as pairs, by
+``tools/measure_session_states.py``::
+
+    stopped/idle 198, done/idle 19, working/active 9,
+    blocked/active 1, blocked/blocked 1
+
+The one ``blocked/active`` record's ``detail`` is the maintainer's typed
+prompt, written 0.62s after it.
+
 An earlier version of this docstring listed ``state`` as ``working, done``
 alone. Under-stating a field's range is what made a wrong filter look correct
 on review: it cost the incident recorded below on 2026-09-12 and a silent
 watcher on 2026-09-13 (#222). Both values it omitted are terminal-ish phases
-Claude Code writes routinely, so re-measure before trusting this list again.
+Claude Code writes routinely, so re-measure with
+``tools/measure_session_states.py`` before trusting this list again.
 
 Consumers outside Python read the same rule from ``mnemo sessions --json``,
 which emits the derived booleans below alongside the raw fields. Nothing
@@ -116,7 +138,11 @@ class Session:
 
     @property
     def is_blocked(self) -> bool:
-        """True when a human is needed. Driven by ``tempo``, never ``state``."""
+        """True when a human is needed. Driven by ``tempo``, never ``state``.
+
+        ``state=blocked, tempo=active`` is not blocked. It is a session that
+        has been answered and is working on the answer (#737, module docstring).
+        """
         return self.tempo == "blocked"
 
     @property

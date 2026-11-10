@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -774,3 +775,69 @@ def test_the_api_error_sentences_are_still_the_ones_we_classify() -> None:
         "mnemo.core.sessions.stalls.NEEDS_BY_ERROR from the current switch "
         "and bump the assumption."
     )
+
+
+# --- answer-keeps-blocked-state: the shapes, checked without a spawn ---------
+
+#: The write a prompt makes: the previous record spread, the prompt as
+#: ``detail``, ``tempo: "active"``, and no ``state`` key anywhere in it.
+_ANSWER_WRITE = re.compile(
+    rb'\{\.\.\.[\w$]+,(?:\.\.\.[^{}]{0,40}\{detail:[\w$]+,output:null\},)?'
+    rb'tempo:"active",inFlight:[\w$]+\(\),needs:void 0')
+#: The mid-turn updater leaving a record with a blocked ``state`` alone.
+_MIDTURN_GUARD = re.compile(
+    rb'if\([\w$]+\?\.tempo==="blocked"\|\|[\w$]+\?\.state==="blocked"\)return;')
+#: Every literal pairing of a blocked ``state`` with a ``tempo``.
+_BLOCKED_PAIR = re.compile(rb'state:"blocked",tempo:"(\w+)"')
+
+
+def _scan(path: Path, patterns: dict) -> dict:
+    """What each pattern matched in *path*: its first group, else the match.
+
+    Chunked like :func:`_contains`, with a wider carry because a pattern is
+    longer than a sentence. A match inside the carry is found twice, which a
+    set absorbs.
+    """
+    found: dict = {key: set() for key in patterns}
+    with path.open("rb") as fh:
+        carry = b""
+        while True:
+            chunk = fh.read(1 << 22)
+            if not chunk:
+                return found
+            blob = carry + chunk
+            for key, pattern in patterns.items():
+                for match in pattern.finditer(blob):
+                    found[key].add(match.group(1) if pattern.groups else match.group(0))
+            carry = blob[-1024:]
+
+
+def test_an_answer_keeps_the_blocked_state() -> None:
+    """``answer-keeps-blocked-state``: why ``is_blocked`` reads ``tempo`` alone.
+
+    #737 asked whether ``state == "blocked"`` should count as a human being
+    needed. It should not: the pair it would add, ``state=blocked,
+    tempo=active``, is what a session reads while it works on the answer it
+    was just given. That rests on three shapes in the binary. A grep, not a
+    spawn, since producing the pair takes a session that asks and a person who
+    answers. The names around the shapes are minified and change every build
+    (``s``/``E``/``IZt`` in 2.1.321 were ``s``/``C``/``HXt`` in 2.1.319), so
+    the patterns match any identifier.
+    """
+    found = _scan(_claude_binary(), {
+        "write": _ANSWER_WRITE, "guard": _MIDTURN_GUARD, "pairs": _BLOCKED_PAIR})
+    broke = (
+        "claude CLI assumption `answer-keeps-blocked-state` did not hold "
+        f"(installed claude {claude_cli.claude_version()}): "
+    )
+    assert found["write"], broke + (
+        "no prompt write that sets tempo=active and leaves `state` alone. If a "
+        "prompt now writes `state` too, the blocked/active pair may be gone; "
+        "re-read the writer and re-run tools/measure_session_states.py.")
+    assert found["guard"], broke + (
+        "the mid-turn updater no longer skips a blocked `state`, so the pair "
+        "may now last only until the first tool call.")
+    assert found["pairs"] == {b"blocked"}, broke + (
+        f"a blocked `state` is written with tempo {sorted(found['pairs'])}. "
+        "One that is not `blocked` may be a question `Session.is_blocked` "
+        "cannot see; that is #737's premise, and this time the binary says so.")

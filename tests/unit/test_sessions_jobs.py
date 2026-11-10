@@ -56,6 +56,22 @@ def test_blocked_is_driven_by_tempo_not_state(tmp_path: Path) -> None:
     assert s.is_done is False
 
 
+def test_an_answered_question_is_not_blocked_while_its_state_still_says_so(tmp_path: Path) -> None:
+    # #737, from the other side of the overlap. Claude Code writes an answer
+    # as tempo=active, with the answer as `detail`, and leaves state=blocked
+    # until the turn ends (`answer-keeps-blocked-state`). This is the session
+    # working on what it was just told. Branching on `state` would put it
+    # under WAITING ON YOU for the whole turn.
+    _job(tmp_path, "3379a534", state="blocked", tempo="active",
+         detail="send me the crash logs")
+
+    (s,) = jobs.read_sessions(tmp_path)
+
+    assert s.is_blocked is False
+    assert s.is_waiting is False
+    assert s.is_done is False
+
+
 def test_done_is_driven_by_state(tmp_path: Path) -> None:
     _job(tmp_path, "e51f", state="done", tempo="idle", name="shipped")
 
