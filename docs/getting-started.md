@@ -1046,8 +1046,13 @@ the same checkpoints for a finding.
 
 What it costs: each call sends the child's whole conversation to the
 advisor, uncached, at the advisor's price. A lean child's first call reads
-about 52,000 tokens, and every later call reads everything since, so the
-three checkpoints cost far more than three first calls: ADVISOR_COST_MEASURED.
+about 52,000 tokens, and each later call reads everything since, so a call
+late in a long session costs more than an early one. Measured on #832's
+check: a Sonnet child with an Opus advisor on a small issue (13 minutes)
+consulted once, on its finished diff. That call read 65,752 tokens and wrote
+8,670, which is $0.44 at list price and 53% of the child's $0.83. The
+paragraph asks for calls but cannot force one. That child skipped the
+checkpoint before its first edit, and said so in its `Advisor:` paragraph.
 Nothing caps the calls; the paragraph asks for these points and "not after
 every step". The advisor is an experimental Claude Code feature and
 Anthropic-API only.
